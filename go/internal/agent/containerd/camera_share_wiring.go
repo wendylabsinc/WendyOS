@@ -21,8 +21,9 @@ import (
 // structurally and tests can record the calls.
 type CameraShareProvider interface {
 	// CreateCameraShares gives a newly created container its shares, within
-	// its own budget; it logs and never fails.
-	CreateCameraShares(ctx context.Context, containerID, appID string)
+	// its own budget; it logs and never fails. The container's entitlements
+	// choose each camera node's format and stamp.
+	CreateCameraShares(ctx context.Context, containerID, appID string, entitlements []appconfig.Entitlement)
 	// CoverCameraShares covers the container's cameras in the new task pid,
 	// between NewTask and Start; it never returns later than its own budget,
 	// and its errors are only for the caller's log.
@@ -89,11 +90,13 @@ func cameraShareContainers(infos []containerCameraInfo) []services.CameraShareCo
 	return out
 }
 
-func (c *Client) createCameraShares(ctx context.Context, containerID, appID string) {
+// createCameraShares passes on the entitlements the container's labels carry,
+// which is what every later reader of the container sees.
+func (c *Client) createCameraShares(ctx context.Context, containerID, appID string, labels map[string]string) {
 	if c.cameraShareProvider == nil {
 		return
 	}
-	c.cameraShareProvider.CreateCameraShares(ctx, containerID, appID)
+	c.cameraShareProvider.CreateCameraShares(ctx, containerID, appID, parseEntitlementsFromAnnotations(labels))
 }
 
 // coverCameraShares covers a sharing container's cameras in its new task,

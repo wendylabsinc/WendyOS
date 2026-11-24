@@ -12,17 +12,23 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
-// sharedMode is the one picture format an app's agent-fed camera node declares.
-// It always comes from the planner (see shareDecisionFor), so the node declares
-// exactly what the hub's pixel tap produces.
+// sharedMode is the one format an app's agent-fed camera node declares. It
+// always comes from shareDecisionFor, so the node declares exactly what the
+// hub subscription of its Format delivers.
 type sharedMode struct {
 	Width, Height uint32
 	Fourcc        string
 	BytesPerLine  uint32
 	FPS           uint32
+	// Format is the entitlement format the node serves (appconfig.CameraFormats).
+	Format string
+	// MaxFrameBytes is the largest frame of a compressed mode. Zero for a
+	// picture mode, whose frames are all frameBytes long.
+	MaxFrameBytes uint32
 }
 
 // String reads "1280x720 YUYV, 30 fps"; the fourcc is trimmed ("Y16 " -> "Y16").
@@ -30,18 +36,86 @@ func (m sharedMode) String() string {
 	return fmt.Sprintf("%dx%d %s, %d fps", m.Width, m.Height, strings.TrimSpace(m.Fourcc), m.FPS)
 }
 
-// frameBytes is the size of one frame in this mode.
+// describeShareNode reads "1280x720 YUYV, 30 fps, format pixels, stamp time".
+func describeShareNode(mode sharedMode, stamp string) string {
+	return fmt.Sprintf("%s, %s", mode, describeShareSettings(mode.Format, stamp))
+}
+
+func describeShareSettings(format, stamp string) string {
+	return fmt.Sprintf("format %s, stamp %s", format, stamp)
+}
+
+// frameBytes is the size of one picture in this mode.
 func (m sharedMode) frameBytes() int { return int(m.BytesPerLine) * int(m.Height) }
 
+func (m sharedMode) compressed() bool { return m.MaxFrameBytes > 0 }
+
+// bufferBytes is the size a node buffer needs to hold any frame of this mode.
+func (m sharedMode) bufferBytes() int {
+	if m.compressed() {
+		return int(m.MaxFrameBytes)
+	}
+	return m.frameBytes()
+}
+
+// compressedNodeFormat is how frames of one codec are declared on a node.
+type compressedNodeFormat struct {
+	v4l2 uint32
+	name string
+}
+
+var compressedNodeFormats = map[agentpb.VideoCodec]compressedNodeFormat{
+	videoCodecMJPEG:                     {v4l2PixFmtMJPEG, "JPEG"},
+	agentpb.VideoCodec_VIDEO_CODEC_H264: {v4l2PixFmtH264, "H.264"},
+}
+
 // pixelFormat is the V4L2 pixel format of the mode's fourcc, or 0 for a fourcc
-// the raw table does not know.
+// no node can declare.
 func (m sharedMode) pixelFormat() uint32 {
+	if m.compressed() {
+		for _, f := range compressedNodeFormats {
+			if fourccName(f.v4l2) == m.Fourcc {
+				return f.v4l2
+			}
+		}
+		return 0
+	}
 	for _, f := range rawPixelFormats {
 		if f.fourcc == m.Fourcc {
 			return f.v4l2
 		}
 	}
 	return 0
+}
+
+func compressedMode(codec agentpb.VideoCodec, format string, width, height, fps uint32) sharedMode {
+	return sharedMode{
+		Width: width, Height: height, Fourcc: fourccName(compressedNodeFormats[codec].v4l2), FPS: fps,
+		Format: format, MaxFrameBytes: maxFrameBytes,
+	}
+}
+
+// carries reports whether f is a frame a node in this mode declares: a picture
+// in exactly its layout, or a compressed frame of its codec.
+func (m sharedMode) carries(f *videoFrame) bool {
+	if rf := f.rawFmt; rf != nil {
+		return rf.GetWidth() == m.Width && rf.GetHeight() == m.Height &&
+			strings.TrimSpace(rf.GetFourcc()) == strings.TrimSpace(m.Fourcc) &&
+			rf.GetBytesPerLine() == m.BytesPerLine
+	}
+	declared, known := compressedNodeFormats[f.codec]
+	return m.compressed() && known && fourccName(declared.v4l2) == m.Fourcc
+}
+
+// describeNodeFrame names a frame's format as carries compares it.
+func describeNodeFrame(f *videoFrame) string {
+	if f.rawFmt != nil {
+		return describeRawFormat(f.rawFmt)
+	}
+	if declared, known := compressedNodeFormats[f.codec]; known {
+		return declared.name
+	}
+	return strings.TrimPrefix(f.codec.String(), "VIDEO_CODEC_")
 }
 
 // admits reports whether a stream request is satisfied by this mode: every
@@ -75,9 +149,34 @@ const defaultSharedFPS = 30
 var isDepthOrInfraredNode = isRealSenseDepthNode
 
 // shareDecisionFor decides whether the camera dev is served to apps through an
-// agent-fed node, and at which mode. The first failing rule gives the Reason.
-func (s *VideoService) shareDecisionFor(ctx context.Context, dev *agentpb.VideoDevice) shareDecision {
-	refuse := func(reason string) shareDecision { return shareDecision{Reason: reason} }
+// agent-fed node of the given format, and at which mode. The first failing
+// rule gives the Reason.
+func (s *VideoService) shareDecisionFor(ctx context.Context, dev *agentpb.VideoDevice, format string) shareDecision {
+	return s.shareDecisionsFor(dev, format)[format]
+}
+
+// shareDecisionsFor is shareDecisionFor for several formats of one camera; the
+// rules that do not depend on the format are checked once.
+func (s *VideoService) shareDecisionsFor(dev *agentpb.VideoDevice, formats ...string) map[string]shareDecision {
+	decisions := make(map[string]shareDecision, len(formats))
+	gstPath, available, reason := s.shareRefusalFor(dev)
+	for _, format := range formats {
+		switch {
+		case reason != "":
+			decisions[format] = shareDecision{Reason: reason}
+		case format == appconfig.CameraFormatPixels:
+			decisions[format] = pictureShareDecision(dev, gstPath, available)
+		default:
+			decisions[format] = compressedShareDecision(dev, format)
+		}
+	}
+	return decisions
+}
+
+// shareRefusalFor is why the camera dev is served to no app through an
+// agent-fed node, whatever its format, or "" with the GStreamer listing.
+func (s *VideoService) shareRefusalFor(dev *agentpb.VideoDevice) (gstPath string, available map[string]bool, reason string) {
+	refuse := func(reason string) (string, map[string]bool, string) { return "", nil, reason }
 
 	if s.loopback == nil || s.loopback.Available() != nil {
 		return refuse("no compatible v4l2loopback module on this device")
@@ -115,6 +214,11 @@ func (s *VideoService) shareDecisionFor(ctx context.Context, dev *agentpb.VideoD
 	if err != nil {
 		return refuse("GStreamer is not installed on this device")
 	}
+	return gstPath, available, ""
+}
+
+func pictureShareDecision(dev *agentpb.VideoDevice, gstPath string, available map[string]bool) shareDecision {
+	refuse := func(reason string) shareDecision { return shareDecision{Reason: reason} }
 
 	plan, err := planGStreamerPipelineShaped(pipelineShape{encode: false}, gstPath, dev.GetPath(),
 		&agentpb.StreamVideoRequest{}, "", false, camera.TransportUSB, "", pipeWireSource{}, available)
@@ -131,6 +235,7 @@ func (s *VideoService) shareDecisionFor(ctx context.Context, dev *agentpb.VideoD
 		Fourcc:       plan.pixels.GetFourcc(),
 		BytesPerLine: plan.pixels.GetBytesPerLine(),
 		FPS:          defaultSharedFPS,
+		Format:       appconfig.CameraFormatPixels,
 	}
 	captureFormat := uint32(v4l2PixFmtMJPEG)
 	if plan.raw != nil {
@@ -140,6 +245,41 @@ func (s *VideoService) shareDecisionFor(ctx context.Context, dev *agentpb.VideoD
 		mode.FPS = best
 	}
 	return shareDecision{Shared: true, Mode: mode}
+}
+
+// shareFormatCodecs is the codec of the frames a compressed node format
+// carries, for the formats that fix one; a format absent here carries the
+// codec of the camera's own frames.
+var shareFormatCodecs = map[string]agentpb.VideoCodec{
+	appconfig.CameraFormatH264: agentpb.VideoCodec_VIDEO_CODEC_H264,
+}
+
+// ownFramesAtDefaults is the codec, size and rate of the camera's own frames
+// as a capture that names no parameters hands them on whole, or why it hands
+// on none.
+func ownFramesAtDefaults(path string) (codec agentpb.VideoCodec, width, height, fps uint32, declined string) {
+	atDefaults := &agentpb.StreamVideoRequest{}
+	width, height, declined = nativeJPEGCapture(path, atDefaults)
+	if declined != "" {
+		return 0, 0, 0, 0, declined
+	}
+	return videoCodecMJPEG, width, height, nativeJPEGFrameRate(path, atDefaults, width, height), ""
+}
+
+// compressedShareDecision declares a compressed node at the size and rate of
+// the camera's own whole frames: the H.264 made from them has that size too.
+func compressedShareDecision(dev *agentpb.VideoDevice, format string) shareDecision {
+	codec, width, height, fps, declined := ownFramesAtDefaults(dev.GetPath())
+	if declined != "" {
+		return shareDecision{Reason: fmt.Sprintf("no shared mode for format %q: the camera's own frames are not captured whole: %s", format, declined)}
+	}
+	if fixed, ok := shareFormatCodecs[format]; ok {
+		codec = fixed
+	}
+	if fps == 0 {
+		fps = defaultSharedFPS
+	}
+	return shareDecision{Shared: true, Mode: compressedMode(codec, format, width, height, fps)}
 }
 
 // gstElementsMemo is a successful gst listing kept for the service's life, and

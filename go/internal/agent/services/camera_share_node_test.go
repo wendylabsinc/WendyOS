@@ -57,10 +57,10 @@ func closedChan() chan struct{} {
 func TestShareNodeWriteFrameRefusesWrongSize(t *testing.T) {
 	mode := sharedMode{Width: 4, Height: 2, Fourcc: "YUYV", BytesPerLine: 8, FPS: 30}
 	w := &shareNodeWriter{mode: mode, fd: -1, wakeR: -1, wakeW: -1, done: closedChan()}
-	if err := w.WriteFrame(make([]byte, mode.frameBytes()-1), 1); err == nil {
+	if err := w.WriteFrame(make([]byte, mode.frameBytes()-1), stampWithCaptureTime(1)); err == nil {
 		t.Fatal("a short frame was accepted")
 	}
-	if err := w.WriteFrame(make([]byte, mode.frameBytes()+1), 1); err == nil {
+	if err := w.WriteFrame(make([]byte, mode.frameBytes()+1), stampWithCaptureTime(1)); err == nil {
 		t.Fatal("a long frame was accepted")
 	}
 }
@@ -72,13 +72,13 @@ func TestShareNodeCloseIsIdempotentAndConcurrent(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		wg.Add(2)
 		go func() { defer wg.Done(); _ = w.Close() }()
-		go func() { defer wg.Done(); _ = w.WriteFrame(make([]byte, mode.frameBytes()), 1) }()
+		go func() { defer wg.Done(); _ = w.WriteFrame(make([]byte, mode.frameBytes()), stampWithCaptureTime(1)) }()
 	}
 	wg.Wait()
 	if err := w.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
-	if err := w.WriteFrame(make([]byte, mode.frameBytes()), 1); !errors.Is(err, errShareNodeClosed) {
+	if err := w.WriteFrame(make([]byte, mode.frameBytes()), stampWithCaptureTime(1)); !errors.Is(err, errShareNodeClosed) {
 		t.Fatalf("write after Close: %v, want errShareNodeClosed", err)
 	}
 }

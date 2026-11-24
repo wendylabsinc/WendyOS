@@ -9,6 +9,12 @@ const (
 	KeyUnavailable = "share_unavailable"
 	// KeyWith lists the apps sharing the camera, e.g. "cv-a, cv-b".
 	KeyWith = "shared_with"
-	// KeyState gives each sharing app's state, e.g. "cv-a (reading), cv-b (idle)".
+	// KeyState gives each sharing app's node settings and state, e.g.
+	// "cv-a [format pixels, stamp time] (reading), cv-b [format native, stamp frame] (idle)".
 	KeyState = "share_state"
 )
+
+// KeyModeOfFormat is the mode of the node an app gets for the camera when its
+// entitlement asks for a format other than the default, e.g.
+// "share_mode_native". The default format's mode is under KeyMode.
+func KeyModeOfFormat(format string) string { return KeyMode + "_" + format }

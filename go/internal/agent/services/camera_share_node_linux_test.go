@@ -14,6 +14,8 @@ import (
 
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
 const vidiocGFmtForShareTest = 0xC0D05604 // _IOWR('V', 4, struct v4l2_format)
@@ -184,7 +186,7 @@ func TestShareNodeWriter_DeclaresModeAndReportsReaders(t *testing.T) {
 		frame[i] = byte(i*7 + i/1280)
 	}
 	const ts = int64(123456789_123456_000) // whole microseconds
-	if err := w.WriteFrame(frame, ts); err != nil {
+	if err := w.WriteFrame(frame, stampWithCaptureTime(ts)); err != nil {
 		t.Fatalf("WriteFrame: %v", err)
 	}
 	gotFrame, gotTs := reader.next(2 * time.Second)
@@ -209,7 +211,7 @@ func TestShareNodeWriter_DeclaresModeAndReportsReaders(t *testing.T) {
 		late.expectNoFrame(150 * time.Millisecond)
 		fresh := bytes.Repeat([]byte{byte(40 + attempt)}, mode.frameBytes())
 		stamp := ts + int64(attempt+1)*1_000_000
-		if err := w.WriteFrame(fresh, stamp); err != nil {
+		if err := w.WriteFrame(fresh, stampWithCaptureTime(stamp)); err != nil {
 			t.Fatal(err)
 		}
 		got, gotStamp := late.next(2 * time.Second)
@@ -276,7 +278,7 @@ func TestShareNode_StaysACameraWhileTheWriterIsAway(t *testing.T) {
 		t.Fatalf("openShareNode: %v", err)
 	}
 	t.Cleanup(func() { _ = w.Close() }) // runs before the node's removal
-	if err := w.WriteFrame(fill(1), 1_000_000_000); err != nil {
+	if err := w.WriteFrame(fill(1), stampWithCaptureTime(1_000_000_000)); err != nil {
 		t.Fatalf("WriteFrame: %v", err)
 	}
 	if err := w.Close(); err != nil {
@@ -320,7 +322,7 @@ func TestShareNode_StaysACameraWhileTheWriterIsAway(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = w2.Close() })
 	want := fill(9)
-	if err := w2.WriteFrame(want, 2_000_000_000); err != nil {
+	if err := w2.WriteFrame(want, stampWithCaptureTime(2_000_000_000)); err != nil {
 		t.Fatalf("WriteFrame after re-attach: %v", err)
 	}
 	frame, stamp := reader.next(2 * time.Second)
@@ -363,7 +365,7 @@ func TestShareNode_FreshStartForLateAndRestartedReaders(t *testing.T) {
 	}
 	expectCount(t, w.Counts(), 1, "first reader")
 	old := bytes.Repeat([]byte{20}, mode.frameBytes())
-	if err := w.WriteFrame(old, 1_000_000_000); err != nil {
+	if err := w.WriteFrame(old, stampWithCaptureTime(1_000_000_000)); err != nil {
 		t.Fatal(err)
 	}
 	first.next(time.Second)
@@ -379,7 +381,7 @@ func TestShareNode_FreshStartForLateAndRestartedReaders(t *testing.T) {
 	expectCount(t, w.Counts(), 1, "late reader")
 	late.expectNoFrame(150 * time.Millisecond)
 	fresh := bytes.Repeat([]byte{60}, mode.frameBytes())
-	if err := w.WriteFrame(fresh, 2_000_000_000); err != nil {
+	if err := w.WriteFrame(fresh, stampWithCaptureTime(2_000_000_000)); err != nil {
 		t.Fatal(err)
 	}
 	// A duplicate STREAMON must not discard the frame already waiting.
@@ -393,7 +395,7 @@ func TestShareNode_FreshStartForLateAndRestartedReaders(t *testing.T) {
 	}
 	late.stop()
 	expectCount(t, w.Counts(), 0, "late reader stopped")
-	if err := w.WriteFrame(old, 3_000_000_000); err != nil {
+	if err := w.WriteFrame(old, stampWithCaptureTime(3_000_000_000)); err != nil {
 		t.Fatal(err)
 	}
 	if err := late.ioctl(vidiocStreamon, unsafe.Pointer(&typ)); err != nil {
@@ -401,7 +403,7 @@ func TestShareNode_FreshStartForLateAndRestartedReaders(t *testing.T) {
 	}
 	expectCount(t, w.Counts(), 1, "same descriptor restarted")
 	late.expectNoFrame(150 * time.Millisecond)
-	if err := w.WriteFrame(fresh, 4_000_000_000); err != nil {
+	if err := w.WriteFrame(fresh, stampWithCaptureTime(4_000_000_000)); err != nil {
 		t.Fatal(err)
 	}
 	got, stamp = late.next(time.Second)
@@ -429,7 +431,7 @@ func TestShareNode_FreshStartSuppressesSyntheticFrames(t *testing.T) {
 		}
 	}
 	old := bytes.Repeat([]byte{20}, mode.frameBytes())
-	if err := w.WriteFrame(old, 1_000_000_000); err != nil {
+	if err := w.WriteFrame(old, stampWithCaptureTime(1_000_000_000)); err != nil {
 		t.Fatal(err)
 	}
 	reader := openShareTestReader(t, path)
@@ -438,7 +440,7 @@ func TestShareNode_FreshStartSuppressesSyntheticFrames(t *testing.T) {
 	}
 	reader.expectNoFrame(350 * time.Millisecond)
 	fresh := bytes.Repeat([]byte{80}, mode.frameBytes())
-	if err := w.WriteFrame(fresh, 2_000_000_000); err != nil {
+	if err := w.WriteFrame(fresh, stampWithCaptureTime(2_000_000_000)); err != nil {
 		t.Fatal(err)
 	}
 	got, stamp := reader.next(time.Second)
@@ -460,7 +462,7 @@ func TestShareNode_FreshStartForReadIO(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = w.Close() })
 	old := bytes.Repeat([]byte{20}, mode.frameBytes())
-	if err := w.WriteFrame(old, 1_000_000_000); err != nil {
+	if err := w.WriteFrame(old, stampWithCaptureTime(1_000_000_000)); err != nil {
 		t.Fatal(err)
 	}
 	reader := openShareTestReader(t, path)
@@ -470,11 +472,126 @@ func TestShareNode_FreshStartForReadIO(t *testing.T) {
 		t.Fatalf("FRESH_CAPTURE_CONTRACT: first read() returned retained data: n=%d err=%v", n, err)
 	}
 	fresh := bytes.Repeat([]byte{90}, mode.frameBytes())
-	if err := w.WriteFrame(fresh, 2_000_000_000); err != nil {
+	if err := w.WriteFrame(fresh, stampWithCaptureTime(2_000_000_000)); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := unix.Read(reader.fd, buffer); err != nil || n != len(fresh) || !bytes.Equal(buffer, fresh) {
 		t.Fatalf("FRESH_CAPTURE_CONTRACT: read() did not return fresh source pixels: n=%d err=%v", n, err)
 	}
 	t.Log("FRESH_CAPTURE_READ_IO_VERIFIED")
+}
+
+func TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength(t *testing.T) {
+	requireShareModule(t)
+	for _, mode := range []sharedMode{
+		{Width: 640, Height: 480, Fourcc: "MJPG", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes},
+		{Width: 640, Height: 480, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatH264, MaxFrameBytes: maxFrameBytes},
+		// 1920x1080 at the module's own depth is larger than the maximum frame.
+		{Width: 1920, Height: 1080, Fourcc: "MJPG", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes},
+	} {
+		t.Run(mode.String(), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			t.Cleanup(cancel)
+			path := createShareFixtureNode(t, ctx, zap.NewNop())
+			w, err := openShareNode(zap.NewNop(), path, mode)
+			if err != nil {
+				t.Fatalf("openShareNode: %v", err)
+			}
+			t.Cleanup(func() { _ = w.Close() })
+			counts := w.Counts()
+			expectCount(t, counts, 0, "initial count")
+
+			probe := openShareTestReader(t, path)
+			var got v4l2Format
+			got.Type = v4l2BufTypeVideoCapture
+			if err := probe.ioctl(vidiocGFmtForShareTest, unsafe.Pointer(&got)); err != nil {
+				t.Fatalf("G_FMT: %v", err)
+			}
+			if got.Width != mode.Width || got.Height != mode.Height || got.PixelFormat != mode.pixelFormat() || got.SizeImage < mode.MaxFrameBytes {
+				t.Fatalf("G_FMT(CAPTURE) = %dx%d %s, image of %d bytes; want %s with an image of at least %d",
+					got.Width, got.Height, fourccName(got.PixelFormat), got.SizeImage, mode, mode.MaxFrameBytes)
+			}
+			t.Logf("%s: the node declares an image of %d bytes for a maximum frame of %d", mode, got.SizeImage, mode.MaxFrameBytes)
+			probe.close()
+
+			reader := openShareTestReader(t, path)
+			if err := reader.start(); err != nil {
+				t.Fatalf("reader STREAMON: %v", err)
+			}
+			expectCount(t, counts, 1, "after the reader's STREAMON")
+			for i, size := range []int{17, 4096, 100_001, int(mode.MaxFrameBytes)} {
+				frame := make([]byte, size)
+				for j := range frame {
+					frame[j] = byte(j*5 + i)
+				}
+				stamp := int64(i+1) * 1_000_000_000
+				if err := w.WriteFrame(frame, stampWithCaptureTime(stamp)); err != nil {
+					t.Fatalf("WriteFrame of %d bytes: %v", size, err)
+				}
+				gotFrame, gotStamp := reader.next(2 * time.Second)
+				if !bytes.Equal(gotFrame, frame) || gotStamp != stamp {
+					t.Fatalf("reader got %d bytes stamped %d, want the %d-byte frame stamped %d", len(gotFrame), gotStamp, size, stamp)
+				}
+			}
+
+			err = w.WriteFrame(make([]byte, int(mode.MaxFrameBytes)+1), stampWithCaptureTime(9_000_000_000))
+			if !errors.Is(err, errShareFrameTooLarge) || w.(*shareNodeWriter).oversizedFrames() != 1 {
+				t.Fatalf("a frame over the maximum: error %v, counted %d", err, w.(*shareNodeWriter).oversizedFrames())
+			}
+			reader.expectNoFrame(150 * time.Millisecond)
+		})
+	}
+}
+
+func TestShareNodeWriter_BufferTimestampReadsBackAsTheCaptureTimeOrTheSampleID(t *testing.T) {
+	requireShareModule(t)
+	for _, mode := range []sharedMode{
+		{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 30, Format: appconfig.CameraFormatPixels},
+		{Width: 640, Height: 480, Fourcc: "MJPG", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes},
+	} {
+		t.Run(mode.String(), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			t.Cleanup(cancel)
+			path := createShareFixtureNode(t, ctx, zap.NewNop())
+			w, err := openShareNode(zap.NewNop(), path, mode)
+			if err != nil {
+				t.Fatalf("openShareNode: %v", err)
+			}
+			t.Cleanup(func() { _ = w.Close() })
+			expectCount(t, w.Counts(), 0, "initial count")
+			reader := openShareTestReader(t, path)
+			if err := reader.start(); err != nil {
+				t.Fatalf("reader STREAMON: %v", err)
+			}
+			expectCount(t, w.Counts(), 1, "after the reader's STREAMON")
+			frame := bytes.Repeat([]byte{0x42}, mode.frameBytes())
+			if mode.compressed() {
+				frame = []byte{0xFF, 0xD8, 0x42, 0xFF, 0xD9}
+			}
+
+			const captured = int64(123_456_789_123_456_000) // whole microseconds
+			if err := w.WriteFrame(frame, stampWithCaptureTime(captured)); err != nil {
+				t.Fatalf("WriteFrame with a capture time: %v", err)
+			}
+			if _, stamp := reader.next(2 * time.Second); stamp != captured {
+				t.Fatalf("capture time read back as %d, want %d", stamp, captured)
+			}
+
+			// A reader recovers a sample ID as tv_sec*1e6 + tv_usec, which is
+			// the dequeued timestamp in whole microseconds.
+			for _, id := range []uint64{1, 999_999, 1_000_000, 1234567890123} {
+				if err := w.WriteFrame(frame, stampWithSampleID(id)); err != nil {
+					t.Fatalf("WriteFrame with sample ID %d: %v", id, err)
+				}
+				if _, stamp := reader.next(2 * time.Second); uint64(stamp/1000) != id || stamp%1000 != 0 {
+					t.Fatalf("sample ID %d read back as %d µs (%d ns)", id, stamp/1000, stamp)
+				}
+			}
+
+			if err := w.WriteFrame(frame, stampWithSampleID(0)); !errors.Is(err, errShareFrameWithoutSampleID) {
+				t.Fatalf("a frame without a sample ID: error %v, want errShareFrameWithoutSampleID", err)
+			}
+			reader.expectNoFrame(150 * time.Millisecond)
+		})
+	}
 }

@@ -380,6 +380,14 @@ func (b *v4l2Buf) setTimestampNanos(nanos int64) {
 	*(*int64)(unsafe.Pointer(&b[24])) = nanos / int64(time.Second)
 	*(*int64)(unsafe.Pointer(&b[32])) = (nanos % int64(time.Second)) / int64(time.Microsecond)
 }
+
+// setLoopbackSampleID encodes the exact hub ID in the copied timeval. This is
+// an identity carrier, not a clock: readers recover tv_sec*1e6 + tv_usec.
+// Splitting before conversion preserves all 64 bits without nanosecond overflow.
+func setLoopbackSampleID(buffer *v4l2Buf, sampleID uint64) {
+	*(*int64)(unsafe.Pointer(&buffer[24])) = int64(sampleID / 1_000_000)
+	*(*int64)(unsafe.Pointer(&buffer[32])) = int64(sampleID % 1_000_000)
+}
 func (b *v4l2Buf) sequence() uint32   { return *(*uint32)(unsafe.Pointer(&b[56])) }
 func (b *v4l2Buf) setMemory(m uint32) { *(*uint32)(unsafe.Pointer(&b[60])) = m }
 func (b *v4l2Buf) offset() uint32     { return *(*uint32)(unsafe.Pointer(&b[64])) }

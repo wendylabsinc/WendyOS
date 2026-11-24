@@ -204,10 +204,14 @@ While a camera is shared:
 ### Status of shared cameras
 
 The Status column of `wendy device camera list` shows
-`shared: <app> (<state>), ...` for each app sharing the camera. The same detail
-is in the JSON from `wendy device hardware list --category camera --json` as
-the properties `share_mode`, `share_unavailable`, `shared_with` and
-`share_state`. A camera that is not shared carries `share_unavailable` with the
+`shared: <app> [format <format>, stamp <stamp>] (<state>), ...` for each app
+sharing the camera. When the camera cannot fill a node in its format or with
+its stamp, the state is `no frames` with the reason, and the node gets frames
+again once the camera can. The same detail is in the JSON from
+`wendy device hardware list --category camera --json` as the properties
+`share_mode`, `share_unavailable`, `shared_with` and `share_state`, with
+`share_mode_native` and `share_mode_h264` for the mode of a node in those
+formats. A camera that is not shared carries `share_unavailable` with the
 reason.
 
 ### Behavior to know about

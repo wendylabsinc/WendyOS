@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,11 +12,13 @@ import (
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
 // shareSubscription is the pump's view of its place in a camera's hub.
 type shareSubscription interface {
-	// Frames delivers decoded pixel frames; it closes when the capture ends.
+	// Frames delivers the frames subscribed for; it closes when the capture ends.
 	Frames() <-chan *videoFrame
 	// Restarted reports that the capture ended because the hub restarted it
 	// (so a join at once will succeed), not because it failed.
@@ -69,6 +70,7 @@ type sharePump struct {
 	camera string
 	node   shareNodeIO
 	mode   sharedMode
+	stamp  string
 	join   func(ctx context.Context) (shareSubscription, error)
 	// onReading, when set, runs each time the pump starts reading for the app
 	// (camera_share.go clears a "took the real camera" note then). It is set
@@ -99,6 +101,14 @@ type sharePump struct {
 	// writeLogged: a node write failure was logged for this subscription.
 	// writeFailed: the latest write failed (state is "no frames").
 	writeLogged, writeFailed bool
+	// awaitRandomAccess: the next frame written must be decodable without the
+	// frames before it, because the app has none of them (a new subscription)
+	// or misses one (a frame that was not written).
+	awaitRandomAccess bool
+	// unserved is why the pump left its last capture: its frames could not
+	// serve the node (cannotServe). Until a frame is written the state stays
+	// "no frames" with it across joins, and each reason is logged once.
+	unserved string
 	// quick counts rejoins since the last written frame that did not wait for
 	// a backoff; past shareQuickRejoins the pump backs off instead.
 	quick   int
@@ -106,12 +116,12 @@ type sharePump struct {
 	waiting <-chan struct{}
 }
 
-func newSharePump(logger *zap.Logger, app, camera string, node shareNodeIO, mode sharedMode, join func(ctx context.Context) (shareSubscription, error)) *sharePump {
+func newSharePump(logger *zap.Logger, app, camera string, node shareNodeIO, mode sharedMode, stamp string, join func(ctx context.Context) (shareSubscription, error)) *sharePump {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &sharePump{
-		logger: logger, app: app, camera: camera, node: node, mode: mode, join: join,
+		logger: logger, app: app, camera: camera, node: node, mode: mode, stamp: stamp, join: join,
 		nowMono: monotonicNs,
 		nowWall: func() int64 { return time.Now().UnixNano() },
 		state:   shareState{Phase: shareIdle},
@@ -169,7 +179,7 @@ func (p *sharePump) Run(ctx context.Context) {
 				p.captureEnded(ctx)
 				continue
 			}
-			p.write(f)
+			p.write(ctx, f)
 		case <-p.retry:
 			p.retry = nil
 			if p.leftMeanwhile(ctx, counts) {
@@ -235,7 +245,9 @@ func (p *sharePump) handleCount(ctx context.Context, n uint32) {
 	}
 }
 
-// start joins the hub; it is called with the count at 1.
+// start joins the hub; it is called with the count at 1. After a capture the
+// pump left because it could not serve the node, the state stays "no frames"
+// until a frame is written (unserved).
 func (p *sharePump) start(ctx context.Context) {
 	p.retry, p.waiting = nil, nil
 	if ctx.Err() != nil {
@@ -248,7 +260,10 @@ func (p *sharePump) start(ctx context.Context) {
 	}
 	p.sub, p.frames = sub, sub.Frames()
 	p.dropped, p.writeLogged, p.writeFailed, p.mismatch = false, false, false, ""
-	p.setState(shareReading, "")
+	p.awaitRandomAccess = true
+	if p.unserved == "" {
+		p.setState(shareReading, "")
+	}
 	if p.onReading != nil {
 		p.onReading()
 	}
@@ -270,7 +285,7 @@ func (p *sharePump) joinFailed(ctx context.Context, err error) {
 	case status.Code(err) == codes.NotFound || errors.Is(err, fs.ErrNotExist):
 		p.setState(shareUnplugged, "")
 	default:
-		p.setState(shareNoFrames, err.Error())
+		p.setState(shareNoFrames, refusalText(err))
 	}
 	d := p.nextDelay()
 	p.logger.Warn(fmt.Sprintf("camera share: %s: joining %s failed while the app reads: %v; retrying in %s", p.app, p.camera, err, d))
@@ -310,11 +325,23 @@ func (p *sharePump) captureEnded(ctx context.Context) {
 		detail = cerr.Error()
 	}
 	p.logger.Warn(fmt.Sprintf("camera share: %s: capture of %s stopped while the app reads: %s; retrying in %s", p.app, p.camera, detail, d))
-	if cameraHeldElsewhere(cerr) {
+	switch {
+	case cameraHeldElsewhere(cerr):
 		detail = shareCameraHeldDetail
+	case cerr != nil:
+		detail = refusalText(cerr)
 	}
 	p.setState(shareNoFrames, detail)
 	p.retry = time.After(d)
+}
+
+// refusalText is why a join or a capture failed as the hub worded it, without
+// the status code a refusal travels with.
+func refusalText(err error) string {
+	if refusal, ok := status.FromError(err); ok {
+		return refusal.Message()
+	}
+	return err.Error()
 }
 
 // shareCameraHeldDetail is the state detail while something other than the
@@ -329,19 +356,83 @@ func cameraHeldElsewhere(err error) bool {
 	return err != nil && (isCameraInUse(err) || errors.Is(err, errPixelsCameraHeld))
 }
 
+// v4l2MonotonicClock is the nativeClock of a frame whose nativeNs the kernel
+// took on CLOCK_MONOTONIC at capture, the clock a node's readers compare a
+// buffer timestamp with.
+const v4l2MonotonicClock = "CLOCK_MONOTONIC_V4L2"
+
+// captureMonoNs is a frame's capture time on the monotonic clock: the kernel's
+// when the frame carries one, and otherwise its wall-clock time rebased.
+func (p *sharePump) captureMonoNs(f *videoFrame) int64 {
+	if f.nativeClock == v4l2MonotonicClock && f.nativeNs > 0 {
+		return f.nativeNs
+	}
+	return p.nowMono() - (p.nowWall() - int64(f.tsNs))
+}
+
+func (p *sharePump) stampOf(f *videoFrame) shareFrameStamp {
+	if p.stamp == appconfig.CameraStampFrame {
+		return stampWithSampleID(f.sampleID)
+	}
+	return stampWithCaptureTime(p.captureMonoNs(f))
+}
+
+// decodableAlone reports whether an app can decode f without the frames
+// before it.
+func decodableAlone(f *videoFrame) bool {
+	if f.rawFmt != nil {
+		return true
+	}
+	_, randomAccess := frameRandomAccess(f)
+	return randomAccess
+}
+
+// Why a capture that delivers frames of the node's mode still cannot serve it.
+const (
+	shareNotWholeFramesDetail = "the camera's %s is not arriving as whole frames, so there is none to put in a buffer"
+	shareNoSampleIDDetail     = `the camera's frames carry no frame number for the "frame" stamp`
+)
+
+// unservable is why f, a frame of the node's mode, shows that this capture
+// cannot serve the node, or "".
+func (p *sharePump) unservable(f *videoFrame) string {
+	switch {
+	case p.mode.compressed() && !f.auAligned:
+		return fmt.Sprintf(shareNotWholeFramesDetail, describeNodeFrame(f))
+	case p.stamp == appconfig.CameraStampFrame && f.sampleID == 0:
+		return shareNoSampleIDDetail
+	}
+	return ""
+}
+
+// cannotServe leaves a capture whose frames cannot serve the node and joins
+// again after a backoff: the camera may be captured another way by then.
+func (p *sharePump) cannotServe(ctx context.Context, reason string) {
+	p.leave()
+	if ctx.Err() != nil {
+		return
+	}
+	d := p.nextDelay()
+	if p.unserved != reason {
+		p.unserved = reason
+		p.logger.Warn(fmt.Sprintf("camera share: %s: %s cannot serve its node (%s): %s; not writing its frames, retrying in %s",
+			p.app, p.camera, describeShareSettings(p.mode.Format, p.stamp), reason, d))
+	}
+	p.setState(shareNoFrames, reason)
+	p.retry = time.After(d)
+}
+
 // write puts one hub frame on the node. A frame that is not the node's mode is
 // dropped, and while frames are dropped the state says so ("no frames", with
 // both formats), not "reading": the app gets nothing. A matching frame puts it
-// back to "reading".
-func (p *sharePump) write(f *videoFrame) {
+// back to "reading". A frame that shows the capture cannot serve the node ends
+// the subscription (cannotServe).
+func (p *sharePump) write(ctx context.Context, f *videoFrame) {
 	if f == nil {
 		return
 	}
-	rf := f.rawFmt
-	if rf == nil || rf.GetWidth() != p.mode.Width || rf.GetHeight() != p.mode.Height ||
-		strings.TrimSpace(rf.GetFourcc()) != strings.TrimSpace(p.mode.Fourcc) ||
-		rf.GetBytesPerLine() != p.mode.BytesPerLine {
-		detail := fmt.Sprintf("camera frames are %s, the node declares %s", describeRawFormat(rf), p.mode)
+	if !p.mode.carries(f) {
+		detail := fmt.Sprintf("camera frames are %s, the node declares %s", describeNodeFrame(f), p.mode)
 		if !p.dropped {
 			p.dropped = true
 			p.logger.Warn(fmt.Sprintf("camera share: %s: %s; not writing them", p.app, detail))
@@ -352,20 +443,30 @@ func (p *sharePump) write(f *videoFrame) {
 		}
 		return
 	}
-	mono := p.nowMono() - (p.nowWall() - int64(f.tsNs))
-	if err := p.node.WriteFrame(f.data, mono); err != nil {
+	if reason := p.unservable(f); reason != "" {
+		p.cannotServe(ctx, reason)
+		return
+	}
+	if p.awaitRandomAccess {
+		if !decodableAlone(f) {
+			return
+		}
+		p.awaitRandomAccess = false
+	}
+	if err := p.node.WriteFrame(f.data, p.stampOf(f)); err != nil {
 		if !errors.Is(err, errShareNodeClosed) {
 			if !p.writeLogged {
 				p.writeLogged = true
 				p.logger.Warn(fmt.Sprintf("camera share: %s: writing %s frames to its node failed: %v; frames are not reaching the app", p.app, p.camera, err))
 			}
 			p.writeFailed, p.mismatch = true, ""
+			p.awaitRandomAccess = true
 			p.setState(shareNoFrames, err.Error())
 		}
 		return
 	}
-	if p.writeFailed || p.mismatch != "" {
-		p.writeFailed, p.mismatch = false, ""
+	if p.writeFailed || p.mismatch != "" || p.unserved != "" {
+		p.writeFailed, p.mismatch, p.unserved = false, "", ""
 		p.setState(shareReading, "")
 	}
 	p.attempt = 0
@@ -378,7 +479,7 @@ func (p *sharePump) stop() {
 	p.leave()
 	p.attempt = 0
 	p.quick = 0
-	p.writeFailed, p.mismatch = false, ""
+	p.writeFailed, p.mismatch, p.unserved = false, "", ""
 	p.setState(shareIdle, "")
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -417,7 +418,7 @@ func TestNativeJPEGFrameRate_DefaultRequestRunsAtTheRateTheShareModeDeclares(t *
 	modes := map[uint32][][2]uint32{v4l2PixFmtYUYV: {{1280, 720}}, v4l2PixFmtMJPEG: {{1280, 720}}}
 	for _, rates := range [][]uint32{{15, 60, 30}, {5, 24, 15}, nil} {
 		s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, modes, rates)
-		shared := s.shareDecisionFor(context.Background(), usbCam())
+		shared := s.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels)
 		if !shared.Shared {
 			t.Fatalf("not shared: %s", shared.Reason)
 		}

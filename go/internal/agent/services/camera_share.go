@@ -35,6 +35,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/devwatch"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hardware"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/camerashare"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -53,8 +54,12 @@ const cameraShareCreateBudget = 2 * time.Second
 // the state file or made at least this long ago.
 const cameraShareSyncGrace = time.Minute
 
-// cameraShareStateVersion is the state file format this agent reads and writes.
-const cameraShareStateVersion = 1
+// cameraShareStateVersion is the state file format this agent writes. It also
+// reads version 1, whose shares had no format or stamp: they are pixels with
+// capture times.
+const cameraShareStateVersion = 2
+
+const cameraShareStateVersionWithoutSettings = 1
 
 // v4l2NameBytes is how much of a node's label the driver keeps as its name.
 const v4l2NameBytes = 31
@@ -141,10 +146,11 @@ type CameraShareContainer struct {
 }
 
 // CreateCameraShares gives a newly created container one share node for each
-// shared camera present, within cameraShareCreateBudget. It logs why a camera
-// is not shared and never fails: a camera it does not share is the real
-// camera, exactly as before sharing existed.
-func (s *VideoService) CreateCameraShares(ctx context.Context, containerID, appID string) {
+// shared camera present, within cameraShareCreateBudget. Each node's format
+// and stamp are what the container's entitlements say for its camera. It logs
+// why a camera is not shared and never fails: a camera it does not share is
+// the real camera, exactly as before sharing existed.
+func (s *VideoService) CreateCameraShares(ctx context.Context, containerID, appID string, entitlements []appconfig.Entitlement) {
 	ctx, cancel := context.WithTimeout(ctx, cameraShareCreateBudget)
 	defer cancel()
 	log := s.shareLogger()
@@ -200,7 +206,7 @@ func (s *VideoService) CreateCameraShares(ctx context.Context, containerID, appI
 			}
 			return
 		}
-		s.createCameraShare(ctx, containerID, appID, dev, creation)
+		s.createCameraShare(ctx, containerID, appID, dev, entitlements, creation)
 	}
 }
 
@@ -266,12 +272,13 @@ func (s *VideoService) noteFreshStartSupport(err error) {
 }
 
 // createCameraShare shares one camera with a container, or logs why not.
-func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID string, dev *agentpb.VideoDevice, creation *shareCreation) {
+func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID string, dev *agentpb.VideoDevice, entitlements []appconfig.Entitlement, creation *shareCreation) {
+	format, stamp := appconfig.CameraNodeSettings(entitlements, dev.GetPath(), dev.GetName())
 	// The policy goes first, so a camera it refuses (CSI, thermal, depth) is
 	// logged with that reason. shareDecisionFor can block well past the
 	// budget (its GStreamer element listing is not context-aware), so it runs
 	// on its own goroutine.
-	decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev) })
+	decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev, format) })
 	if !ok {
 		s.logRealCamera(true, containerID, dev, shareSetupStopped(ctx.Err()))
 		return
@@ -314,7 +321,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		return
 	}
 
-	r := &shareRecord{cameraName: dev.GetName(), cameraPath: dev.GetPath(), mode: decision.Mode, node: nr, camera: id, nodeMade: made,
+	r := &shareRecord{cameraName: dev.GetName(), cameraPath: dev.GetPath(), mode: decision.Mode, stamp: stamp, node: nr, camera: id, nodeMade: made,
 		siblings: sameModelPorts(id, s.presentCameraIdentities())}
 	start, refused := s.storeShare(containerID, appID, r, node, creation)
 	if refused != "" {
@@ -326,7 +333,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 	s.persistCameraShares()
 	start()
 	s.shareLogger().Info(fmt.Sprintf("camera share: %s shares %s (%s) through %s at %s",
-		containerID, dev.GetName(), dev.GetPath(), path, decision.Mode))
+		containerID, dev.GetName(), dev.GetPath(), path, describeShareNode(decision.Mode, stamp)))
 }
 
 // makeShareNode allocates a node number and creates the node, labelled with
@@ -857,7 +864,7 @@ func (s *VideoService) storeShare(containerID, appID string, r *shareRecord, nod
 // outlives the call that made the share. Callers hold s.shares.mu.
 func (s *VideoService) attachSharePumpLocked(containerID string, r *shareRecord, node shareNodeIO) (start func()) {
 	ctx, cancel := context.WithCancel(s.serviceContext())
-	pump := newSharePump(s.logger, containerID, r.cameraName, node, r.mode,
+	pump := newSharePump(s.logger, containerID, r.cameraName, node, r.mode, r.stamp,
 		func(ctx context.Context) (shareSubscription, error) { return s.joinShare(ctx, r) })
 	// Reading for the app again means it reopened the camera: it shares it
 	// now, whatever it took after a replug or a failed start cover.
@@ -1410,7 +1417,7 @@ func (s *VideoService) adoptShare(containerID string, r *shareRecord) {
 	start := s.attachSharePumpLocked(containerID, r, node)
 	s.shares.mu.Unlock()
 	start()
-	s.shareLogger().Info(fmt.Sprintf("camera share: %s adopted %s for %s at %s", containerID, path, r.cameraName, r.mode))
+	s.shareLogger().Info(fmt.Sprintf("camera share: %s adopted %s for %s at %s", containerID, path, r.cameraName, describeShareNode(r.mode, r.stamp)))
 	s.checkAdoptedModeLater(containerID, r)
 }
 
@@ -1466,7 +1473,7 @@ func (s *VideoService) checkAdoptedMode(ctx context.Context, containerID string,
 	if dev == nil {
 		return
 	}
-	decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev) })
+	decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev, r.mode.Format) })
 	if !ok || !decision.Shared || decision.Mode == r.mode {
 		return
 	}
@@ -1774,7 +1781,7 @@ func (s *VideoService) presentIdentities() map[string]camera.Identity {
 	return camera.PresentIdentities()
 }
 
-// The state file: {"version":1,"containers":{"<id>":{"app":…,"shares":[…]}}},
+// The state file: {"version":2,"containers":{"<id>":{"app":…,"shares":[…]}}},
 // plus "removing":[{"node":254,"name":…}] while a share node waits to be
 // removed, so a removal a holder or Shutdown interrupted is retried by the next
 // agent. An older agent ignores "removing".
@@ -1798,7 +1805,10 @@ type cameraShareStateShare struct {
 	Camera cameraShareStateCamera `json:"camera"`
 	Path   string                 `json:"path"`
 	Mode   cameraShareStateMode   `json:"mode"`
-	Node   int                    `json:"node"`
+	// Format and Stamp are absent from a version 1 file.
+	Format string `json:"format,omitempty"`
+	Stamp  string `json:"stamp,omitempty"`
+	Node   int    `json:"node"`
 	// SameModelPorts is the record's siblings; omitted when it has none, and
 	// absent from files written before it existed.
 	SameModelPorts []string `json:"sameModelPorts,omitempty"`
@@ -1816,6 +1826,8 @@ type cameraShareStateMode struct {
 	Fourcc       string `json:"fourcc"`
 	BytesPerLine uint32 `json:"bytesPerLine"`
 	FPS          uint32 `json:"fps"`
+	// MaxFrameBytes is omitted for a picture mode.
+	MaxFrameBytes uint32 `json:"maxFrameBytes,omitempty"`
 }
 
 // sharesStatePathLocked is the state file's path, fixed at first use. Callers
@@ -1847,7 +1859,9 @@ func (s *VideoService) persistCameraShares() {
 				Camera: cameraShareStateCamera{Device: r.camera.Device, Index: r.camera.Index, Name: r.camera.Name},
 				Path:   r.cameraPath,
 				Mode: cameraShareStateMode{Width: r.mode.Width, Height: r.mode.Height, Fourcc: r.mode.Fourcc,
-					BytesPerLine: r.mode.BytesPerLine, FPS: r.mode.FPS},
+					BytesPerLine: r.mode.BytesPerLine, FPS: r.mode.FPS, MaxFrameBytes: r.mode.MaxFrameBytes},
+				Format:         r.mode.Format,
+				Stamp:          r.stamp,
 				Node:           r.node,
 				SameModelPorts: append([]string(nil), r.siblings...),
 			})
@@ -1877,10 +1891,12 @@ func (s *VideoService) persistCameraShares() {
 // moved aside to <path>.corrupt and logged. A file in a version newer than
 // this agent reads (a newer agent ran, then this one was put back) is left in
 // place, ignored and never written over, so the newer agent finds its own
-// records again; this agent then keeps its shares in memory only. A record
-// that could not have been written by this agent (a node outside the band, a
-// mode without a known format) is dropped, so it never hides a real camera
-// from IsShareNode.
+// records again; this agent then keeps its shares in memory only. A version 1
+// file is read with every share as pixels with capture times, which is all
+// that version could hold. A record that could not have been written by this
+// agent (a node outside the band, a mode no node can declare, a format or
+// stamp it does not know) is dropped, so it never hides a real camera from
+// IsShareNode.
 func (s *VideoService) loadCameraShares() {
 	log := s.shareLogger()
 	s.shares.fileMu.Lock()
@@ -1907,8 +1923,8 @@ func (s *VideoService) loadCameraShares() {
 	}
 	var state cameraShareState
 	err = json.Unmarshal(data, &state)
-	if err == nil && state.Version != cameraShareStateVersion {
-		err = fmt.Errorf("version %d, this agent reads version %d", state.Version, cameraShareStateVersion)
+	if err == nil && state.Version != cameraShareStateVersion && state.Version != cameraShareStateVersionWithoutSettings {
+		err = fmt.Errorf("version %d, this agent reads versions %d and %d", state.Version, cameraShareStateVersionWithoutSettings, cameraShareStateVersion)
 	}
 	if err != nil {
 		corrupt := path + ".corrupt"
@@ -1924,18 +1940,25 @@ func (s *VideoService) loadCameraShares() {
 	for id, c := range state.Containers {
 		sc := &shareContainer{app: c.App}
 		for _, sh := range c.Shares {
+			format, stamp := sh.Format, sh.Stamp
+			if state.Version == cameraShareStateVersionWithoutSettings {
+				format, stamp = appconfig.CameraFormatPixels, appconfig.CameraStampTime
+			}
 			r := &shareRecord{
 				cameraName: sh.Camera.Name,
 				cameraPath: sh.Path,
 				mode: sharedMode{Width: sh.Mode.Width, Height: sh.Mode.Height, Fourcc: sh.Mode.Fourcc,
-					BytesPerLine: sh.Mode.BytesPerLine, FPS: sh.Mode.FPS},
+					BytesPerLine: sh.Mode.BytesPerLine, FPS: sh.Mode.FPS, Format: format, MaxFrameBytes: sh.Mode.MaxFrameBytes},
+				stamp:    stamp,
 				node:     sh.Node,
 				camera:   camera.Identity{Device: sh.Camera.Device, Index: sh.Camera.Index, Name: sh.Camera.Name},
 				siblings: append([]string(nil), sh.SameModelPorts...),
 			}
-			if r.node < ipcam.IDBandStart || r.node > ipcam.IDBandEnd || r.mode.pixelFormat() == 0 || r.mode.frameBytes() <= 0 {
+			_, formatKnown := shareFrameKinds[format]
+			if r.node < ipcam.IDBandStart || r.node > ipcam.IDBandEnd || r.mode.pixelFormat() == 0 || r.mode.bufferBytes() <= 0 ||
+				!formatKnown || !slices.Contains(appconfig.CameraStamps, stamp) {
 				log.Warn(fmt.Sprintf("camera share: %s: dropping %s's share of %q at node %d with mode %s; this agent could not have made it",
-					path, id, sh.Camera.Name, sh.Node, r.mode))
+					path, id, sh.Camera.Name, sh.Node, describeShareNode(r.mode, stamp)))
 				continue
 			}
 			sc.shares = append(sc.shares, r)
@@ -3171,8 +3194,9 @@ var _ hardware.CameraShareReporter = (*VideoService)(nil)
 
 // CameraShareReport describes how each local camera is shared, by device path,
 // for the hardware listing (internal/shared/camerashare names the keys). A
-// camera that is shared carries its mode; one that is not carries why. When
-// containers share it, it also names them and each one's state.
+// camera that is shared carries its mode in each node format it can be shared
+// in; one that is not carries why. When containers share it, it also names
+// them and each one's node settings and state.
 //
 // Nothing is cached: every call decides afresh with shareDecisionFor, which
 // only reads (its GStreamer listing is memoised), on its own goroutine and
@@ -3212,18 +3236,26 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 			props[camerashare.KeyState] = strings.Join(state, ", ")
 		}
 		if ctx.Err() == nil {
-			if decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionFor(ctx, dev) }); ok {
-				if decision.Shared {
-					s.shares.mu.Lock()
-					unsupported := s.shares.freshStartUnsupported
-					s.shares.mu.Unlock()
-					if unsupported {
-						props[camerashare.KeyUnavailable] = errShareFreshStartUnsupported.Error()
-					} else {
+			if decisions, ok := withinBudget(ctx, func() map[string]shareDecision {
+				return s.shareDecisionsFor(dev, appconfig.CameraFormats...)
+			}); ok {
+				s.shares.mu.Lock()
+				unsupported := s.shares.freshStartUnsupported
+				s.shares.mu.Unlock()
+				// The default format's mode and refusal keep the keys an
+				// older command line reads.
+				for i, format := range appconfig.CameraFormats {
+					decision, isDefault := decisions[format], i == 0
+					switch {
+					case decision.Shared && !unsupported && isDefault:
 						props[camerashare.KeyMode] = decision.Mode.String()
+					case decision.Shared && !unsupported:
+						props[camerashare.KeyModeOfFormat(format)] = decision.Mode.String()
+					case decision.Shared && isDefault:
+						props[camerashare.KeyUnavailable] = errShareFreshStartUnsupported.Error()
+					case isDefault:
+						props[camerashare.KeyUnavailable] = decision.Reason
 					}
-				} else {
-					props[camerashare.KeyUnavailable] = decision.Reason
 				}
 			}
 		}
@@ -3235,7 +3267,8 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 }
 
 // shareStatesOf returns the sorted IDs of the containers sharing the camera at
-// path and, in the same order, "<id> (<phase>[: <detail>][; <note>])" for
+// path and, in the same order,
+// "<id> [format <format>, stamp <stamp>] (<phase>[: <detail>][; <note>])" for
 // each. A record whose camera was absent at its last resolve is not the camera
 // at path (sharedModeOf).
 func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
@@ -3244,6 +3277,7 @@ func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
 		pump               *sharePump
 		tookB, coverFailed string
 		modeNote           string
+		format, stamp      string
 	}
 	var snaps []snap
 	s.shares.mu.Lock()
@@ -3253,7 +3287,7 @@ func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
 		}
 		for _, r := range c.shares {
 			if r != nil && r.cameraPath == path && !r.cameraAbsent {
-				snaps = append(snaps, snap{id, r.pump, r.tookRealCamera, r.coverFailed, r.modeNote})
+				snaps = append(snaps, snap{id, r.pump, r.tookRealCamera, r.coverFailed, r.modeNote, r.mode.Format, r.stamp})
 				break
 			}
 		}
@@ -3280,7 +3314,7 @@ func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
 			text += "; " + sn.modeNote
 		}
 		ids = append(ids, sn.id)
-		states = append(states, fmt.Sprintf("%s (%s)", sn.id, text))
+		states = append(states, fmt.Sprintf("%s [%s] (%s)", sn.id, describeShareSettings(sn.format, sn.stamp), text))
 	}
 	return ids, states
 }

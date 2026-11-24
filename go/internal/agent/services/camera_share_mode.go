@@ -23,6 +23,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/devcover"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -101,7 +102,7 @@ type shareContainer struct {
 }
 
 // shareRecord is one camera shared with one container through one node.
-// cameraName and mode never change once the record is stored. Everything else
+// cameraName, mode and stamp never change once the record is stored. Everything else
 // is guarded by cameraShares.mu: cameraPath follows the camera, and
 // cameraAbsent says its last resolve did not find it; camera moves to the
 // camera's new port when it is followed there; node and nodeMade change when
@@ -117,8 +118,10 @@ type shareRecord struct {
 	// different camera that takes the path does not inherit them.
 	cameraAbsent bool
 	mode         sharedMode
-	node         int
-	camera       camera.Identity
+	// stamp is what the node's buffer timestamps hold (appconfig.CameraStamps).
+	stamp  string
+	node   int
+	camera camera.Identity
 	// siblings are the ports (Identity.Device) of cameras of the same name and
 	// index seen present while this record's camera was present too, sorted.
 	// A camera on one of them is another camera, so the record never follows
@@ -196,8 +199,9 @@ func (s *VideoService) sharedModeOf(path string) (mode sharedMode, apps []string
 		apps = append(apps, id)
 	}
 	slices.Sort(apps)
-	// Every record of one camera carries the mode the planner chose for it;
-	// taking the first container's keeps the answer deterministic regardless.
+	// Records of one camera can differ in format; their size and rate, which
+	// is all the rules compare, are the camera's. Taking the first container's
+	// keeps the answer deterministic.
 	return modes[apps[0]], apps, true
 }
 
@@ -301,8 +305,16 @@ func firstClosed(a, b <-chan struct{}) <-chan struct{} {
 	return out
 }
 
-// joinHubForShare is a share node's join. It subscribes for pixels at
-// defaults; a hub that already runs at the shared mode is joined as it is. A
+// shareFrameKinds is the hub subscription that serves each node format.
+var shareFrameKinds = map[string]frameKind{
+	appconfig.CameraFormatPixels: pixelFrames,
+	appconfig.CameraFormatNative: nativeFrames,
+	appconfig.CameraFormatH264:   encodedFrames,
+}
+
+// joinHubForShare is a share node's join. It subscribes for the frames of the
+// mode's format at defaults; a hub that already runs at the shared mode is
+// joined as it is. A
 // hub that runs at another mode is waited for when a recording holds it
 // (*shareWaitError, at once) and otherwise taken over: its explicit viewers'
 // streams end with a message that names the shared mode, its parameter-less
@@ -314,9 +326,13 @@ func firstClosed(a, b <-chan struct{}) <-chan struct{} {
 // hubTeardownTimeout for the old producer to let go. With today's constants
 // the worst case is about 6 s; the usual case is no wait, or one takeover.
 func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID uint32, mode sharedMode) (shareSubscription, error) {
+	kind, known := shareFrameKinds[mode.Format]
+	if !known {
+		return nil, status.Errorf(codes.Internal, "camera share has no subscription for format %q", mode.Format)
+	}
 	req := &agentpb.StreamVideoRequest{DeviceId: devID}
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
-		h, id, ch, err := s.getOrCreateHubKind(ctx, path, req, hubHolderStreamClient, pixelFrames)
+		h, id, ch, err := s.getOrCreateHubKind(ctx, path, req, hubHolderStreamClient, kind)
 		switch {
 		case err == nil && runsAtSharedMode(h, mode):
 			return &hubShareSubscription{hub: h, id: id, ch: ch}, nil
@@ -332,7 +348,7 @@ func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID u
 			// a takeover would change nothing, so the pump is told why.
 			return nil, err
 		}
-		sub, retry, err := s.takeOverHubForShare(ctx, path, req, mode)
+		sub, retry, err := s.takeOverHubForShare(ctx, path, req, mode, kind)
 		if err != nil {
 			return nil, err
 		}
@@ -358,7 +374,7 @@ func (s *VideoService) liveHubAtOtherMode(path string, mode sharedMode) bool {
 // mode. It returns retry when the hub is gone or no longer conflicts, and a
 // *shareWaitError when a recording holds it. The check and the takeover happen
 // under s.mu and the old hub's mu, so no recording can join between them.
-func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req *agentpb.StreamVideoRequest, mode sharedMode) (sub shareSubscription, retry bool, err error) {
+func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req *agentpb.StreamVideoRequest, mode sharedMode, kind frameKind) (sub shareSubscription, retry bool, err error) {
 	// Read before s.mu: the share records have their own lock, never nested.
 	_, apps, _ := s.sharedModeOf(path)
 	ended := status.Errorf(codes.InvalidArgument,
@@ -395,7 +411,7 @@ func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req
 		done:      make(chan struct{}),
 		sampleSeq: s.sampleSeqLocked(path),
 	}
-	id, ch, _ := h.subscribePixels()
+	id, ch, _ := h.subscribeKind(kind)
 	s.hubs[path] = h
 	// End each viewer that asked for its mode, with the reason; it is told
 	// before the producer stops, so pumpFrames reads this, not a restart.
@@ -424,7 +440,7 @@ func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req
 	return &hubShareSubscription{hub: h, id: id, ch: ch}, false, nil
 }
 
-// hubShareSubscription is a share pump's pixel subscription on a hub.
+// hubShareSubscription is a share pump's subscription on a hub.
 type hubShareSubscription struct {
 	hub   *deviceHub
 	id    int
@@ -436,8 +452,8 @@ func (s *hubShareSubscription) Frames() <-chan *videoFrame { return s.ch }
 
 func (s *hubShareSubscription) Restarted() bool { return s.hub.wasRestarted() }
 
-// Err is the reason the producer turned this subscriber away (no tap), or the
-// producer's terminal error.
+// Err is the reason the producer turned this subscriber away (it does not
+// offer the subscription's frames), or the producer's terminal error.
 func (s *hubShareSubscription) Err() error {
 	if err := s.hub.subscriberErr(s.id); err != nil {
 		return err

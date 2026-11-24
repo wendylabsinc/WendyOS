@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -23,6 +24,7 @@ type spNodeEvent struct {
 	kind   string // "frame" or "blank"
 	monoNs int64
 	size   int
+	stamp  shareFrameStamp
 }
 
 type spFakeNode struct {
@@ -52,14 +54,14 @@ func (n *spFakeNode) record(e spNodeEvent) {
 	n.mu.Unlock()
 	n.events <- e
 }
-func (n *spFakeNode) WriteFrame(data []byte, monoNs int64) error {
+func (n *spFakeNode) WriteFrame(data []byte, stamp shareFrameStamp) error {
 	n.mu.Lock()
 	err := n.writeErr
 	n.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	n.record(spNodeEvent{"frame", monoNs, len(data)})
+	n.record(spNodeEvent{"frame", stamp.captureMonoNs, len(data), stamp})
 	return nil
 }
 
@@ -169,7 +171,7 @@ func spWaitClosed(t *testing.T, ch <-chan struct{}, what string) {
 	}
 }
 
-var spMode = sharedMode{Width: 1280, Height: 720, Fourcc: "YUYV", BytesPerLine: 2560, FPS: 30}
+var spMode = sharedMode{Width: 1280, Height: 720, Fourcc: "YUYV", BytesPerLine: 2560, FPS: 30, Format: appconfig.CameraFormatPixels}
 
 func spFrame(w, h, bpl uint32, ts uint64) *videoFrame {
 	return &videoFrame{
@@ -203,7 +205,7 @@ func startSharePumpBackoff(t *testing.T, j *spJoiner, backoff []time.Duration, o
 	t.Cleanup(func() { shareRetryBackoff = old })
 	core, logs := observer.New(zap.DebugLevel)
 	node := newSpFakeNode()
-	p := newSharePump(zap.New(core), "app1", "cam0", node, spMode, j.join)
+	p := newSharePump(zap.New(core), "app1", "cam0", node, spMode, appconfig.CameraStampTime, j.join)
 	for _, o := range opts {
 		o(p)
 	}
@@ -640,7 +642,7 @@ func TestSharePump_APendingZeroBeatsAFiredTimer(t *testing.T) {
 	j := newSpJoiner()
 	node := newSpFakeNode()
 	node.counts = make(chan uint32, 1)
-	p := newSharePump(zap.NewNop(), "app1", "cam0", node, spMode, j.join)
+	p := newSharePump(zap.NewNop(), "app1", "cam0", node, spMode, appconfig.CameraStampTime, j.join)
 	p.reading = true
 	node.counts <- 0
 	if !p.leftMeanwhile(context.Background(), node.counts) {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -88,11 +89,11 @@ func brioSizes() map[uint32][][2]uint32 {
 
 func TestShareDecision_MJPEGCameraSharesYUYVAtItsDefaultSize(t *testing.T) {
 	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{5, 15, 30})
-	d := s.shareDecisionFor(context.Background(), usbCam())
+	d := s.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels)
 	if !d.Shared {
 		t.Fatalf("not shared: %s", d.Reason)
 	}
-	if want := (sharedMode{1280, 720, "YUYV", 2560, 30}); d.Mode != want {
+	if want := (sharedMode{1280, 720, "YUYV", 2560, 30, "pixels", 0}); d.Mode != want {
 		t.Errorf("Mode = %+v, want %+v", d.Mode, want)
 	}
 	if want := (rateQuery{v4l2PixFmtMJPEG, 1280, 720}); latestRateQuery() != want {
@@ -109,11 +110,11 @@ func TestShareDecision_MJPEGCameraSharesYUYVAtItsDefaultSize(t *testing.T) {
 func TestShareDecision_RawOnlyCameraSharesItsOwnFormat(t *testing.T) {
 	s := shareTestService(t, []uint32{v4l2PixFmtUYVY},
 		map[uint32][][2]uint32{v4l2PixFmtUYVY: {{640, 480}}}, nil)
-	d := s.shareDecisionFor(context.Background(), usbCam())
+	d := s.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels)
 	if !d.Shared {
 		t.Fatalf("not shared: %s", d.Reason)
 	}
-	if want := (sharedMode{640, 480, "UYVY", 1280, 30}); d.Mode != want {
+	if want := (sharedMode{640, 480, "UYVY", 1280, 30, "pixels", 0}); d.Mode != want {
 		t.Errorf("Mode = %+v, want %+v", d.Mode, want)
 	}
 	if want := (rateQuery{v4l2PixFmtUYVY, 640, 480}); latestRateQuery() != want {
@@ -167,7 +168,7 @@ func TestShareDecision_RefusalsNameTheirReason(t *testing.T) {
 			s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{30})
 			dev := usbCam()
 			tc.mutate(t, s, dev)
-			d := s.shareDecisionFor(context.Background(), dev)
+			d := s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels)
 			if d.Shared || d.Reason != tc.want {
 				t.Errorf("got Shared=%v Reason=%q, want refusal %q", d.Shared, d.Reason, tc.want)
 			}
@@ -178,7 +179,7 @@ func TestShareDecision_RefusalsNameTheirReason(t *testing.T) {
 func TestShareDecision_NoTapNamesThePlannersReason(t *testing.T) {
 	// A camera that advertises no frame size has nothing to tap.
 	s := shareTestService(t, []uint32{v4l2PixFmtYUYV}, map[uint32][][2]uint32{}, nil)
-	d := s.shareDecisionFor(context.Background(), usbCam())
+	d := s.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels)
 	want := "no shared mode: camera advertises no discrete frame size to capture raw frames at"
 	if d.Shared || d.Reason != want {
 		t.Errorf("got Shared=%v Reason=%q, want %q", d.Shared, d.Reason, want)
@@ -189,7 +190,7 @@ func TestShareDecision_PlannerErrorIsReported(t *testing.T) {
 	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), nil)
 	dev := usbCam()
 	dev.Path = "/dev/video4 !"
-	d := s.shareDecisionFor(context.Background(), dev)
+	d := s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels)
 	if d.Shared || !strings.HasPrefix(d.Reason, "no shared mode: ") || d.Reason == "no shared mode: " {
 		t.Errorf("got Shared=%v Reason=%q, want a planner error after the prefix", d.Shared, d.Reason)
 	}
@@ -278,7 +279,7 @@ func TestShareDecision_RateIsTheHighestAdvertised(t *testing.T) {
 		want  uint32
 	}{{[]uint32{15, 30}, 30}, {[]uint32{5, 24, 15}, 24}, {nil, 30}} {
 		s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), tc.rates)
-		d := s.shareDecisionFor(context.Background(), usbCam())
+		d := s.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels)
 		if !d.Shared || d.Mode.FPS != tc.want {
 			t.Errorf("rates %v: Shared=%v FPS=%d, want %d", tc.rates, d.Shared, d.Mode.FPS, tc.want)
 		}

@@ -188,14 +188,6 @@ func (w *v4l2OutputWriter) configure() error {
 	return nil
 }
 
-// setLoopbackSampleID encodes the exact hub ID in the copied timeval. This is
-// an identity carrier, not a clock: readers recover tv_sec*1e6 + tv_usec.
-// Splitting before conversion preserves all 64 bits without nanosecond overflow.
-func setLoopbackSampleID(buffer *v4l2Buf, sampleID uint64) {
-	*(*int64)(unsafe.Pointer(&buffer[24])) = int64(sampleID / 1_000_000)
-	*(*int64)(unsafe.Pointer(&buffer[32])) = int64(sampleID % 1_000_000)
-}
-
 // WriteFrame carries the hub sample ID in the nonzero writer timestamp that
 // v4l2loopback copies verbatim to CAPTURE buffers. The kernel sequence remains
 // separate and is used only for the binding table and reader drop accounting.

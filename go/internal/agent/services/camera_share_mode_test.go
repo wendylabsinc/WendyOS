@@ -10,12 +10,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 // testSharedMode is the shared mode every test here puts on /dev/video0.
-var testSharedMode = sharedMode{Width: 1280, Height: 720, Fourcc: "YUYV", BytesPerLine: 2560, FPS: 30}
+var testSharedMode = sharedMode{Width: 1280, Height: 720, Fourcc: "YUYV", BytesPerLine: 2560, FPS: 30, Format: appconfig.CameraFormatPixels}
 
 // shareForTest records that each container holds a share node for path, as
 // the share manager would. cv-b goes in before cv-a so the listing is seen to
@@ -29,7 +30,7 @@ func shareForTest(svc *VideoService, path string, containers ...string) {
 	for i, id := range containers {
 		svc.shares.containers[id] = &shareContainer{
 			app:    "sh.wendy." + id,
-			shares: []*shareRecord{{cameraName: "Brio 101", cameraPath: path, mode: testSharedMode, node: 254 - i}},
+			shares: []*shareRecord{{cameraName: "Brio 101", cameraPath: path, mode: testSharedMode, stamp: appconfig.CameraStampTime, node: 254 - i}},
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -28,9 +29,11 @@ func TestCameraShareReport_NamesModeAppsAndStates(t *testing.T) {
 	got := h.s.CameraShareReport(context.Background())["/dev/video0"]
 	dev := &agentpb.VideoDevice{Path: "/dev/video0", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_USB}
 	want := map[string]string{
-		"share_mode":  h.s.shareDecisionFor(context.Background(), dev).Mode.String(),
-		"shared_with": "cv-a, cv-b, cv-c",
-		"share_state": "cv-a (reading), cv-b (waiting: held by cv-x at 1920x1080), cv-c (not sharing: took the real camera after a replug)",
+		"share_mode":        h.s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels).Mode.String(),
+		"share_mode_native": "1280x720 MJPG, 30 fps",
+		"share_mode_h264":   "1280x720 H264, 30 fps",
+		"shared_with":       "cv-a, cv-b, cv-c",
+		"share_state":       "cv-a [format pixels, stamp time] (reading), cv-b [format pixels, stamp time] (waiting: held by cv-x at 1920x1080), cv-c [format pixels, stamp time] (not sharing: took the real camera after a replug)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("report = %#v, want %#v", got, want)
@@ -49,7 +52,7 @@ func TestCameraShareReport_UnsharedCameraSaysWhy(t *testing.T) {
 func TestCameraShareReport_UnsupportedFreshStartFallsBackToRealCamera(t *testing.T) {
 	h := newCSHarness(t, csBrio())
 	h.openErr["/dev/video255"] = errShareFreshStartUnsupported
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.drainRemovals()
 	if len(h.records("cv-a")) != 0 || len(h.loop.liveAux()) != 0 {
 		t.Fatal("unsupported module left a share node covering the real camera")
@@ -60,7 +63,7 @@ func TestCameraShareReport_UnsupportedFreshStartFallsBackToRealCamera(t *testing
 		t.Fatalf("report = %#v, want %#v", got, want)
 	}
 	delete(h.openErr, "/dev/video255")
-	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b")
+	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b", nil)
 	got = h.s.CameraShareReport(context.Background())["/dev/video0"]
 	if got["share_unavailable"] != "" || got["share_mode"] == "" {
 		t.Fatalf("successful new module open kept old refusal: %#v", got)
@@ -146,7 +149,7 @@ func TestCameraShareReport_SlowDecisionStillNamesSharers(t *testing.T) {
 	}
 	for _, path := range []string{"/dev/video0", "/dev/video4"} {
 		props := got[path]
-		if props["shared_with"] != "cv-a" || props["share_state"] != "cv-a (reading)" {
+		if props["shared_with"] != "cv-a" || props["share_state"] != "cv-a [format pixels, stamp time] (reading)" {
 			t.Errorf("%s: %#v, want cv-a sharing and reading", path, props)
 		}
 		if _, ok := props["share_mode"]; path == "/dev/video0" && ok {

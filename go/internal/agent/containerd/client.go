@@ -2153,7 +2153,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// never made, so its app would get the real cameras.
 	if sharesCamera(labels) {
 		c.mu.Unlock()
-		c.createCameraShares(context.WithoutCancel(ctx), containerName, appID)
+		c.createCameraShares(context.WithoutCancel(ctx), containerName, appID, labels)
 		c.mu.Lock()
 	}
 

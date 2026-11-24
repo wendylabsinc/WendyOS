@@ -32,11 +32,13 @@ type shareCall struct {
 // provider, in the order the calls returned. cover, when set, runs inside
 // CoverCameraShares before it returns, and its errors are returned.
 type fakeCameraShares struct {
-	mu     sync.Mutex
-	calls  []shareCall
-	syncs  [][]services.CameraShareContainer
-	cover  func(containerID string, pid uint32) []error
-	remove func(containerID string) // runs inside RemoveCameraShares
+	mu    sync.Mutex
+	calls []shareCall
+	// created holds the entitlements of each create, by container.
+	created map[string][]appconfig.Entitlement
+	syncs   [][]services.CameraShareContainer
+	cover   func(containerID string, pid uint32) []error
+	remove  func(containerID string) // runs inside RemoveCameraShares
 }
 
 var _ CameraShareProvider = (*fakeCameraShares)(nil)
@@ -53,8 +55,20 @@ func (f *fakeCameraShares) record(call shareCall) {
 	f.calls = append(f.calls, call)
 }
 
-func (f *fakeCameraShares) CreateCameraShares(_ context.Context, containerID, appID string) {
+func (f *fakeCameraShares) CreateCameraShares(_ context.Context, containerID, appID string, entitlements []appconfig.Entitlement) {
+	f.mu.Lock()
+	if f.created == nil {
+		f.created = map[string][]appconfig.Entitlement{}
+	}
+	f.created[containerID] = entitlements
+	f.mu.Unlock()
 	f.record(shareCall{op: "create", containerID: containerID, appID: appID})
+}
+
+func (f *fakeCameraShares) createdWith(containerID string) []appconfig.Entitlement {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.created[containerID]
 }
 
 func (f *fakeCameraShares) CoverCameraShares(_ context.Context, containerID string, pid uint32) []error {
@@ -288,12 +302,43 @@ func TestCameraShareCoverLogsEachErrorWithTheAppName(t *testing.T) {
 	}
 }
 
+// The share manager is given the entitlements the container's labels carry,
+// so each camera's node gets the format and stamp its entry asks for.
+func TestCreateCameraSharesPassesTheLabelsEntitlements(t *testing.T) {
+	fake := &fakeCameraShares{}
+	c := &Client{logger: zap.NewNop()}
+	c.SetCameraShareProvider(fake)
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"Brio 101"}, Format: appconfig.CameraFormatH264},
+		{Type: appconfig.EntitlementNetwork, Mode: "host"},
+	}
+	labels := wendyLabels("app", "", "1.0.0", nil, entitlements, "", nil)
+	addCameraShareLabel(labels, entitlements)
+	if !sharesCamera(labels) {
+		t.Fatalf("labels do not mark the container as sharing: %v", labels)
+	}
+
+	c.createCameraShares(context.Background(), "app", "app", labels)
+
+	got := fake.createdWith("app")
+	for _, tc := range []struct{ path, name, format, stamp string }{
+		{"/dev/video0", "C920", appconfig.CameraFormatNative, appconfig.CameraStampFrame},
+		{"/dev/video2", "Brio 101", appconfig.CameraFormatH264, appconfig.CameraStampTime},
+		{"/dev/video4", "Other", appconfig.CameraFormatPixels, appconfig.CameraStampTime},
+	} {
+		if format, stamp := appconfig.CameraNodeSettings(got, tc.path, tc.name); format != tc.format || stamp != tc.stamp {
+			t.Errorf("%s (%s): settings from the passed entitlements = (%q, %q), want (%q, %q)", tc.path, tc.name, format, stamp, tc.format, tc.stamp)
+		}
+	}
+}
+
 // Without a provider (no video service, other platforms) every share call is
 // a no-op.
 func TestCameraShareCallsWithoutAProviderDoNothing(t *testing.T) {
 	c := &Client{logger: zap.NewNop()}
 	ctx := context.Background()
-	c.createCameraShares(ctx, "app", "app")
+	c.createCameraShares(ctx, "app", "app", map[string]string{labelKeyCameraShare: "shared"})
 	if c.coverCameraShares(ctx, "app", "app", 1) {
 		t.Fatal("coverCameraShares reported a cover without a provider")
 	}

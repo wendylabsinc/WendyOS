@@ -23,6 +23,8 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/camerashare"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -49,6 +51,332 @@ import (
 func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 	requireShareCaptureFixture(t)
 
+	containers := []string{"ci-app-a", "ci-app-b"}
+	fx := startShareCaptureFixture(t, containers...)
+	ctx, logs, path, feed, statePath, svc := fx.ctx, fx.logs, fx.path, fx.feed, fx.statePath, fx.svc
+
+	// Step 3: two containers are created, and each shares the camera.
+	nodes := map[string]string{}
+	var mode sharedMode
+	for i, id := range containers {
+		svc.CreateCameraShares(ctx, id, fmt.Sprintf("sh.wendy.ci.%c", 'a'+i), nil)
+		r, ok := shareRecordOf(svc, id)
+		if !ok {
+			t.Fatalf("camera was not shared: %s", shareRefusalReason(logs, id))
+		}
+		fx.made = append(fx.made, r.node)
+		if r.cameraPath != path {
+			t.Fatalf("%s shares %s, want the camera %s", id, r.cameraPath, path)
+		}
+		nodes[id] = shareNodePath(r.node)
+		mode = r.mode
+		t.Logf("%s shares %s through %s at %s", id, path, nodes[id], r.mode)
+	}
+	if nodes[containers[0]] == nodes[containers[1]] {
+		t.Fatalf("both containers share through %s, want a node each", nodes[containers[0]])
+	}
+	if data, err := os.ReadFile(statePath); err != nil {
+		t.Fatalf("reading the state file: %v", err)
+	} else {
+		var state cameraShareState
+		if err := json.Unmarshal(data, &state); err != nil {
+			t.Fatalf("the state file does not parse: %v: %s", err, data)
+		}
+		for i, id := range containers {
+			if c := state.Containers[id]; len(c.Shares) != 1 || c.Shares[0].Node != fx.made[i] || c.Shares[0].Path != path {
+				t.Fatalf("the state file does not hold %s's share of %s at node %d: %s", id, path, fx.made[i], data)
+			}
+		}
+	}
+	const frameBytes = pixelsFixtureWidth * pixelsFixtureHeight * 2
+	if mode.Width != pixelsFixtureWidth || mode.Height != pixelsFixtureHeight || mode.Fourcc != "YUYV" ||
+		mode.BytesPerLine != pixelsFixtureWidth*2 || mode.frameBytes() != frameBytes {
+		t.Fatalf("shared mode is %s with %d bytes per line, want %dx%d YUYV with %d", mode, mode.BytesPerLine,
+			pixelsFixtureWidth, pixelsFixtureHeight, pixelsFixtureWidth*2)
+	}
+
+	// Step 4: each node is a camera with the shared format, and nothing runs
+	// the camera while no app reads.
+	for _, id := range containers {
+		probe := openShareTestReader(t, nodes[id])
+		var got v4l2Format
+		got.Type = v4l2BufTypeVideoCapture
+		if err := probe.ioctl(vidiocGFmtForShareTest, unsafe.Pointer(&got)); err != nil {
+			t.Fatalf("G_FMT(CAPTURE) on %s: %v", nodes[id], err)
+		}
+		probe.close()
+		if got.Width != pixelsFixtureWidth || got.Height != pixelsFixtureHeight || got.PixelFormat != v4l2PixFmtYUYV ||
+			got.BytesPerLine != pixelsFixtureWidth*2 {
+			t.Fatalf("G_FMT(CAPTURE) on %s = %dx%d %s, %d bytes per line; want %dx%d YUYV, %d", nodes[id],
+				got.Width, got.Height, fourccName(got.PixelFormat), got.BytesPerLine,
+				pixelsFixtureWidth, pixelsFixtureHeight, pixelsFixtureWidth*2)
+		}
+	}
+	if n := hubCount(svc); n != 0 {
+		t.Fatalf("camera is running with no reader: %d hubs", n)
+	}
+
+	// Step 5: app B joins while app A is already receiving the source. Each
+	// app owns a separate capture node, backed by the same physical capture.
+	readerA := openShareAppReader(t, nodes[containers[0]])
+	readerB := openShareAppReader(t, nodes[containers[1]])
+	for _, r := range []*shareAppReader{readerA, readerB} {
+		started := monotonicNs()
+		if err := r.start(); err != nil {
+			t.Fatalf("reader STREAMON on %s: %v", r.path, err)
+		}
+		frame, stamp, err := r.next(ctx, 10*time.Second)
+		if err != nil {
+			t.Fatalf("first source frame on %s: %v", r.path, err)
+		}
+		if problem := sharePictureProblem(frame, frameBytes); problem != "" || stamp < started/1000*1000 {
+			t.Fatalf("FRESH_CAPTURE_CONTRACT: app's first frame on %s is not fresh source pixels: %s timestamp=%d start=%d", r.path, problem, stamp, started)
+		}
+	}
+
+	const wantFrames = 10
+	got, problem := readPictures(ctx, []*shareAppReader{readerA, readerB}, wantFrames, 10*time.Second, frameBytes)
+	if problem != "" {
+		t.Fatalf("%s; hubs: %d; feed: %v", problem, hubCount(svc), feed.err())
+	}
+	t.Logf("both readers received the source picture, stamped with its capture time: %v frames", got)
+
+	// Step 6: app readers want pixels only, so the pipeline has no encoder.
+	hub, ok := hubOf(svc, path)
+	if !ok {
+		t.Fatalf("no hub runs %s while both apps read", path)
+	}
+	if n := hubCount(svc); n != 1 {
+		t.Fatalf("%d hubs run while both apps read one camera, want 1", n)
+	}
+	if hub.pipelineEncodes() {
+		t.Fatal("pipeline is encoding with only app readers")
+	}
+
+	// Step 7: app A stops reading; app B keeps its frames. 10 frames at 15 fps
+	// take under a second; the 5 s allow for a hosted runner under -race. A
+	// reader that stalled when A left still yields at most the 2 frames its
+	// buffers held, so this still catches it.
+	readerA.close()
+	got, problem = readPictures(ctx, []*shareAppReader{readerB}, wantFrames, 5*time.Second, frameBytes)
+	if problem != "" {
+		t.Fatalf("one app leaving stopped another app's frames: %s; hub error: %v", problem, hub.terminalErr())
+	}
+	t.Logf("after %s stopped reading, %s received %v more frames", readerA.path, readerB.path, got)
+
+	// Step 8: app B stops too; the camera stops with its last reader.
+	readerB.close()
+	deadline := time.Now().Add(3 * time.Second)
+	for hubCount(svc) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("camera still running with no reader 3 s after the last one stopped")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Step 9: reopening a dormant node waits for the next real camera picture.
+	// Neither blank placeholders nor pictures from before STREAMON are valid.
+	for attempt := 0; attempt < 3; attempt++ {
+		again := openShareAppReader(t, nodes[containers[0]])
+		restarted := monotonicNs()
+		if err := again.start(); err != nil {
+			t.Fatalf("new reader STREAMON on %s: %v", again.path, err)
+		}
+		frame, ts, err := again.next(ctx, 10*time.Second)
+		if err != nil {
+			t.Fatalf("new reader got no first frame: %v; feed: %v", err, feed.err())
+		}
+		if problem := sharePictureProblem(frame, frameBytes); problem != "" {
+			t.Fatalf("FRESH_CAPTURE_CONTRACT: first frame on %s was not the source picture: %s", again.path, problem)
+		}
+		if ts < restarted/1000*1000 {
+			t.Fatalf("FRESH_CAPTURE_CONTRACT: first frame on %s predates STREAMON by %s", again.path, time.Duration(restarted-ts))
+		}
+		again.close()
+		deadline = time.Now().Add(3 * time.Second)
+		for hubCount(svc) != 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("camera still running after reopened reader stopped")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	t.Log("FRESH_CAPTURE_FIRST_PICTURE_VERIFIED")
+
+	// Step 10: both containers are removed; their nodes and records go.
+	for _, id := range containers {
+		svc.RemoveCameraShares(id)
+	}
+	if problem := waitShareNodesRemoved(svc, fx.made, statePath, 15*time.Second); problem != "" {
+		t.Fatal(problem)
+	}
+	t.Logf("removing both containers removed %v and left no containers in the state file", fx.made)
+}
+
+// Each app's node follows its entitlement, the whole way through real kernel
+// nodes: one capture of one JPEG camera fills a node of the camera's own
+// frames and a node of H.264, every buffer stamped with its frame's sample ID,
+// beside a node of decoded pictures stamped with capture times.
+func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
+	requireShareCaptureFixture(t)
+	cameraEntitlement := func(format, stamp string) []appconfig.Entitlement {
+		return []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Format: format, Stamp: stamp}}
+	}
+	apps := []struct {
+		id           string
+		entitlements []appconfig.Entitlement
+		format       string
+		stamp        string
+		pixelFormat  uint32
+	}{
+		{"ci-app-native", cameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame), appconfig.CameraFormatNative, appconfig.CameraStampFrame, v4l2PixFmtMJPEG},
+		{"ci-app-h264", cameraEntitlement(appconfig.CameraFormatH264, appconfig.CameraStampFrame), appconfig.CameraFormatH264, appconfig.CameraStampFrame, v4l2PixFmtH264},
+		{"ci-app-pixels", cameraEntitlement("", ""), appconfig.CameraFormatPixels, appconfig.CameraStampTime, v4l2PixFmtYUYV},
+	}
+	fx := startShareCaptureFixture(t, apps[0].id, apps[1].id, apps[2].id)
+	ctx, svc, path := fx.ctx, fx.svc, fx.path
+
+	readers := map[string]*shareAppReader{}
+	for _, app := range apps {
+		svc.CreateCameraShares(ctx, app.id, "sh.wendy."+app.id, app.entitlements)
+		r, ok := shareRecordOf(svc, app.id)
+		if !ok {
+			t.Fatalf("%s: camera was not shared: %s", app.id, shareRefusalReason(fx.logs, app.id))
+		}
+		fx.made = append(fx.made, r.node)
+		if r.mode.Format != app.format || r.stamp != app.stamp || r.mode.pixelFormat() != app.pixelFormat ||
+			r.mode.Width != pixelsFixtureWidth || r.mode.Height != pixelsFixtureHeight {
+			t.Fatalf("%s shares at %s, want %dx%d %s as %s", app.id, describeShareNode(r.mode, r.stamp),
+				pixelsFixtureWidth, pixelsFixtureHeight, fourccName(app.pixelFormat), describeShareSettings(app.format, app.stamp))
+		}
+		node := shareNodePath(r.node)
+		probe := openShareTestReader(t, node)
+		var got v4l2Format
+		got.Type = v4l2BufTypeVideoCapture
+		if err := probe.ioctl(vidiocGFmtForShareTest, unsafe.Pointer(&got)); err != nil {
+			t.Fatalf("G_FMT(CAPTURE) on %s: %v", node, err)
+		}
+		probe.close()
+		if got.Width != pixelsFixtureWidth || got.Height != pixelsFixtureHeight || got.PixelFormat != app.pixelFormat ||
+			got.SizeImage < uint32(r.mode.bufferBytes()) {
+			t.Fatalf("G_FMT(CAPTURE) on %s = %dx%d %s, image of %d bytes; want %s with room for %d", node,
+				got.Width, got.Height, fourccName(got.PixelFormat), got.SizeImage, r.mode, r.mode.bufferBytes())
+		}
+		t.Logf("%s shares %s through %s at %s", app.id, path, node, describeShareNode(r.mode, r.stamp))
+		readers[app.id] = openShareAppReader(t, node)
+	}
+
+	started := monotonicNs()
+	for _, app := range apps {
+		if err := readers[app.id].start(); err != nil {
+			t.Fatalf("%s: reader STREAMON: %v", app.id, err)
+		}
+	}
+	const wantFrames = 10
+	read := func(id string) (frames [][]byte, stamps []int64) {
+		t.Helper()
+		for len(frames) < wantFrames {
+			frame, stamp, err := readers[id].next(ctx, 15*time.Second)
+			if err != nil {
+				state := svc.CameraShareReport(ctx)[path][camerashare.KeyState]
+				if len(frames) == 0 && strings.Contains(state, "not available for this camera") {
+					if os.Getenv("WENDY_GSTREAMER_REQUIRED") == "1" {
+						t.Fatalf("required: the camera's own frames captured whole: %s", state)
+					}
+					t.Skipf("this device does not capture the camera's own frames whole: %s", state)
+				}
+				t.Fatalf("%s: frame %d: %v; share state: %s; feed: %v", id, len(frames), err, state, fx.feed.err())
+			}
+			frames, stamps = append(frames, frame), append(stamps, stamp)
+		}
+		return frames, stamps
+	}
+	// A sample ID is read back as tv_sec*1e6 + tv_usec: the timestamp in
+	// whole microseconds.
+	sampleIDs := func(id string, stamps []int64) []uint64 {
+		t.Helper()
+		ids := make([]uint64, len(stamps))
+		for i, stamp := range stamps {
+			ids[i] = uint64(stamp / 1000)
+			if stamp <= 0 || stamp%1000 != 0 || (i > 0 && ids[i] <= ids[i-1]) {
+				t.Fatalf("%s: buffer timestamps %v are not increasing sample IDs", id, stamps)
+			}
+		}
+		return ids
+	}
+
+	jpegs, jpegStamps := read(apps[0].id)
+	for i, frame := range jpegs {
+		if whole, ok := jpegFrameInBuffer(frame); !ok || len(whole) != len(frame) {
+			t.Fatalf("native node frame %d (%d bytes) is not one whole JPEG image", i, len(frame))
+		}
+	}
+	jpegIDs := sampleIDs(apps[0].id, jpegStamps)
+
+	units, unitStamps := read(apps[1].id)
+	if _, randomAccess := h264RandomAccessOffset(units[0]); !randomAccess {
+		t.Fatalf("h264 node's first frame (%d bytes) cannot be decoded on its own", len(units[0]))
+	}
+	for i, unit := range units {
+		if _, _, ok := h264NextNAL(unit, 0); !ok {
+			t.Fatalf("h264 node frame %d (%d bytes) holds no NAL unit", i, len(unit))
+		}
+	}
+	unitIDs := sampleIDs(apps[1].id, unitStamps)
+
+	const frameBytes = pixelsFixtureWidth * pixelsFixtureHeight * 2
+	pictures, pictureStamps := read(apps[2].id)
+	for i, frame := range pictures {
+		if problem := sharePictureProblem(frame, frameBytes); problem != "" || pictureStamps[i] < started/1000*1000 || pictureStamps[i] > monotonicNs() {
+			t.Fatalf("pixels node frame %d: %s; timestamp %d is not a capture time between %d and now", i, problem, pictureStamps[i], started)
+		}
+	}
+
+	// One capture numbers the frames of both compressed nodes.
+	if n := hubCount(svc); n != 1 {
+		t.Fatalf("%d hubs run while three apps read one camera, want 1", n)
+	}
+	svc.mu.Lock()
+	minted := svc.sampleSeqs[path].Load()
+	svc.mu.Unlock()
+	for id, ids := range map[string][]uint64{apps[0].id: jpegIDs, apps[1].id: unitIDs} {
+		if last := ids[len(ids)-1]; last > minted {
+			t.Fatalf("%s: sample ID %d is beyond the %d the camera's capture has minted", id, last, minted)
+		}
+	}
+	want := "ci-app-h264 [format h264, stamp frame] (reading), ci-app-native [format native, stamp frame] (reading), ci-app-pixels [format pixels, stamp time] (reading)"
+	if state := svc.CameraShareReport(ctx)[path][camerashare.KeyState]; state != want {
+		t.Fatalf("share state = %q\nwant        %q", state, want)
+	}
+	t.Logf("native frames %v, H.264 access units %v, and %d pictures came from one capture", jpegIDs, unitIDs, len(pictures))
+
+	for _, app := range apps {
+		readers[app.id].close()
+		svc.RemoveCameraShares(app.id)
+	}
+	if problem := waitShareNodesRemoved(svc, fx.made, fx.statePath, 15*time.Second); problem != "" {
+		t.Fatal(problem)
+	}
+}
+
+// shareCaptureFixture is a JPEG camera on a v4l2loopback node and a video
+// service wired for it as NewVideoService wires local cameras, with a loopback
+// manager, registry and state file of its own. Its cleanup removes the shares
+// of containers and waits for the nodes in made to go.
+type shareCaptureFixture struct {
+	ctx        context.Context
+	logs       *observer.ObservedLogs
+	path       string
+	feed       *mjpegFeed
+	statePath  string
+	svc        *VideoService
+	containers []string
+	made       []int
+}
+
+func startShareCaptureFixture(t *testing.T, containers ...string) *shareCaptureFixture {
+	t.Helper()
+	fx := &shareCaptureFixture{containers: containers}
 	core, logs := observer.New(zap.DebugLevel)
 	logger := zap.New(core)
 	// Cleanups run last to first. This one runs last: the agent's own account
@@ -142,15 +470,13 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 		svc.wg.Add(1)
 		go svc.runProducer(ctx, h, path, req)
 	}
-	containers := []string{"ci-app-a", "ci-app-b"}
-	var made []int // share node numbers this test's service made
 	// Registered before any reader opens a node, so it runs after every reader
 	// has closed its node. The shares go first and their nodes are removed
 	// (Shutdown would cancel a removal still waiting for its node to settle),
 	// then every pipeline exits and releases the camera, then the feed closes
 	// it, and only then is the camera node removed.
 	t.Cleanup(func() {
-		for _, id := range containers {
+		for _, id := range fx.containers {
 			svc.RemoveCameraShares(id)
 		}
 		// A drain that times out here (a node another process keeps open, say)
@@ -158,7 +484,7 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 		// that share node behind. That is acceptable only because the CI runner
 		// is disposable: this test's records are in a state file of its own, so
 		// run on a device such a node stays until the device reboots.
-		if problem := waitShareNodesRemoved(svc, made, statePath, 15*time.Second); problem != "" {
+		if problem := waitShareNodesRemoved(svc, fx.made, statePath, 15*time.Second); problem != "" {
 			t.Errorf("cleanup: %s", problem)
 		}
 		svc.Shutdown()
@@ -179,163 +505,8 @@ func TestCameraShareTwoReadersDecodeRealFrames(t *testing.T) {
 		t.Fatalf("listing GStreamer elements: %v", err)
 	}
 	t.Logf("listed GStreamer elements in %s", time.Since(listStart).Round(time.Millisecond))
-
-	// Step 3: two containers are created, and each shares the camera.
-	nodes := map[string]string{}
-	var mode sharedMode
-	for i, id := range containers {
-		svc.CreateCameraShares(ctx, id, fmt.Sprintf("sh.wendy.ci.%c", 'a'+i))
-		r, ok := shareRecordOf(svc, id)
-		if !ok {
-			t.Fatalf("camera was not shared: %s", shareRefusalReason(logs, id))
-		}
-		made = append(made, r.node)
-		if r.cameraPath != path {
-			t.Fatalf("%s shares %s, want the camera %s", id, r.cameraPath, path)
-		}
-		nodes[id] = shareNodePath(r.node)
-		mode = r.mode
-		t.Logf("%s shares %s through %s at %s", id, path, nodes[id], r.mode)
-	}
-	if nodes[containers[0]] == nodes[containers[1]] {
-		t.Fatalf("both containers share through %s, want a node each", nodes[containers[0]])
-	}
-	if data, err := os.ReadFile(statePath); err != nil {
-		t.Fatalf("reading the state file: %v", err)
-	} else {
-		var state cameraShareState
-		if err := json.Unmarshal(data, &state); err != nil {
-			t.Fatalf("the state file does not parse: %v: %s", err, data)
-		}
-		for i, id := range containers {
-			if c := state.Containers[id]; len(c.Shares) != 1 || c.Shares[0].Node != made[i] || c.Shares[0].Path != path {
-				t.Fatalf("the state file does not hold %s's share of %s at node %d: %s", id, path, made[i], data)
-			}
-		}
-	}
-	const frameBytes = pixelsFixtureWidth * pixelsFixtureHeight * 2
-	if mode.Width != pixelsFixtureWidth || mode.Height != pixelsFixtureHeight || mode.Fourcc != "YUYV" ||
-		mode.BytesPerLine != pixelsFixtureWidth*2 || mode.frameBytes() != frameBytes {
-		t.Fatalf("shared mode is %s with %d bytes per line, want %dx%d YUYV with %d", mode, mode.BytesPerLine,
-			pixelsFixtureWidth, pixelsFixtureHeight, pixelsFixtureWidth*2)
-	}
-
-	// Step 4: each node is a camera with the shared format, and nothing runs
-	// the camera while no app reads.
-	for _, id := range containers {
-		probe := openShareTestReader(t, nodes[id])
-		var got v4l2Format
-		got.Type = v4l2BufTypeVideoCapture
-		if err := probe.ioctl(vidiocGFmtForShareTest, unsafe.Pointer(&got)); err != nil {
-			t.Fatalf("G_FMT(CAPTURE) on %s: %v", nodes[id], err)
-		}
-		probe.close()
-		if got.Width != pixelsFixtureWidth || got.Height != pixelsFixtureHeight || got.PixelFormat != v4l2PixFmtYUYV ||
-			got.BytesPerLine != pixelsFixtureWidth*2 {
-			t.Fatalf("G_FMT(CAPTURE) on %s = %dx%d %s, %d bytes per line; want %dx%d YUYV, %d", nodes[id],
-				got.Width, got.Height, fourccName(got.PixelFormat), got.BytesPerLine,
-				pixelsFixtureWidth, pixelsFixtureHeight, pixelsFixtureWidth*2)
-		}
-	}
-	if n := hubCount(svc); n != 0 {
-		t.Fatalf("camera is running with no reader: %d hubs", n)
-	}
-
-	// Step 5: app B joins while app A is already receiving the source. Each
-	// app owns a separate capture node, backed by the same physical capture.
-	readerA := openShareAppReader(t, nodes[containers[0]])
-	readerB := openShareAppReader(t, nodes[containers[1]])
-	for _, r := range []*shareAppReader{readerA, readerB} {
-		started := monotonicNs()
-		if err := r.start(); err != nil {
-			t.Fatalf("reader STREAMON on %s: %v", r.path, err)
-		}
-		frame, stamp, err := r.next(ctx, 10*time.Second)
-		if err != nil {
-			t.Fatalf("first source frame on %s: %v", r.path, err)
-		}
-		if problem := sharePictureProblem(frame, frameBytes); problem != "" || stamp < started/1000*1000 {
-			t.Fatalf("FRESH_CAPTURE_CONTRACT: app's first frame on %s is not fresh source pixels: %s timestamp=%d start=%d", r.path, problem, stamp, started)
-		}
-	}
-
-	const wantFrames = 10
-	got, problem := readPictures(ctx, []*shareAppReader{readerA, readerB}, wantFrames, 10*time.Second, frameBytes)
-	if problem != "" {
-		t.Fatalf("%s; hubs: %d; feed: %v", problem, hubCount(svc), feed.err())
-	}
-	t.Logf("both readers received the source picture, stamped with its capture time: %v frames", got)
-
-	// Step 6: app readers want pixels only, so the pipeline has no encoder.
-	hub, ok := hubOf(svc, path)
-	if !ok {
-		t.Fatalf("no hub runs %s while both apps read", path)
-	}
-	if n := hubCount(svc); n != 1 {
-		t.Fatalf("%d hubs run while both apps read one camera, want 1", n)
-	}
-	if hub.pipelineEncodes() {
-		t.Fatal("pipeline is encoding with only app readers")
-	}
-
-	// Step 7: app A stops reading; app B keeps its frames. 10 frames at 15 fps
-	// take under a second; the 5 s allow for a hosted runner under -race. A
-	// reader that stalled when A left still yields at most the 2 frames its
-	// buffers held, so this still catches it.
-	readerA.close()
-	got, problem = readPictures(ctx, []*shareAppReader{readerB}, wantFrames, 5*time.Second, frameBytes)
-	if problem != "" {
-		t.Fatalf("one app leaving stopped another app's frames: %s; hub error: %v", problem, hub.terminalErr())
-	}
-	t.Logf("after %s stopped reading, %s received %v more frames", readerA.path, readerB.path, got)
-
-	// Step 8: app B stops too; the camera stops with its last reader.
-	readerB.close()
-	deadline = time.Now().Add(3 * time.Second)
-	for hubCount(svc) != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("camera still running with no reader 3 s after the last one stopped")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	// Step 9: reopening a dormant node waits for the next real camera picture.
-	// Neither blank placeholders nor pictures from before STREAMON are valid.
-	for attempt := 0; attempt < 3; attempt++ {
-		again := openShareAppReader(t, nodes[containers[0]])
-		restarted := monotonicNs()
-		if err := again.start(); err != nil {
-			t.Fatalf("new reader STREAMON on %s: %v", again.path, err)
-		}
-		frame, ts, err := again.next(ctx, 10*time.Second)
-		if err != nil {
-			t.Fatalf("new reader got no first frame: %v; feed: %v", err, feed.err())
-		}
-		if problem := sharePictureProblem(frame, frameBytes); problem != "" {
-			t.Fatalf("FRESH_CAPTURE_CONTRACT: first frame on %s was not the source picture: %s", again.path, problem)
-		}
-		if ts < restarted/1000*1000 {
-			t.Fatalf("FRESH_CAPTURE_CONTRACT: first frame on %s predates STREAMON by %s", again.path, time.Duration(restarted-ts))
-		}
-		again.close()
-		deadline = time.Now().Add(3 * time.Second)
-		for hubCount(svc) != 0 {
-			if time.Now().After(deadline) {
-				t.Fatal("camera still running after reopened reader stopped")
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-	}
-	t.Log("FRESH_CAPTURE_FIRST_PICTURE_VERIFIED")
-
-	// Step 10: both containers are removed; their nodes and records go.
-	for _, id := range containers {
-		svc.RemoveCameraShares(id)
-	}
-	if problem := waitShareNodesRemoved(svc, made, statePath, 15*time.Second); problem != "" {
-		t.Fatal(problem)
-	}
-	t.Logf("removing both containers removed %v and left no containers in the state file", made)
+	fx.ctx, fx.logs, fx.path, fx.feed, fx.statePath, fx.svc = ctx, logs, path, feed, statePath, svc
+	return fx
 }
 
 // requireShareCaptureFixture skips, or fails under WENDY_GSTREAMER_REQUIRED=1,
