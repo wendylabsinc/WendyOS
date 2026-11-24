@@ -334,34 +334,25 @@ func TestResolveTargetDoesNotFallBackToUSB(t *testing.T) {
 	})
 }
 
-// A saved default that is on USB is used before the user is asked to pick
-// another device.
-func TestResolveTargetReachesTheDefaultDeviceOverUSBBeforeRecovery(t *testing.T) {
+// A device selected through WENDY_DEVICE uses the same USB fallback as --device.
+func TestResolveTargetReachesTheEnvDeviceOverUSB(t *testing.T) {
 	for _, interactive := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no terminal", true: "terminal"}[interactive], func(t *testing.T) {
-			d := stubUSBOnlyDevice(t, &config.Config{DefaultDevice: "wendy-thor.local"}, errors.New("device offline in test"), "wendy-thor", assetObs("42"))
-			origSpinner, origConfirm, origPicker := runAgentConnectionSpinner, confirmDefaultRecoveryFn, pickDefaultRecoveryDeviceFn
-			t.Cleanup(func() {
-				runAgentConnectionSpinner, confirmDefaultRecoveryFn, pickDefaultRecoveryDeviceFn = origSpinner, origConfirm, origPicker
-			})
+			d := stubUSBOnlyDevice(t, &config.Config{}, errors.New("device offline in test"), "wendy-thor", assetObs("42"))
+			t.Setenv(deviceEnvVar, "wendy-thor.local")
+			applyDeviceEnv()
+			origSpinner := runAgentConnectionSpinner
+			t.Cleanup(func() { runAgentConnectionSpinner = origSpinner })
 			isInteractiveTerminalFn = func() bool { return interactive }
 			runAgentConnectionSpinner = func(ctx context.Context, _ string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
 				return connect(ctx)
-			}
-			confirmDefaultRecoveryFn = func(string) (bool, error) {
-				t.Error("asked to pick another device although the default is on USB")
-				return false, nil
-			}
-			pickDefaultRecoveryDeviceFn = func(context.Context, map[string]bool, bool, bool, bool) (*SelectedDevice, error) {
-				t.Error("opened the device picker although the default is on USB")
-				return nil, errors.New("no picker in test")
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			sel, err := resolveTarget(ctx)
 			if err != nil {
-				t.Fatalf("resolveTarget = %v, want the default device on USB", err)
+				t.Fatalf("resolveTarget = %v, want the env device on USB", err)
 			}
 			defer sel.Close()
 			if sel.Agent != d.conn {

@@ -1,0 +1,33 @@
+#usda 1.0
+(
+    defaultPrim = "Room"
+    metersPerUnit = 0.01
+    upAxis = "Z"
+)
+
+def Xform "Room"
+{
+    def Xform "Wall"
+    {
+        matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (100, 0, 0, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+
+        def Mesh "Panel"
+        {
+            int[] faceVertexCounts = [4, 3]
+            int[] faceVertexIndices = [0, 1, 2, 3, 0, 2, 4]
+            point3f[] points = [(0, 0, 0), (200, 0, 0), (200, 0, 250), (0, 0, 250), (100, 50, 300)]
+            color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
+        }
+    }
+    def Xform "Table"
+    {
+        double3 xformOp:translate = (0, 300, 0)
+        float3 xformOp:scale = (2, 2, 2)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        def Cube "Box"
+        {
+            double size = 50
+        }
+    }
+}

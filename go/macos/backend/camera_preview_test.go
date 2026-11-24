@@ -9,12 +9,15 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	pbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 )
 
 type previewAgent struct {
+	pbv2.UnimplementedWendySensorPairingServiceServer
+	pairings []*pbv2.SensorPairing
 	pb.UnimplementedWendyVideoServiceServer
 	pb.UnimplementedWendyContainerServiceServer
 	ended chan string
@@ -57,6 +60,7 @@ func previewAgentFixture(t *testing.T, agent *previewAgent) *Backend {
 	server := grpc.NewServer()
 	pb.RegisterWendyVideoServiceServer(server, agent)
 	pb.RegisterWendyContainerServiceServer(server, agent)
+	pbv2.RegisterWendySensorPairingServiceServer(server, agent)
 	go server.Serve(listener)
 	t.Cleanup(func() { server.Stop(); listener.Close() })
 	b := New()
@@ -293,5 +297,56 @@ func TestPreviewAccountSwitchRetiresHandles(t *testing.T) {
 	}
 	if next := b.PreviewCreate(); next == 0 || next == id {
 		t.Fatal("account switch blocked new previews")
+	}
+}
+
+func (a *previewAgent) ListSensorPairings(context.Context, *pbv2.ListSensorPairingsRequest) (*pbv2.ListSensorPairingsResponse, error) {
+	return &pbv2.ListSensorPairingsResponse{Pairings: a.pairings}, nil
+}
+
+func TestPreviewSensorNamesUseSavedPairingsOnExistingConnection(t *testing.T) {
+	b := previewAgentFixture(t, &previewAgent{pairings: []*pbv2.SensorPairing{
+		{SourcePrincipalUri: "spiffe://first", Name: " ccr-thermal-p4 ", Connected: true},
+		{SourcePrincipalUri: "spiffe://second", Name: "micro-fire-demo-3"},
+		{SourceAssetId: 42, Name: "Legacy source"},
+		{Name: "No identity"}, {SourcePrincipalUri: "spiffe://unnamed", Name: " "},
+	}})
+	b.session = 99
+	dials := 0
+	dial := b.connectTarget
+	b.connectTarget = func(ctx context.Context, selector string) (*grpcclient.AgentConnection, liteConnection, error) {
+		dials++
+		return dial(ctx, selector)
+	}
+	id := b.PreviewCreate()
+	if _, err := b.PreviewSensorPairings(id); err == nil {
+		t.Fatal("unconnected preview accepted")
+	}
+	if _, err := b.PreviewCameras(id, "iq8", false); err != nil {
+		t.Fatal(err)
+	}
+	result, err := b.PreviewSensorPairings(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 3 {
+		t.Fatalf("pairings: %+v", result)
+	}
+	for i, want := range []struct{ id, name string }{{"spiffe://first", "ccr-thermal-p4"}, {"spiffe://second", "micro-fire-demo-3"}, {"asset:42", "Legacy source"}} {
+		got := result.Items[i]
+		if got.ID != want.id || got.Name != want.name || !got.Paired {
+			t.Fatalf("pairing %d: %+v", i, got)
+		}
+	}
+	if dials != 1 || b.session != 99 || b.conn != nil {
+		t.Fatal("metadata changed connection or interactive session")
+	}
+	b.PreviewCancel(id)
+	if _, err := b.PreviewSensorPairings(id); err == nil {
+		t.Fatal("cancelled preview accepted")
+	}
+	b.PreviewClose(id)
+	if _, err := b.PreviewSensorPairings(id); err == nil {
+		t.Fatal("closed preview accepted")
 	}
 }

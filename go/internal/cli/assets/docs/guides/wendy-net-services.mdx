@@ -11,7 +11,7 @@ apps browse it through their own network interface.
 Start by [connecting the devices](/docs/guides/wendy-net) and checking their peers.
 Use current Linux WendyOS images with full Wendy Net support.
 
-Run these commands in an interactive terminal. Select the intended device when prompted and check any automatically selected default.
+Run these commands in an interactive terminal. Select the intended device when prompted, or check the target `WENDY_DEVICE` selects automatically.
 
 ## 1. Give the publishing app Wendy Net access
 
@@ -185,8 +185,8 @@ cd ../client
 wendy run --device "$CLIENT_DEVICE"
 ```
 
-The explicit selectors keep both apps on their intended devices, even if you have
-a saved default. Expect a resolved `10.99.x.x:18080` endpoint and JSON with `instance` and
+The explicit selectors keep both apps on their intended devices, even if
+`WENDY_DEVICE` is set. Expect a resolved `10.99.x.x:18080` endpoint and JSON with `instance` and
 `status: "ok"`. The client exits after success or a 60-second discovery timeout.
 Its manifest sets `restartPolicy: "no"` so it stays stopped after exiting.
 To check recovery, run `wendy run --device "$PUBLISHER_DEVICE" --detach` again

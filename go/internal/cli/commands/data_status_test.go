@@ -389,7 +389,8 @@ func TestRecordNextStepsNamesStopAndStatus(t *testing.T) {
 
 // TestRecordNextStepsKeepTheDevice: a recording started with --device must be
 // stopped on that device. Without the flag, the copied `wendy data stop` would
-// go to the saved default device and stop whatever that one is recording.
+// go to whatever WENDY_DEVICE or the picker selects and stop what that device
+// is recording.
 func TestRecordNextStepsKeepTheDevice(t *testing.T) {
 	for device, want := range map[string]string{
 		"robot-b.local":  "--device robot-b.local",

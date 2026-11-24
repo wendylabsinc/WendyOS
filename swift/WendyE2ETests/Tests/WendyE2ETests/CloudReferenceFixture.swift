@@ -100,13 +100,17 @@ enum CloudReferenceFixture {
 
     static func preserved(_ cli: WendyE2ESession) async throws {
         // Cloud discovery may learn pins in this disposable HOME. It must not
-        // change credentials, current context, default tenant/target or settings.
+        // change credentials, current context, default tenant or settings. A normal
+        // config save may remove the obsolete defaultDevice key.
         try await python(
             cli,
             """
             import json, os, pathlib
             before = json.loads(pathlib.Path('.cloud-reference-before.json').read_text())
             after = json.loads((pathlib.Path(os.environ['HOME']) / '.wendy/config.json').read_text())
+            old_default = before.pop('defaultDevice', None)
+            new_default = after.pop('defaultDevice', None)
+            assert new_default in (None, old_default), 'legacy default was replaced'
             old_pins = before.pop('devicePins', {})
             new_pins = after.pop('devicePins', {})
             assert all(new_pins.get(key) == value for key, value in old_pins.items()), 'existing trust pins changed'
@@ -139,7 +143,11 @@ enum CloudReferenceFixture {
             ["cloud", "discover", "--cloud-grpc", target.endpoint, "--json"]
             + (all ? ["--all"] : [])
         let result = try await LocalCLIAssertions.run(cli, args, exit: 0)
-        #expect(result.stderr == "")
+        #expect(
+            result.stderr.isEmpty
+                || result.stderr
+                    == "The saved default device is ignored; use --device <device> or set WENDY_DEVICE for this shell.\n"
+        )
         let rows = try #require(
             try JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [[String: Any]]
         )
