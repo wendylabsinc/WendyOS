@@ -286,11 +286,8 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 	if err != nil {
 		return err
 	}
-	if err := checkRequired(config, a.required); err != nil {
+	if err := checkDeployConfig(config, a.required); err != nil {
 		return err
-	}
-	if err := appconfig.CheckDeploymentConfig(config); err != nil {
-		return usageErrorf("Devices refuse this configuration: %v. Change that setting with --config NAME=VALUE, or leave it out.", err)
 	}
 	plan.config = config
 
@@ -440,6 +437,18 @@ func deployConfig(defaults string, a deployAnswers, interactive bool, say func(s
 	}
 	text, err := json.Marshal(values)
 	return string(text), changed, err
+}
+
+// checkDeployConfig refuses a configuration that leaves a required setting
+// empty or that a device would refuse.
+func checkDeployConfig(config string, required []string) error {
+	if err := checkRequired(config, required); err != nil {
+		return err
+	}
+	if err := appconfig.CheckDeploymentConfig(config); err != nil {
+		return usageErrorf("Devices refuse this configuration: %v. Change that setting with --config NAME=VALUE, or leave it out.", err)
+	}
+	return nil
 }
 
 // releaseRequired is the settings rel requires (wendy.json requiredEnv,

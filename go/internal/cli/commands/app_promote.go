@@ -3,9 +3,12 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
 // newAppPromoteCmd is `wendy app promote` (spec 4.5): publish the image the
@@ -36,14 +39,14 @@ func newAppPromoteCmd() *cobra.Command {
 			if device == "" {
 				return missing("device chosen", "--device <name|id>", "pick it")
 			}
-			p.lastRun = true
-			rel, err := publishProject(cmd, p)
+			raw, err := os.ReadFile("wendy.json")
+			if err != nil {
+				return fmt.Errorf("reading wendy.json: %w", err)
+			}
+			appCfg, _, err := appDefinition(raw, p.appID)
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			_, _ = fmt.Fprintf(out, "Published %s of %s. Deploying it to %s.\n", rel.name, rel.app, device)
-			a.app, a.release, a.digest, a.devices = rel.app, rel.id, rel.digest, []string{device}
 			auth, err := pickAppAuth(p.cloudGRPC)
 			if err != nil {
 				return err
@@ -53,9 +56,26 @@ func newAppPromoteCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return runDeploy(ctx, op, a, out, interactive)
+				return promoteCheck(ctx, op, appCfg, a, device, interactive)
 			}); err != nil {
 				return err
+			}
+			p.lastRun = true
+			rel, err := publishProject(cmd, p)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			_, _ = fmt.Fprintf(out, "Published %s of %s. Deploying it to %s.\n", rel.name, rel.app, device)
+			a.app, a.release, a.digest, a.devices = rel.app, rel.id, rel.digest, []string{device}
+			if err := withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
+				op, err := newRegistryOp(ctx, conn, auth)
+				if err != nil {
+					return err
+				}
+				return runDeploy(ctx, op, a, out, interactive)
+			}); err != nil {
+				return fmt.Errorf("release %s of %s is published, but deploying it did not finish: %w\nDeploy it with: wendy app deploy --app %s --release %s --device %s", rel.name, rel.app, err, rel.app, rel.name, device)
 			}
 			_, _ = fmt.Fprintf(out, "%s replaces the running app with the published release; it does not keep the running container yet.\n", device)
 			return nil
@@ -65,4 +85,35 @@ func newAppPromoteCmd() *cobra.Command {
 	a.bindSteps(cmd)
 	cmd.Flags().StringVar(&device, "device", "", "The device you ran the app on: its name or id")
 	return cmd
+}
+
+// promoteCheck refuses, before anything is published, what deploying to
+// device would refuse: an unknown device and, without a terminal, a missing
+// answer or a configuration with an empty required setting or one a device
+// refuses. In a terminal the deploy questions ask for what is missing.
+func promoteCheck(ctx context.Context, op *registryOp, cfg *appconfig.AppConfig, a deployAnswers, device string, interactive bool) error {
+	assets, _, err := op.devices(ctx)
+	if err != nil {
+		return err
+	}
+	id, err := assetID(assets, device)
+	if err != nil || interactive {
+		return err
+	}
+	switch {
+	case a.name == "":
+		return missing("deployment name given", "--name <name>", "enter one")
+	case !a.run && !a.installOnly:
+		return missing("run state chosen", "--run or --install-only", "choose")
+	case !a.yes:
+		return usageErrorf("Not confirmed. Add --yes to deploy without a terminal.")
+	}
+	if _, err := op.confirmMoves(ctx, cfg.AppID, "", []string{id}, assets, a.move, false); err != nil {
+		return err
+	}
+	config, _, err := deployConfig(releaseDefaults(cfg), a, false, nil)
+	if err != nil {
+		return err
+	}
+	return checkDeployConfig(config, cfg.RequiredEnv)
 }

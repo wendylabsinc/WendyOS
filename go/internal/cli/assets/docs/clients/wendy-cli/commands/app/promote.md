@@ -17,6 +17,11 @@ app and platform, so it does not build again. If there is none (no
 Container), promote stops: run the app with `wendy run` first, or publish it
 with `wendy app publish`.
 
+Before it publishes, promote checks the deploy answers: the device must
+exist and, without a terminal, every answer must be given and every required
+setting must have a value. If the deploy fails after the publish, the error
+names the release and the `wendy app deploy` command that deploys it.
+
 The device replaces the running app with the published release. It does not
 keep the running container yet.
 

@@ -123,3 +123,37 @@ func TestPromoteWithoutDeviceNamesTheFlag(t *testing.T) {
 		t.Fatalf("calls %+v", fake.calls)
 	}
 }
+
+// Promote checks the deploy answers (the device, an answer missing without a
+// terminal, an empty required setting) before it publishes anything; a deploy
+// that fails after the publish names the release and the command to deploy it.
+func TestPromoteChecksDeployAnswersBeforePublishing(t *testing.T) {
+	_, fake := promoteFixture(t)
+	keepRunImage(t)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--device", "nope", "--tag", "1.0.0", "--name", "bench", "--run", "--yes"}, `No device "nope"`},
+		{[]string{"--device", "packer-01", "--tag", "1.0.0", "--run", "--yes"}, "--name"},
+		{[]string{"--device", "packer-01", "--tag", "1.0.0", "--name", "bench", "--yes"}, "--run or --install-only"},
+		{[]string{"--device", "packer-01", "--tag", "1.0.0", "--name", "bench", "--run"}, "--yes"},
+		{[]string{"--device", "packer-01", "--tag", "1.0.0", "--name", "bench", "--run", "--yes", "--config", "my-var=1"}, `"my-var"`},
+	} {
+		if _, err := runApp(newAppPromoteCmd(), tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) || len(fake.releases) != 0 {
+			t.Fatalf("%v: %v, %d releases", tc.args, err, len(fake.releases))
+		}
+	}
+	if err := os.WriteFile("wendy.json", []byte(`{"appId": "sh.wendy.example", "env": {"API_KEY": ""}, "requiredEnv": ["API_KEY"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runApp(newAppPromoteCmd(), promoteArgs...); err == nil || !strings.Contains(err.Error(), "API_KEY has no value") || len(fake.releases) != 0 {
+		t.Fatalf("an empty required setting: %v, %d releases", err, len(fake.releases))
+	}
+	fake.keys = nil // the device has no registry key: the deploy fails after the publish
+	_, err := runApp(newAppPromoteCmd(), append(promoteArgs, "--config", "API_KEY=k")...)
+	if err == nil || !strings.Contains(err.Error(), "release 1.0.0 of sh.wendy.example is published") ||
+		!strings.Contains(err.Error(), "wendy app deploy --app sh.wendy.example --release 1.0.0 --device packer-01") || len(fake.releases) != 1 {
+		t.Fatalf("a deploy failed after the publish: %v", err)
+	}
+}

@@ -136,10 +136,7 @@ func publishProject(cmd *cobra.Command, p publishArgs) (*publishedRelease, error
 			return nil, err
 		}
 	}
-	defaults := []byte("{}")
-	if appCfg.Env != nil {
-		defaults, _ = json.Marshal(appCfg.Env)
-	}
+	defaults := releaseDefaults(appCfg)
 	auth, err := pickAppAuth(p.cloudGRPC)
 	if err != nil {
 		return nil, err
@@ -184,7 +181,7 @@ func publishProject(cmd *cobra.Command, p publishArgs) (*publishedRelease, error
 		if err != nil {
 			return err
 		}
-		releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, p.tag, string(defaults), appCfg.RequiredEnv)
+		releaseID, err := createAppRelease(ctx, conn, auth, op.org, appCfg.AppID, p.tag, defaults, appCfg.RequiredEnv)
 		if err != nil {
 			return err
 		}
@@ -197,6 +194,16 @@ func publishProject(cmd *cobra.Command, p publishArgs) (*publishedRelease, error
 		return nil
 	})
 	return out, err
+}
+
+// releaseDefaults is the default configuration a release of cfg carries:
+// wendy.json's env.
+func releaseDefaults(cfg *appconfig.AppConfig) string {
+	if cfg.Env == nil {
+		return "{}"
+	}
+	b, _ := json.Marshal(cfg.Env)
+	return string(b)
 }
 
 // appConfigLabel carries the release's app definition to the device
