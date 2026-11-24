@@ -478,11 +478,12 @@ func CameraShareChoice(entitlements []Entitlement) string {
 	return choice
 }
 
-// What a camera entitlement's node carries: decoded pictures or the camera's own
-// frames.
+// What a camera entitlement's node carries: decoded pictures, the camera's own
+// frames, or H.264 with one whole frame per buffer.
 const (
 	CameraFormatPixels = "pixels"
 	CameraFormatNative = "native"
+	CameraFormatH264   = "h264"
 )
 
 // What the timestamp field of each frame on the node holds: the capture time or
@@ -495,7 +496,7 @@ const (
 // CameraFormats and CameraStamps list the accepted values; the first of each is
 // the default. wendy.schema.json repeats them as enums.
 var (
-	CameraFormats = []string{CameraFormatPixels, CameraFormatNative}
+	CameraFormats = []string{CameraFormatPixels, CameraFormatNative, CameraFormatH264}
 	CameraStamps  = []string{CameraStampTime, CameraStampFrame}
 )
 

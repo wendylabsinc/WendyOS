@@ -144,8 +144,9 @@ shared by the app (see below).
 
 Two optional keys on the camera entitlement set what the node carries:
 
-- `format`: `"pixels"` (default) for decoded pictures, or `"native"` for the
-  camera's own frames, for example MJPEG or H.264.
+- `format`: `"pixels"` (default) for decoded pictures, `"native"` for the
+  camera's own frames, for example MJPEG or H.264, or `"h264"` for H.264 with
+  one whole frame per buffer.
 - `stamp`: `"time"` (default) makes each frame's timestamp its capture time;
   `"frame"` puts the agent's frame number in the timestamp field instead.
 

@@ -288,9 +288,9 @@
             },
             "format": {
               "type": "string",
-              "enum": ["pixels", "native"],
+              "enum": ["pixels", "native", "h264"],
               "default": "pixels",
-              "description": "What the app's camera node carries: \"pixels\" for decoded pictures, \"native\" for the camera's own frames (for example MJPEG or H.264)."
+              "description": "What the app's camera node carries: \"pixels\" for decoded pictures, \"native\" for the camera's own frames (for example MJPEG or H.264), \"h264\" for H.264 with one whole frame per buffer."
             },
             "stamp": {
               "type": "string",
@@ -359,9 +359,9 @@
             },
             "format": {
               "type": "string",
-              "enum": ["pixels", "native"],
+              "enum": ["pixels", "native", "h264"],
               "default": "pixels",
-              "description": "What the app's camera node carries: \"pixels\" for decoded pictures, \"native\" for the camera's own frames (for example MJPEG or H.264)."
+              "description": "What the app's camera node carries: \"pixels\" for decoded pictures, \"native\" for the camera's own frames (for example MJPEG or H.264), \"h264\" for H.264 with one whole frame per buffer."
             },
             "stamp": {
               "type": "string",

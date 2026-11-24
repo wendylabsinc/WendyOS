@@ -24,6 +24,7 @@ func TestValidate_CameraNodeFormatAndStamp(t *testing.T) {
 		{"neither key", []Entitlement{cam("", "")}, ""},
 		{"explicit defaults", []Entitlement{cam("pixels", "time")}, ""},
 		{"native and frame", []Entitlement{cam("native", "frame")}, ""},
+		{"h264", []Entitlement{cam("h264", "")}, ""},
 		{"format only", []Entitlement{cam("native", "")}, ""},
 		{"stamp only", []Entitlement{cam("", "frame")}, ""},
 		{"video alias", []Entitlement{{Type: EntitlementVideo, Format: "native", Stamp: "frame"}}, ""},
@@ -31,13 +32,13 @@ func TestValidate_CameraNodeFormatAndStamp(t *testing.T) {
 		{"direct without node keys", []Entitlement{{Type: EntitlementCamera, Mode: "direct"}}, ""},
 		{
 			"unknown format",
-			[]Entitlement{cam("h264", "")},
-			`entitlement[0]: camera format must be one of "pixels", "native"; got "h264"`,
+			[]Entitlement{cam("vp8", "")},
+			`entitlement[0]: camera format must be one of "pixels", "native", "h264"; got "vp8"`,
 		},
 		{
 			"format is case sensitive",
 			[]Entitlement{cam("Native", "")},
-			`entitlement[0]: camera format must be one of "pixels", "native"; got "Native"`,
+			`entitlement[0]: camera format must be one of "pixels", "native", "h264"; got "Native"`,
 		},
 		{
 			"unknown stamp names its index",
@@ -47,7 +48,7 @@ func TestValidate_CameraNodeFormatAndStamp(t *testing.T) {
 		{
 			"unknown format on the video alias",
 			[]Entitlement{{Type: EntitlementVideo, Format: "raw"}},
-			`entitlement[0]: video format must be one of "pixels", "native"; got "raw"`,
+			`entitlement[0]: video format must be one of "pixels", "native", "h264"; got "raw"`,
 		},
 		{
 			"format with direct",
@@ -514,7 +515,8 @@ func TestCameraNodeSettings_UnknownValuesResolveToTheDefaults(t *testing.T) {
 		wantFormat    string
 		wantStamp     string
 	}{
-		{"format from a newer command line", "h264", "frame", "pixels", "frame"},
+		{"format from a newer command line", "vp8", "frame", "pixels", "frame"},
+		{"h264", "h264", "frame", "h264", "frame"},
 		{"unknown stamp", "native", "sequence", "native", "time"},
 		{"both unknown", "H264", "Frame", "pixels", "time"},
 	}
@@ -600,7 +602,9 @@ func TestSchema_ValidatesCameraNodeKeys(t *testing.T) {
 		{"native and frame", `{"type": "camera", "format": "native", "stamp": "frame"}`, true},
 		{"video alias", `{"type": "video", "format": "native", "stamp": "frame"}`, true},
 		{"neither key", `{"type": "camera"}`, true},
-		{"unknown format", `{"type": "camera", "format": "h264"}`, false},
+		{"h264", `{"type": "camera", "format": "h264"}`, true},
+		{"h264 on the video alias", `{"type": "video", "format": "h264"}`, true},
+		{"unknown format", `{"type": "camera", "format": "vp8"}`, false},
 		{"unknown stamp", `{"type": "camera", "stamp": "sequence"}`, false},
 		{"unknown format on the video alias", `{"type": "video", "format": "raw"}`, false},
 	}

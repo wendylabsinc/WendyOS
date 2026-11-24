@@ -601,8 +601,8 @@ func TestProjectEditsCameraNodeFormatAndStamp(t *testing.T) {
 			t.Errorf("missing %s in %s", want, saved)
 		}
 	}
-	_, err := projectTestCommand(t, "edit", "camera", "--format", "h264", "--file", path)
-	if err == nil || !strings.Contains(err.Error(), `camera format must be one of "pixels", "native"`) {
+	_, err := projectTestCommand(t, "edit", "camera", "--format", "vp8", "--file", path)
+	if err == nil || !strings.Contains(err.Error(), `camera format must be one of "pixels", "native", "h264"`) {
 		t.Fatalf("error = %v, want the accepted formats", err)
 	}
 	if readProjectTestFile(t, path) != saved {

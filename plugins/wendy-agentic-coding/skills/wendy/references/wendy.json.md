@@ -120,7 +120,7 @@ Camera / V4L2 device access.
 | Field | Description |
 |-------|-------------|
 | `allowlist` | Names the cameras, by device path or camera name, that this entry's `format` and `stamp` apply to. Omit to apply them to every camera. |
-| `format` | What the app's camera node carries. `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example Motion JPEG (MJPEG) or H.264. |
+| `format` | What the app's camera node carries. `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example Motion JPEG (MJPEG) or H.264. `"h264"`: H.264, one whole frame per buffer. |
 | `stamp` | What each frame's timestamp field holds on the node. `"time"` (default): the capture time. `"frame"`: the agent's frame number. |
 | `user` | Username for a registered IP camera. Ignored for local cameras. |
 | `password` | Password for a registered IP camera. Ignored for local cameras. |
