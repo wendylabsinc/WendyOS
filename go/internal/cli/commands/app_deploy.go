@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -37,7 +38,17 @@ var keepTryingChoices = map[string]time.Duration{
 	"7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour, "60d": 60 * 24 * time.Hour, "1y": 365 * 24 * time.Hour,
 }
 
-var keepTryingWords = map[string]string{"7d": "7 days", "30d": "30 days", "60d": "60 days", "1y": "364 days"} // 1y is signed a day short (cloudrequest.MaxSigned)
+// keepTryingFor is how long a statement valid for v is signed for, in words:
+// 0 is the stated default, and 1y is signed a day short (cloudrequest.MaxSigned).
+func keepTryingFor(v time.Duration) string {
+	if v == 0 {
+		v = cloudrequest.DefaultValidity
+	}
+	if v = min(v, cloudrequest.MaxSigned); v%(24*time.Hour) == 0 {
+		return plural(int(v/(24*time.Hour)), "day")
+	}
+	return v.String()
+}
 
 func newAppDeployCmd() *cobra.Command {
 	var a deployAnswers
@@ -313,9 +324,9 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 	say("     %s: %s %s to %s, %s, %s.", plan.name, a.app, rel.GetName(), plural(len(plan.devices), "device"), runWords, plural(changed, "value")+" changed")
 	say("     Devices: %s", deviceNames(assets, plan.devices))
 	if offline > 0 {
-		say("     %s offline. Offline devices keep trying for %s.", plural(offline, "device is", "devices are"), keepTryingWords[a.keepTrying])
+		say("     %s offline. Offline devices keep trying for %s.", plural(offline, "device is", "devices are"), keepTryingFor(plan.validity))
 	} else {
-		say("     Offline devices keep trying for %s.", keepTryingWords[a.keepTrying])
+		say("     Offline devices keep trying for %s.", keepTryingFor(plan.validity))
 	}
 	if len(plan.moves) > 0 {
 		say("     %s from another deployment of %s.", plural(len(plan.moves), "device moves", "devices move"), a.app)

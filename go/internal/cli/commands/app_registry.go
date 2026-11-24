@@ -752,7 +752,7 @@ type keyedDeployment struct {
 	manifestDigest string
 	key            []byte
 	sealed         *cloudpb.SealedContentKey
-	validity       time.Duration // what the operator chose for its statements; 0 = the stated default
+	validity       time.Duration // the keep-trying time the operator was shown; 0 = the stated default
 }
 
 // newDeploymentKey seals the content key under a fresh deployment key and
@@ -996,7 +996,7 @@ func (op *registryOp) signAssign(ctx context.Context, d *cloudpb.Deployment, kd 
 	if err != nil {
 		return err
 	}
-	expires, err := cloudrequest.ValidUntil(time.Now(), kd.validity) // the operator's choice, never Cloud's echo
+	expires, err := cloudrequest.ValidUntil(time.Now(), kd.validity) // capped at MaxSigned
 	if err != nil {
 		return err
 	}
@@ -1051,7 +1051,8 @@ func (op *registryOp) rotate(ctx context.Context, deploymentID, appID string, de
 	if err != nil {
 		return fmt.Errorf("deployment %s: %w", deploymentID, err)
 	}
-	cliLogln("Deployment %s now uses key %s", deploymentID, registrycrypto.KeyID(kd.key))
+	kd.validity = d.GetValidity().AsDuration()
+	cliLogln("Deployment %s now uses key %s; offline devices keep trying for %s", deploymentID, registrycrypto.KeyID(kd.key), keepTryingFor(kd.validity))
 	var errs []error
 	for _, device := range slices.Sorted(maps.Keys(keys)) {
 		if err := op.signAssign(ctx, d, kd, appID, device, keys[device], "", 0); err != nil {

@@ -177,7 +177,6 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 			return usageErrorf("--keep-trying must be 7d, 30d, 60d or 1y.")
 		}
 		req.Validity = durationpb.New(v)
-		review = append(review, "Offline devices keep trying for "+keepTryingWords[c.keepTrying])
 	}
 	cur, err := op.revisionDevices(ctx, d.GetId(), d.GetRevision())
 	if err != nil {
@@ -267,13 +266,24 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 	if err := checkRequired(orDefault(req.ConfigJson, d.GetConfigJson()), releaseRequired(release)); err != nil {
 		return err
 	}
-	if len(review) == 0 {
+	if len(review) == 0 && req.Validity == nil {
 		return usageErrorf("Nothing to change. Add --release, --config, --start, --stop, --add-device, --remove-device, --add-tag, --remove-tag, --add-site, --remove-site or --keep-trying.")
 	}
 	content := req.AppReleaseId != nil || req.ConfigJson != nil || req.DesiredState != nil
 	get := next
 	if !content {
 		get = without(next, cur)
+	}
+	// Statements are signed with the stored time unless --keep-trying changes it.
+	validity := d.GetValidity().AsDuration()
+	if req.Validity != nil {
+		validity = req.Validity.AsDuration()
+	}
+	switch {
+	case req.Validity != nil && !content:
+		review = append(review, "Offline devices keep trying for "+keepTryingFor(validity)+" on instructions sent from now on. Devices that have theirs keep the time they got.")
+	case len(get) > 0:
+		review = append(review, "Offline devices keep trying for "+keepTryingFor(validity))
 	}
 	moves, err := op.confirmMoves(ctx, appID, d.GetId(), without(next, cur), assets, c.move, interactive)
 	if err != nil {
@@ -286,7 +296,7 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 	if err := confirmChange(c, interactive, fmt.Sprintf("Apply this change to %s?", name)); err != nil {
 		return err
 	}
-	return op.change(ctx, d, newRel, get, without(cur, next), moves, true, keepTryingChoices[c.keepTrying], cloudpb.DeploymentService_UpdateDeployment_FullMethodName, req,
+	return op.change(ctx, d, newRel, get, without(cur, next), moves, true, validity, cloudpb.DeploymentService_UpdateDeployment_FullMethodName, req,
 		func(n *cloudpb.Deployment) bool {
 			return n.GetAppReleaseId() == orDefault(req.AppReleaseId, d.GetAppReleaseId()) && n.GetConfigJson() == orDefault(req.ConfigJson, d.GetConfigJson()) &&
 				n.GetDesiredState() == orDefault(req.DesiredState, d.GetDesiredState())
@@ -358,11 +368,12 @@ func runRollback(ctx context.Context, op *registryOp, appID, name string, c chan
 	say("     Configuration: %s", target.GetConfigJson())
 	say("     Run state: %s", run)
 	say("     Devices: %s", deviceDiff(assets, cur, next))
+	say("     Offline devices keep trying for %s", keepTryingFor(target.GetValidity().AsDuration()))
 	if err := confirmChange(c, interactive, fmt.Sprintf("Roll back %s to revision %d?", name, c.to)); err != nil {
 		return err
 	}
 	req := &cloudpb.RollbackDeploymentRequest{OrganizationId: op.org, DeploymentId: d.GetId(), ExpectedRevision: d.GetRevision(), ToRevision: c.to, Note: c.note, MoveDevices: c.move}
-	return op.change(ctx, d, newRel, next, without(cur, next), moves, false, 0, cloudpb.DeploymentService_RollbackDeployment_FullMethodName, req,
+	return op.change(ctx, d, newRel, next, without(cur, next), moves, false, target.GetValidity().AsDuration(), cloudpb.DeploymentService_RollbackDeployment_FullMethodName, req,
 		func(n *cloudpb.Deployment) bool {
 			return n.GetAppReleaseId() == target.GetAppReleaseId() && n.GetConfigJson() == target.GetConfigJson() && n.GetDesiredState() == target.GetDesiredState()
 		}, say)
@@ -434,7 +445,8 @@ func runResume(ctx context.Context, op *registryOp, appID, name string, c change
 		if d.GetDesiredState() == cloudpb.Running_STOPPED {
 			run = "install only"
 		}
-		say("%s/%s revision %d: release %s, %s, configuration %s. Devices still to be told:", appID, name, revision, releaseName(rels, d.GetAppReleaseId()), run, d.GetConfigJson())
+		say("%s/%s revision %d: release %s, %s, configuration %s, offline devices keep trying for %s. Devices still to be told:", appID, name, revision,
+			releaseName(rels, d.GetAppReleaseId()), run, d.GetConfigJson(), keepTryingFor(d.GetValidity().AsDuration()))
 	}
 	var gets []string
 	remove, moves := map[string]bool{}, map[string]string{}
@@ -477,6 +489,7 @@ func runResume(ctx context.Context, op *registryOp, appID, name string, c change
 		if conf.kd, err = op.current(ctx, d.GetId()); err != nil {
 			return err
 		}
+		conf.kd.validity = d.GetValidity().AsDuration()
 	}
 	return op.signPending(ctx, conf, rows, "")
 }
@@ -486,7 +499,7 @@ func runResume(ctx context.Context, op *registryOp, appID, name string, c change
 // deployment, drop leaves it. A new release is sealed under a new key.
 // With mustGet, every device in get must be asked for (an update: the
 // changed content reaches each, or each is new).
-// validity is the operator's --keep-trying answer, 0 for the stated default.
+// validity is the keep-trying time shown in the review, 0 for the stated default.
 func (op *registryOp) change(ctx context.Context, d *cloudpb.Deployment, newRel *cloudpb.AppRelease, get, drop []string, moves map[string]string, mustGet bool,
 	validity time.Duration, method string, req proto.Message, want func(*cloudpb.Deployment) bool, say func(string, ...any),
 ) error {

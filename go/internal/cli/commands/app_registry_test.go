@@ -27,7 +27,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -500,6 +499,7 @@ func (f *fakeRegistry) CreateDeploymentV2(_ context.Context, in *cloudpb.SignedR
 	d := &cloudpb.Deployment{
 		Id: uuid.NewString(), OrganizationId: req.GetOrganizationId(), AppReleaseId: req.GetAppReleaseId(), AppId: "sh.wendy.example",
 		Name: req.GetName(), ConfigJson: req.GetConfigJson(), DesiredState: req.GetRunning(), Revision: 1, TargetDeviceIds: req.GetTargetDeviceIds(),
+		Validity: req.GetValidity(),
 	}
 	devices := f.resolve(&cloudpb.DeviceSelection{TargetDeviceIds: req.GetTargetDeviceIds(), TargetTags: req.GetTargetTags(), TargetSiteIds: req.GetTargetSiteIds()}) // tags resolve at create
 	rows := f.rows(d, cloudpb.PendingDeviceStatement_KIND_ASSIGN, devices)
@@ -523,7 +523,7 @@ func (f *fakeRegistry) CreateDeploymentV2(_ context.Context, in *cloudpb.SignedR
 func (f *fakeRegistry) record(d *cloudpb.Deployment, devices []string) {
 	f.history[d.GetId()] = append(f.history[d.GetId()], &cloudpb.DeploymentRevision{
 		DeploymentId: d.GetId(), Revision: d.GetRevision(), AppReleaseId: d.GetAppReleaseId(), ConfigJson: d.GetConfigJson(),
-		DesiredState: d.GetDesiredState(), Selection: f.sel[d.GetId()], DeviceCount: int32(len(devices)),
+		DesiredState: d.GetDesiredState(), Selection: f.sel[d.GetId()], DeviceCount: int32(len(devices)), Validity: d.GetValidity(),
 	})
 	f.revDevices[fmt.Sprint(d.GetId(), "/", d.GetRevision())] = devices
 }
@@ -609,6 +609,9 @@ func (f *fakeRegistry) UpdateDeployment(_ context.Context, in *cloudpb.SignedReq
 	if req.DesiredState != nil {
 		d.DesiredState = req.GetDesiredState()
 	}
+	if req.Validity != nil {
+		d.Validity = req.GetValidity()
+	}
 	sel, devices := f.sel[d.Id], f.revDevices[fmt.Sprint(d.Id, "/", old.GetRevision())]
 	if req.GetDevices() != nil {
 		sel, devices = req.GetDevices(), f.resolve(req.GetDevices())
@@ -629,7 +632,7 @@ func (f *fakeRegistry) RollbackDeployment(_ context.Context, in *cloudpb.SignedR
 	}
 	to := f.history[old.Id][req.GetToRevision()-1]
 	d := proto.Clone(old).(*cloudpb.Deployment)
-	d.AppReleaseId, d.ConfigJson, d.DesiredState = to.GetAppReleaseId(), to.GetConfigJson(), to.GetDesiredState()
+	d.AppReleaseId, d.ConfigJson, d.DesiredState, d.Validity = to.GetAppReleaseId(), to.GetConfigJson(), to.GetDesiredState(), to.GetValidity()
 	return f.next(d, to.GetSelection(), f.revDevices[fmt.Sprint(old.Id, "/", to.GetRevision())]), nil
 }
 
@@ -1005,18 +1008,5 @@ func TestSigningRefusesAKeyForAnotherRelease(t *testing.T) {
 	err := op.rotate(context.Background(), depID, "sh.wendy.example", []string{vectorDevice})
 	if err == nil || !strings.Contains(err.Error(), "nothing was signed") || len(fake.assigned) != n {
 		t.Fatalf("a key for another release: %v", err)
-	}
-}
-
-// A statement's validity is the stated default, not what Cloud echoes.
-func TestStatementValidityIsNotCloudsEcho(t *testing.T) {
-	op, fake, _, _, depID := deployFixture(t)
-	fake.deploys[depID].Validity = durationpb.New(365 * 24 * time.Hour)
-	if err := op.rotate(context.Background(), depID, "sh.wendy.example", []string{vectorDevice}); err != nil {
-		t.Fatal(err)
-	}
-	last := fake.assigned[len(fake.assigned)-1]
-	if last.GetExpiresAt().AsTime().After(time.Now().Add(61 * 24 * time.Hour)) {
-		t.Fatalf("expires %v", last.GetExpiresAt().AsTime())
 	}
 }

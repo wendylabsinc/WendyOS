@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -193,5 +194,56 @@ func TestRollbackRefusesAnEmptyRequiredSetting(t *testing.T) {
 	}
 	if err := runRollback(ctx, op, "sh.wendy.example", "line-3", changeFlags{to: 1, yes: true}, io.Discard, false); err != nil {
 		t.Fatalf("rollback to a filled one: %v", err)
+	}
+}
+
+// Update, rollback, resume and rotate sign with the deployment's stored
+// keep-trying time when no --keep-trying is given, show it, and never sign
+// past the 364-day ceiling. A --keep-trying that sends nothing says so.
+func TestLaterChangesKeepTheStoredKeepTryingTime(t *testing.T) {
+	op, fake, _, depID := deployedFixture(t) // deployed with --keep-trying 30d
+	ctx := context.Background()
+	days := func() int {
+		return int(time.Until(fake.assigned[len(fake.assigned)-1].GetExpiresAt().AsTime()).Round(time.Hour).Hours() / 24)
+	}
+	var out bytes.Buffer
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{config: []string{"LOG_LEVEL=debug"}, yes: true}, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	if days() != 30 || !strings.Contains(out.String(), "Offline devices keep trying for 30 days\n") {
+		t.Fatalf("update signed %d days\n%s", days(), out.String())
+	}
+	out.Reset()
+	n := len(fake.assigned)
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{keepTrying: "7d", yes: true}, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.assigned) != n || !strings.Contains(out.String(), "7 days on instructions sent from now on") {
+		t.Fatalf("--keep-trying alone sent %d statements\n%s", len(fake.assigned)-n, out.String())
+	}
+	out.Reset()
+	if err := runRollback(ctx, op, "sh.wendy.example", "line-3", changeFlags{to: 1, yes: true}, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	if days() != 30 || !strings.Contains(out.String(), "Offline devices keep trying for 30 days") {
+		t.Fatalf("rollback signed %d days\n%s", days(), out.String())
+	}
+	d := fake.deploys[depID]
+	d.Validity = durationpb.New(7 * 24 * time.Hour)
+	fake.pending[depID] = []*cloudpb.PendingDeviceStatement{{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, DeploymentId: depID,
+		Device: certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice), Revision: d.GetRevision()}}
+	out.Reset()
+	if err := runResume(ctx, op, "sh.wendy.example", "line-3", changeFlags{yes: true}, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	if days() != 7 || !strings.Contains(out.String(), "keep trying for 7 days") {
+		t.Fatalf("resume signed %d days\n%s", days(), out.String())
+	}
+	d.Validity = durationpb.New(365 * 24 * time.Hour)
+	if err := op.rotate(ctx, depID, "sh.wendy.example", []string{vectorDevice}); err != nil {
+		t.Fatal(err)
+	}
+	if days() != 364 {
+		t.Fatalf("rotate signed %d days, past the ceiling", days())
 	}
 }
