@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -115,50 +116,44 @@ func asksForEncodedVideo(capture *data.SourceCapture) bool {
 	return primary == encodedFrames
 }
 
-// armsStandbyRing reports whether Arm keeps a pre-roll ring for the listing.
+// armsStandbyRing reports whether Arm would keep a pre-roll ring for the
+// listing: it keeps none for a snapshot source. A ring also takes a buffer
+// and a camera Arm can join, which only Arm finds out.
 func armsStandbyRing(source data.Source) bool {
 	return source.Capture == nil || source.Capture.EffectiveMode() != captureModeSnapshot
 }
 
-// planAsksForEncodedVideo decides from the plan alone whether any camera can
-// be read as encoded video: by the campaign's inference, which reads every
-// camera source so, or by a listing whose own capture block asks for it. A
-// camera's recording and its ring each follow one listing's block, so a plan
-// with no such listing asks no camera for encoded video.
-func planAsksForEncodedVideo(campaign data.Campaign) bool {
-	for _, source := range campaign.Sources {
-		if source.Camera != "" && (campaign.Inference.IsEnabled() || asksForEncodedVideo(source.Capture)) {
-			return true
-		}
-	}
-	return false
-}
-
 // DeployWarnings names each camera of the campaign present now whose video
-// the campaign reads and this device encodes in software. It lists the
-// cameras only for a plan that asks one for video, and resolves the plan's
-// selectors as a trigger and arming do (data.Campaign.CamerasAmong). A source
-// that asks for the camera's own frames is not warned of, also where a camera
-// without frames of its own is recorded as video instead: the episode's
-// manifest says that.
+// this device encodes in software for the campaign. It lists the cameras for
+// any plan with a camera source, and resolves the plan's selectors with
+// data.Campaign.CamerasAmong. A camera is read as its recording asks; with a
+// buffer, the last listing Arm keeps a ring for decides instead, because the
+// episode goes on with that ring's subscription. A campaign's inference reads
+// every camera as video whatever its source stores. It stops between cameras
+// once ctx is done: nobody waits for the answer by then.
 func (a *cameraDataAdapter) DeployWarnings(ctx context.Context, campaign data.Campaign) []string {
-	if !planAsksForEncodedVideo(campaign) {
+	if !slices.ContainsFunc(campaign.Sources, func(source data.CampaignSource) bool { return source.Camera != "" }) {
 		return nil
 	}
 	recorded, listed := campaign.CamerasAmong(a.Discover(ctx))
-	buffered := map[string]bool{}
-	if campaign.BufferDuration() > 0 {
-		for _, listing := range listed {
-			if armsStandbyRing(listing) {
-				buffered[listing.ID] = asksForEncodedVideo(listing.Capture)
-			}
+	readAs := make(map[string]*data.SourceCapture, len(recorded))
+	for _, source := range recorded {
+		readAs[source.ID] = source.Capture
+	}
+	asksForFramesAlone := map[string]bool{}
+	for _, listing := range listed {
+		if campaign.BufferDuration() > 0 && armsStandbyRing(listing) {
+			readAs[listing.ID] = listing.Capture
+		}
+		if !listing.Capture.StoresVideo() {
+			asksForFramesAlone[listing.ID] = true
 		}
 	}
 	inference := campaign.Inference.IsEnabled()
 	var warnings []string
 	for _, source := range recorded {
-		if !inference && !asksForEncodedVideo(source.Capture) && !buffered[source.ID] {
-			continue
+		if ctx.Err() != nil {
+			return warnings
 		}
 		devID, ok := cameraDeviceID(source.ID)
 		if !ok {
@@ -169,19 +164,22 @@ func (a *cameraDataAdapter) DeployWarnings(ctx context.Context, campaign data.Ca
 			continue
 		}
 		encoder, ownFrames := a.video.softwareEncoderOfVideoAt(src.key)
-		if encoder == "" {
+		video := asksForEncodedVideo(readAs[source.ID])
+		if encoder == "" || (!inference && !video && ownFrames) {
 			continue
 		}
-		warning := fmt.Sprintf("camera %s: its video is encoded in software (%s) on this device while ", source.ID, encoder)
+		encoded := fmt.Sprintf("encoded in software (%s) on this device while ", encoder)
 		switch {
 		case inference:
-			warning += "the campaign's inference runs"
-		case ownFrames:
-			warning += "the campaign records or buffers; store: frames keeps the camera's own frames without encoding"
+			encoded = "its video is " + encoded + "the campaign's inference runs"
+		case !video:
+			encoded = "it hands on no frames of its own, so what its source asks to store is recorded as video, " + encoded + "the campaign records or buffers"
+		case ownFrames && !asksForFramesAlone[source.ID]:
+			encoded = "its video is " + encoded + "the campaign records or buffers; store: frames keeps the camera's own frames without encoding"
 		default:
-			warning += "the campaign records or buffers"
+			encoded = "its video is " + encoded + "the campaign records or buffers"
 		}
-		warnings = append(warnings, warning)
+		warnings = append(warnings, fmt.Sprintf("camera %s: %s", source.ID, encoded))
 	}
 	return warnings
 }

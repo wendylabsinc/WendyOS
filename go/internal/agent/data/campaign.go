@@ -955,7 +955,9 @@ func camerasNamedBy(all []Source, selector string) ([]string, error) {
 }
 
 // recordWith is the rule for a camera a plan lists more than once: a trigger
-// records it with the capture block of the last listing that has one.
+// hands its capture the block of the last listing that has one. A camera
+// armed for pre-roll goes on recording by the listing it was armed with
+// instead, so with a buffer that listing decides, not this block.
 func recordWith(captures map[string]*SourceCapture, camera string, capture *SourceCapture) {
 	if capture != nil {
 		captures[camera] = capture
@@ -975,8 +977,10 @@ func listingsOf(cameras []string, capture *SourceCapture) []Source {
 // CamerasAmong resolves the campaign's camera selectors against sources, by
 // the rules a trigger and arming resolve them with, and discovers nothing
 // itself. recorded holds each camera once, sorted by ID, with the capture block
-// a trigger records it with; listed holds what arming is handed. A selector
-// that names no camera among sources is passed over.
+// a trigger hands its capture (recordWith); listed holds what arming is
+// handed. Which of the two a recording follows is the capture adapter's to
+// say: a camera it armed keeps its armed listing. A selector that names no
+// camera among sources is passed over.
 func (c Campaign) CamerasAmong(sources []Source) (recorded, listed []Source) {
 	sources = append([]Source(nil), sources...)
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].ID < sources[j].ID })

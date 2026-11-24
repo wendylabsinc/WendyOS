@@ -3480,7 +3480,8 @@ func (s *VideoService) shareStatesOf(path, softwareEncoder string) (ids, states 
 	slices.SortFunc(snaps, func(a, b snap) int { return strings.Compare(a.id, b.id) })
 	for _, sn := range snaps {
 		var text string
-		// phase stays empty for an app that holds the real camera, not its node.
+		// phase stays empty for an app that reads the real camera, not its node:
+		// one that took it after a replug, and one whose start's cover failed.
 		var phase sharePhase
 		switch {
 		case sn.tookB != "":

@@ -717,9 +717,13 @@ func softwareEncoderNoteOnThisDevice(t *testing.T, available map[string]bool) st
 // checkShareCellStates fails unless the camera's share state lists the six
 // cells of shareCells as reading. A pixels entry names the decoder of its
 // pictures, which differs by device, and an h264 entry ends in h264Note: what
-// it says of a software encoder that feeds it, or nothing.
+// it says of a software encoder that feeds it, or nothing. That note is the
+// camera's decision at the report, which a report gives up on after its
+// budget, so the state is asked for again until it is the one wanted or
+// shareStateWait has passed.
 func checkShareCellStates(t *testing.T, fx *shareCaptureFixture, h264Note string) {
 	t.Helper()
+	const shareStateWait = 15 * time.Second
 	state := fx.svc.CameraShareReport(fx.ctx)[fx.path][camerashare.KeyState]
 	decoder := fx.svc.pictureDecoderAt(fx.path)
 	if decoder == "" {
@@ -731,6 +735,10 @@ func checkShareCellStates(t *testing.T, fx *shareCaptureFixture, h264Note string
 		"ci-app-native-time [format native, stamp time] (reading), " +
 		"ci-app-pixels-frame [format pixels, stamp frame] (reading; pictures decoded by " + decoder + "), " +
 		"ci-app-pixels-time [format pixels, stamp time] (reading; pictures decoded by " + decoder + ")"
+	for deadline := time.Now().Add(shareStateWait); state != want && time.Now().Before(deadline) && fx.ctx.Err() == nil; {
+		time.Sleep(100 * time.Millisecond)
+		state = fx.svc.CameraShareReport(fx.ctx)[fx.path][camerashare.KeyState]
+	}
 	if state != want {
 		t.Fatalf("share state = %q\nwant        %q", state, want)
 	}

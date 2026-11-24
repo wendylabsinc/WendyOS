@@ -20,6 +20,7 @@ type encoderPlan struct {
 	sources   [][]string
 	buffer    string
 	inference bool
+	telemetry bool
 }
 
 func cameraSource(selector string, capture ...string) []string {
@@ -28,6 +29,9 @@ func cameraSource(selector string, capture ...string) []string {
 
 func (p encoderPlan) yaml() []byte {
 	yaml := "version: 1\nname: encoder-notice\nsources:\n"
+	if p.telemetry {
+		yaml += "  - telemetry: true\n"
+	}
 	for _, source := range p.sources {
 		yaml += "  - camera: \"" + source[0] + "\"\n"
 		if len(source) > 1 {
@@ -102,6 +106,7 @@ const (
 	encodedInSoftware     = ": its video is encoded in software (x264enc) on this device while "
 	c920RecordedWarning   = "camera v4l2:/dev/video4" + encodedInSoftware + "the campaign records or buffers; store: frames keeps the camera's own frames without encoding"
 	rawCamRecordedWarning = "camera v4l2:/dev/video6" + encodedInSoftware + "the campaign records or buffers"
+	noFramesOfItsOwn      = ": it hands on no frames of its own, so what its source asks to store is recorded as video, encoded in software (x264enc) on this device while the campaign records or buffers"
 	c920InferenceWarning  = "camera v4l2:/dev/video4" + encodedInSoftware + "the campaign's inference runs"
 )
 
@@ -202,9 +207,12 @@ func TestCampaignDeploy_ACameraListedAgainWithoutACaptureBlockIsNotWarnedOfVideo
 func TestCampaignDeployWarnings_ABufferedCameraIsWarnedOfByWhatArmingSubscribesTo(t *testing.T) {
 	h := newCSHarness(t, csH264Cam(), csC920())
 	hcCanDecode(h.s, softwareEncoderElements...)
+	// The plan already asks this camera for frames in one listing, so the
+	// warning does not advise what it does.
+	const c920WithoutAdvice = "camera v4l2:/dev/video4" + encodedInSoftware + "the campaign records or buffers"
 	framesThenBare := encoderPlan{buffer: "2s", sources: [][]string{cameraSource("/dev/video4", "store: frames"), cameraSource("/dev/video4")}}
-	if got := deployWarningsOf(t, h, framesThenBare); !slices.Equal(got, []string{c920RecordedWarning}) {
-		t.Errorf("buffered as video: warnings = %q\nwant %q", got, []string{c920RecordedWarning})
+	if got := deployWarningsOf(t, h, framesThenBare); !slices.Equal(got, []string{c920WithoutAdvice}) {
+		t.Errorf("buffered as video: warnings = %q\nwant %q", got, []string{c920WithoutAdvice})
 	}
 	bareThenFrames := encoderPlan{buffer: "2s", sources: [][]string{cameraSource("/dev/video4"), cameraSource("/dev/video4", "store: frames")}}
 	if got := deployWarningsOf(t, h, bareThenFrames); len(got) != 0 {
@@ -252,6 +260,44 @@ func TestCampaignDeployWarnings_ACameraThePipelineEncodesInSoftwareIsWarnedOfWit
 		h.s.gstMemo.mu.Unlock()
 		if got := deployWarningsOf(t, h, recording(cameraSource("/dev/video4"))); !slices.Equal(got, []string{c920WithoutAdvice}) {
 			t.Errorf("warnings = %q\nwant       %q", got, []string{c920WithoutAdvice})
+		}
+	})
+}
+
+// A source that asks for a camera's own frames, as frames or as snapshot
+// stills, is recorded as video where the camera hands on none, and that video
+// is encoded like any other. The deploy says so in words of its own.
+func TestCampaignDeployWarnings_ASourceAskingForFramesOfACameraWithoutItsOwnIsWarnedItIsRecordedAsEncodedVideo(t *testing.T) {
+	for name, tc := range map[string]struct {
+		prepare func(h *csHarness)
+		plan    encoderPlan
+		want    []string
+	}{
+		"store frames with a buffer, only uncompressed video": {func(*csHarness) {},
+			encoderPlan{buffer: "2s", sources: [][]string{cameraSource("/dev/video6", "store: frames")}}, []string{"camera v4l2:/dev/video6" + noFramesOfItsOwn}},
+		"snapshot stills, only uncompressed video": {func(*csHarness) {},
+			recording(cameraSource("/dev/video6", "mode: snapshot", "interval: 1s")), []string{"camera v4l2:/dev/video6" + noFramesOfItsOwn}},
+		"store frames, derived frames failed recently": {func(h *csHarness) {
+			h.s.derivedFailures.remember(h.s.cameraIdentityKey("/dev/video4"), "the encoder gave no frame", false)
+		}, recording(cameraSource("/dev/video4", "store: frames")), []string{"camera v4l2:/dev/video4" + noFramesOfItsOwn}},
+		"store frames, a camera on the CSI connector": {func(h *csHarness) {
+			h.s.classifyTransport = func(string) (camera.Transport, string) { return camera.TransportCSI, "tegra-capture-vi" }
+		}, recording(cameraSource("/dev/video4", "store: frames")), []string{"camera v4l2:/dev/video4" + noFramesOfItsOwn}},
+		"store frames, every camera": {func(*csHarness) {},
+			recording(cameraSource("*", "store: frames")), []string{"camera v4l2:/dev/video6" + noFramesOfItsOwn}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := encoderCameras(t, softwareEncoderElements...)
+			tc.prepare(h)
+			if got := deployWarningsOf(t, h, tc.plan); !slices.Equal(got, tc.want) {
+				t.Errorf("warnings = %q\nwant       %q", got, tc.want)
+			}
+		})
+	}
+	t.Run("a hardware encoder", func(t *testing.T) {
+		h := encoderCameras(t, "jpegdec", "v4l2h264enc", "x264enc")
+		if got := deployWarningsOf(t, h, recording(cameraSource("/dev/video6", "store: frames"))); len(got) != 0 {
+			t.Errorf("warnings = %q, want none", got)
 		}
 	})
 }
@@ -307,15 +353,17 @@ func countingListings(h *csHarness) (listings func() int) {
 	}
 }
 
-// A plan that asks no camera for video cannot be told anything of an encoder,
-// so its deploy lists no camera to find out.
-func TestCampaignDeploy_APlanThatAsksNoCameraForVideoDiscoversNothing(t *testing.T) {
+// A deploy lists the cameras once for a plan with a camera source, however
+// many it names and whatever they store, and not at all for a plan without
+// one.
+func TestCampaignDeploy_ListsTheCamerasOnceForAPlanWithACameraSourceAndNeverWithout(t *testing.T) {
 	for name, tc := range map[string]struct {
 		plan     encoderPlan
 		listings int
 	}{
-		"only store frames":          {recording(cameraSource("/dev/video4", "store: frames"), cameraSource("/dev/video2", "store: frames")), 0},
-		"only snapshot stills":       {recording(cameraSource("*", "mode: snapshot", "interval: 1s")), 0},
+		"no camera source":           {encoderPlan{telemetry: true}, 0},
+		"only store frames":          {recording(cameraSource("/dev/video4", "store: frames"), cameraSource("/dev/video2", "store: frames")), 1},
+		"only snapshot stills":       {recording(cameraSource("*", "mode: snapshot", "interval: 1s")), 1},
 		"one source stores video":    {recording(cameraSource("/dev/video4", "store: frames"), cameraSource("/dev/video2")), 1},
 		"a selector names no camera": {recording(cameraSource("/dev/video4"), cameraSource("/dev/video9"), cameraSource("/dev/video2")), 1},
 	} {
@@ -405,8 +453,21 @@ func TestCampaignDeploy_AHungDeviceQuestionDelaysNoArmingAndYieldsNoWarning(t *t
 	}
 }
 
-func TestCampaignDeploy_TheAdaptersAreGivenTwoSecondsToAnswer(t *testing.T) {
-	if campaignDeployWarningBudget != 2*time.Second {
-		t.Errorf("budget = %s", campaignDeployWarningBudget)
+// Once the deploy has stopped waiting, the adapter asks no further camera
+// what encodes its video.
+func TestCampaignDeployWarnings_AnAdapterNobodyWaitsForStopsBetweenCameras(t *testing.T) {
+	h := encoderCameras(t, softwareEncoderElements...)
+	campaign, err := data.ParseCampaign(recording(cameraSource("*")).yaml())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := newCameraDataAdapter(h.s).(dataDeployAdvisingAdapter)
+	if got := adapter.DeployWarnings(context.Background(), campaign); len(got) != 2 {
+		t.Fatalf("while the deploy waits: warnings = %q, want one for each of two cameras", got)
+	}
+	done, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := adapter.DeployWarnings(done, campaign); len(got) != 0 {
+		t.Errorf("after the deploy stopped waiting: warnings = %q, want none", got)
 	}
 }
