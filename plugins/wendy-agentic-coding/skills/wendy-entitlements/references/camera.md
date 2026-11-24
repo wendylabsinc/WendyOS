@@ -17,7 +17,10 @@ device and leaves no node to configure.
 | `stamp` | `"time"` (default): the capture time. `"frame"`: the agent's frame number. |
 
 A camera that cannot provide the `format` asked for is served in another one,
-and `wendy run` says which and why.
+and `wendy run` says which and why. On a device without a hardware H.264
+encoder, `"h264"` from a camera that produces JPEG is encoded in software for
+as long as the app reads its node, and `wendy run` says so; `"native"` and
+`"pixels"` need no encoder.
 
 ## Allowlist
 
