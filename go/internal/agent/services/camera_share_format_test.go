@@ -487,6 +487,99 @@ func TestCreateCameraShares_NoEntitlementSettingsIsPixelsWithCaptureTimes(t *tes
 	}
 }
 
+// A container's nodes are made when it is created, for the cameras present
+// then. A camera one of its entries names that is plugged in afterwards gets
+// no node, whatever the entry asks for, at the replug, at a sync and at the
+// container's next start: the app has the real camera. Only the next create
+// gives it a node, and that node follows the entry.
+func TestCreateCameraShares_ACameraPluggedInAfterTheCreateGetsNoNodeUntilTheNextCreate(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	sfCanDeriveFrames(h.s)
+	entitlements := []appconfig.Entitlement{
+		sfCameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame, "C920"),
+		sfCameraEntitlement("", "", "Brio 101"),
+	}
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	h.watch()
+	present := h.records("cv-a")
+	if len(present) != 1 || present[0].cameraName != "Brio 101" {
+		t.Fatalf("records = %+v, want the Brio's alone; logs: %v", present, h.logs.All())
+	}
+	onlyTheBrio := func(when string, covers []csCover) {
+		t.Helper()
+		if records := h.records("cv-a"); len(records) != 1 || records[0] != present[0] || len(h.openedNodes()) != 1 {
+			t.Fatalf("%s: records = %+v with %d nodes opened, want the Brio's alone", when, records, len(h.openedNodes()))
+		}
+		if got := coversWithout(h.coverList()); !reflect.DeepEqual(got, covers) {
+			t.Fatalf("%s: covers = %+v, want %+v", when, got, covers)
+		}
+		if row := h.reportOf("/dev/video4"); row["shared_with"] != "" || row["share_state"] != "" || row["share_mode_native"] != "1280x720 MJPG, 30 fps" {
+			t.Fatalf("%s: the C920's row = %v, want a camera that could have a native node and is shared with no app", when, row)
+		}
+	}
+
+	h.plug(csC920())
+	h.waitLogged("camera share: /dev/video4 appeared; no running app shares it", 1)
+	atStart := []csCover{{pid: 11, src: "/dev/video255", dst: "/dev/video0"}}
+	onlyTheBrio("after the camera was plugged in", atStart)
+	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a", Running: true, PID: 11}})
+	onlyTheBrio("after a sync", atStart)
+	h.s.ReleaseCameraShares("cv-a")
+	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 12); len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	onlyTheBrio("after the container's next start", append(atStart, csCover{pid: 12, src: "/dev/video255", dst: "/dev/video0"}))
+
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
+	records := h.records("cv-a")
+	if len(records) != 2 || records[0] != present[0] {
+		t.Fatalf("after the next create: records = %+v, want the Brio's kept and the C920's; logs: %v", records, h.logs.All())
+	}
+	if r := records[1]; r.cameraName != "C920" || r.mode != sfNativeMode || r.stamp != appconfig.CameraStampFrame || r.askedFormat != "" {
+		t.Errorf("the C920's record holds %s (asked %q), want %s as its entry asks",
+			describeShareNode(r.mode, r.stamp), r.askedFormat, describeShareNode(sfNativeMode, appconfig.CameraStampFrame))
+	}
+	if got, want := h.reportOf("/dev/video4")["share_state"], "cv-a [format native, stamp frame] (idle)"; got != want {
+		t.Errorf("share_state = %q, want %q", got, want)
+	}
+}
+
+// An allowlist says which cameras an entry's format and stamp are for, and
+// nothing else. When every entry has one, a camera none of them names is still
+// shared with the app, through a node of pixels with capture times.
+func TestCreateCameraShares_ACameraNoAllowlistNamesStillGetsANodeOfPixelsWithCaptureTimes(t *testing.T) {
+	h := newCSHarness(t, csBrio(), csC920())
+	sfCanDeriveFrames(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
+		sfCameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame, "C920"),
+		sfCameraEntitlement(appconfig.CameraFormatH264, appconfig.CameraStampFrame, "/dev/video9", "Cam Six"),
+	})
+	type node struct {
+		mode  sharedMode
+		stamp string
+	}
+	got := map[string]node{}
+	for _, r := range h.records("cv-a") {
+		got[r.cameraName] = node{r.mode, r.stamp}
+	}
+	want := map[string]node{
+		"C920":     {sfNativeMode, appconfig.CameraStampFrame},
+		"Brio 101": {sfPixelsMode, appconfig.CameraStampTime},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("nodes = %+v, want %+v; logs: %v", got, want, h.logs.All())
+	}
+	if got, want := h.reportOf("/dev/video0")["share_state"], "cv-a [format pixels, stamp time] (idle)"; got != want {
+		t.Errorf("share_state of the camera no allowlist names = %q, want %q", got, want)
+	}
+	if n := h.logged("camera share: cv-a shares Brio 101 (/dev/video0) through /dev/video255 at 1280x720 YUYV, 30 fps, format pixels, stamp time"); n != 1 {
+		t.Errorf("shares line of the camera no allowlist names logged %d times; logs: %v", n, h.logs.All())
+	}
+}
+
 // An app that asks for a format its camera cannot provide still gets a node
 // for the camera, of pictures, and every report of the share says so. Its
 // other settings, and other apps' nodes, are as they would be.
