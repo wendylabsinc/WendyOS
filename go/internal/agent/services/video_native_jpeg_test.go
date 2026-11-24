@@ -26,35 +26,37 @@ func encodeTestJPEG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-func TestJPEGWithoutPadding(t *testing.T) {
+func TestJPEGFrameInBuffer(t *testing.T) {
 	whole := encodeTestJPEG(t, 64, 48)
 	join := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
 	endMarkerMidData := join(whole[:len(whole)-2], []byte{0xFF, 0xD9, 0x12, 0x34}, whole[len(whole)-2:])
+	smallest := []byte{0xFF, 0xD8, 0x00, 0xFF, 0xD9}
 	cases := []struct {
 		name string
 		data []byte
 		want []byte
 	}{
 		{"complete image", whole, whole},
-		{"smallest possible", []byte{0xFF, 0xD8, 0xFF, 0xD9}, []byte{0xFF, 0xD8, 0xFF, 0xD9}},
+		{"one byte between the markers", smallest, smallest},
 		{"zero padding after the end marker", join(whole, make([]byte, 4096)), whole},
-		{"one zero byte after the end marker", join(whole, []byte{0x00}), whole},
+		{"FF padding after the end marker", join(whole, bytes.Repeat([]byte{0xFF}, 64)), whole},
+		{"vendor data after the end marker", join(whole, []byte{0x01, 0x02, 0xFF, 0xD8, 0x7F}), whole},
 		{"end marker inside the data with real data after it", endMarkerMidData, endMarkerMidData},
 		{"end marker inside the data, padded", join(endMarkerMidData, make([]byte, 16)), endMarkerMidData},
 		{"no end marker", whole[:len(whole)-2], nil},
 		{"no end marker, padded", join(whole[:len(whole)-2], make([]byte, 16)), nil},
-		{"non-zero bytes after the end marker", join(whole, []byte{0x01, 0x02}), nil},
-		{"non-zero byte after the padding", join(whole, make([]byte, 16), []byte{0x01}), nil},
 		{"no start marker", whole[2:], nil},
+		{"nothing between the markers", []byte{0xFF, 0xD8, 0xFF, 0xD9}, nil},
+		{"nothing between the markers, padded", []byte{0xFF, 0xD8, 0xFF, 0xD9, 0x00, 0x00}, nil},
 		{"start marker only", []byte{0xFF, 0xD8}, nil},
 		{"start and end markers overlap", []byte{0xFF, 0xD8, 0xD9}, nil},
 		{"only padding", make([]byte, 16), nil},
 		{"empty", nil, nil},
 	}
 	for _, c := range cases {
-		got, ok := jpegWithoutPadding(c.data)
+		got, ok := jpegFrameInBuffer(c.data)
 		if ok != (c.want != nil) || !bytes.Equal(got, c.want) {
-			t.Errorf("%s: jpegWithoutPadding = %d bytes, %v; want %d bytes, %v", c.name, len(got), ok, len(c.want), c.want != nil)
+			t.Errorf("%s: jpegFrameInBuffer = %d bytes, %v; want %d bytes, %v", c.name, len(got), ok, len(c.want), c.want != nil)
 		}
 	}
 }
@@ -65,12 +67,17 @@ type broadcastFrame struct {
 	codec agentpb.VideoCodec
 }
 
-func TestNativeJPEGEmitBroadcastsWholeFramesAndDropsTheRest(t *testing.T) {
+func recordingNativeJPEGFrames(sent *[]broadcastFrame) *nativeJPEGFrames {
+	return &nativeJPEGFrames{logger: zap.NewNop(), device: "/dev/video4",
+		broadcast: func(d []byte, stamp frameTimestamp, c agentpb.VideoCodec) bool {
+			*sent = append(*sent, broadcastFrame{d, stamp, c})
+			return true
+		}}
+}
+
+func TestNativeJPEGFramesBroadcastsJPEGFramesAndDropsTheRest(t *testing.T) {
 	var sent []broadcastFrame
-	emit := nativeJPEGEmit(func(d []byte, stamp frameTimestamp, c agentpb.VideoCodec) bool {
-		sent = append(sent, broadcastFrame{d, stamp, c})
-		return true
-	})
+	frames := recordingNativeJPEGFrames(&sent)
 	whole := encodeTestJPEG(t, 64, 48)
 
 	for _, f := range []struct {
@@ -81,30 +88,97 @@ func TestNativeJPEGEmitBroadcastsWholeFramesAndDropsTheRest(t *testing.T) {
 		{"first whole frame", whole, frameTimestamp{auAligned: true, sequence: 1}},
 		{"truncated by the camera", whole[:len(whole)-2], frameTimestamp{auAligned: true, sequence: 2}},
 		{"truncated by the size cap", whole, frameTimestamp{auAligned: false, sequence: 3}},
-		{"trailing non-zero bytes", append(append([]byte{}, whole...), 0x01), frameTimestamp{auAligned: true, sequence: 4}},
+		{"flagged as damaged by the driver", whole, frameTimestamp{auAligned: true, sequence: 4, nativeFlags: v4l2BufFlagError}},
 		{"whole frame padded with zeros", append(append([]byte{}, whole...), make([]byte, 512)...), frameTimestamp{auAligned: true, sequence: 5}},
 	} {
-		if !emit(f.data, f.stamp) {
+		if !frames.emit(f.data, f.stamp) {
 			t.Fatalf("%s stopped the capture", f.name)
 		}
 	}
 
 	if len(sent) != 2 {
-		t.Fatalf("broadcast %d frames, want the 2 whole ones", len(sent))
+		t.Fatalf("broadcast %d frames, want the 2 usable ones", len(sent))
 	}
 	for i, wantSequence := range []uint32{1, 5} {
 		got := sent[i]
 		if got.codec != videoCodecMJPEG || !got.stamp.auAligned || got.stamp.sequence != wantSequence || !bytes.Equal(got.data, whole) {
-			t.Errorf("frame %d: codec=%d auAligned=%v sequence=%d len=%d, want JPEG codec, aligned, sequence %d, the whole image",
+			t.Errorf("frame %d: codec=%d auAligned=%v sequence=%d len=%d, want JPEG codec, aligned, sequence %d, exactly the image",
 				i, int32(got.codec), got.stamp.auAligned, got.stamp.sequence, len(got.data), wantSequence)
 		}
 	}
+	if err := frames.captureResult(nil); err != nil {
+		t.Errorf("a capture that delivered frames ended with %v", err)
+	}
 }
 
-func TestNativeJPEGEmitStopsWhenNoSubscriberRemains(t *testing.T) {
-	emit := nativeJPEGEmit(func([]byte, frameTimestamp, agentpb.VideoCodec) bool { return false })
-	if emit(encodeTestJPEG(t, 64, 48), frameTimestamp{auAligned: true}) {
+func TestNativeJPEGFramesStopsWhenNoSubscriberRemains(t *testing.T) {
+	frames := &nativeJPEGFrames{logger: zap.NewNop(), broadcast: func([]byte, frameTimestamp, agentpb.VideoCodec) bool { return false }}
+	if frames.emit(encodeTestJPEG(t, 64, 48), frameTimestamp{auAligned: true}) {
 		t.Fatal("capture must stop when broadcast reports no subscribers")
+	}
+	if err := frames.captureResult(nil); err != nil {
+		t.Errorf("a capture that ran out of subscribers ended with %v", err)
+	}
+}
+
+func TestNativeJPEGFramesGivesUpWhenTheFirstBuffersAreAllUnusable(t *testing.T) {
+	var sent []broadcastFrame
+	frames := recordingNativeJPEGFrames(&sent)
+	notJPEG := []byte("YUYV bytes from a camera that lied about its format")
+
+	for i := 1; i < nativeJPEGUnusableBuffersBeforeNotSupported; i++ {
+		if !frames.emit(notJPEG, frameTimestamp{auAligned: true}) {
+			t.Fatalf("capture gave up after %d unusable buffers, want %d", i, nativeJPEGUnusableBuffersBeforeNotSupported)
+		}
+	}
+	if frames.emit(notJPEG, frameTimestamp{auAligned: true}) {
+		t.Fatalf("capture kept running after %d unusable buffers and no frame", nativeJPEGUnusableBuffersBeforeNotSupported)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("broadcast %d unusable buffers", len(sent))
+	}
+
+	err := fmt.Errorf("capture: %w", frames.captureResult(nil))
+	var notSupported nativeJPEGNotSupported
+	if !errors.As(err, &notSupported) {
+		t.Fatalf("a camera with no usable frame must be a nativeJPEGNotSupported, got %T: %v", err, err)
+	}
+	if !strings.Contains(notSupported.Error(), "not a JPEG image") {
+		t.Errorf("the error does not say why the buffers were unusable: %q", notSupported)
+	}
+}
+
+func TestNativeJPEGFramesKeepsCapturingThroughBadBuffersAfterAGoodFrame(t *testing.T) {
+	var sent []broadcastFrame
+	frames := recordingNativeJPEGFrames(&sent)
+	whole := encodeTestJPEG(t, 64, 48)
+
+	for i := 1; i < nativeJPEGUnusableBuffersBeforeNotSupported; i++ {
+		frames.emit(whole[:len(whole)-2], frameTimestamp{auAligned: true})
+	}
+	if !frames.emit(whole, frameTimestamp{auAligned: true}) {
+		t.Fatal("the first good frame stopped the capture")
+	}
+	for i := 0; i < 3*nativeJPEGUnusableBuffersBeforeNotSupported; i++ {
+		if !frames.emit(whole[:len(whole)-2], frameTimestamp{auAligned: true}) {
+			t.Fatalf("bad buffer %d after a good frame stopped the capture", i+1)
+		}
+	}
+	if len(sent) != 1 {
+		t.Fatalf("broadcast %d frames, want the 1 good one", len(sent))
+	}
+	if err := frames.captureResult(nil); err != nil {
+		t.Errorf("a capture that delivered a frame ended with %v", err)
+	}
+}
+
+func TestNativeJPEGFramesCaptureResultKeepsTheCaptureError(t *testing.T) {
+	frames := recordingNativeJPEGFrames(new([]broadcastFrame))
+	for i := 0; i < nativeJPEGUnusableBuffersBeforeNotSupported; i++ {
+		frames.emit(nil, frameTimestamp{auAligned: true})
+	}
+	if err := frames.captureResult(context.Canceled); !errors.Is(err, context.Canceled) {
+		t.Errorf("captureResult = %v, want the capture's own error", err)
 	}
 }
 
@@ -141,10 +215,27 @@ func TestCaptureNativeJPEGRefusesAMissingDevice(t *testing.T) {
 	}
 }
 
+func TestCaptureNativeJPEGRefusesAnUnchosenSize(t *testing.T) {
+	s := &VideoService{logger: zap.NewNop()}
+	for _, size := range [][2]uint32{{0, 0}, {1280, 0}, {0, 720}} {
+		err := s.captureNativeJPEG(context.Background(), func([]byte, frameTimestamp, agentpb.VideoCodec) bool {
+			t.Fatal("no frame can exist")
+			return false
+		}, "/dev/video4", size[0], size[1], 30)
+		if err == nil || !strings.Contains(err.Error(), "nativeJPEGCaptureSize") {
+			t.Errorf("%dx%d: error %v does not send the caller to nativeJPEGCaptureSize", size[0], size[1], err)
+		}
+		if errors.As(err, new(nativeJPEGNotSupported)) {
+			t.Errorf("%dx%d: a caller's missing size is not a camera without JPEG: %v", size[0], size[1], err)
+		}
+	}
+}
+
 type jpegSelectionCamera struct {
 	defaultSize [2]uint32
 	jpegSizes   [][2]uint32
 	yuyvSizes   [][2]uint32
+	thermal     *agentpb.ThermalCamera
 }
 
 func withJPEGSelectionCamera(t *testing.T, cam jpegSelectionCamera) (jpegProbes *[][2]uint32) {
@@ -155,7 +246,7 @@ func withJPEGSelectionCamera(t *testing.T, cam jpegSelectionCamera) (jpegProbes 
 		bestDefaultFrameSizeForDevice, deviceSupportsMJPEGSize, thermalCaptureProfile = prevDefault, prevJPEG, prevThermal
 	})
 	bestDefaultFrameSizeForDevice = func(string) (uint32, uint32) { return cam.defaultSize[0], cam.defaultSize[1] }
-	thermalCaptureProfile = func(string) *agentpb.ThermalCamera { return nil }
+	thermalCaptureProfile = func(string) *agentpb.ThermalCamera { return cam.thermal }
 	jpegProbes = new([][2]uint32)
 	deviceSupportsMJPEGSize = func(_ string, w, h uint32) bool {
 		*jpegProbes = append(*jpegProbes, [2]uint32{w, h})
@@ -171,6 +262,8 @@ func withJPEGSelectionCamera(t *testing.T, cam jpegSelectionCamera) (jpegProbes 
 
 func TestNativeJPEGCaptureSize(t *testing.T) {
 	webcam := jpegSelectionCamera{defaultSize: [2]uint32{1280, 720}, jpegSizes: [][2]uint32{{1280, 720}, {640, 480}}}
+	thermalModule := jpegSelectionCamera{defaultSize: [2]uint32{256, 192}, jpegSizes: [][2]uint32{{256, 192}, {640, 480}},
+		thermal: &agentpb.ThermalCamera{CaptureWidth: 256, CaptureHeight: 384}}
 	cases := []struct {
 		name     string
 		cam      jpegSelectionCamera
@@ -188,6 +281,11 @@ func TestNativeJPEGCaptureSize(t *testing.T) {
 		{"default promoted to a stacked mode that is not JPEG",
 			jpegSelectionCamera{defaultSize: [2]uint32{512, 384}, jpegSizes: [][2]uint32{{512, 384}}, yuyvSizes: [][2]uint32{{512, 384}, {512, 484}}},
 			&agentpb.StreamVideoRequest{}, [2]uint32{}, false},
+		{"raw request at a JPEG size", webcam, &agentpb.StreamVideoRequest{Codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, Width: 640, Height: 480}, [2]uint32{}, false},
+		{"raw request at the device default", webcam, &agentpb.StreamVideoRequest{Codec: agentpb.VideoCodec_VIDEO_CODEC_RAW}, [2]uint32{}, false},
+		{"VP8 request at a JPEG size", webcam, &agentpb.StreamVideoRequest{Codec: agentpb.VideoCodec_VIDEO_CODEC_VP8, Width: 640, Height: 480}, [2]uint32{640, 480}, true},
+		{"thermal module at its default", thermalModule, &agentpb.StreamVideoRequest{}, [2]uint32{}, false},
+		{"thermal module at a requested JPEG size", thermalModule, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, [2]uint32{}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -213,6 +311,8 @@ func TestNativeJPEGCaptureSizeDoesNotProbeAnUnknownSize(t *testing.T) {
 func TestPlannerJPEGChoiceIsUnchangedBySharingTheSelectionRule(t *testing.T) {
 	webcam := jpegSelectionCamera{defaultSize: [2]uint32{1280, 720}, jpegSizes: [][2]uint32{{1280, 720}}}
 	stacked := jpegSelectionCamera{defaultSize: [2]uint32{512, 384}, jpegSizes: [][2]uint32{{512, 384}}, yuyvSizes: [][2]uint32{{512, 384}, {512, 484}}}
+	thermalModule := jpegSelectionCamera{defaultSize: [2]uint32{256, 192}, jpegSizes: [][2]uint32{{256, 192}},
+		thermal: &agentpb.ThermalCamera{CaptureWidth: 256, CaptureHeight: 384}}
 	hd := &agentpb.StreamVideoRequest{Width: 1280, Height: 720}
 	const noJPEG = ""
 	cases := []struct {
@@ -238,6 +338,10 @@ func TestPlannerJPEGChoiceIsUnchangedBySharingTheSelectionRule(t *testing.T) {
 			map[string]bool{"x264enc": true}, noJPEG, nil, false},
 		{"stacked default with videocrop", stacked, &agentpb.StreamVideoRequest{},
 			map[string]bool{"jpegdec": true, "videocrop": true}, noJPEG, [][2]uint32{{512, 484}}, true},
+		{"thermal profile default with videocrop", thermalModule, &agentpb.StreamVideoRequest{},
+			map[string]bool{"jpegdec": true, "videocrop": true}, noJPEG, [][2]uint32{{256, 384}}, true},
+		{"thermal profile default without videocrop", thermalModule, &agentpb.StreamVideoRequest{},
+			map[string]bool{"jpegdec": true}, "image/jpeg,width=256,height=192", [][2]uint32{{256, 192}}, false},
 		{"stacked default without videocrop", stacked, &agentpb.StreamVideoRequest{},
 			map[string]bool{"jpegdec": true}, "image/jpeg,width=512,height=384", [][2]uint32{{512, 384}}, false},
 	}

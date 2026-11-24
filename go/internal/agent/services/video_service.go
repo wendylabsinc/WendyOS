@@ -3096,9 +3096,9 @@ type v4l2CaptureConfig struct {
 	tuneKeyframes bool
 	framerate     uint32
 	// setFrameInterval asks the driver for framerate via VIDIOC_S_PARM.
-	// Best-effort, raw formats only: H.264 keeps its historical behaviour
-	// (interval untouched), but a RealSense depth node left at its default
-	// interval runs Z16 at ~90 fps and triples the USB bandwidth asked of it.
+	// Best-effort: H.264 keeps its historical behaviour (interval untouched),
+	// but a RealSense depth node left at its default interval runs Z16 at
+	// ~90 fps and triples the USB bandwidth asked of it.
 	setFrameInterval bool
 	// formatUnsupported wraps the three "device cannot produce this format"
 	// exits (S_FMT EINVAL, a silently switched format, DQBUF dying before the
