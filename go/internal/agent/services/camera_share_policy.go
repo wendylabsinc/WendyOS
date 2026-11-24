@@ -208,9 +208,19 @@ func (s *VideoService) shareDecisionsFor(dev *agentpb.VideoDevice, formats ...st
 	}
 	frames := s.framesForNodes(dev)
 	for _, format := range formats {
-		decisions[format] = shareDecisionOf(frames, format)
+		decisions[format] = shareDecisionOf(frames, format).namingSoftwareEncoderOf(frames)
 	}
 	return decisions
+}
+
+// namingSoftwareEncoderOf is the decision with the software element that
+// makes its node's frames from the camera's own, for a compressed node whose
+// codec is not the camera's.
+func (d shareDecision) namingSoftwareEncoderOf(frames nodeFrames) shareDecision {
+	if d.Shared && d.Mode.compressed() && frames.nodeCodec(d.Mode.Format) != frames.own.codec {
+		d.SoftwareEncoder = frames.softwareEncoder
+	}
+	return d
 }
 
 func shareDecisionOf(frames nodeFrames, format string) shareDecision {
@@ -229,11 +239,7 @@ func shareDecisionOf(frames nodeFrames, format string) shareDecision {
 	if mode.FPS == 0 {
 		mode.FPS = defaultSharedFPS
 	}
-	decision := shareDecision{Shared: true, Mode: mode}
-	if mode.compressed() && frames.nodeCodec(format) != frames.own.codec {
-		decision.SoftwareEncoder = frames.softwareEncoder
-	}
-	return decision
+	return shareDecision{Shared: true, Mode: mode}
 }
 
 // shareFormatCodecs is the codec of the frames a compressed node format
