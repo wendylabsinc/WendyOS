@@ -21,9 +21,11 @@ if [[ "$module_version" != 0.15.4 ]]; then
   exit 2
 fi
 # The second list is what deriving pictures and H.264 from a camera's own frames
-# needs; without it an app's native or h264 node is served as pixels.
+# needs; without it an app's native or h264 node is served as pixels. The third
+# decodes the pictures of the camera that produces H.264.
 for element in v4l2src jpegdec videoconvert queue fdsink \
-  fdsrc gdpdepay gdppay tee x264enc h264parse; do
+  fdsrc gdpdepay gdppay tee x264enc h264parse \
+  avdec_h264; do
   gst-inspect-1.0 "$element" > /dev/null
 done
 if ! command -v unshare > /dev/null; then
@@ -35,7 +37,8 @@ trap 'rm -f "$output/"*.test' EXIT
 services=./go/internal/agent/services
 devcover=./go/internal/agent/devcover
 share_test=TestCameraShareTwoReadersDecodeRealFrames
-share_tests=(TestCameraShareTwoReadersDecodeRealFrames TestShareNodeWriter_DeclaresModeAndReportsReaders TestShareNode_StaysACameraWhileTheWriterIsAway TestShareNode_FreshStartForLateAndRestartedReaders TestShareNode_FreshStartSuppressesSyntheticFrames TestShareNode_FreshStartForReadIO TestCameraShareNodesFollowTheirEntitlements TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength TestShareNodeWriter_BufferTimestampReadsBackAsTheCaptureTimeOrTheSampleID)
+h264_camera_test=TestCameraShareNodesOfAnH264CameraFollowTheirEntitlements
+share_tests=(TestCameraShareTwoReadersDecodeRealFrames TestShareNodeWriter_DeclaresModeAndReportsReaders TestShareNode_StaysACameraWhileTheWriterIsAway TestShareNode_FreshStartForLateAndRestartedReaders TestShareNode_FreshStartSuppressesSyntheticFrames TestShareNode_FreshStartForReadIO TestCameraShareNodesFollowTheirEntitlements "$h264_camera_test" TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength TestShareNodeWriter_BufferTimestampReadsBackAsTheCaptureTimeOrTheSampleID)
 cover_test=TestCover_BindsSourceInsideTargetNamespaceOnly
 
 python3 - "$output" <<'PY'
@@ -54,6 +57,10 @@ mutations = {
     'fresh-start-disabled': ('go/internal/agent/services/camera_share_node.go',
                              'fresh := v4l2Control{ID: v4l2LoopbackCidFreshStart, Value: 1}',
                              'fresh := v4l2Control{ID: v4l2LoopbackCidFreshStart, Value: 0}'),
+    # A picture carries the sample ID of the frame after the one it shows.
+    'next-sample-id': ('go/internal/agent/services/video_service.go',
+                       'derived.sampleID = source.sampleID',
+                       'derived.sampleID = source.sampleID + 1'),
     # A cover never enters the container's mount namespace.
     'no-setns': ('go/internal/agent/devcover/cover_linux.go',
                  'unix.Setns(n.fd, unix.CLONE_NEWNS)',
@@ -72,6 +79,7 @@ PY
 go test -race -tags regression_camera_fixture -c -o "$output/services.test" "$services"
 go test -race -tags regression_camera_fixture -overlay "$output/sharing-disabled.json" -c -o "$output/sharing-disabled.test" "$services"
 go test -race -tags regression_camera_fixture -overlay "$output/fresh-start-disabled.json" -c -o "$output/fresh-start-disabled.test" "$services"
+go test -race -tags regression_camera_fixture -overlay "$output/next-sample-id.json" -c -o "$output/next-sample-id.test" "$services"
 go test -race -tags regression_camera_fixture -c -o "$output/devcover.test" "$devcover"
 go test -race -tags regression_camera_fixture -overlay "$output/no-setns.json" -c -o "$output/no-setns.test" "$devcover"
 
@@ -114,7 +122,7 @@ require_rejected() {
   grep -qF "$message" "$log" || { echo "Regression rejected $mutation without: $message" >&2; exit 1; }
 }
 
-run_share "$output/services.test" '^Test(CameraShareTwoReadersDecodeRealFrames|ShareNodeWriter_DeclaresModeAndReportsReaders|ShareNode_StaysACameraWhileTheWriterIsAway|ShareNode_FreshStartForLateAndRestartedReaders|ShareNode_FreshStartSuppressesSyntheticFrames|ShareNode_FreshStartForReadIO|CameraShareNodesFollowTheirEntitlements|ShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength|ShareNodeWriter_BufferTimestampReadsBackAsTheCaptureTimeOrTheSampleID)$' | tee "$output/normal.log"
+run_share "$output/services.test" '^Test(CameraShareTwoReadersDecodeRealFrames|ShareNodeWriter_DeclaresModeAndReportsReaders|ShareNode_StaysACameraWhileTheWriterIsAway|ShareNode_FreshStartForLateAndRestartedReaders|ShareNode_FreshStartSuppressesSyntheticFrames|ShareNode_FreshStartForReadIO|CameraShareNodesFollowTheirEntitlements|CameraShareNodesOfAnH264CameraFollowTheirEntitlements|ShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength|ShareNodeWriter_BufferTimestampReadsBackAsTheCaptureTimeOrTheSampleID)$' | tee "$output/normal.log"
 require_passed "$output/normal.log" "${share_tests[@]}"
 
 if run_share "$output/sharing-disabled.test" "^${share_test}\$" > "$output/sharing-disabled.log" 2>&1; then
@@ -131,6 +139,13 @@ if run_share "$output/fresh-start-disabled.test" "^${fresh_test}\$" > "$output/f
   exit 1
 fi
 require_rejected "$output/fresh-start-disabled.log" fresh-start-disabled "$fresh_test" 'FRESH_CAPTURE_CONTRACT:'
+
+if run_share "$output/next-sample-id.test" "^${h264_camera_test}\$" > "$output/next-sample-id.log" 2>&1; then
+  cat "$output/next-sample-id.log"
+  echo 'Regression did not reject next-sample-id' >&2
+  exit 1
+fi
+require_rejected "$output/next-sample-id.log" next-sample-id "$h264_camera_test" 'but shows luma'
 
 mapfile -t cover_tests < <("$output/devcover.test" -test.list '.*' | grep '^Test')
 if [[ ${#cover_tests[@]} -eq 0 ]]; then

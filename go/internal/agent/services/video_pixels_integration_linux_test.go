@@ -383,8 +383,8 @@ func waitForUdevBeforeRemoval(t *testing.T, nr int, createdAt time.Time) {
 	}
 }
 
-// mjpegFeed writes the fixture's JPEG frames into the node.
-type mjpegFeed struct {
+// fixtureFeed writes the fixture camera's frames into its node.
+type fixtureFeed struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	result error // set before done is closed
@@ -392,18 +392,26 @@ type mjpegFeed struct {
 
 // feedMJPEG writes jpeg to the node at pixelsFixtureFPS through the ROS 2 camera
 // writer until stopped or the writer fails.
-func feedMJPEG(t *testing.T, ctx context.Context, path string, jpeg []byte) *mjpegFeed {
+func feedMJPEG(t *testing.T, ctx context.Context, path string, jpeg []byte) *fixtureFeed {
+	t.Helper()
+	return feedFixtureFrames(t, ctx, path, ros2camera.CodecMJPEG, [][]byte{jpeg})
+}
+
+// feedFixtureFrames writes frames to the node in turn, over and over, at
+// pixelsFixtureFPS through the ROS 2 camera writer until stopped or the writer
+// fails.
+func feedFixtureFrames(t *testing.T, ctx context.Context, path string, codec ros2camera.Codec, frames [][]byte) *fixtureFeed {
 	t.Helper()
 	feedCtx, cancel := context.WithCancel(ctx)
-	feed := &mjpegFeed{cancel: cancel, done: make(chan struct{})}
+	feed := &fixtureFeed{cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(feed.done)
 		writer := ros2camera.NewFrameWriter(path)
-		frame := ros2camera.Frame{Data: jpeg, Width: pixelsFixtureWidth, Height: pixelsFixtureHeight, Codec: ros2camera.CodecMJPEG}
 		ticker := time.NewTicker(time.Second / pixelsFixtureFPS)
 		defer ticker.Stop()
 		var err error
-		for err == nil {
+		for next := 0; err == nil; next++ {
+			frame := ros2camera.Frame{Data: frames[next%len(frames)], Width: pixelsFixtureWidth, Height: pixelsFixtureHeight, Codec: codec}
 			if err = writer.WriteFrame(frame); err != nil {
 				break
 			}
@@ -426,14 +434,14 @@ func feedMJPEG(t *testing.T, ctx context.Context, path string, jpeg []byte) *mjp
 
 // stop ends the feed, closes the node and reports why the feed ended early, if
 // it did. It may be called more than once.
-func (f *mjpegFeed) stop() error {
+func (f *fixtureFeed) stop() error {
 	f.cancel()
 	<-f.done
 	return f.result
 }
 
 // err reports why the feed ended, without stopping it: nil while it runs.
-func (f *mjpegFeed) err() error {
+func (f *fixtureFeed) err() error {
 	select {
 	case <-f.done:
 		if f.result == nil {
