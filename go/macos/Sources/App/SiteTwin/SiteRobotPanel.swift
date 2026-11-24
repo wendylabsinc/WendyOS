@@ -116,7 +116,7 @@ final class SiteRobotMapModel: ObservableObject {
         if reading?.moving == true {
             return reading?.message == "Route changed to avoid a blocked area." ? "Moving along an alternative route" : "Moving"
         }
-        if localizing { return searchTurns > 0 ? "Matching view after turn \(searchTurns) of 12…" : "Locating Go2…" }
+        if localizing { return searchTurns > 0 ? "Matching view after turn \(searchTurns) of 6…" : "Locating Go2…" }
         if !candidates.isEmpty { return "Confirm suggested position" }
         if reading?.ready == true {
             return reading?.usingArrivalTiming == true ? "Ready · supervised timing" : "Ready for orders"
@@ -891,7 +891,7 @@ struct SiteRobotRotationPrompt: ViewModifier {
         } message: {
             Text(model.exploreDuringSearch
                  ? "Go2 will turn and navigate to up to three nearby viewpoints on observed clear floor, stopping when it finds a position match. Keep Go2 in sight and Stop within reach."
-                 : "Go2 will check clearance and turn in 30° steps to match its LiDAR observations. Keep Go2 in sight and its turning area clear.")
+                 : "Go2 will check clearance and turn in 60° steps to match its LiDAR observations. Keep Go2 in sight and its turning area clear.")
         }
     }
 }

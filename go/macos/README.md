@@ -1387,11 +1387,12 @@ at the current heading and up to 90 degrees to either side. It turns toward a
 reachable viewpoint before advancing, instead of requiring a fixed forward move.
 It matches again after each move and stops as
 soon as a candidate is available. It stops moving after three attempted viewpoints
-if matching is still inconclusive. When a move is blocked, it turns 30 degrees
-to check another heading, considering at most twelve distinct headings without
+if matching is still inconclusive. When a move is blocked, it turns 60 degrees
+to check another heading, considering at most six distinct headings without
 repeating the initial orientation. Discovery is also limited to five minutes.
-Turn the option off for rotation-only discovery, which retains a twelve-turn
-limit. Stop cancels the search and any active movement.
+Turn the option off for rotation-only discovery, which uses six 60-degree
+turns for a full rotation. Each turn pairs two former 30-degree steps, halving
+the stop-and-match cycles. Stop cancels the search and any active movement.
 
 Each move uses the live odometry frame, since the room transform is not yet
 confirmed. The body sweep uses a 10 cm drift margin. Before every command,
