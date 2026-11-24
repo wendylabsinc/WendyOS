@@ -1196,22 +1196,27 @@ func sfBufferTimeval(b *v4l2Buf) (seconds, microseconds int64) {
 	return *(*int64)(unsafe.Pointer(&b[24])), *(*int64)(unsafe.Pointer(&b[32]))
 }
 
-func TestShareNodeWriter_DeclaresACompressedModeByItsMaximumFrameSize(t *testing.T) {
+// The module sizes a compressed format's image itself (width x height x 4 in
+// 0.15.4), so the node's maximum frame is whatever the kernel reports.
+func TestShareNodeWriter_ACompressedNodeTakesItsMaximumFrameSizeFromTheKernel(t *testing.T) {
 	stopAtBuffers := errors.New("stop before the buffers")
 	for name, tc := range map[string]struct {
 		mode      sharedMode
 		taken     func(*v4l2Format)
+		wantMax   uint32
 		wantError string
 	}{
-		"jpeg":                           {mode: sfNativeMode},
-		"h264":                           {mode: sfH264Mode},
-		"driver sizes the image larger":  {mode: sfNativeMode, taken: func(f *v4l2Format) { f.SizeImage = 1280 * 720 * 4 }},
-		"driver sizes the image smaller": {mode: sfNativeMode, taken: func(f *v4l2Format) { f.SizeImage = maxFrameBytes - 1 }, wantError: "instead of 1280x720 MJPG, 30 fps"},
-		"driver takes another format":    {mode: sfH264Mode, taken: func(f *v4l2Format) { f.PixelFormat = v4l2PixFmtMJPEG }, wantError: "instead of 1280x720 H264, 30 fps"},
+		"jpeg, as asked":                 {mode: sfNativeMode, wantMax: maxFrameBytes},
+		"h264, as asked":                 {mode: sfH264Mode, wantMax: maxFrameBytes},
+		"kernel sizes the image larger":  {mode: sfNativeMode, taken: func(f *v4l2Format) { f.SizeImage = 1280 * 720 * 4 }, wantMax: 1280 * 720 * 4},
+		"kernel sizes the image smaller": {mode: sfH264Mode, taken: func(f *v4l2Format) { f.SizeImage = 320 * 240 * 4 }, wantMax: 320 * 240 * 4},
+		"kernel reports no image size":   {mode: sfNativeMode, taken: func(f *v4l2Format) { f.SizeImage = 0 }, wantError: "instead of 1280x720 MJPG, 30 fps"},
+		"kernel takes another format":    {mode: sfH264Mode, taken: func(f *v4l2Format) { f.PixelFormat = v4l2PixFmtMJPEG }, wantError: "instead of 1280x720 H264, 30 fps"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var asked v4l2Format
-			w := &shareNodeWriter{mode: tc.mode, path: "/dev/video255", fd: -1, wakeR: -1, wakeW: -1}
+			w := &shareNodeWriter{mode: tc.mode, path: "/dev/video255", fd: -1, wakeR: -1, wakeW: -1, done: closedChan()}
+			queued := 0
 			w.ioctlFn = func(req uintptr, arg unsafe.Pointer) error {
 				switch req {
 				case vidiocSFmt:
@@ -1221,6 +1226,8 @@ func TestShareNodeWriter_DeclaresACompressedModeByItsMaximumFrameSize(t *testing
 					}
 				case vidiocReqbufs:
 					return stopAtBuffers
+				case vidiocQbuf:
+					queued++
 				}
 				return nil
 			}
@@ -1230,13 +1237,52 @@ func TestShareNodeWriter_DeclaresACompressedModeByItsMaximumFrameSize(t *testing
 				t.Errorf("declared %dx%d %s, %d bytes per line, %d bytes; want 1280x720 %s, 0, %d",
 					asked.Width, asked.Height, fourccName(asked.PixelFormat), asked.BytesPerLine, asked.SizeImage, tc.mode.Fourcc, maxFrameBytes)
 			}
-			switch {
-			case tc.wantError == "" && !errors.Is(err, stopAtBuffers):
-				t.Errorf("the mode the node took was refused: %v", err)
-			case tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)):
-				t.Errorf("error = %v, want one saying %q", err, tc.wantError)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Errorf("error = %v, want one saying %q", err, tc.wantError)
+				}
+				return
+			}
+			if !errors.Is(err, stopAtBuffers) {
+				t.Fatalf("the mode the node took was refused: %v", err)
+			}
+			want := tc.mode
+			want.MaxFrameBytes = tc.wantMax
+			if got := w.Mode(); got != want || got.bufferBytes() != int(tc.wantMax) {
+				t.Fatalf("the writer's mode = %+v with %d-byte buffers, want %+v", got, got.bufferBytes(), want)
+			}
+
+			// The stand-in buffers are as large as the kernel's would be.
+			w.buffers = [][]byte{make([]byte, tc.wantMax), make([]byte, tc.wantMax)}
+			if err := w.WriteFrame(make([]byte, tc.wantMax), stampWithCaptureTime(1)); err != nil || queued != 1 {
+				t.Errorf("a frame of the kernel's maximum, %d bytes: %v, %d queued", tc.wantMax, err, queued)
+			}
+			err = w.WriteFrame(make([]byte, tc.wantMax+1), stampWithCaptureTime(2))
+			if !errors.Is(err, errShareFrameTooLarge) || w.oversizedFrames() != 1 || queued != 1 {
+				t.Errorf("a frame one byte over the kernel's maximum: error %v, counted %d, %d queued", err, w.oversizedFrames(), queued)
 			}
 		})
+	}
+}
+
+func TestShareNodeWriter_APictureNodeStillNeedsItsExactLayout(t *testing.T) {
+	for name, taken := range map[string]func(*v4l2Format){
+		"another image size":     func(f *v4l2Format) { f.SizeImage = 1280 * 720 * 4 },
+		"another bytes per line": func(f *v4l2Format) { f.BytesPerLine = 2564 },
+	} {
+		w := &shareNodeWriter{mode: sfPixelsMode, path: "/dev/video255", fd: -1, wakeR: -1, wakeW: -1}
+		w.ioctlFn = func(req uintptr, arg unsafe.Pointer) error {
+			if req == vidiocSFmt {
+				taken((*v4l2Format)(arg))
+			}
+			return nil
+		}
+		if err := w.configure(); err == nil || !strings.Contains(err.Error(), "instead of 1280x720 YUYV, 30 fps") {
+			t.Errorf("%s: error = %v, want the layout refused", name, err)
+		}
+		if w.Mode() != sfPixelsMode {
+			t.Errorf("%s: the writer's mode changed to %+v", name, w.Mode())
+		}
 	}
 }
 
@@ -1324,5 +1370,65 @@ func TestShareNodeWriter_BufferTimestampHoldsTheCaptureTimeOrTheSampleID(t *test
 	}
 	if len(*queued) != before {
 		t.Error("a frame with sample ID 0 was queued")
+	}
+}
+
+// A share's record holds the maximum frame size its node's kernel gave, and
+// that size is not a difference between the record and the mode the policy
+// decides: the container created again keeps its node, and an adopted record
+// is not told to redeploy.
+func TestCreateCameraShares_ACompressedSharesRecordHoldsTheKernelsMaximumFrameSize(t *testing.T) {
+	for name, kernelBytes := range map[string]uint32{"smaller than asked": 1280 * 720, "larger than asked": 1280 * 720 * 4} {
+		t.Run(name, func(t *testing.T) {
+			h := newCSHarness(t, csBrio())
+			sfCanDeriveFrames(h.s)
+			h.kernelImageBytes = func(sharedMode) uint32 { return kernelBytes }
+			entitlements := []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, "")}
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
+
+			want := sfNativeMode
+			want.MaxFrameBytes = kernelBytes
+			records := h.records("cv-a")
+			if len(records) != 1 || records[0].mode != want || records[0].pump.mode != want {
+				t.Fatalf("records = %+v, want one at %+v; logs: %v", records, want, h.logs.All())
+			}
+			if asked := records[0].io.(*csNode).mode; asked != sfNativeMode {
+				t.Errorf("the node was opened in %+v, want what the policy decided, %+v", asked, sfNativeMode)
+			}
+			if mode := h.stateShares("cv-a")[0]["mode"].(map[string]any); mode["maxFrameBytes"] != float64(kernelBytes) {
+				t.Errorf("state file mode = %v, want maxFrameBytes %d", mode, kernelBytes)
+			}
+
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
+			if again := h.records("cv-a"); len(again) != 1 || again[0] != records[0] || len(h.openedNodes()) != 1 {
+				t.Errorf("the container created again got another node: %d records, %d nodes opened", len(again), len(h.openedNodes()))
+			}
+			h.s.checkAdoptedMode(context.Background(), "cv-a", records[0])
+			if note := h.reportOf("/dev/video0")["share_state"]; strings.Contains(note, "redeploy") {
+				t.Errorf("the kernel's frame size is reported as a changed mode: %q", note)
+			}
+		})
+	}
+}
+
+func TestSharedMode_AsksWhat(t *testing.T) {
+	kernelSized := sfNativeMode
+	kernelSized.MaxFrameBytes = 1280 * 720 * 4
+	otherSize := sfNativeMode
+	otherSize.Width = 640
+	for name, tc := range map[string]struct {
+		a, b sharedMode
+		want bool
+	}{
+		"the same compressed mode":               {sfNativeMode, sfNativeMode, true},
+		"a compressed mode at the kernel's size": {sfNativeMode, kernelSized, true},
+		"another size":                           {sfNativeMode, otherSize, false},
+		"another format":                         {sfNativeMode, sfH264Mode, false},
+		"pictures and a compressed mode":         {sfPixelsMode, kernelSized, false},
+		"the same pictures":                      {sfPixelsMode, sfPixelsMode, true},
+	} {
+		if got := tc.a.asksWhat(tc.b); got != tc.want || tc.b.asksWhat(tc.a) != tc.want {
+			t.Errorf("%s: asksWhat = %v, want %v", name, got, tc.want)
+		}
 	}
 }

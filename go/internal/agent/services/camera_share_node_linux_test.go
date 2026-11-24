@@ -486,7 +486,8 @@ func TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength(t *testing.
 	for _, mode := range []sharedMode{
 		{Width: 640, Height: 480, Fourcc: "MJPG", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes},
 		{Width: 640, Height: 480, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatH264, MaxFrameBytes: maxFrameBytes},
-		// 1920x1080 at the module's own depth is larger than the maximum frame.
+		// The module sizes the image itself: below the size asked for at
+		// 640x480, above it at 1920x1080.
 		{Width: 1920, Height: 1080, Fourcc: "MJPG", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes},
 	} {
 		t.Run(mode.String(), func(t *testing.T) {
@@ -507,11 +508,15 @@ func TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength(t *testing.
 			if err := probe.ioctl(vidiocGFmtForShareTest, unsafe.Pointer(&got)); err != nil {
 				t.Fatalf("G_FMT: %v", err)
 			}
-			if got.Width != mode.Width || got.Height != mode.Height || got.PixelFormat != mode.pixelFormat() || got.SizeImage < mode.MaxFrameBytes {
-				t.Fatalf("G_FMT(CAPTURE) = %dx%d %s, image of %d bytes; want %s with an image of at least %d",
-					got.Width, got.Height, fourccName(got.PixelFormat), got.SizeImage, mode, mode.MaxFrameBytes)
+			largest := int(w.Mode().MaxFrameBytes)
+			if got.Width != mode.Width || got.Height != mode.Height || got.PixelFormat != mode.pixelFormat() || got.SizeImage == 0 || int(got.SizeImage) != largest {
+				t.Fatalf("G_FMT(CAPTURE) = %dx%d %s, image of %d bytes; want %s with the image size the writer took as its largest frame, %d",
+					got.Width, got.Height, fourccName(got.PixelFormat), got.SizeImage, mode, largest)
 			}
-			t.Logf("%s: the node declares an image of %d bytes for a maximum frame of %d", mode, got.SizeImage, mode.MaxFrameBytes)
+			if taken := w.Mode(); !taken.asksWhat(mode) {
+				t.Fatalf("the writer's mode = %+v, want %+v at the kernel's image size", taken, mode)
+			}
+			t.Logf("%s: asked for a largest frame of %d bytes, the kernel gave %d", mode, mode.MaxFrameBytes, largest)
 			probe.close()
 
 			reader := openShareTestReader(t, path)
@@ -519,7 +524,7 @@ func TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength(t *testing.
 				t.Fatalf("reader STREAMON: %v", err)
 			}
 			expectCount(t, counts, 1, "after the reader's STREAMON")
-			for i, size := range []int{17, 4096, 100_001, int(mode.MaxFrameBytes)} {
+			for i, size := range []int{17, 4096, largest/3 + 1, largest} {
 				frame := make([]byte, size)
 				for j := range frame {
 					frame[j] = byte(j*5 + i)
@@ -534,9 +539,9 @@ func TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength(t *testing.
 				}
 			}
 
-			err = w.WriteFrame(make([]byte, int(mode.MaxFrameBytes)+1), stampWithCaptureTime(9_000_000_000))
+			err = w.WriteFrame(make([]byte, largest+1), stampWithCaptureTime(9_000_000_000))
 			if !errors.Is(err, errShareFrameTooLarge) || w.(*shareNodeWriter).oversizedFrames() != 1 {
-				t.Fatalf("a frame over the maximum: error %v, counted %d", err, w.(*shareNodeWriter).oversizedFrames())
+				t.Fatalf("a frame one byte over the kernel's size: error %v, counted %d", err, w.(*shareNodeWriter).oversizedFrames())
 			}
 			reader.expectNoFrame(150 * time.Millisecond)
 		})

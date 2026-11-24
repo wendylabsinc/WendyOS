@@ -97,6 +97,9 @@ func (e *v4l2Event) pending() uint32 { return *(*uint32)(unsafe.Pointer(&e[v4l2E
 type shareNodeIO interface {
 	Counts() <-chan uint32
 	WriteFrame(data []byte, stamp shareFrameStamp) error
+	// Mode is the mode the node took: the one it was opened in, with the
+	// maximum frame size the kernel gave a compressed format.
+	Mode() sharedMode
 	Close() error
 }
 
@@ -253,17 +256,20 @@ func (w *shareNodeWriter) configure() error {
 	if err := w.ioctl(vidiocSFmt, unsafe.Pointer(&vfmt)); err != nil {
 		return fmt.Errorf("VIDIOC_S_FMT on %s: %w", w.path, err)
 	}
-	// v4l2loopback sizes a compressed format's image from its own depth table
-	// and keeps the larger of that and the requested size, so a compressed
-	// node may take more than the maximum frame size; a picture's layout is
-	// exact.
+	// A picture's layout is exact. v4l2loopback sizes a compressed format's
+	// image itself, whatever size was asked for, so the node's maximum frame
+	// is the size it reports.
 	layoutTaken := vfmt.BytesPerLine == mode.BytesPerLine && vfmt.SizeImage == uint32(mode.bufferBytes())
 	if mode.compressed() {
-		layoutTaken = vfmt.SizeImage >= mode.MaxFrameBytes
+		layoutTaken = vfmt.SizeImage > 0
 	}
 	if vfmt.Width != mode.Width || vfmt.Height != mode.Height || vfmt.PixelFormat != mode.pixelFormat() || !layoutTaken {
 		return fmt.Errorf("share node %s took %dx%d %s (%d bytes per line, %d bytes) instead of %s",
 			w.path, vfmt.Width, vfmt.Height, fourccName(vfmt.PixelFormat), vfmt.BytesPerLine, vfmt.SizeImage, mode)
+	}
+	if mode.compressed() {
+		mode.MaxFrameBytes = vfmt.SizeImage
+		w.mode = mode
 	}
 
 	// Best effort. A refusal leaves the driver's default interval, which is a
@@ -426,9 +432,11 @@ func pumpShareEvents(logger *zap.Logger, path string, nodeFd, wakeFd int, wantEv
 
 func (w *shareNodeWriter) Counts() <-chan uint32 { return w.counts }
 
+func (w *shareNodeWriter) Mode() sharedMode { return w.mode }
+
 // WriteFrame queues one frame. A picture must be exactly the mode's frame
-// size. A compressed frame may be any size up to the mode's maximum; a larger
-// one is dropped and counted (errShareFrameTooLarge).
+// size. A compressed frame may be any size up to the maximum the node took; a
+// larger one is dropped and counted (errShareFrameTooLarge).
 func (w *shareNodeWriter) WriteFrame(data []byte, stamp shareFrameStamp) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

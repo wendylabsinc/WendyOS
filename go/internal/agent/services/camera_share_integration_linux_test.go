@@ -264,8 +264,8 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 		}
 		probe.close()
 		if got.Width != pixelsFixtureWidth || got.Height != pixelsFixtureHeight || got.PixelFormat != app.pixelFormat ||
-			got.SizeImage < uint32(r.mode.bufferBytes()) {
-			t.Fatalf("G_FMT(CAPTURE) on %s = %dx%d %s, image of %d bytes; want %s with room for %d", node,
+			got.SizeImage == 0 || got.SizeImage != uint32(r.mode.bufferBytes()) {
+			t.Fatalf("G_FMT(CAPTURE) on %s = %dx%d %s, image of %d bytes; want %s with the %d bytes the share holds as its largest frame", node,
 				got.Width, got.Height, fourccName(got.PixelFormat), got.SizeImage, r.mode, r.mode.bufferBytes())
 		}
 		t.Logf("%s shares %s through %s at %s", app.id, path, node, describeShareNode(r.mode, r.stamp))

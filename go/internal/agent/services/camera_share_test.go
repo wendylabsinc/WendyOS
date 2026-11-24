@@ -65,11 +65,14 @@ func csCam6() csCamera {
 // csNode is a share node writer double: the pump's fake node, plus Close.
 type csNode struct {
 	*spFakeNode
-	h      *csHarness
-	path   string
-	mode   sharedMode
-	closes atomic.Int32
+	h    *csHarness
+	path string
+	// mode is what the node was opened in, and taken what its kernel made of it.
+	mode, taken sharedMode
+	closes      atomic.Int32
 }
+
+func (n *csNode) Mode() sharedMode { return n.taken }
 
 func (n *csNode) Close() error {
 	n.closes.Add(1)
@@ -125,10 +128,13 @@ type csHarness struct {
 	openHook      func(path string)
 	events        []string
 	probed        []string // paths hasVideoCapture or capturePixelFormats saw
-	udev          func(nr int) bool
-	held          map[string][]deviceHolder // by path
-	holderErr     error                     // the holder scan fails with it
-	removedAt     map[int]time.Time         // fake time of each node's RemoveAuxNode
+	// kernelImageBytes, when set, is the image size the fake kernel gives a
+	// compressed node, whatever size it was asked for.
+	kernelImageBytes func(asked sharedMode) uint32
+	udev             func(nr int) bool
+	held             map[string][]deviceHolder // by path
+	holderErr        error                     // the holder scan fails with it
+	removedAt        map[int]time.Time         // fake time of each node's RemoveAuxNode
 
 	// Covering (Task 9). Each fake namespace stands for one pid, with the
 	// inode 1000+pid; the agent's own is csAgentNS, init's csInitNS.
@@ -411,8 +417,11 @@ func (h *csHarness) open(_ *zap.Logger, path string, mode sharedMode) (shareNode
 	if err != nil {
 		return nil, err
 	}
-	n := &csNode{spFakeNode: newSpFakeNode(), h: h, path: path, mode: mode}
+	n := &csNode{spFakeNode: newSpFakeNode(), h: h, path: path, mode: mode, taken: mode}
 	h.mu.Lock()
+	if h.kernelImageBytes != nil && mode.compressed() {
+		n.taken.MaxFrameBytes = h.kernelImageBytes(mode)
+	}
 	h.opened = append(h.opened, n)
 	h.mu.Unlock()
 	return n, nil

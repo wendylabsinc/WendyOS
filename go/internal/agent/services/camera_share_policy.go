@@ -26,9 +26,17 @@ type sharedMode struct {
 	FPS           uint32
 	// Format is the entitlement format the node serves (appconfig.CameraFormats).
 	Format string
-	// MaxFrameBytes is the largest frame of a compressed mode. Zero for a
-	// picture mode, whose frames are all frameBytes long.
+	// MaxFrameBytes is the largest frame of a compressed mode: the size asked
+	// of the node, and once a node has taken the mode, the size its kernel
+	// gave. Zero for a picture mode, whose frames are all frameBytes long.
 	MaxFrameBytes uint32
+}
+
+// asksWhat reports whether a node opened in other would be asked for what m
+// asks: the same mode, whatever maximum frame size a kernel gave either.
+func (m sharedMode) asksWhat(other sharedMode) bool {
+	m.MaxFrameBytes, other.MaxFrameBytes = min(m.MaxFrameBytes, 1), min(other.MaxFrameBytes, 1)
+	return m == other
 }
 
 // String reads "1280x720 YUYV, 30 fps"; the fourcc is trimmed ("Y16 " -> "Y16").

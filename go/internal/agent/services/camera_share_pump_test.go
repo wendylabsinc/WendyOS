@@ -47,6 +47,7 @@ func newSpFakeNode() *spFakeNode {
 }
 
 func (n *spFakeNode) Counts() <-chan uint32 { return n.counts }
+func (n *spFakeNode) Mode() sharedMode      { return sharedMode{} }
 func (n *spFakeNode) Close() error          { return nil }
 func (n *spFakeNode) record(e spNodeEvent) {
 	n.mu.Lock()

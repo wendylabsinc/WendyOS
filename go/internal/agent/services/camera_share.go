@@ -300,7 +300,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		return
 	}
 	if existing := s.shareOfCamera(containerID, id); existing != nil {
-		if existing.mode == decision.Mode && existing.stamp == stamp && existing.askedFormat == decision.AskedFormat {
+		if existing.mode.asksWhat(decision.Mode) && existing.stamp == stamp && existing.askedFormat == decision.AskedFormat {
 			return
 		}
 		// A record left from an earlier container of this name: this
@@ -333,6 +333,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		return
 	}
 
+	decision.Mode = node.Mode()
 	r := &shareRecord{cameraName: dev.GetName(), cameraPath: dev.GetPath(), mode: decision.Mode, stamp: stamp,
 		askedFormat: decision.AskedFormat, askedWhyNot: decision.AskedWhyNot, node: nr, camera: id, nodeMade: made,
 		siblings: sameModelPorts(id, s.presentCameraIdentities())}
@@ -1515,7 +1516,7 @@ func (s *VideoService) checkAdoptedMode(ctx context.Context, containerID string,
 		return
 	}
 	decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionsFor(dev, r.mode.Format)[r.mode.Format] })
-	if !ok || !decision.Shared || decision.Mode == r.mode {
+	if !ok || !decision.Shared || decision.Mode.asksWhat(r.mode) {
 		return
 	}
 	note := fmt.Sprintf("redeploy the app: its node keeps %s, and the camera's shared mode is now %s", r.mode, decision.Mode)
