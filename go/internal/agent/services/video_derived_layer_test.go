@@ -244,7 +244,7 @@ const (
 	derivedPicturesOutput = "queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream" +
 		" ! videoconvert ! video/x-raw,format=YUY2 ! gdppay ! fdsink fd=3"
 	derivedEncoder = "queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream" +
-		" ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=15 bframes=0 ! video/x-h264,profile=high" +
+		" ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=15 bframes=0 ! video/x-h264,profile=high" +
 		" ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! gdppay ! fdsink"
 	derivedPicturesOnly       = "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! " + derivedPicturesOutput
 	derivedPicturesAndEncoder = "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! tee name=derived" +

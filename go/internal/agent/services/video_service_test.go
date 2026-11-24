@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -281,9 +283,72 @@ func TestBuildGStreamerArgs_WithoutH264Parse(t *testing.T) {
 	// With nothing to convert its output, x264enc itself must emit Annex B:
 	// left to negotiate against fdsink it picks stream-format=avc, which loses
 	// SPS/PPS over the raw pipe.
-	want := fmt.Sprintf("x264enc tune=zerolatency key-int-max=%d bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au ! fdsink fd=1", keyframeIntervalFrames(0))
+	want := fmt.Sprintf("x264enc tune=zerolatency speed-preset=ultrafast key-int-max=%d bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au ! fdsink fd=1", keyframeIntervalFrames(0))
 	if !strings.Contains(joined, want) {
 		t.Errorf("x264enc without h264parse must pin Annex B byte-stream caps\nwant substring: %s\ngot: %s", want, joined)
+	}
+}
+
+// x264enc is the one encoder the agent sets a speed for. Every pipeline it
+// builds with x264enc runs it at x264's fastest preset, with the settings the
+// derived layer's frame numbering rests on beside it: no frame delay and no
+// B-frames. No pipeline built with another encoder is given a preset or a
+// tune.
+func TestPipelines_OnlyX264RunsAtItsFastestPresetAndEveryPipelineWithItDoes(t *testing.T) {
+	stubV4L2NodeUsable(t, true)
+	request := &agentpb.StreamVideoRequest{}
+	builders := map[string]func(t *testing.T, encoder string, hasH264Parse bool) string{
+		"the encoder stage": func(_ *testing.T, encoder string, hasH264Parse bool) string {
+			return encoderSegment(encoder, hasH264Parse, 30)
+		},
+		"a camera captured through GStreamer": func(t *testing.T, encoder string, hasH264Parse bool) string {
+			return strings.Join(mustBuildGStreamerArgs(t, "gst", "/dev/video0", request, encoder, hasH264Parse), " ")
+		},
+		"a Jetson sensor captured through Argus": func(_ *testing.T, encoder string, hasH264Parse bool) string {
+			return strings.Join(buildArgusGStreamerArgs("gst", request, 0, encoder, hasH264Parse, map[string]bool{"nvarguscamerasrc": true, encoder: true}), " ")
+		},
+		"a feed of JPEG frames": func(t *testing.T, encoder string, hasH264Parse bool) string {
+			plan, err := planSharedJPEGPipeline("gst", "", request, gstEncoderResult{element: encoder, hasH264Parse: hasH264Parse}, sharedCameraJPEG{width: 640, height: 480})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return strings.Join(plan.args, " ")
+		},
+		"the layer derived from a webcam's frames": func(t *testing.T, encoder string, hasH264Parse bool) string {
+			if !hasH264Parse || encoder == "vp8enc" {
+				return "" // the layer is built only with an H.264 encoder and h264parse
+			}
+			layer, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), format: videoCodecMJPEG, gstPath: "gst", width: 1280, height: 720, framerate: 30,
+				available: map[string]bool{"gdpdepay": true, "gdppay": true, "jpegdec": true, "h264parse": true, encoder: true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if layer.encoder.element != encoder {
+				t.Fatalf("the layer chose %s", layer.encoder.element)
+			}
+			return strings.Join(layer.pipelineArgs(pipelineShape{encode: true, pixels: true}), " ")
+		},
+	}
+	encoders := append(slices.Clone(h264EncoderPreference), "vtenc_h264", "vtenc_h264_hw", "vp8enc")
+	for name, build := range builders {
+		for _, encoder := range encoders {
+			for _, hasH264Parse := range []bool{true, false} {
+				pipeline := build(t, encoder, hasH264Parse)
+				if pipeline == "" {
+					continue
+				}
+				if !strings.Contains(pipeline, encoder) {
+					t.Fatalf("%s with %s (h264parse %v) does not run it: %s", name, encoder, hasH264Parse, pipeline)
+				}
+				x264 := regexp.MustCompile(`x264enc tune=zerolatency speed-preset=ultrafast key-int-max=\d+ bframes=0 ! `)
+				switch {
+				case encoder == "x264enc" && (len(x264.FindAllString(pipeline, -1)) != 1 || strings.Count(pipeline, "x264enc") != 1):
+					t.Errorf("%s with x264enc (h264parse %v) does not run it once, at its fastest preset without frame delay or B-frames: %s", name, hasH264Parse, pipeline)
+				case encoder != "x264enc" && (strings.Contains(pipeline, "speed-preset") || strings.Contains(pipeline, "tune=") || strings.Contains(pipeline, "x264enc")):
+					t.Errorf("%s with %s (h264parse %v) is given x264's settings: %s", name, encoder, hasH264Parse, pipeline)
+				}
+			}
+		}
 	}
 }
 
@@ -295,8 +360,8 @@ func TestEncoderSegment_ByteStreamCapsOnlyForX264WithoutH264Parse(t *testing.T) 
 		hasH264Parse bool
 		want         string
 	}{
-		{"x264enc", false, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au"},
-		{"x264enc", true, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high" + h264ByteStream},
+		{"x264enc", false, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au"},
+		{"x264enc", true, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 ! video/x-h264,profile=high" + h264ByteStream},
 		{"v4l2h264enc", false, "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc extra-controls=\"controls,h264_i_frame_period=30\" ! video/x-h264,profile=baseline,level=(string)4"},
 		{"vaapih264enc", false, "videoconvert ! video/x-raw,format=I420 ! vaapih264enc"},
 	} {

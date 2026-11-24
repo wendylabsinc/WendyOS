@@ -4646,6 +4646,14 @@ func buildArgusGStreamerArgs(gstPath string, req *agentpb.StreamVideoRequest, se
 // repeated SPS/PPS also lets the client sync mid-stream.
 const h264ByteStream = " ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au"
 
+// x264Settings are what every x264enc stage the agent builds starts with.
+// tune=zerolatency hands each picture back as it comes, which the derived
+// layer's frame numbering rests on, together with bframes=0 in keyframeArg.
+// speed-preset=ultrafast is x264's fastest: at its default, medium, the
+// encoder cannot keep up with 1280x720 at 30 frames per second on a Jetson
+// Orin Nano and drops frames.
+const x264Settings = " tune=zerolatency speed-preset=ultrafast"
+
 func keyframeArg(encoder string, gop int) string {
 	switch encoder {
 	case "x264enc":
@@ -4745,7 +4753,7 @@ func encoderSegment(encoder string, hasH264Parse bool, gop int) string {
 			// emit Annex B itself; it then repeats SPS/PPS before every IDR.
 			caps += ",stream-format=byte-stream,alignment=au"
 		}
-		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency" + kf + " ! " + caps
+		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc" + x264Settings + kf + " ! " + caps
 	case "openh264enc":
 		enc = "videoconvert ! video/x-raw,format=I420 ! openh264enc" + kf
 	case "avenc_h264":
