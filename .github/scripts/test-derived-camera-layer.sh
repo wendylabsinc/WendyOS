@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Extend the existing Linux media job. The fixtures feed JPEG frames and H.264
 # access units to the derived layer's real GStreamer child; they open no camera.
+# One records an episode that stores both from the layer's hub.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 # avdec_h264 is the H.264 decoder this image has: the layer takes the first of
@@ -13,11 +14,12 @@ mkdir -p "$output"
 export WENDY_GSTREAMER_REQUIRED=1
 test_name=TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity
 h264_tests=(TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame TestDerivedLayerPairsNoPictureOfAnH264StreamItsDecoderReorders)
+store_test=TestStoreBothThroughTheDerivedLayerIndexesEverySampleAsItsJPEGAndItsH264
 go test -race -c -o "$output/services.test" ./go/internal/agent/services
 trap 'rm -f "$output/services.test"' EXIT
-required="$(IFS='|'; echo "$test_name|${h264_tests[*]}")"
+required="$(IFS='|'; echo "$test_name|$store_test|${h264_tests[*]}")"
 "$output/services.test" -test.run "^(${required})$" -test.v -test.count=1 -test.timeout=240s | tee "$output/normal.log"
-for required_test in "$test_name" "${h264_tests[@]}"; do
+for required_test in "$test_name" "$store_test" "${h264_tests[@]}"; do
   grep -q "^--- PASS: $required_test " "$output/normal.log"
 done
 grep -q 'H.264 decoder: h264parse ! avdec_h264' "$output/normal.log"

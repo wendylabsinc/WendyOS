@@ -19,6 +19,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -344,6 +345,131 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 		t.Fatal("no picture came back from the burst")
 	}
 	checkPairing("the burst")
+}
+
+// Real gst-launch-1.0 and the real layer between a JPEG camera's hub and an
+// episode that stores both: every sample must be indexed twice, as the JPEG the
+// camera sent and as the H.264 the layer made from it, at one capture time.
+func TestStoreBothThroughTheDerivedLayerIndexesEverySampleAsItsJPEGAndItsH264(t *testing.T) {
+	gstPath, available, skip := derivedTestGStreamer(t)
+	cam := newStoreTestCamera(t)
+	// Every reading of the clock mapping differs from the one before, and each
+	// time computed reads it anew, so two records of one sample agree only if
+	// the second takes the time of the first.
+	readings := int64(0)
+	cam.adapter.monotonicMapping = func() (data.MonotonicMappingSample, error) {
+		readings++
+		offset := int64(scriptedBootMinusMonotonic) + readings*int64(time.Microsecond)
+		return data.MonotonicMappingSample{BootAfterNanos: -int64(time.Hour),
+			OffsetLowerNanos: offset - scriptedMappingHalfWidth, OffsetUpperNanos: offset + scriptedMappingHalfWidth}, nil
+	}
+	layer, err := newDerivedLayer(derivedLayerConfig{
+		logger: zap.NewNop(), device: storeTestCameraPath, format: videoCodecMJPEG,
+		gstPath: gstPath, available: available, width: derivedTestWidth, height: derivedTestHeight, framerate: 30,
+		grace: time.Minute, demand: cam.hub, publish: cam.hub.broadcastDerivedFrom,
+	})
+	if err != nil {
+		skip("this GStreamer cannot run the derived layer: " + err.Error())
+	}
+	detach := cam.hub.feedDerivedLayer(layer)
+	defer detach()
+	layer.offerTo(cam.hub)
+	layerCtx, stopLayer := context.WithCancel(context.Background())
+	layerDone := make(chan error, 1)
+	go func() { layerDone <- layer.run(layerCtx) }()
+	defer func() {
+		stopLayer()
+		<-layerDone
+	}()
+
+	const frames = 20
+	jpegs := derivedTestJPEGs(t)
+	type captured struct {
+		jpeg     []byte
+		nativeNs int64
+	}
+	fed := map[uint64]captured{}
+	r := cam.record(t, &data.SourceCapture{Store: data.CaptureStoreBoth}, 3, func() {
+		waitUntil(t, "the child takes frames", layer.feeding.Load)
+		for i := 0; i < frames; i++ {
+			sampleID := cam.hub.sampleSeq.Load() + 1
+			_, receipt, _, err := data.CaptureReceipt()
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame := captured{jpegs[sampleID%derivedTestShades], receipt - int64(scriptedCaptureToReceipt) - int64(scriptedBootMinusMonotonic)}
+			fed[sampleID] = frame
+			cam.hub.produceCaptured(frame.jpeg, frameTimestamp{wallNs: uint64(time.Now().UnixNano()), nativeNs: frame.nativeNs,
+				nativeClock: kernelClock, sequence: uint32(sampleID), sequenceValid: true, auAligned: true, native: true}, videoCodecMJPEG)
+			// The frame's access unit is out before the next frame is fed, so
+			// the queues that drop under load have nothing to drop.
+			deadline := time.Now().Add(20 * time.Second)
+			for layer.counts().published < uint64(i+1) {
+				if time.Now().After(deadline) {
+					t.Fatalf("sample %d came back as no access unit (layer counts %+v)", sampleID, layer.counts())
+				}
+				time.Sleep(time.Millisecond)
+			}
+			cam.waitUntilTaken(t)
+		}
+	}, 2*frames)
+
+	own, video := r.recordsOf(t, indexedAsJPEG), r.recordsOf(t, indexedAsH264)
+	if len(own) != frames || len(video) != frames || len(r.index(t)) != 2*frames {
+		t.Fatalf("%d JPEG and %d H.264 records among %d, want %d of each for the %d frames fed\ndetail: %s",
+			len(own), len(video), len(r.index(t)), frames, frames, r.result.SourceDetail)
+	}
+	madeFrom := map[uint64]cameraIndexRecord{}
+	units := make([][]byte, len(video))
+	for i, record := range video {
+		if _, twice := madeFrom[record.SampleID]; twice {
+			t.Fatalf("sample %d has two H.264 records", record.SampleID)
+		}
+		madeFrom[record.SampleID] = record
+		units[i] = r.cut(t, record)
+	}
+	for i, record := range own {
+		frame, known := fed[record.SampleID]
+		if !known {
+			t.Fatalf("JPEG record %d names sample %d, which was not fed", i, record.SampleID)
+		}
+		if got := r.cut(t, record); !bytes.Equal(got, frame.jpeg) {
+			t.Errorf("JPEG record of sample %d cuts %d bytes out of %s at %d that are not the %d-byte JPEG fed as that sample",
+				record.SampleID, len(got), record.Segment, record.ByteOffset, len(frame.jpeg))
+		}
+		made, both := madeFrom[record.SampleID]
+		if !both {
+			t.Fatalf("sample %d has a JPEG record and no H.264 record", record.SampleID)
+		}
+		if made.CanonicalEpisodeNanos != record.CanonicalEpisodeNanos || made.CanonicalUncertaintyNanos != record.CanonicalUncertaintyNanos ||
+			made.MappingSegment != record.MappingSegment {
+			t.Errorf("sample %d: its H.264 record is at %dns +/-%d under %s and its JPEG record at %dns +/-%d under %s; want one time for both",
+				record.SampleID, made.CanonicalEpisodeNanos, made.CanonicalUncertaintyNanos, made.MappingSegment,
+				record.CanonicalEpisodeNanos, record.CanonicalUncertaintyNanos, record.MappingSegment)
+		}
+		if made.NativeTimestampNanos != frame.nativeNs || record.NativeTimestampNanos != frame.nativeNs ||
+			made.NativeClockDomain != kernelClock || record.NativeClockDomain != kernelClock {
+			t.Errorf("sample %d: its records carry native times %d in %q (H.264) and %d in %q (JPEG), want the kernel's %d in %q",
+				record.SampleID, made.NativeTimestampNanos, made.NativeClockDomain, record.NativeTimestampNanos, record.NativeClockDomain, frame.nativeNs, kernelClock)
+		}
+		// The kernel's capture time on the episode timeline, under a mapping
+		// read at most twice per frame so far.
+		mapped := frame.nativeNs + int64(scriptedBootMinusMonotonic) - int64(recordingOrigin)
+		if late := record.CanonicalEpisodeNanos - mapped; late <= 0 || late > 2*frames*int64(time.Microsecond) || record.MappingSegment != "monotonic-boottime-1" {
+			t.Errorf("sample %d is at %dns under %s, want its kernel capture time %dns mapped under monotonic-boottime-1",
+				record.SampleID, record.CanonicalEpisodeNanos, record.MappingSegment, mapped)
+		}
+	}
+	var decoded decodedGray
+	for i, picture := range decodeTestH264(t, gstPath, available, skip, units) {
+		if luma, shade := yuyvMeanLuma(picture), derivedTestShade(video[i].SampleID); !decoded.shows(luma, shade) {
+			t.Fatalf("H.264 record %d names sample %d but its bytes decode to luma %d; that sample's JPEG is gray level %d, which decodes to %s",
+				i, video[i].SampleID, luma, shade, decoded.lumasOf(shade))
+		}
+	}
+	if r.result.Count != 2*frames {
+		t.Errorf("count = %d, want %d: %d video frames and %d JPEG frames", r.result.Count, 2*frames, frames, frames)
+	}
 }
 
 // decodedGray says whether a picture decoded from H.264 shows a gray level. A
