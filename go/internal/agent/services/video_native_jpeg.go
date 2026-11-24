@@ -18,29 +18,54 @@ type nativeJPEGNotSupported struct{ msg string }
 
 func (e nativeJPEGNotSupported) Error() string { return e.msg }
 
-// The JPEG markers the frame gate tells apart; every other marker opens a
-// segment that carries its own length.
+// What the frame gate tells apart in the byte after an FF: the markers it
+// acts on, and the zero that makes the FF before it a byte of entropy-coded
+// data.
 const (
-	jpegMarkerPrefix       = 0xFF
-	jpegStartOfImage       = 0xD8
-	jpegEndOfImage         = 0xD9
-	jpegStartOfScan        = 0xDA
-	jpegTemporary          = 0x01
-	jpegFirstRestart       = 0xD0
-	jpegLastRestart        = 0xD7
-	jpegStuffedPrefix      = 0x00
-	jpegSegmentLengthBytes = 2
+	jpegMarkerPrefix           = 0xFF
+	jpegStuffedFF              = 0x00
+	jpegTemporary              = 0x01
+	jpegHuffmanTables          = 0xC4
+	jpegArithmeticConditioning = 0xCC
+	jpegFirstRestart           = 0xD0
+	jpegLastRestart            = 0xD7
+	jpegStartOfImage           = 0xD8
+	jpegEndOfImage             = 0xD9
+	jpegStartOfScan            = 0xDA
+	jpegQuantizationTables     = 0xDB
+	jpegNumberOfLines          = 0xDC
+	jpegRestartInterval        = 0xDD
+	jpegFirstApplication       = 0xE0
+	jpegLastApplication        = 0xEF
+	jpegComment                = 0xFE
+	jpegSegmentLengthBytes     = 2
 )
+
+// jpegMarkerEndsScan reports the markers that can follow the entropy-coded
+// data of a scan: the end of the image, a further scan, and the segments
+// allowed between scans.
+func jpegMarkerEndsScan(marker byte) bool {
+	switch marker {
+	case jpegEndOfImage, jpegStartOfScan, jpegHuffmanTables, jpegArithmeticConditioning,
+		jpegQuantizationTables, jpegNumberOfLines, jpegRestartInterval, jpegComment:
+		return true
+	}
+	return marker >= jpegFirstApplication && marker <= jpegLastApplication
+}
 
 // jpegFrameInBuffer returns the one whole JPEG image a capture buffer starts
 // with. Webcams follow the end marker with zeros, FF bytes or vendor data,
 // which are left out.
 //
-// The end of the image is found by reading it, not by searching for an end
-// marker: an application segment may hold a thumbnail, a whole image with an
-// end marker of its own, so the segments before a scan are stepped over by
-// their lengths, and an end marker counts only where a marker can stand
-// between the entropy-coded bytes of a scan.
+// The gate is there to catch a frame cut short, so the end of the image is
+// found by reading it, not by searching for an end marker: an application
+// segment may hold a thumbnail, a whole image with an end marker of its own.
+// Segments are stepped over by their lengths, and the image ends at the end
+// marker that follows a scan. It is not there to judge headers: bytes between
+// segments that are no marker, a repeated start marker and an end marker
+// before any scan are stepped over, and an FF in a scan that no legal marker
+// follows is data. A segment whose length is under two or runs past the
+// buffer is a cut or not an image.
 func jpegFrameInBuffer(buffer []byte) (frame []byte, ok bool) {
 	if len(buffer) < 2 || buffer[0] != jpegMarkerPrefix || buffer[1] != jpegStartOfImage {
 		return nil, false
@@ -48,18 +73,17 @@ func jpegFrameInBuffer(buffer []byte) (frame []byte, ok bool) {
 	scans := 0
 	for at := 2; at+1 < len(buffer); {
 		if buffer[at] != jpegMarkerPrefix {
-			return nil, false
+			at++
+			continue
 		}
 		marker := buffer[at+1]
 		switch {
-		case marker == jpegMarkerPrefix:
+		case marker == jpegMarkerPrefix || marker == jpegStuffedFF:
 			at++
-		case marker == jpegEndOfImage:
-			if scans == 0 {
-				return nil, false
-			}
+		case marker == jpegEndOfImage && scans > 0:
 			return buffer[:at+2], true
-		case marker == jpegTemporary || (marker >= jpegFirstRestart && marker <= jpegLastRestart):
+		case marker == jpegEndOfImage || marker == jpegStartOfImage || marker == jpegTemporary ||
+			(marker >= jpegFirstRestart && marker <= jpegLastRestart):
 			at += 2
 		default:
 			if at+2+jpegSegmentLengthBytes > len(buffer) {
@@ -80,8 +104,9 @@ func jpegFrameInBuffer(buffer []byte) (frame []byte, ok bool) {
 }
 
 // jpegScanEnd returns where the entropy-coded data starting at from ends: at
-// the first marker that is neither a stuffed FF byte nor a restart marker, or
-// at the end of the buffer when the scan is cut short.
+// the first marker that can follow a scan, or at the end of the buffer when
+// the scan is cut short. A start marker in a scan is another image begun
+// before this one ended, which is a cut too.
 func jpegScanEnd(buffer []byte, from int) int {
 	for at := from; ; {
 		next := bytes.IndexByte(buffer[at:], jpegMarkerPrefix)
@@ -92,12 +117,25 @@ func jpegScanEnd(buffer []byte, from int) int {
 		switch following := buffer[at+1]; {
 		case following == jpegMarkerPrefix:
 			at++
-		case following == jpegStuffedPrefix || (following >= jpegFirstRestart && following <= jpegLastRestart):
-			at += 2
-		default:
+		case following == jpegStartOfImage:
+			return len(buffer)
+		case jpegMarkerEndsScan(following):
 			return at
+		default:
+			at += 2
 		}
 	}
+}
+
+// jpegImageFollows reports that the bytes after a frame taken from buffer,
+// past any zero or FF padding, are a whole image of their own.
+func jpegImageFollows(buffer, frame []byte) bool {
+	at := len(frame)
+	for at+1 < len(buffer) && (buffer[at] == 0x00 || (buffer[at] == jpegMarkerPrefix && buffer[at+1] != jpegStartOfImage)) {
+		at++
+	}
+	_, whole := jpegFrameInBuffer(buffer[at:])
+	return whole
 }
 
 func cameraOffersJPEGAt(devicePath string, width, height uint32) bool {
@@ -147,9 +185,10 @@ type nativeJPEGFrames struct {
 	logger    *zap.Logger
 	device    string
 
-	delivered      bool
-	unusable       int
-	unusableReason string
+	delivered         bool
+	unusable          int
+	unusableReason    string
+	warnedOfTwoImages bool
 }
 
 func (f *nativeJPEGFrames) emit(buffer []byte, stamp frameTimestamp) bool {
@@ -161,6 +200,11 @@ func (f *nativeJPEGFrames) emit(buffer []byte, stamp frameTimestamp) bool {
 		return f.drop("the buffer exceeds the frame size limit", len(buffer))
 	case !isJPEG:
 		return f.drop("the buffer is not a JPEG image", len(buffer))
+	}
+	if !f.warnedOfTwoImages && jpegImageFollows(buffer, frame) {
+		f.warnedOfTwoImages = true
+		f.logger.Warn("camera buffer holds a second JPEG image after the first; only the first is handed on",
+			zap.String("device", f.device), zap.Int("first_image_bytes", len(frame)), zap.Int("buffer_bytes", len(buffer)))
 	}
 	f.delivered = true
 	stamp.native = true

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -62,6 +63,16 @@ func TestJPEGFrameInBuffer(t *testing.T) {
 		jpegSegment(0xC4, 0x10, 1), jpegScan(0x30, 0xFF, 0x00, 0x40),
 		jpegScan(0x50), jpegEnd)
 	fillBytesBeforeAMarker := join(jpegStart, []byte{0xFF, 0xFF}, tables, jpegScan(0x01, 0xFF), jpegEnd)
+	// What webcams get wrong in a header, or leave unstuffed in a scan, says
+	// nothing about whether the frame was cut short.
+	small := join(jpegStart, tables, jpegScan(0x55, 0x66), jpegEnd)
+	startMarkerTwice := join(jpegStart, small)
+	strayEndMarkerInTheHeader := join(jpegStart, jpegSegment(0xDB, 0, 1, 2, 3), jpegEnd, jpegSegment(0xC0, 8, 0, 48, 0, 64, 1, 1, 0x11, 0), jpegScan(0x55), jpegEnd)
+	strayEndMarkerThenAnImage := join(jpegStart, jpegEnd, small)
+	zeroBetweenSegments := join(jpegStart, jpegSegment(0xDB, 0, 1, 2, 3), []byte{0x00}, jpegSegment(0xC0, 8, 0, 48, 0, 64, 1, 1, 0x11, 0), jpegScan(0x55), jpegEnd)
+	applicationSegmentOneShort := join(jpegStart, jpegSegment(0xE0, 'J', 'F', 'I', 'F'), []byte{0x00}, tables, jpegScan(0x55), jpegEnd)
+	unstuffedFFInTheScan := join(jpegStart, tables, jpegScan(0x11, 0xFF, 0x3A, 0x22), jpegEnd)
+	temporaryMarkerInTheScan := join(jpegStart, tables, jpegScan(0x11, 0xFF, 0x01, 0x22), jpegEnd)
 	cases := []struct {
 		name string
 		data []byte
@@ -87,6 +98,17 @@ func TestJPEGFrameInBuffer(t *testing.T) {
 		{"scan cut in the middle", whole[:len(whole)-40], nil},
 		{"scan cut on a marker's first byte", join(jpegStart, tables, jpegScan(0x01), []byte{0xFF}), nil},
 		{"end marker before any scan", join(jpegStart, tables, jpegEnd), nil},
+		{"start marker twice", startMarkerTwice, startMarkerTwice},
+		{"stray end marker between header segments", strayEndMarkerInTheHeader, strayEndMarkerInTheHeader},
+		{"stray end marker after the start marker, then a whole image", strayEndMarkerThenAnImage, strayEndMarkerThenAnImage},
+		{"one zero byte between header segments", zeroBetweenSegments, zeroBetweenSegments},
+		{"application segment whose length is one short", applicationSegmentOneShort, applicationSegmentOneShort},
+		{"unstuffed FF 3A in the scan", unstuffedFFInTheScan, unstuffedFFInTheScan},
+		{"temporary marker FF 01 in the scan", temporaryMarkerInTheScan, temporaryMarkerInTheScan},
+		{"second start marker inside the scan, the first image never ended", join(jpegStart, tables, jpegScan(0x11, 0x22), small), nil},
+		{"two images back to back", join(small, small), small},
+		{"two images back to back, the second cut short", join(small, small[:len(small)-3]), small},
+		{"segment length 0", join(jpegStart, []byte{0xFF, 0xDB, 0x00, 0x00}, tables, jpegScan(0x01), jpegEnd), nil},
 		{"segment length shorter than itself", join(jpegStart, []byte{0xFF, 0xDB, 0x00, 0x01}, jpegScan(0x01), jpegEnd), nil},
 		{"segment longer than the buffer", join(jpegStart, []byte{0xFF, 0xE0, 0x40, 0x00}, jpegScan(0x01), jpegEnd), nil},
 		{"bytes that are no marker where a segment should start", join(jpegStart, []byte{0x11, 0x22}), nil},
@@ -220,6 +242,44 @@ func TestNativeJPEGFramesBroadcastsJPEGFramesAndDropsTheRest(t *testing.T) {
 	}
 	if err := frames.captureResult(nil); err != nil {
 		t.Errorf("a capture that delivered frames ended with %v", err)
+	}
+}
+
+// Two images in one buffer are two interlaced fields or two frames the driver
+// ran together. The first is handed on, and the capture says so once.
+func TestNativeJPEGFramesHandsOnTheFirstOfTwoImagesAndWarnsOnce(t *testing.T) {
+	var sent []broadcastFrame
+	frames := recordingNativeJPEGFrames(&sent)
+	core, logs := observer.New(zap.WarnLevel)
+	frames.logger = zap.New(core)
+	whole := encodeTestJPEG(t, 64, 48)
+	padding := make([]byte, 8)
+
+	for _, buffer := range [][]byte{
+		bytes.Join([][]byte{whole, whole}, nil),
+		bytes.Join([][]byte{whole, padding, whole, padding}, nil),
+		bytes.Join([][]byte{whole, {0x01, 0x02, 0xFF, 0xD8, 0x7F}}, nil),
+		whole,
+	} {
+		if !frames.emit(buffer, frameTimestamp{auAligned: true}) {
+			t.Fatal("a usable buffer stopped the capture")
+		}
+	}
+
+	if len(sent) != 4 {
+		t.Fatalf("broadcast %d frames, want 4", len(sent))
+	}
+	for i, frame := range sent {
+		if !bytes.Equal(frame.data, whole) {
+			t.Errorf("frame %d is %d bytes, want the first image's %d", i, len(frame.data), len(whole))
+		}
+	}
+	warnings := logs.FilterMessage("camera buffer holds a second JPEG image after the first; only the first is handed on").All()
+	if len(warnings) != 1 || logs.Len() != 1 {
+		t.Fatalf("%d warning(s) of a second image among %d log line(s), want exactly one for the capture", len(warnings), logs.Len())
+	}
+	if device := warnings[0].ContextMap()["device"]; device != "/dev/video4" {
+		t.Errorf("the warning names device %v", device)
 	}
 }
 
