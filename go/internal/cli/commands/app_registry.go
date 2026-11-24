@@ -227,8 +227,8 @@ func appDefinition(raw []byte, app string) (*appconfig.AppConfig, []byte, error)
 	if len(cfg.Services) > 0 || cfg.ServiceName != "" {
 		return nil, nil, errors.New("apps with several services cannot be deployed yet; deploy each service as its own app")
 	}
-	if err := appconfig.ValidateAppID(cfg.AppID); err != nil {
-		return nil, nil, fmt.Errorf("wendy.json: %w", err)
+	if err := validateNewAppID(cfg.AppID); err != nil {
+		return nil, nil, err
 	}
 	if err := appconfig.ValidateRequiredEnv(cfg.RequiredEnv, cfg.Env); err != nil {
 		return nil, nil, fmt.Errorf("wendy.json: %w", err)

@@ -164,15 +164,12 @@ func TestResolveInitDestAndID_CurrentDirUsesValidatedBasename(t *testing.T) {
 	}
 }
 
-func TestResolveInitDestAndID_CurrentDirRejectsInvalidBasename(t *testing.T) {
+func TestResolveInitDestAndID_CurrentDirDerivesIDFromBasename(t *testing.T) {
 	stubInitDestPrompts(t, true, true, "")
 
-	_, _, err := resolveInitDestAndID("/tmp/Demo App", nil, initOptions{})
-	if err == nil {
-		t.Fatal("expected invalid directory basename to fail as app ID")
-	}
-	if !strings.Contains(err.Error(), `"Demo App"`) || !strings.Contains(err.Error(), "--app-id") {
-		t.Fatalf("error = %q, want mention of basename and --app-id", err)
+	destDir, appID, err := resolveInitDestAndID("/tmp/Demo App", nil, initOptions{})
+	if err != nil || destDir != "/tmp/Demo App" || appID != "demo-app" {
+		t.Fatalf("destDir, appID, err = %q, %q, %v, want current dir and demo-app", destDir, appID, err)
 	}
 }
 
@@ -238,15 +235,12 @@ func TestResolveInitDestAndID_HereWithoutNameUsesValidatedBasename(t *testing.T)
 	}
 }
 
-func TestResolveInitDestAndID_HereWithoutNameRejectsInvalidBasename(t *testing.T) {
+func TestResolveInitDestAndID_HereWithoutNameDerivesIDFromBasename(t *testing.T) {
 	stubInitDestPrompts(t, false, false, "")
 
-	_, _, err := resolveInitDestAndID("/tmp/Demo App", nil, initOptions{here: true})
-	if err == nil {
-		t.Fatal("expected invalid directory basename to fail as app ID")
-	}
-	if !strings.Contains(err.Error(), `"Demo App"`) || !strings.Contains(err.Error(), "wendy init --here <name>") {
-		t.Fatalf("error = %q, want mention of basename and %q", err, "wendy init --here <name>")
+	destDir, appID, err := resolveInitDestAndID("/tmp/Demo App", nil, initOptions{here: true})
+	if err != nil || destDir != "/tmp/Demo App" || appID != "demo-app" {
+		t.Fatalf("destDir, appID, err = %q, %q, %v, want current dir and demo-app", destDir, appID, err)
 	}
 }
 
@@ -281,7 +275,7 @@ func TestPathHasPrefix_IsCaseSensitiveOnUnix(t *testing.T) {
 }
 
 func TestValidateNewProjectName_RejectsNonSubdirectoryNames(t *testing.T) {
-	for _, value := range []string{"", "   ", ".", "..", "../outside", "nested/app", `nested\app`, "/tmp/app", "C:app", "demo app", "demo'app", "-demo", ".demo"} {
+	for _, value := range []string{"", "   ", ".", "..", "../outside", "nested/app", `nested\app`, "/tmp/app", "C:app", "demo app", "demo'app", "-demo", ".demo", "demo_app", "DemoApp"} {
 		t.Run(value, func(t *testing.T) {
 			if err := validateNewProjectName(value); err == nil {
 				t.Fatalf("validateNewProjectName(%q) = nil, want error", value)
@@ -291,7 +285,7 @@ func TestValidateNewProjectName_RejectsNonSubdirectoryNames(t *testing.T) {
 }
 
 func TestValidateNewProjectName_AcceptsPlainDirectoryNames(t *testing.T) {
-	for _, value := range []string{"demo-app", "demo.app", "demo_app"} {
+	for _, value := range []string{"demo-app", "demo.app"} {
 		t.Run(value, func(t *testing.T) {
 			if err := validateNewProjectName(value); err != nil {
 				t.Fatalf("validateNewProjectName(%q): %v", value, err)

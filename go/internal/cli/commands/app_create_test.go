@@ -121,7 +121,7 @@ func TestAppCreateNamesTheMissingFlagWithoutTerminal(t *testing.T) {
 		{[]string{"--name", "Cam", "--yes"}, "No app id given. Add --app <id>, or run in a terminal to answer."},
 		{[]string{"--app", "cam.app", "--yes"}, "No name given. Add --name <name>, or run in a terminal to answer."},
 		{[]string{"--name", "Cam", "--app", "cam.app"}, "Add --yes"},
-		{[]string{"--name", "Cam", "--app", "Cam_App", "--yes"}, "Use lowercase letters, digits, dots and hyphens."},
+		{[]string{"--name", "Cam", "--app", "Cam_App", "--yes"}, "use lowercase letters, digits, dots and hyphens"},
 		{[]string{"--name", "Cam", "--app", "cam.app", "--access", "ops=viewer", "--yes"}, "name a person by email"},
 	} {
 		if _, err := runApp(newAppCreateCmd(), tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {

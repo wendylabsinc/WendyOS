@@ -1193,6 +1193,9 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 	if err := appCfg.Validate(); err != nil {
 		return invalidAppConfigError(err)
 	}
+	if err := checkAppID(appCfg.AppID); err != nil {
+		cliNotice("Warning: %v. It runs here, but wendy app publish will refuse it until you rename appId in wendy.json.", err)
+	}
 	activationStep(ctx, "connect", map[string]string{"project_recognized": "true"})
 	if err := warnAppConfigFile(cfgPath); err != nil {
 		return fmt.Errorf("reading wendy.json warnings: %w", err)

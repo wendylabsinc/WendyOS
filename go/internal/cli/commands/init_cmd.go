@@ -1019,7 +1019,7 @@ func resolveInitDestAndID(cwd string, args []string, opts initOptions) (string, 
 			return cwd, appID, nil
 		}
 
-		appID := strings.TrimSpace(filepath.Base(cwd))
+		appID := appIDFromName(filepath.Base(cwd))
 		if err := validateNewProjectName(appID); err != nil {
 			return "", "", fmt.Errorf("current directory name %q is not a valid app id: %w; pass one explicitly: wendy init --here <name>", appID, err)
 		}
@@ -1045,7 +1045,7 @@ func resolveInitDestAndID(cwd string, args []string, opts initOptions) (string, 
 		return "", "", err
 	}
 	if useCurrentDir {
-		appID := strings.TrimSpace(filepath.Base(cwd))
+		appID := appIDFromName(filepath.Base(cwd))
 		if err := validateNewProjectName(appID); err != nil {
 			return "", "", fmt.Errorf("current directory name %q cannot be used as the app ID: %w; rerun with --app-id", appID, err)
 		}
@@ -1078,7 +1078,7 @@ func validateNewProjectName(value string) error {
 		}
 		return fmt.Errorf("project name may only contain letters, numbers, '.', '_' or '-'")
 	}
-	return nil
+	return checkAppID(name)
 }
 
 // maybeGitInit optionally runs git init in the project directory.
@@ -1124,7 +1124,7 @@ func resolveInitAppID(cwd string, args []string, opts initOptions) (string, erro
 		if appID == "" {
 			return "", fmt.Errorf("app ID cannot be empty or whitespace")
 		}
-		return appID, nil
+		return appID, checkAppID(appID)
 	}
 
 	if opts.appIDSet {
@@ -1132,12 +1132,12 @@ func resolveInitAppID(cwd string, args []string, opts initOptions) (string, erro
 		if flagAppID == "" {
 			return "", fmt.Errorf("app ID cannot be empty or whitespace")
 		}
-		return flagAppID, nil
+		return flagAppID, checkAppID(flagAppID)
 	}
 
 	// Non-template flow can infer from the current directory name.
 	if !opts.templateSet {
-		appID := strings.TrimSpace(filepath.Base(cwd))
+		appID := appIDFromName(filepath.Base(cwd))
 		if appID == "" {
 			return "", fmt.Errorf("could not infer a valid app ID; please provide a non-empty value via --app-id or as a positional argument")
 		}

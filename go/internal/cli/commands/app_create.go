@@ -35,13 +35,39 @@ var (
 
 const notifyHint = "This app may send notifications. People with access to this app can receive them."
 
+// newAppIDPattern is the one app id rule: wendy init writes such ids and
+// app create, publish and promote take only these. A device names a release
+// image after its app id, and containerd image names are lowercase.
 var newAppIDPattern = regexp.MustCompile(`^[a-z0-9.-]+$`)
 
-func validateNewAppID(id string) error {
+func checkAppID(id string) error {
 	if !newAppIDPattern.MatchString(id) || appconfig.ValidateAppID(id) != nil {
-		return fmt.Errorf("%q is not a valid app id. Use lowercase letters, digits, dots and hyphens.", id)
+		return fmt.Errorf("app id %q is not allowed: use lowercase letters, digits, dots and hyphens, for example %q", id, appIDFromName(id))
 	}
 	return nil
+}
+
+// validateNewAppID is checkAppID with the fix for an id from wendy.json.
+func validateNewAppID(id string) error {
+	if err := checkAppID(id); err != nil {
+		return fmt.Errorf("%w. Rename appId in wendy.json.", err)
+	}
+	return nil
+}
+
+// appIDFromName turns a directory or project name into an id that follows
+// the rule: lowercase, any other character a hyphen.
+func appIDFromName(name string) string {
+	id := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			return r
+		}
+		return '-'
+	}, strings.ToLower(strings.TrimSpace(name)))
+	if id = strings.Trim(id, ".-"); id == "" {
+		return "app"
+	}
+	return id
 }
 
 // appRoles are the built-in app roles, by the short name --access takes.
