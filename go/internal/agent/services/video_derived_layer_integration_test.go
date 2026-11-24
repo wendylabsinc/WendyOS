@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -18,6 +19,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -389,33 +391,39 @@ func encodeTestH264(t *testing.T, gstPath string, frames int, encoderStages stri
 	return units
 }
 
-// h264PicturesTest runs the real H.264 picture layer on a real hub, with the
-// camera replaced by access units produced into the hub as native capture does.
+// h264PicturesTest runs the real H.264 picture layer on a real hub, as the
+// capture of a camera that produces H.264 runs it, with the camera replaced by
+// access units produced into the hub as native capture does. The service's
+// share policy sees that camera through the seams of shareTestService.
 type h264PicturesTest struct {
 	t        *testing.T
+	svc      *VideoService
 	hub      *deviceHub
 	layer    *derivedLayer
 	pictures derivedFramesSeen
-	ended    chan error
 	shadeOf  map[uint64]int
 	lumaOf   func(shade int) int
 }
 
 func startH264PicturesTest(t *testing.T, gstPath string, available map[string]bool, skip func(string)) *h264PicturesTest {
 	t.Helper()
+	svc := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtH264},
+		map[uint32][][2]uint32{v4l2PixFmtH264: {{derivedTestWidth, derivedTestHeight}}}, []uint32{30})
+	svc.logger, svc.encoderIdleGrace = zap.NewNop(), 200*time.Millisecond
+	svc.gstMemo.gstPath, svc.gstMemo.available = gstPath, available
 	hub, cancelHub := newTestHub(t)
 	t.Cleanup(cancelHub)
 	hub.sampleSeq = new(atomic.Uint64)
-	layer, err := newDerivedLayer(derivedLayerConfig{
-		logger: zap.NewNop(), device: "/dev/video44", format: agentpb.VideoCodec_VIDEO_CODEC_H264,
-		gstPath: gstPath, available: available, width: derivedTestWidth, height: derivedTestHeight, framerate: 30,
-		grace: 200 * time.Millisecond, demand: hub, publish: hub.broadcastDerivedFrom,
-	})
-	if err != nil {
-		skip("this GStreamer cannot decode pictures from H.264: " + err.Error())
+	own, declined, _ := svc.ownFramesAtDefaults(usbCam().GetPath())
+	if declined != "" || own.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || own.width != derivedTestWidth || own.height != derivedTestHeight {
+		t.Fatalf("the test camera's own frames = %+v (declined %q), want %dx%d H.264", own, declined, derivedTestWidth, derivedTestHeight)
+	}
+	layer, whyNot := svc.pictureLayerFor(hub, usbCam().GetPath(), own)
+	if layer == nil {
+		skip("this GStreamer cannot decode pictures from H.264: " + whyNot)
 	}
 	t.Logf("H.264 decoder: %s", layer.decoder.stages)
-	p := &h264PicturesTest{t: t, hub: hub, layer: layer, ended: make(chan error, 1), shadeOf: map[uint64]int{}}
+	p := &h264PicturesTest{t: t, svc: svc, hub: hub, layer: layer, shadeOf: map[uint64]int{}}
 	// The viewer keeps the hub's audience while the pixel reader comes and goes.
 	idViewer, viewer, err := hub.subscribe()
 	if err != nil {
@@ -425,16 +433,29 @@ func startH264PicturesTest(t *testing.T, gstPath string, available map[string]bo
 		for range viewer {
 		}
 	}()
-	detach := hub.feedDerivedLayer(layer)
 	layer.offerTo(hub)
 	ctx, stop := context.WithCancel(context.Background())
-	go func() { p.ended <- layer.run(ctx) }()
+	captureEnded := make(chan error, 1)
+	go func() {
+		captureEnded <- svc.captureDeriving(ctx, hub, layer, func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
 	t.Cleanup(func() {
 		stop()
-		detach()
+		if err := <-captureEnded; !errors.Is(err, context.Canceled) {
+			t.Errorf("the capture ended with %v before the test stopped it: its viewers lost the camera", err)
+		}
 		hub.unsubscribe(idViewer)
 	})
 	return p
+}
+
+// whyPicturesGivenUp is the reason the capture remembers once the layer has
+// given the camera's pictures up.
+func (p *h264PicturesTest) whyPicturesGivenUp() (why string, givenUp bool) {
+	return p.svc.derivedFailures.recent(usbCam().GetPath())
 }
 
 func (p *h264PicturesTest) readPictures() (leave func()) {
@@ -477,7 +498,7 @@ func (p *h264PicturesTest) produce(unit h264TestUnit) (sampleID uint64, fed bool
 			p.awaitPictureOf(sampleID)
 			return sampleID, true
 		}
-		if counts.awaitedStart > before.awaitedStart || len(p.ended) > 0 {
+		if _, givenUp := p.whyPicturesGivenUp(); givenUp || counts.awaitedStart > before.awaitedStart {
 			return sampleID, false
 		}
 		if time.Now().After(deadline) {
@@ -650,13 +671,18 @@ func TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame(t *testi
 
 // A decoder hands B pictures back out of turn and GStreamer then moves
 // timestamps between pictures, so a tag would name another frame. The layer
-// must give such a stream up before it pairs a picture with the wrong frame.
+// must give such a stream up before it pairs a picture with the wrong frame,
+// and the camera's share must then be its own H.264.
 func TestDerivedLayerPairsNoPictureOfAnH264StreamItsDecoderReorders(t *testing.T) {
 	gstPath, available, skip := derivedTestGStreamer(t)
 	if !available["x264enc"] {
 		skip("x264enc, the one encoder asked for B frames here, is not installed")
 	}
 	p := startH264PicturesTest(t, gstPath, available, skip)
+	picturesMode := sharedMode{derivedTestWidth, derivedTestHeight, "YUYV", derivedTestWidth * 2, 30, appconfig.CameraFormatPixels, 0}
+	if d := p.svc.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels); d != (shareDecision{Shared: true, Mode: picturesMode}) {
+		t.Fatalf("before the stream is seen the camera is shared as %+v, want pictures", d)
+	}
 	units := encodeTestH264(t, gstPath, 30, "videoconvert ! video/x-raw,format=I420 ! x264enc bframes=2 b-adapt=0 key-int-max=10 option-string=scenecut=0"+h264TestByteStream)
 	firstReordered := -1
 	for i, unit := range units {
@@ -668,34 +694,60 @@ func TestDerivedLayerPairsNoPictureOfAnH264StreamItsDecoderReorders(t *testing.T
 		t.Fatalf("the test stream's first B picture is unit %d; want one that follows a later frame", firstReordered)
 	}
 
-	leave := p.readPictures()
-	defer leave()
+	idPictures, chPictures, err := p.hub.subscribePixels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.hub.unsubscribe(idPictures)
+	turnedAway := make(chan struct{})
+	go func() {
+		defer close(turnedAway)
+		p.pictures.collect(chPictures)
+	}()
 	waitUntil(t, "the child takes frames", p.layer.feeding.Load)
-	var fedBefore []uint64
 	for i, unit := range units {
 		sampleID, fed := p.produce(unit)
 		if fed != (i < firstReordered) {
 			t.Fatalf("unit %d (frame %d, sample %d) fed=%v; want every unit ahead of the first B picture and none after", i, unit.frame, sampleID, fed)
 		}
-		if fed {
-			fedBefore = append(fedBefore, sampleID)
-		}
 	}
+
+	// The guard fired, once, for good.
+	why, givenUp := p.whyPicturesGivenUp()
+	if !givenUp || why != errDerivedFramesReordered.Error() {
+		t.Fatalf("pictures given up: %v, because %q; want the reordered stream named", givenUp, why)
+	}
+	if counts := p.layer.counts(); counts.fed != uint64(firstReordered) || counts.childRuns != 1 {
+		t.Fatalf("the layer counts %+v, want %d frames fed to one child and the B picture never fed", counts, firstReordered)
+	}
+	p.svc.derivedFailures.now = func() time.Time { return time.Now().Add(100 * captureFailureRetryAfter) }
+	if _, still := p.whyPicturesGivenUp(); !still {
+		t.Error("a stream that reorders is forgotten after the bounded time")
+	}
+
+	// No picture was published, and the pixel reader was told why.
 	select {
-	case err := <-p.ended:
-		var gaveUp derivedLayerGaveUp
-		if !errors.As(err, &gaveUp) || gaveUp.msg != errDerivedFramesReordered.Error() {
-			t.Fatalf("the layer ended with %v, want it to give the reordered stream up", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the layer ran on after a B picture")
+	case <-turnedAway:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pixel reader was left waiting on pictures that will not come")
 	}
-	pictures := p.settledPictures()
-	p.checkPictures("ahead of the first B picture", pictures)
-	for _, picture := range pictures {
-		if picture.sampleID > fedBefore[len(fedBefore)-1] {
-			t.Fatalf("a picture carries sample %d, which was never fed", picture.sampleID)
-		}
+	if refusal := p.hub.subscriberErr(idPictures); !errors.Is(refusal, errPixelsUnavailable) || !strings.Contains(refusal.Error(), why) {
+		t.Fatalf("pixel refusal = %v, want errPixelsUnavailable naming the reordered stream", refusal)
 	}
-	t.Logf("%d units were fed ahead of the first B picture and gave %d pictures, each of its own frame", len(fedBefore), len(pictures))
+	if published := p.pictures.all(); len(published) != 0 || p.layer.counts().published != 0 {
+		t.Fatalf("%d pictures of a reordered stream were published (the layer counts %d)", len(published), p.layer.counts().published)
+	}
+
+	// The camera's share falls back to its own H.264, and a picture node made
+	// earlier holds the reason.
+	whyNoPictures := "decoding this camera's frames failed: " + why
+	fallback := p.svc.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels)
+	wantFallback := shareDecision{Shared: true, AskedFormat: appconfig.CameraFormatPixels, AskedWhyNot: whyNoPictures,
+		Mode: compressedMode(agentpb.VideoCodec_VIDEO_CODEC_H264, appconfig.CameraFormatNative, derivedTestWidth, derivedTestHeight, 30)}
+	if fallback != wantFallback {
+		t.Fatalf("after the stream is seen the camera is shared as %+v\nwant %+v", fallback, wantFallback)
+	}
+	if got, want := p.svc.nodeUnservedAt(usbCam().GetPath(), picturesMode, appconfig.CameraStampTime), fmt.Sprintf(picturesNotMade, whyNoPictures); got != want {
+		t.Fatalf("a picture node made before = %q\nwant %q", got, want)
+	}
 }

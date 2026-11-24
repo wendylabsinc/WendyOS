@@ -45,7 +45,8 @@ import sys
 
 out = Path(sys.argv[1]).resolve()
 mutations = {
-    # The policy refuses every camera: no container shares one.
+    # The policy declares no mode, whatever the capture has for a node: no
+    # container shares a camera.
     'sharing-disabled': ('go/internal/agent/services/camera_share_policy.go',
                          'return shareDecision{Shared: true, Mode: mode}',
                          'return shareDecision{Reason: "sharing disabled"}'),

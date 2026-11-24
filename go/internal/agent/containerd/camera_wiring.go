@@ -14,11 +14,8 @@ import (
 )
 
 // CameraLoopbackProvider is the narrow capability the client needs from the
-// video service to keep host-side v4l2loopback camera nodes and their pump
-// consumers in sync with which entitled containers are actually running.
-// Declared here (mirroring AppSystemAPISocketProvider, client.go:61-65) so
-// *services.VideoService satisfies it structurally without an adapter — see
-// the compile-time assertion below.
+// video service to keep the host-side v4l2loopback nodes of network cameras
+// and their pump consumers in sync with which entitled containers are running.
 type CameraLoopbackProvider interface {
 	// EnsureCameraNodes creates a v4l2loopback device node for every
 	// registered network camera that does not already have one.
@@ -29,18 +26,12 @@ type CameraLoopbackProvider interface {
 	SetCameraContainerConsumers(ctx context.Context, containerIDs []string)
 }
 
-// Compile-time check that *services.VideoService satisfies CameraLoopbackProvider
-// without an adapter (Task C6 wires it in directly via SetCameraLoopbackProvider).
 var _ CameraLoopbackProvider = (*services.VideoService)(nil)
 
 // SetCameraLoopbackProvider injects the manager for host-side camera loopback
-// nodes and pump consumers. Called once from main.go at agent startup,
-// mirroring SetAppSystemAPISocketProvider (client.go:194-197): not protected
-// by c.mu, since it is set during single-threaded startup before the Client
-// is exposed to concurrent callers. A nil provider (build without the ipcam
-// module, or before main.go wires it in) leaves camera-loopback sync a
-// complete no-op — see SyncCameraLoopbacks and the create-hook gate in
-// CreateContainerWithProgress.
+// nodes and pump consumers. It is not protected by c.mu: it must be called
+// during single-threaded startup, before the Client is exposed to concurrent
+// callers. With a nil provider, camera-loopback sync does nothing.
 func (c *Client) SetCameraLoopbackProvider(p CameraLoopbackProvider) {
 	c.cameraLoopbackProvider = p
 }
@@ -57,11 +48,9 @@ type containerCameraInfo struct {
 
 // cameraConsumerNames returns the names of containers that currently count
 // as camera-loopback consumers: a Running task AND the camera entitlement or
-// its deprecated alias, video (both map to applyCamera, entitlements.go:83).
-// Labels are revalidated here rather than trusted outright — same
-// defense-in-depth posture as appSystemAPIOwnersFromLabels (client.go:204-217)
-// — so a container whose appID/serviceName labels fail validation is dropped
-// rather than handed to the loopback manager as a consumer name.
+// its deprecated alias, video. Labels are revalidated here rather than trusted
+// outright, so a container whose appID/serviceName labels fail validation is
+// dropped rather than handed to the loopback manager as a consumer name.
 func cameraConsumerNames(infos []containerCameraInfo) []string {
 	var names []string
 	for _, info := range infos {
@@ -93,8 +82,7 @@ func shouldEnsureCameraNodes(appCfg *appconfig.AppConfig) bool {
 }
 
 // SyncCameraLoopbacks recomputes v4l2loopback node existence and pump
-// consumers from container truth: it lists Wendy-managed containers (the same
-// label-filter pattern as RestoreAppSystemAPISockets, client.go:227), keeps
+// consumers from container truth: it lists Wendy-managed containers, keeps
 // the ones with a Running task and a camera/video entitlement via
 // cameraConsumerNames, then calls EnsureCameraNodes and
 // SetCameraContainerConsumers on the registered provider.
