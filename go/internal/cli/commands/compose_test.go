@@ -918,6 +918,33 @@ func TestApplyComposeCompanion(t *testing.T) {
 			t.Errorf("want 1 entitlement (no per-service addition), got %d", len(got.Entitlements))
 		}
 	})
+
+	t.Run("keeps the shared and the per-service camera entries with their settings", func(t *testing.T) {
+		shared := appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"},
+			Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame}
+		perService := appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"Logi H264"},
+			Format: appconfig.CameraFormatH264, Stamp: appconfig.CameraStampFrame}
+		companion := &appconfig.AppConfig{
+			AppID:        "com.example.robot",
+			Entitlements: []appconfig.Entitlement{shared},
+			Services: map[string]*appconfig.ServiceConfig{
+				"camera": {Entitlements: []appconfig.Entitlement{perService}},
+			},
+		}
+		got := baseAppCfg()
+		applyComposeCompanion(got, companion, "camera")
+		if len(got.Entitlements) != 3 || !slices.Equal(got.Entitlements[1].Allowlist, shared.Allowlist) || !slices.Equal(got.Entitlements[2].Allowlist, perService.Allowlist) {
+			t.Fatalf("entitlements = %+v, want the compose one, then the shared and the per-service camera entries", got.Entitlements)
+		}
+		read := cameraEntriesInLabels(t, got, map[string]string{
+			"sh.wendy/entitlement.network":  "enabled=true",
+			"sh.wendy/entitlement.camera.0": "format=native,stamp=frame,allowlist=/dev/video0",
+			"sh.wendy/entitlement.camera.1": "format=h264,stamp=frame,allowlist=Logi H264",
+		})
+		if len(read) != 2 || read[0].Format != shared.Format || read[0].Stamp != shared.Stamp || read[1].Format != perService.Format || read[1].Stamp != perService.Stamp {
+			t.Errorf("camera entries read back from the labels = %+v, want %+v and %+v", read, shared, perService)
+		}
+	})
 }
 
 func TestDeduplicateEntitlements(t *testing.T) {
@@ -968,6 +995,28 @@ func TestDeduplicateEntitlements(t *testing.T) {
 		}
 		if got := deduplicateEntitlements(ents); len(got) != len(ents) {
 			t.Fatalf("parameterized entitlements collapsed: got %+v", got)
+		}
+	})
+
+	t.Run("camera entries that differ only in format or stamp are kept", func(t *testing.T) {
+		entry := func(format, stamp string) appconfig.Entitlement {
+			return appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: format, Stamp: stamp}
+		}
+		ents := []appconfig.Entitlement{
+			entry("", ""),
+			entry(appconfig.CameraFormatNative, ""),
+			entry(appconfig.CameraFormatH264, ""),
+			entry("", appconfig.CameraStampFrame),
+			entry(appconfig.CameraFormatNative, appconfig.CameraStampFrame),
+		}
+		got := deduplicateEntitlements(append(ents, entry(appconfig.CameraFormatNative, appconfig.CameraStampFrame)))
+		if len(got) != len(ents) {
+			t.Fatalf("want the %d distinct entries, got %d: %+v", len(ents), len(got), got)
+		}
+		for i, e := range got {
+			if e.Format != ents[i].Format || e.Stamp != ents[i].Stamp {
+				t.Errorf("entry %d = %+v, want %+v", i, e, ents[i])
+			}
 		}
 	})
 
