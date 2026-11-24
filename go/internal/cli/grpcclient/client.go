@@ -179,6 +179,9 @@ type AgentConnection struct {
 	// localDeviceVerified holds the device key a local-key dial verified
 	// (see LocalDeviceKey).
 	localDeviceVerified *atomic.Pointer[[]byte]
+	// deviceRefusedKey is set when a device that proved its key answered a
+	// local-key dial with a TLS alert (see DeviceRefusedKey).
+	deviceRefusedKey *atomic.Bool
 	// tcpDial records failures before TCP connected, separately from TLS errors.
 	// nil when gRPC owns dialing, including HTTP CONNECT proxy transports.
 	tcpDial *agentTCPDialState

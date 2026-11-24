@@ -172,7 +172,7 @@ func dialLocalOperator(ctx context.Context, target dialTarget, candidates []stri
 
 	var winner *grpcclient.AgentConnection
 	var refusal error
-	keyRefused, keyClosed := false, false
+	keyRefused := false
 	for i, a := range attempts {
 		conn := a.conn
 		if conn == nil {
@@ -197,20 +197,15 @@ func dialLocalOperator(ctx context.Context, target dialTarget, candidates []stri
 		if conn.NotLocalDevice() {
 			res.enrolledSeen = true
 		}
-		// Only a device that proved itself local-only (its certificate
-		// verified) and then failed the handshake refused our key.
+		// Only an alert from a device that proved its key in a completed
+		// handshake is a refusal (DeviceRefusedKey). A bare close or reset is
+		// anyone's to send, so it is a failure of a verified device, never a
+		// reason for plaintext.
 		if conn.LocalDeviceVerified() {
 			switch {
-			case isCertRejectionError(addrs[i], a.err):
+			case conn.DeviceRefusedKey():
 				keyRefused = true
-			case status.Code(a.err) == codes.Unavailable:
-				// The device closed the connection right after its verified
-				// handshake: on loopback and some stacks that is how a
-				// refused client certificate shows instead of an alert.
-				keyClosed = true
 			case res.verifiedProbeErr == nil:
-				// The device proved itself; whatever failed after the
-				// handshake, plaintext is not an option for it.
 				res.verifiedProbeErr = mtlsAttemptError{addr: addrs[i], err: a.err}
 			}
 		}
@@ -230,7 +225,7 @@ func dialLocalOperator(ctx context.Context, target dialTarget, candidates []stri
 		}
 		return winner, res, nil
 	}
-	if keyRefused || keyClosed {
+	if keyRefused {
 		if target.pinned() || target.Expected != nil {
 			// Reached over cloud mTLS before: never plaintext now.
 			return nil, res, refuseIdentity(

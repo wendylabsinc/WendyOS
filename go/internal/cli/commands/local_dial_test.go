@@ -437,9 +437,10 @@ func TestLadderRefusesCloudPinnedHostRefusingLocalKey(t *testing.T) {
 	}
 }
 
-// A local-only device that completes its verified handshake and then closes
-// the connection without an alert is refusing the key.
-func TestLadderReadsCloseAfterVerifiedLocalHandshakeAsKeyRefused(t *testing.T) {
+// A close without an alert after a verified handshake is anyone's to send (an
+// on-path relay drops the connection), so it is no refusal and never leads to
+// plaintext.
+func TestLadderNeverReadsCloseAfterVerifiedLocalHandshakeAsKeyRefused(t *testing.T) {
 	setTempConfig(t, &config.Config{})
 	setPinCache(t)
 	useLocalKey(t)
@@ -469,14 +470,9 @@ func TestLadderReadsCloseAfterVerifiedLocalHandshakeAsKeyRefused(t *testing.T) {
 		}
 	}()
 
-	// A refused key leaves only the keyless set, which is plaintext.
-	errPlaintext := errors.New("plaintext rung reached")
-	orig := plaintextConnectFn
-	plaintextConnectFn = func(context.Context, string) (*grpcclient.AgentConnection, error) { return nil, errPlaintext }
-	t.Cleanup(func() { plaintextConnectFn = orig })
-
+	forbidPlaintext(t)
 	_, _, err = dialAgentLadderWithCerts(ladderCtx(t), newDialTarget("box", ln.Addr().String()), nil)
-	if !errors.Is(err, errPlaintext) {
-		t.Fatalf("err = %v, want the key-refused reading (keyless plaintext rung)", err)
+	if !errors.Is(err, errNoAuthenticatedEndpoint) {
+		t.Fatalf("err = %v, want a verified-device failure with no plaintext", err)
 	}
 }

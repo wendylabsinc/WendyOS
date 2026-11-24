@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"github.com/wendylabsinc/wendy/go/internal/cli/closedtest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -209,5 +210,60 @@ func TestConnectWithLocalKeyRecognisesAnEnrolledDevice(t *testing.T) {
 	defer conn.Close()
 	if err := probe(conn); err == nil || !conn.NotLocalDevice() {
 		t.Fatalf("probe err = %v, NotLocalDevice = %v; want refusal as cloud-enrolled", err, conn.NotLocalDevice())
+	}
+}
+
+// A peer that replays a device's certificate without its key fails the
+// handshake before the device is marked verified or its key pinned.
+func TestConnectWithLocalKeyNeverTrustsAReplayedCertificate(t *testing.T) {
+	devCert, devKey, err := mtls.ClosedServerIdentity(t.TempDir(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherCert, otherKey, err := mtls.ClosedServerIdentity(t.TempDir(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := certs.TLSKeyPair(devCert, "", devKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := certs.TLSKeyPair(otherCert, "", otherKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := tls.Certificate{Certificate: device.Certificate, PrivateKey: other.PrivateKey}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				_ = tls.Server(c, &tls.Config{Certificates: []tls.Certificate{replayed}, ClientAuth: tls.RequireAnyClientCert, NextProtos: []string{"h2"}}).Handshake()
+				c.Close()
+			}()
+		}
+	}()
+
+	pinned := false
+	conn, err := grpcclient.ConnectWithLocalKey(context.Background(), ln.Addr().String(), newLocalKey(t), func(*x509.Certificate) error {
+		pinned = true
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if probe(conn) == nil {
+		t.Fatal("probe succeeded against a replayed certificate")
+	}
+	if conn.LocalDeviceVerified() || pinned {
+		t.Errorf("verified = %v, pinned = %v; want neither for a peer that did not prove the key", conn.LocalDeviceVerified(), pinned)
 	}
 }
