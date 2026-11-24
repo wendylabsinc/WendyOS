@@ -332,7 +332,7 @@ func TestNewDerivedLayer_H264NeedsFramingAndOneDecoderAndNoEncoder(t *testing.T)
 	if err != nil {
 		t.Fatalf("a device with a decoder and no encoder: %v", err)
 	}
-	want := "gst-launch-1.0 -q fdsrc fd=0 ! gdpdepay ! h264parse ! nvv4l2decoder ! nvvidconv ! video/x-raw ! " + derivedPicturesOutput
+	want := "gst-launch-1.0 -q fdsrc fd=0 ! gdpdepay ! h264parse ! nvv4l2decoder ! nvvidconv ! video/x-raw,format=I420 ! " + derivedPicturesOutput
 	if got := strings.Join(layer.pipelineArgs(pipelineShape{pixels: true}), " "); got != want {
 		t.Errorf("child pipeline\n got %q\nwant %q", got, want)
 	}

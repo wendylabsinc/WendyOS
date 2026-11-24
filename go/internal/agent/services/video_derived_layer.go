@@ -77,8 +77,9 @@ var derivedTransforms = map[agentpb.VideoCodec]derivedTransform{
 			return fmt.Sprintf("video/x-h264, stream-format=(string)byte-stream, alignment=(string)au, framerate=(fraction)%d/1", framerate)
 		},
 		decoders: []derivedDecoder{
-			// nvv4l2decoder hands on NVMM memory, which videoconvert cannot read.
-			{element: "nvv4l2decoder", stages: "h264parse ! nvv4l2decoder ! nvvidconv ! video/x-raw", elements: []string{"nvv4l2decoder", "nvvidconv"}},
+			// videoconvert cannot read nvv4l2decoder's memory, and nvvidconv
+			// negotiates nothing unless it is told a format.
+			{element: "nvv4l2decoder", stages: "h264parse ! nvv4l2decoder ! nvvidconv ! video/x-raw,format=I420", elements: []string{"nvv4l2decoder", "nvvidconv"}},
 			{element: "v4l2h264dec", stages: "h264parse ! v4l2h264dec", elements: []string{"v4l2h264dec"}},
 			// Frame threads hold back as many pictures as there are threads.
 			{element: "avdec_h264", stages: "h264parse ! avdec_h264 thread-type=slice", elements: []string{"avdec_h264"}},

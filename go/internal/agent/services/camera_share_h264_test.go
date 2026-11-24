@@ -151,7 +151,7 @@ func TestShareDecision_H264CameraIsDecodedByTheFirstDecoderPresent(t *testing.T)
 		missing []string
 		want    string
 	}{
-		{nil, "h264parse ! nvv4l2decoder ! nvvidconv ! video/x-raw"},
+		{nil, "h264parse ! nvv4l2decoder ! nvvidconv ! video/x-raw,format=I420"},
 		{[]string{"nvvidconv"}, "h264parse ! v4l2h264dec"},
 		{[]string{"nvv4l2decoder"}, "h264parse ! v4l2h264dec"},
 		{[]string{"nvv4l2decoder", "v4l2h264dec"}, "h264parse ! avdec_h264 thread-type=slice"},
