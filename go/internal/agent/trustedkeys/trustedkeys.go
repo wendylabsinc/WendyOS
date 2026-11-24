@@ -21,8 +21,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
@@ -79,7 +82,11 @@ var (
 	ErrAlreadyExists = errors.New("that key is already trusted; remove it first to change its role")
 	ErrLastOwner     = errors.New("that is the last owner key; add another owner first")
 	ErrActorNotOwner = errors.New("your key is no longer an owner on this device")
+	ErrBadLabel      = fmt.Errorf("a key label is at most %d bytes of printable text", MaxLabelLen)
 )
+
+// MaxLabelLen bounds a key label, which other owners see in key lists.
+const MaxLabelLen = 128
 
 // Entry is one trusted key as stored on disk.
 type Entry struct {
@@ -294,6 +301,9 @@ func (s *Store) List() []Entry {
 func newEntry(spki []byte, role Role, label, addedBy string, now time.Time) (Entry, error) {
 	if role == RoleNone {
 		return Entry{}, errors.New("a role is required: owner, operator or viewer")
+	}
+	if len(label) > MaxLabelLen || !utf8.ValidString(label) || strings.IndexFunc(label, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return Entry{}, ErrBadLabel
 	}
 	if err := checkKey(spki); err != nil {
 		return Entry{}, err

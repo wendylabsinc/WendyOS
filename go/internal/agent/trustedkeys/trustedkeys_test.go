@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -171,5 +172,21 @@ func TestKeysMustBeMLDSA65(t *testing.T) {
 	}
 	if _, err := ParsePublicKey(newSPKI(t)); err != nil {
 		t.Errorf("ML-DSA-65 key refused: %v", err)
+	}
+}
+
+// Labels reach other owners' terminals: bounded, printable text only.
+func TestLabelsAreBoundedPrintableText(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"a\nfake row", "\x1b[2Jcleared", strings.Repeat("x", MaxLabelLen+1), "\xff"} {
+		if _, err := s.Close(newSPKI(t), bad, time.Now()); !errors.Is(err, ErrBadLabel) {
+			t.Errorf("label %q: %v, want ErrBadLabel", bad, err)
+		}
+	}
+	if _, err := s.Close(newSPKI(t), "Sem's laptop – ünï", time.Now()); err != nil {
+		t.Fatalf("printable label refused: %v", err)
 	}
 }

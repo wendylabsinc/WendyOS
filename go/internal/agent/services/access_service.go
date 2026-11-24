@@ -166,6 +166,8 @@ func keyError(err error) error {
 	switch {
 	case errors.Is(err, trustedkeys.ErrNotFound):
 		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, trustedkeys.ErrBadLabel):
+		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, trustedkeys.ErrAlreadyExists):
 		return status.Error(codes.AlreadyExists, err.Error())
 	case errors.Is(err, trustedkeys.ErrActorNotOwner):
