@@ -1,0 +1,70 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+
+  // Dependabot stays the owner of action pins, Go modules, screencast npm and the simulator
+  // pip files (.github/dependabot.yml), plus repo-wide security updates. Renovate only takes
+  // what Dependabot cannot update: versions and images written inside the workflows.
+  // Self-hosted: .github/workflows/renovate.yml decides when this runs, so there is no `schedule:`.
+  // No automerge: main's ruleset needs no approving review and auto-merge is on, so an
+  // automerged PR would land with no human looking at it.
+  enabledManagers: ["github-actions", "custom.regex"],
+  labels: ["dependencies"],
+
+  customManagers: [
+    {
+      customType: "regex",
+      description: "govulncheck: installed by version in security.yml (dependency_gates_test.py checks the vX.Y.Z form)",
+      managerFilePatterns: ["/^\\.github/workflows/security\\.yml$/"],
+      matchStrings: ["go install golang\\.org/x/vuln/cmd/govulncheck@(?<currentValue>v[0-9.]+)"],
+      depNameTemplate: "golang.org/x/vuln",
+      datasourceTemplate: "go",
+    },
+    {
+      customType: "regex",
+      description: "syft: anchore/sbom-action/download-syft's syft-version input in sbom.yml and build.yml",
+      managerFilePatterns: ["/^\\.github/workflows/(sbom|build)\\.yml$/"],
+      matchStrings: ["syft-version: (?<currentValue>v[0-9.]+)"],
+      depNameTemplate: "anchore/syft",
+      datasourceTemplate: "github-releases",
+    },
+  ],
+
+  packageRules: [
+    {
+      description: "Workflow tool versions and images: one PR.",
+      matchManagers: ["github-actions", "custom.regex"],
+      groupName: "workflow tools and images",
+    },
+    {
+      description: "Action and reusable-workflow pins belong to Dependabot (github-actions ecosystem). Renovate taking them too would open duplicate PRs.",
+      matchManagers: ["github-actions"],
+      matchDepTypes: ["action", "workflow"],
+      enabled: false,
+    },
+    // Deliberate pins. Each rule carries the reason; drop a rule only when its reason is gone.
+    {
+      description: "Runner images (runs-on: ubuntu-24.04 and similar): an OS line move is a reviewed decision, not a routine bump.",
+      matchManagers: ["github-actions"],
+      matchDepTypes: ["github-runner"],
+      enabled: false,
+    },
+    {
+      description: "Toolchain lines (setup-node and setup-python versions, the swift-lint container): a new minor or major line is sem's call, not a routine bump. dependency_gates_test.py also only accepts Node 22 and 24. Patches within the line still flow.",
+      matchDepNames: ["node", "python", "swift"],
+      matchUpdateTypes: ["major", "minor"],
+      enabled: false,
+    },
+    {
+      description: "The go-tests postgres service tracks the Postgres major the stacks run; a major moves with the database, not on its own. Digest refreshes still flow.",
+      matchDepNames: ["postgres"],
+      matchUpdateTypes: ["major"],
+      enabled: false,
+    },
+    {
+      description: "setup-uv's version mirrors uvVersion in go/internal/agent/inference/runtime.go (shipped code). Move both together by hand.",
+      matchDepNames: ["astral-sh/uv"],
+      enabled: false,
+    },
+  ],
+}
