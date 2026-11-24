@@ -235,6 +235,53 @@ func TestVisualAudioUsesVerifiedSegmentTimeAndRejectsDurationMismatch(t *testing
 		t.Fatal("accepted invented duration")
 	}
 }
+func TestVisualExportPointsAtThePlayableClipOnlyWhenACameraHasOne(t *testing.T) {
+	openRecording := func(c *visualFixtureClient) string {
+		t.Helper()
+		filename, err := exportVisualEpisode(context.Background(), c, "episode")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(filename)
+		z, err := zip.OpenReader(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer z.Close()
+		r, err := z.Open("OPEN_RECORDING.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		text, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(text)
+	}
+	const openTheClip = "Video: open cameras/*/playable.mp4."
+
+	stills := &visualFixtureClient{manifest: data.Manifest{ID: "episode", State: "complete"}, files: map[string][]byte{}}
+	addVisualFile(stills, "cameras/cam/snapshot-000001.jpg", "cam", []byte{0xFF, 0xD8, 0xFF, 0xD9})
+	addVisualFile(stills, "cameras/cam/index.jsonl", "cam", []byte("{}\n"))
+	if text := openRecording(stills); strings.Contains(text, openTheClip) || !strings.Contains(text, "Video: no camera of this episode has a playable.mp4.") {
+		t.Errorf("an episode of JPEG stills is told to open a clip it does not have:\n%s", text)
+	}
+
+	video := &visualFixtureClient{manifest: data.Manifest{ID: "episode", State: "complete"}, files: map[string][]byte{}}
+	addVisualFile(video, "cameras/cam/segment-000001.h264", "cam", []byte{0, 0, 0, 1})
+	addVisualFile(video, "cameras/cam/playable.mp4", "cam", []byte("clip"))
+	video.manifest.Files[1].Role = data.FileRoleDerived
+	if text := openRecording(video); !strings.Contains(text, openTheClip) {
+		t.Errorf("an episode with a clip is not pointed at it:\n%s", text)
+	}
+
+	noCameras := &visualFixtureClient{manifest: data.Manifest{ID: "episode", State: "complete"}, files: map[string][]byte{}}
+	addVisualFile(noCameras, "audio/mic/a.wav", "audio:mic", audioFixture())
+	if text := openRecording(noCameras); !strings.Contains(text, openTheClip) {
+		t.Errorf("the general advice for an episode without cameras changed:\n%s", text)
+	}
+}
 func TestVisualExportPreservesFilesAndRefusesUnsafeOrUnverifiedArchives(t *testing.T) {
 	c := &visualFixtureClient{manifest: data.Manifest{ID: "episode", State: "complete"}, files: map[string][]byte{}}
 	addVisualFile(c, "ros2/domain/metadata.yaml", "ros2:default:domain-0", []byte("original metadata"))

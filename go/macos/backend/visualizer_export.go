@@ -38,6 +38,27 @@ func (b *Backend) ExportVisualEpisode(session uint64, episode string) (string, e
 	defer cancel()
 	return exportVisualEpisode(ctx, client, episode)
 }
+
+// exportVideoAdvice is the line of OPEN_RECORDING.txt about camera files. An
+// episode whose cameras stored only their own frames or stills has no clip to
+// point at.
+func exportVideoAdvice(files []data.File) string {
+	const openTheClip = "Video: open cameras/*/playable.mp4."
+	cameraFiles := false
+	for _, file := range files {
+		if !strings.HasPrefix(file.Path, "cameras/") {
+			continue
+		}
+		if file.Role == data.FileRoleDerived && path.Base(file.Path) == "playable.mp4" {
+			return openTheClip
+		}
+		cameraFiles = true
+	}
+	if !cameraFiles {
+		return openTheClip
+	}
+	return "Video: no camera of this episode has a playable.mp4. cameras/*/index.jsonl lists each stored frame or still with its file, byte offset, and capture time; .jpg stills open in an image viewer."
+}
 func exportVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode string) (filename string, err error) {
 	r, err := client.Inspect(ctx, &pb.DataInspectRequest{Episode: episode})
 	if err != nil {
@@ -82,7 +103,7 @@ func exportVisualEpisode(ctx context.Context, client pb.DataServiceClient, episo
 	if err != nil {
 		return "", err
 	}
-	_, err = w.Write([]byte("Wendy Data episode export\n\nAll files are original, verified against manifest.json SHA-256 checksums.\nExtract this ZIP before opening files.\n\nROS 2: open .mcap files in an MCAP-compatible viewer, or use ros2 bag info/play on a bag directory containing metadata.yaml. SQLite .db3 bags retain their metadata and original message definitions/type names.\nAudio: open .wav segments in an audio editor. audio/*/index.jsonl records segment offsets and clock uncertainty.\nVideo: open cameras/*/playable.mp4.\nTelemetry and events: JSONL, with episode-relative timestamps.\n\nROS bag receipt timestamps and sensor message header timestamps are distinct. ros2/*-clock_samples.jsonl preserves the measured mapping to the episode timeline. Original data is not downsampled by the viewer.\n"))
+	_, err = w.Write([]byte("Wendy Data episode export\n\nAll files are original, verified against manifest.json SHA-256 checksums.\nExtract this ZIP before opening files.\n\nROS 2: open .mcap files in an MCAP-compatible viewer, or use ros2 bag info/play on a bag directory containing metadata.yaml. SQLite .db3 bags retain their metadata and original message definitions/type names.\nAudio: open .wav segments in an audio editor. audio/*/index.jsonl records segment offsets and clock uncertainty.\n" + exportVideoAdvice(m.Files) + "\nTelemetry and events: JSONL, with episode-relative timestamps.\n\nROS bag receipt timestamps and sensor message header timestamps are distinct. ros2/*-clock_samples.jsonl preserves the measured mapping to the episode timeline. Original data is not downsampled by the viewer.\n"))
 	if err != nil {
 		return "", err
 	}

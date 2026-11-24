@@ -397,7 +397,7 @@ Any other `store` value, `store` on a source that is not a camera, or `store`
 with `mode: snapshot` is rejected; snapshot mode always stores single frames.
 Each snapshot still is one of the camera's own frames. A webcam the agent
 captures natively as JPEG stores that JPEG frame, unchanged, in a
-`snapshot-NNNNNN.jpg` file, and nothing is encoded for the source. A camera
+`snapshot-NNNNNN.jpg` file, and the source asks for no encoding. A camera
 whose own frames are H.264 stores a key frame with its parameter sets in a
 `snapshot-NNNNNN.h264` file. `index.jsonl` gives each still's sample ID,
 capture time, file, and codec. A source that holds only JPEG stills has no
