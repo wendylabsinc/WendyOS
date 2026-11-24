@@ -208,6 +208,8 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 	// range; which one is this GStreamer's choice, read off the first picture.
 	var lumaOf func(shade int) int
 	var decoded decodedGray
+	// Where the burst began in what the layer published, and its counts then.
+	burstFrom, beforeBurst := -1, derivedLayerCounts{}
 	checkPairing := func(what string) {
 		t.Helper()
 		// Each access unit must decode to the picture of the frame whose
@@ -219,6 +221,18 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 				t.Fatalf("%s: published access unit %d: codec=%v auAligned=%v, %d bytes, want one whole Annex B access unit", what, i, unit.codec, unit.auAligned, len(unit.data))
 			}
 			payloads[i] = unit.data
+		}
+		// In the burst a tag may leave the table before its output comes back,
+		// and that output is not published. The H.264 then has a gap, and what
+		// follows a gap does not decode to its own frame.
+		if burstFrom >= 0 {
+			if left := layer.counts().since(beforeBurst); left.unknownTags+left.unusable > 0 {
+				t.Logf("%s: in the burst the layer left out %d outputs whose tag was gone and %d unusable ones, so the H.264 published since access unit %d may have a gap; only the %d before it are decoded",
+					what, left.unknownTags, left.unusable, burstFrom, burstFrom)
+				payloads = payloads[:burstFrom]
+			} else {
+				t.Logf("%s: the layer left no output out in the burst, so all %d access units it published are decoded", what, len(payloads))
+			}
 		}
 		for i, picture := range decodeTestH264(t, gstPath, available, skip, payloads) {
 			if luma, shade := yuyvMeanLuma(picture), derivedTestShade(published[i].sampleID); !decoded.shows(luma, shade) {
@@ -325,6 +339,7 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 	// tags leave the table as newer ones are assigned, and the child's own
 	// queues drop. Whatever comes back must still be its own frame.
 	before, picturesBefore := layer.counts(), pictures.count()
+	burstFrom, beforeBurst = len(stream.all()), before
 	burstEnds := time.Now().Add(30 * time.Second)
 	for layer.counts().fed-before.fed < 2*derivedTagTableFrames {
 		if time.Now().After(burstEnds) {
@@ -345,19 +360,38 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 		t.Fatal("no picture came back from the burst")
 	}
 	checkPairing("the burst")
-
-	// The layer's tags start where GStreamer's video encoders leave timestamps
-	// alone, and it subtracts the segment start in case one moves them anyway.
-	// Whether this encoder moved them is in the log; below the tags it does.
-	checkEncoderTimestamps(t, layer, available, skip, "timestamps from where the layer's tags start", derivedTagBase)
-	checkEncoderTimestamps(t, layer, available, skip, "timestamps from one second", uint64(time.Second))
 }
 
-// checkEncoderTimestamps runs the layer's own H.264 pipeline in a child of the
+// The layer's tags start at 1000 hours, where GStreamer's video encoders leave
+// timestamps alone, and the layer subtracts the segment start its child sends
+// in case an encoder moves them anyway. This runs the layer's H.264 pipeline
+// on a real encoder and checks the tag table's arithmetic against the segment
+// start that encoder sends: derivedFrameTags.source must name, for each access
+// unit, the frame the unit decodes to. It logs whether the encoder moved the
+// timestamps and asserts neither answer.
+//
+// It does not run the layer's publishOutput: the layer's own tags cannot be
+// made to start lower, so a real moved segment never reaches that call. Its
+// subtraction there is covered by the scripted segment of
+// TestDerivedLayer_UndoesTheShiftTheChildReportsAndDropsMisSizedPictures.
+func TestDerivedTagTableUndoesTheSegmentStartARealH264EncoderSends(t *testing.T) {
+	gstPath, available, skip := derivedTestGStreamer(t)
+	layer, err := newDerivedLayer(derivedLayerConfig{
+		logger: zap.NewNop(), device: "/dev/video44", format: videoCodecMJPEG,
+		gstPath: gstPath, available: available, width: derivedTestWidth, height: derivedTestHeight, framerate: 30, grace: time.Minute,
+	})
+	if err != nil {
+		skip("this GStreamer cannot run the derived layer: " + err.Error())
+	}
+	checkTagTableOnARealEncoder(t, layer, available, skip, "timestamps from where the layer's tags start", derivedTagBase)
+	checkTagTableOnARealEncoder(t, layer, available, skip, "timestamps from one second", uint64(time.Second))
+}
+
+// checkTagTableOnARealEncoder runs the layer's H.264 pipeline in a child of the
 // test's on frames timed from first, logs the segment start that child sent,
-// and fails unless the layer's tag table, given that segment start, pairs each
-// access unit with the frame the unit decodes to.
-func checkEncoderTimestamps(t *testing.T, layer *derivedLayer, available map[string]bool, skip func(why string), what string, first uint64) {
+// and fails unless a tag table of those frames, given that segment start,
+// pairs each access unit with the frame the unit decodes to.
+func checkTagTableOnARealEncoder(t *testing.T, layer *derivedLayer, available map[string]bool, skip func(why string), what string, first uint64) {
 	t.Helper()
 	const frames = 8
 	jpegs := derivedTestJPEGs(t)
@@ -413,11 +447,12 @@ func checkEncoderTimestamps(t *testing.T, layer *derivedLayer, available map[str
 	if err := cmd.Wait(); err != nil || len(units) == 0 {
 		t.Fatalf("%s: the layer's H.264 pipeline gave %d access units for %d frames: %v\n%s", what, len(units), frames, err, stderr.String())
 	}
-	if gdp.segmentStart == 0 {
-		t.Logf("%s: %s sent segment start 0 and %d access units: it left the timestamps as fed", what, layer.encoder.element, len(units))
-	} else {
-		t.Logf("%s: %s sent segment start %d ns and %d access units: it moved the timestamps by that much", what, layer.encoder.element, gdp.segmentStart, len(units))
+	moved := "it left the timestamps as fed"
+	if gdp.segmentStart != 0 {
+		moved = "it moved the timestamps by that much"
 	}
+	t.Logf("%s: %s sent segment start %d ns and %d access units: %s; checking the tag table's arithmetic on them, not the layer's publishOutput",
+		what, layer.encoder.element, gdp.segmentStart, len(units), moved)
 	var decoded decodedGray
 	for i, picture := range decodeTestH264(t, layer.gstPath, available, skip, units) {
 		source, known := tags.source(came[i], gdp.segmentStart)
@@ -510,14 +545,24 @@ func TestStoreBothThroughTheDerivedLayerIndexesEverySampleAsItsJPEGAndItsH264(t 
 		if _, twice := madeFrom[record.SampleID]; twice {
 			t.Fatalf("sample %d has two H.264 records", record.SampleID)
 		}
+		if _, known := fed[record.SampleID]; !known {
+			t.Fatalf("H.264 record %d names sample %d, which was not fed", i, record.SampleID)
+		}
 		madeFrom[record.SampleID] = record
 		units[i] = r.cut(t, record)
 	}
+	// With as many records of each kind as frames fed, a sample that is fed
+	// and recorded once in each is every sample, exactly once.
+	recorded := map[uint64]bool{}
 	for i, record := range own {
 		frame, known := fed[record.SampleID]
 		if !known {
 			t.Fatalf("JPEG record %d names sample %d, which was not fed", i, record.SampleID)
 		}
+		if recorded[record.SampleID] {
+			t.Fatalf("sample %d has two JPEG records", record.SampleID)
+		}
+		recorded[record.SampleID] = true
 		if got := r.cut(t, record); !bytes.Equal(got, frame.jpeg) {
 			t.Errorf("JPEG record of sample %d cuts %d bytes out of %s at %d that are not the %d-byte JPEG fed as that sample",
 				record.SampleID, len(got), record.Segment, record.ByteOffset, len(frame.jpeg))
@@ -921,7 +966,8 @@ func (p *h264PicturesTest) checkPictures(what string, pictures []*videoFrame) {
 			case luma >= videoRange(shade)-4 && luma <= videoRange(shade)+4:
 				p.lumaOf = videoRange
 			default:
-				p.t.Fatalf("%s: the first picture, of sample %d, has luma %d; its frame is gray level %d", what, picture.sampleID, luma, shade)
+				p.t.Fatalf("%s: picture %d carries sample %d but shows luma %d; that sample's frame shows %d, or %d in video range",
+					what, i, picture.sampleID, luma, shade, videoRange(shade))
 			}
 		}
 		if want := p.lumaOf(shade); luma < want-4 || luma > want+4 {
@@ -1014,7 +1060,7 @@ func TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame(t *testi
 	produceFrom("the second child", starts[2]+1, paced)
 	second := want
 	if len(second) != paced-starts[3] {
-		t.Fatalf("the second child was fed %d frames, want the %d from the stream's fourth start on", len(second), len(units)-starts[3])
+		t.Fatalf("the second child was fed %d frames, want the %d from the stream's fourth start on", len(second), paced-starts[3])
 	}
 	pictures = p.settledPictures()
 	p.checkPictures("the second child", pictures)

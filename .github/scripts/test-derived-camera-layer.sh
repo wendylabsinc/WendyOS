@@ -15,16 +15,24 @@ export WENDY_GSTREAMER_REQUIRED=1
 test_name=TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity
 h264_tests=(TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame TestDerivedLayerPairsNoPictureOfAnH264StreamItsDecoderReorders)
 store_test=TestStoreBothThroughTheDerivedLayerIndexesEverySampleAsItsJPEGAndItsH264
+tag_table_test=TestDerivedTagTableUndoesTheSegmentStartARealH264EncoderSends
+# expect PATTERN LOG: the log has a line matching the pattern, or say which is missing.
+expect() {
+  grep -q -- "$1" "$2" || { echo "Expected in $2: $1" >&2; exit 1; }
+}
 go test -race -c -o "$output/services.test" ./go/internal/agent/services
 trap 'rm -f "$output/services.test"' EXIT
-required="$(IFS='|'; echo "$test_name|$store_test|${h264_tests[*]}")"
+required="$(IFS='|'; echo "$test_name|$store_test|$tag_table_test|${h264_tests[*]}")"
 "$output/services.test" -test.run "^(${required})$" -test.v -test.count=1 -test.timeout=240s | tee "$output/normal.log"
-for required_test in "$test_name" "$store_test" "${h264_tests[@]}"; do
-  grep -q "^--- PASS: $required_test " "$output/normal.log"
+for required_test in "$test_name" "$store_test" "$tag_table_test" "${h264_tests[@]}"; do
+  expect "^--- PASS: $required_test " "$output/normal.log"
 done
-grep -q 'H.264 decoder: h264parse ! avdec_h264' "$output/normal.log"
-# Whether the encoder moved the layer's tags is on record, whichever it did.
-grep -q "timestamps from where the layer's tags start: .* sent segment start" "$output/normal.log"
+expect 'H.264 decoder: h264parse ! avdec_h264' "$output/normal.log"
+# Both runs of the tag table check are on record with the segment start the
+# encoder sent, whichever it was: on the layer's tags, and on timestamps below
+# them, where an encoder that moves timestamps does.
+expect "timestamps from where the layer's tags start: .* sent segment start" "$output/normal.log"
+expect 'timestamps from one second: .* sent segment start' "$output/normal.log"
 if grep -q '^--- SKIP:' "$output/normal.log"; then
   echo 'A required derived camera layer regression was skipped' >&2
   exit 1
@@ -57,10 +65,10 @@ if go test -race -overlay "$output/newest-frame.json" ./go/internal/agent/servic
   exit 1
 fi
 cat "$output/newest-frame.log"
-grep -q "^--- FAIL: $test_name " "$output/newest-frame.log"
-grep -q "^--- FAIL: $h264_picture_test " "$output/newest-frame.log"
+expect "^--- FAIL: $test_name " "$output/newest-frame.log"
+expect "^--- FAIL: $h264_picture_test " "$output/newest-frame.log"
 # A picture and an access unit made from JPEG frames, and a picture decoded
 # from H.264, each rejected for showing another frame than the one it names.
-grep -q "but shows luma .* that sample's JPEG shows" "$output/newest-frame.log"
-grep -q 'but decodes to luma' "$output/newest-frame.log"
-grep -q "but shows luma .* that sample's frame shows" "$output/newest-frame.log"
+expect "but shows luma .* that sample's JPEG shows" "$output/newest-frame.log"
+expect 'but decodes to luma' "$output/newest-frame.log"
+expect "but shows luma .* that sample's frame shows" "$output/newest-frame.log"
