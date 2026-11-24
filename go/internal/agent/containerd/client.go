@@ -3129,7 +3129,28 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 // StartContainerWithStdin uses the same validated task-start lifecycle as
 // StartContainer and only changes the task's stdin stream.
 func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan services.ContainerOutput, error) {
+	// Attach restarts the app with the caller's stdin. A lookup failure is
+	// left to startContainer to report.
+	if ctr, err := c.runningContainerForApp(c.withNamespace(ctx), appName); err == nil {
+		if err := roleMayDrive(c.withNamespace(ctx), ctr); err != nil {
+			return nil, err
+		}
+	}
 	return c.startContainer(ctx, appName, stdin, postStartAgentCommand, restartPolicy)
+}
+
+// roleMayDrive refuses, on a Closed device, an exec into or an attach to an
+// app whose entitlements the caller's role could not deploy: exec copies the
+// container's process spec, so the command runs with its privileges.
+func roleMayDrive(ctx context.Context, ctr containerd.Container) error {
+	if _, closed := trustedkeys.CallerRole(ctx); !closed {
+		return nil
+	}
+	labels, err := ctr.Labels(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the app's entitlements: %w", err)
+	}
+	return entitlementRoleError(ctx, &appconfig.AppConfig{Entitlements: parseEntitlementsFromAnnotations(labels)})
 }
 
 // execCounter disambiguates concurrent exec IDs within the agent process.
@@ -3172,6 +3193,9 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 
 	container, err := c.runningContainerForApp(ctx, appName)
 	if err != nil {
+		return -1, err
+	}
+	if err := roleMayDrive(ctx, container); err != nil {
 		return -1, err
 	}
 	task, err := container.Task(ctx, nil)
