@@ -171,19 +171,13 @@ struct `report command` {
         )
 
         #expect(html.contains("macos-jetson-orin-nano"))
-        #expect(html.contains("<td><span class=\"badge fail\">Failed</span></td>"))
+        #expect(html.contains(#"<span class="badge fail">Failed</span></td>"#))
+        #expect(html.contains(#"aria-label="0 passed, 0 flaked, 1 failed, 0 skipped, 0 unknown""#))
         #expect(
-            html.contains(
-                """
-                  <td class="numeric">1</td>
-                  <td class="numeric">0</td>
-                  <td class="numeric">0</td>
-                  <td class="numeric">0</td>
-                  <td class="numeric">1</td>
-                  <td class="numeric">0</td>
-                  <td class="numeric">0</td>
-                """
-            )
+            html.range(
+                of: #"<td class="numeric">1</td>\s*<td class="numeric">0</td>"#,
+                options: .regularExpression
+            ) != nil
         )
     }
 }
@@ -250,7 +244,9 @@ private func assertCoverageOverview(coverages: [String?], expected: String) thro
     ])
     try command.run()
     let html = try String(contentsOf: runURL.appendingPathComponent("index.html"), encoding: .utf8)
-    #expect(html.contains("Go source coverage: <strong>\(expected)</strong>"))
+    let visible = expected.hasSuffix("%") ? expected : (expected == "Incomplete" ? "Partial" : "—")
+    #expect(html.contains("<span title=\"\(expected)\">Total <b>\(visible)</b></span>"))
+    #expect(!html.contains(">Diff <b>"))
     #expect(!html.contains("{{GO_COVERAGE_TOTAL}}"))
 }
 

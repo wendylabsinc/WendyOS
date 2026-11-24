@@ -152,10 +152,16 @@ func aggregateGoCoverage(
     errors initialErrors: [String],
     run: URL,
     repo: URL?,
-    diff: String?
+    diff: String?,
+    target: String? = nil
 ) throws -> Bool {
-    let destination = run.appendingPathComponent("coverage")
-    try CoverageIO.remove(run.appendingPathComponent("comparison.json"))
+    let coverage = run.appendingPathComponent("coverage")
+    let destination =
+        try target.map { try CoverageIO.evidence("targets/" + $0, in: coverage) } ?? coverage
+    if target == nil {
+        try CoverageIO.remove(run.appendingPathComponent("comparison.json"))
+        try CoverageIO.remove(run.appendingPathComponent("diff.json"))
+    }
     // Never reuse a profile/totals left by another set of attempts.
     try CoverageIO.remove(destination)
     var errors = initialErrors
@@ -248,7 +254,7 @@ func aggregateGoCoverage(
             comparison.status = "compared"
             comparison.baseRevision = git.base
             comparison.sourceRevision = git.head
-            comparison.specs = try git.specs()
+            if target == nil { comparison.specs = try git.specs() }
             if let first {
                 guard compatible, first.source["revision"] as? String == git.head else {
                     throw ValidationError("Comparison source differs from measured build")
@@ -291,12 +297,14 @@ func aggregateGoCoverage(
                 Data("WARNING: E2E aggregate comparison unavailable: \(reason)\n".utf8)
             )
         }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try encoder.encode(comparison).write(
-            to: run.appendingPathComponent("comparison.json"),
-            options: .atomic
-        )
+        if target == nil {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            try encoder.encode(comparison).write(
+                to: run.appendingPathComponent("diff.json"),
+                options: .atomic
+            )
+        }
     }
     if !captured.isEmpty || !errors.isEmpty || diff != nil {
         try CoverageIO.write(result, to: destination.appendingPathComponent("summary.json"))

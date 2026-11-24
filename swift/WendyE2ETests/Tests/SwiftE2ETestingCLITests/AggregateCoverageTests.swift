@@ -113,7 +113,10 @@ struct `aggregate saved coverage` {
         var report = try ReportCommand.parse([
             "--package-dir", package.path, "--template", template.path, "--run-dir", run.path,
         ])
+        #expect(CoverageIO.exists(run.appendingPathComponent("coverage/functions.txt")))
+        #expect(!CoverageIO.exists(run.appendingPathComponent("coverage/source.html")))
         try report.run()
+        #expect(CoverageIO.exists(run.appendingPathComponent("coverage/source.html")))
         var html = try String(contentsOf: run.appendingPathComponent("index.html"), encoding: .utf8)
         #expect(html.contains("data-spec-change=\"Added\""))
         #expect(html.contains("data-spec-change=\"Changed\""))
@@ -159,8 +162,68 @@ struct `aggregate saved coverage` {
         // Saved wrong-head comparisons cannot annotate a valid run.
         var bad = comparison
         bad.sourceRevision = base
-        try JSONEncoder().encode(bad).write(to: run.appendingPathComponent("comparison.json"))
+        try JSONEncoder().encode(bad).write(to: run.appendingPathComponent("diff.json"))
         #expect(throws: (any Error).self) { try E2ERunComparison.load(in: run) }
+    }
+
+    @Test
+    func `target coverage unions retries and links the matching target profile`() throws {
+        let f = try GoCoverageFixture()
+        try f.attempt()
+        let location = "observations/sample/branch"
+        var inputs: [String] = []
+        for (id, argument) in [("a.0001", "left"), ("a.0002", "right"), ("b.0001", "left")] {
+            let native = try f.native(location + "/coverage/go")
+            try f.invoke(native, argument)
+            try f.records([f.record(argument, directory: location)])
+            let input = f.repo.appendingPathComponent("run-input/swift.123." + id)
+            try FileManager.default.createDirectory(
+                at: input.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.copyItem(at: f.run, to: input)
+            inputs.append(input.path)
+            try CoverageIO.remove(native)
+        }
+        let output = f.repo.appendingPathComponent("run-output")
+        var aggregate = try AggregateCommand.parse(
+            ["--repo", f.repo.path, "--output-dir", output.path] + inputs
+        )
+        try aggregate.run()
+        let run = output.appendingPathComponent("swift.123")
+        func measured(_ directory: String) throws -> Int {
+            let summary = try CoverageIO.read(
+                run.appendingPathComponent(directory + "/summary.json")
+            )
+            return try #require((summary["summary"] as? [String: Any])?["covered"] as? Int)
+        }
+        let a = try measured("coverage/targets/a")
+        let b = try measured("coverage/targets/b")
+        #expect(a > b)
+        #expect(try measured("coverage") == a)
+        let scopes = [
+            "coverage", "coverage/targets/a", "coverage/targets/b",
+            "attempts/a/0001/coverage", "attempts/a/0002/coverage", "attempts/b/0001/coverage",
+        ]
+        for scope in scopes {
+            #expect(CoverageIO.exists(run.appendingPathComponent(scope + "/functions.txt")))
+            #expect(!CoverageIO.exists(run.appendingPathComponent(scope + "/source.html")))
+        }
+        let exports = try GoCoverageReports(run: run, package: f.product, repo: f.repo)
+        for target in ["a", "b"] {
+            let links = exports.links(directory: try exports.directory(for: target), icons: true)
+            #expect(links.contains("coverage/targets/" + target + "/source.html"))
+            #expect(links.contains("coverage/targets/" + target + "/functions.txt"))
+        }
+        for scope in scopes {
+            #expect(CoverageIO.exists(run.appendingPathComponent(scope + "/source.html")))
+        }
+        try f.write("go/internal/sample/branch.go", GoCoverageFixture.branch + "// edited\n")
+        let mismatch = try GoCoverageReports(run: run, package: f.product, repo: f.repo)
+        let offlineLinks = mismatch.links(directory: mismatch.root, icons: false)
+        #expect(!offlineLinks.contains("source.html"))
+        #expect(offlineLinks.contains("functions.txt"))
+        #expect(!CoverageIO.exists(run.appendingPathComponent("coverage/source.html")))
     }
 
     @Test

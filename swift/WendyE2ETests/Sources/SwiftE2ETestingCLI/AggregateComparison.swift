@@ -21,8 +21,13 @@ struct E2ERunComparison: Codable {
     var profileSHA256: String?
     var specs: [Spec] = []
 
+    static func artifact(in run: URL) -> URL {
+        let current = run.appendingPathComponent("diff.json")
+        return CoverageIO.exists(current) ? current : run.appendingPathComponent("comparison.json")
+    }
+
     static func load(in run: URL) throws -> Self? {
-        let path = run.appendingPathComponent("comparison.json")
+        let path = artifact(in: run)
         guard CoverageIO.exists(path) else { return nil }
         let result = try JSONDecoder().decode(Self.self, from: Data(contentsOf: path))
         if result.status == "compared" {

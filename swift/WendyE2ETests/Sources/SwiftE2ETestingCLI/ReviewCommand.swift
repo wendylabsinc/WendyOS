@@ -648,7 +648,7 @@ private func runPromptHeader(
         "",
     ]
 
-    let comparison = runURL.appendingPathComponent("comparison.json")
+    let comparison = E2ERunComparison.artifact(in: runURL)
     let coverage = runURL.appendingPathComponent("coverage/summary.json")
     if FileManager.default.fileExists(atPath: comparison.path) {
         lines.append(
@@ -1252,7 +1252,7 @@ private func formatSeconds(_ value: Double) -> String {
 // Older runs without this metadata preserve their existing review behavior.
 func validateRecordedReviewRevision(runURL: URL, repoURL: URL) throws {
     guard
-        CoverageIO.exists(runURL.appendingPathComponent("comparison.json"))
+        CoverageIO.exists(E2ERunComparison.artifact(in: runURL))
             || CoverageIO.exists(runURL.appendingPathComponent("coverage/summary.json"))
     else { return }
     let attempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }

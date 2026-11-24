@@ -175,18 +175,19 @@ tar -xzf coverage/go-native.tar.gz
 Reaggregation reads an existing native archive in scratch space, so it requires
 no new test execution or permanent unpack. Supply all raw attempts for a run
 when reaggregating coverage; use a fresh output directory for a subset. The
-embedded run report and AI inputs retain logs, recordings, test results and
-derived metadata without duplicating native archives or profiles. Standard Go
-tools can derive additional profiles or an optional source HTML view; HTML is not produced during collection:
+aggregate stores `coverage/coverage.out` and `coverage/functions.txt` for the run.
+For multiple targets it also merges attempts by target under
+`coverage/targets/<target>/`. For multiple attempts it retains the individual
+profiles and function lists in `attempts/<target>/<attempt>/coverage/`. A
+single-attempt run shares its run artifacts with that attempt and target.
 
-```bash
-go tool cover -html=/path/to/run/coverage/coverage.out -o=/path/to/coverage.html
-```
-
-`report` only displays the saved aggregation results. It requires no Git access
-to calculate coverage or spec changes. Existing noncoverage runs remain readable;
-not-collected, no-data and incomplete results retain honest labels. Existing
-per-test/command timings and product assertions are unchanged.
+`report` reads saved totals and renders `source.html` alongside each complete
+profile. Pass `--repo /path/to/tested/checkout` to aggregate and report when
+the tooling and measured source live in different checkouts. Source views require
+the recorded revision and source identity. Older runs can display their saved
+numbers without the source. Hover or focus a target row for its source report
+and plain-text function list. Diff appears only for a comparison; its tooltip
+explains unavailable values and gives the comparison range.
 
 ### Optional Git comparison
 
@@ -200,7 +201,7 @@ swift run swift-e2e-testing aggregate --package-dir . --output-dir /path/to/runs
 `BASE...TESTED` resolves an immutable merge base; `BASE..TESTED` uses the explicit
 base. TESTED must match the recorded run revision. Reaggregate with another base
 to change the comparison without rerunning tests. The run saves revisions,
-source/profile identity, metric results and spec entries in `comparison.json`
+source/profile identity, metric results and spec entries in `diff.json`
 and `coverage/summary.json`. No patch, patch archive or whole-patch AI prompt is
 stored. The unreleased earlier patch-file/reference-comparison interface has
 been removed; full reference generation remains independent.
@@ -520,7 +521,7 @@ has the spec/test source that produced them.
 
 AI review files are Markdown. Top-level `review.md` is the compact aggregate
 that can be posted as a CI comment. Attempt, overview, and AI review JSON
-schemas live in `Support/Schemas/`.
+schemas live in `Support/Schemas/`. The coverage schema describes the source manifest, captured test records, and attempt and aggregate summaries. The diff and test schemas describe the saved comparison and observation metadata.
 
 ### Reference directory
 

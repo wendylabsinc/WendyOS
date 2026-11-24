@@ -7,6 +7,7 @@ DEFAULT_PACKAGE_DIR="$SWIFT_DIR/WendyE2ETests"
 
 OUTPUT_DIR=""
 PACKAGE_DIR="$DEFAULT_PACKAGE_DIR"
+REPO_DIR=""
 ATTEMPT_DIRS=()
 DIFF_RANGE=""
 
@@ -21,6 +22,7 @@ Options:
   --package-dir DIR Swift package directory containing swift-e2e-testing;
                     defaults to $DEFAULT_PACKAGE_DIR.
   --diff RANGE      Optional Git comparison, e.g. origin/main...HEAD.
+  --repo DIR         Checkout containing the measured source revision.
   --help            Show this help message.
 EOF
 }
@@ -57,6 +59,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --output-dir)
       OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --repo)
+      REPO_DIR="$(absolute_existing_dir_path "$2")"
       shift 2
       ;;
     --package-dir)
@@ -110,6 +116,7 @@ for attempt_dir in "${ABSOLUTE_ATTEMPT_DIRS[@]}"; do
 done
 
 aggregate_args=()
+[[ -z "$REPO_DIR" ]] || aggregate_args+=(--repo "$REPO_DIR")
 [[ -z "$DIFF_RANGE" ]] || aggregate_args+=(--diff "$DIFF_RANGE")
 
 (

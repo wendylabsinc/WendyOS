@@ -20,6 +20,11 @@ struct ReportCommand: ParsableCommand {
     @Option(name: .long, help: "Swift package directory.")
     var packageDir = "."
 
+    @Option(
+        help: "Tested source checkout for Go coverage reports. Defaults to the package repository."
+    )
+    var repo: String?
+
     @Option(name: .long, help: "Directory containing Swift E2E test sources.")
     var testsDir: String?
 
@@ -60,6 +65,8 @@ struct ReportCommand: ParsableCommand {
         )
         try renderReport(
             templateURL: templateURL,
+            packageURL: packageURL,
+            repo: repo.map { URL(fileURLWithPath: $0) },
             runURL: runURL,
             files: files,
             aiReviews: aiReviews,
@@ -1163,6 +1170,8 @@ func runAttemptArtifactURLsByTarget(in runURL: URL) throws -> [String: [URL]] {
 
 private func renderReport(
     templateURL: URL,
+    packageURL: URL,
+    repo: URL?,
     runURL: URL,
     files: [ReportTestFile],
     aiReviews: RunAIReviews,
@@ -1200,7 +1209,7 @@ private func renderReport(
     try renderReviewAggregateHTMLIfPresent(runURL: runURL)
 
     let reviewHTML = renderRunAIReview(aiReviews.root)
-    let targetOverview = try renderTargetOverview(buildTargetOverview(runURL: runURL, files: files))
+    let targetRows = try buildTargetOverview(runURL: runURL, files: files)
     let coverageAttempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
     let savedCoverageURL = runURL.appendingPathComponent("coverage/summary.json")
     let savedCoverage =
@@ -1223,6 +1232,27 @@ private func renderReport(
             ? "Multiple attempts"
             : coverageAttempts.first.map { e2eAttemptGoDiffCoverageTotal(at: $0) } ?? "Not compared"
     }
+    let coverage = try GoCoverageReports(run: runURL, package: packageURL, repo: repo)
+    let comparing =
+        comparison != nil || savedCoverage?["diff"] != nil
+        || (coverageAttempts.count == 1 && goDiffCoverageTotal != "Not compared")
+    let runValues = coverageValues(
+        total: goCoverageTotal,
+        diff: comparing ? goDiffCoverageTotal : nil
+    )
+    let runLinks = coverage.links(directory: coverage.root, icons: false)
+    let runCounts = ReportTargetOutcomeCounts(
+        passed: passed,
+        flaked: flaked,
+        skipped: skipped,
+        failed: failed,
+        unknown: unknown
+    )
+    let targetOverview = try renderTargetOverview(
+        targetRows,
+        artifacts: coverage,
+        comparing: comparing
+    )
     let testCards = renderCards(files: files)
 
     template.replaceSubrange(
@@ -1238,6 +1268,9 @@ private func renderReport(
         "{{RUN_ID}}": runID(outputURL: outputURL),
         "{{REVIEW_AGGREGATE_LINK}}": renderReviewAggregateLink(runURL: runURL),
         "{{TARGET_OVERVIEW}}": targetOverview,
+        "{{RUN_OUTCOMES}}": outcomePill(runCounts, labeled: true),
+        "{{RUN_COVERAGE_LINKS}}": runLinks,
+        "{{RUN_COVERAGE_VALUES}}": runValues,
         "{{GO_COVERAGE_TOTAL}}": goCoverageTotal,
         "{{GO_DIFF_COVERAGE_TOTAL}}": goDiffCoverageTotal,
         "{{TESTS_PASSED_COUNT}}": String(passed),
@@ -1261,7 +1294,8 @@ private func renderReport(
         "{{VISIBLE_TEST_COUNT}}",
         "{{TOTAL_TEST_COUNT}}",
         "{{REVIEW_AGGREGATE_LINK}}",
-        "{{TARGET_OVERVIEW}}",
+        "{{TARGET_OVERVIEW}}", "{{RUN_OUTCOMES}}", "{{RUN_COVERAGE_LINKS}}",
+        "{{RUN_COVERAGE_VALUES}}",
     ]
 
     for (placeholder, value) in replacements {
@@ -1543,45 +1577,70 @@ private func displayOutcomeCounts(for test: ReportTestCase) -> ReportTargetOutco
     test.targetOutcomes.isEmpty ? .fallback(for: test.status) : test.targetOutcomes
 }
 
-private func renderTargetOverview(_ rows: [ReportTargetOverviewRow]) -> String {
+private func outcomePill(_ counts: ReportTargetOutcomeCounts, labeled: Bool) -> String {
+    let segments = [
+        ("pass", "passed", counts.passed), ("flaked", "flaked", counts.flaked),
+        ("fail", "failed", counts.failed), ("skipped", "skipped", counts.skipped),
+        ("unknown", "unknown", counts.unknown),
+    ]
+    let description = segments.map { "\($0.2) \($0.1)" }.joined(separator: ", ")
+    let badges = segments.map { style, label, count in
+        let caption = labeled ? "<span>\(label)</span>" : ""
+        return
+            "<span class=\"badge \(style)\" title=\"\(count) \(label)\"><b>\(count)</b>\(caption)</span>"
+    }.joined()
+    return
+        "<span class=\"outcome-pill\" role=\"img\" aria-label=\"\(description)\">\(badges)</span>"
+}
+
+private func renderTargetOverview(
+    _ rows: [ReportTargetOverviewRow],
+    artifacts: GoCoverageReports,
+    comparing: Bool
+) throws -> String {
     guard !rows.isEmpty else {
         return ""
     }
 
-    let tableRows = rows.map { row in
+    let largestCount = rows.map { max($0.tests, $0.counts.failed) }.max() ?? 0
+    let countWidth = max(3, String(largestCount).count)
+    let tableRows = try rows.map { row in
         let outcome = row.outcome
         let escapedTarget = escapeHTML(row.target)
         let route = renderTargetRoute(row.route, escapedTitle: escapedTarget)
+        let directory = try artifacts.directory(for: row.target)
+        let values = try artifacts.values(
+            for: row.target,
+            directory: directory,
+            comparing: comparing
+        )
+        let status =
+            row.tests == 0
+            ? " <span class=\"badge \(outcome.statusClass)\">\(outcome.statusText)</span>" : ""
         return """
             <tr>
-              <td><span class="target-overview-target">\(route)<span>\(escapedTarget)</span></span></td>
-              <td><span class="badge \(outcome.statusClass)">\(outcome.statusText)</span></td>
+              <td><span class="target-overview-target">\(route)<span>\(escapedTarget)</span></span>\(status)</td>
               <td class="numeric">\(row.attempts)</td>
               <td class="numeric">\(row.tests)</td>
-              <td class="numeric">\(row.counts.passed)</td>
-              <td class="numeric">\(row.counts.flaked)</td>
-              <td class="numeric">\(row.counts.failed)</td>
-              <td class="numeric">\(row.counts.skipped)</td>
-              <td class="numeric">\(row.counts.unknown)</td>
+              <td class="target-outcomes">\(outcomePill(row.counts, labeled: false))</td>
+              <td class="target-action-cell">\(artifacts.links(directory: directory, icons: true))</td>
+              <td class="numeric target-coverage">\(values)</td>
             </tr>
             """
     }.joined(separator: "\n")
 
     return """
-        <section class="target-overview" aria-label="CLI to Agent run overview">
+        <section id="target-overview" class="target-overview" aria-label="CLI to Agent run overview">
           <div class="target-overview-table-wrapper">
-            <table class="target-overview-table">
+            <table class="target-overview-table" style="--count-width: \(countWidth)ch">
               <thead>
                 <tr>
-                  <th scope="col" aria-label="CLI to Agent"></th>
-                  <th scope="col" aria-label="Outcome"></th>
+                  <th scope="col">Target</th>
                   <th class="numeric" scope="col">Attempts</th>
                   <th class="numeric" scope="col">Tests</th>
-                  <th class="numeric" scope="col">Passed</th>
-                  <th class="numeric" scope="col">Flaked</th>
-                  <th class="numeric" scope="col">Failed</th>
-                  <th class="numeric" scope="col">Skipped</th>
-                  <th class="numeric" scope="col">Unknown</th>
+                  <th scope="col" aria-label="Outcomes"></th>
+                  <th scope="col" aria-label="Coverage reports"></th>
+                  <th class="numeric" scope="col">Coverage</th>
                 </tr>
               </thead>
               <tbody>
@@ -2294,7 +2353,7 @@ private func replacingFirstMatch(
     return text
 }
 
-private func escapeHTML(_ value: String) -> String {
+func escapeHTML(_ value: String) -> String {
     value
         .replacingOccurrences(of: "&", with: "&amp;")
         .replacingOccurrences(of: "<", with: "&lt;")
