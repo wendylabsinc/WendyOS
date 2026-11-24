@@ -113,6 +113,10 @@ device node at the camera's usual path, so several apps, live views and
 recordings can read one USB camera at the same time. Add `"mode": "direct"` to
 the camera entitlement to get the real device instead.
 
+An app deployed before this version must be deployed again to get a camera
+node. The extra device path that carried the H.264 of a camera that produces
+it is gone: the app reads the camera at its own path.
+
 Sharing covers local USB cameras that produce MJPEG, H.264 or packed raw
 formats. These keep today's behavior and are not shared: CSI cameras, depth,
 infrared and thermal streams, metadata nodes, SensorLink, ROS 2 and network
@@ -165,7 +169,13 @@ An app gets a node for every shared camera. A camera that cannot provide the
 made, for example from a camera that produces H.264 on a device without an
 H.264 decoder. The deploy notice and the camera's status say
 `asked for <format>; serving <format> because <reason>`. A compressed node's
-largest frame is the image size the node reports; a larger frame is dropped. A
+largest frame is the image size the node reports; a larger frame is dropped.
+
+A node keeps the format it was made with. When a camera stops providing it
+while the app runs, for example because pictures can no longer be decoded from
+its frames, the node's status is `cannot serve` with the reason, and deploying
+the app again makes its node in a format the camera provides. While a picture
+node is read, its status names the decoder: `pictures decoded by <element>`. A
 `"frame"` stamp is never replaced by a time: a node whose camera's frames
 carry no frame number gets no frames, and its status says why.
 

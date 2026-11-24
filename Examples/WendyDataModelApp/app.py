@@ -240,16 +240,16 @@ def main() -> None:
     person_present = False
     skipped = 0
     try:
-        # freshest_frames decodes on its own thread and hands over only the most
-        # recent frame, so inference always runs on current input rather than
-        # draining a backlog. Without it the loop falls behind the producer by
+        # resilient_frames hands over only the most recent frame and says how
+        # many it passed over, so inference always runs on current input. A
+        # loop that drained the backlog would fall behind the producer by
         # however much slower inference is than capture, and the sample
-        # identifiers each prediction references drift out of the range the
-        # episode recorded, which is what makes the join unresolvable.
+        # identifiers each prediction references would drift out of the range
+        # the episode recorded, which is what makes the join unresolvable.
         for sensor_frame, discarded in wendyframes.resilient_frames(
             CAMERA_DEVICE, CAMERA_SOURCE, CAMERA_RECONNECT_ATTEMPTS, CAMERA_RECONNECT_DELAY_SECONDS
         ):
-            # Decoded while the previous inference was still running, then
+            # Queued while the previous inference was still running, then
             # dropped on purpose. Added to the same counter the rate gate feeds
             # so one field accounts for every frame that arrived and was not
             # scored, whatever the reason.

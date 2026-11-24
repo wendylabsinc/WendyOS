@@ -36,9 +36,8 @@ it.
    app's dequeue time is separate.
 2. Because that node is fed by the agent, the app is one more consumer of
    the producer the campaign's capture adapter consumes. Video4Linux2
-   admits a single holder of a capture device; the agent is that holder.
-   **This is why the example no longer ships a telemetry-only campaign
-   variant** — there is no conflict left to work around.
+   admits a single holder of a capture device; the agent is that holder, so
+   the app and a campaign that records the camera run at the same time.
 3. Each `prediction` record carries `inputs: [{source_id, sample_id}]`.
    The camera capture's `index.jsonl` carries the same identifier on the
    bytes it kept. Match each prediction's source and sample ID to that index
@@ -55,11 +54,18 @@ below):
 1. Opens the camera node, reads its pixel format, and decodes accordingly:
    whole H.264 access units with PyAV, Motion-JPEG frames with OpenCV.
    Private packet timestamps preserve the original sample identity through
-   H.264 decoder reordering. Missing identities, malformed access units, and
+   H.264 decoder reordering. A node keeps only its newest frames, so after
+   frames the app never dequeued (inference slower than the camera) H.264
+   decoding resumes at the camera's next keyframe, and the frames in between
+   count as dropped. Missing identities, malformed access units, and
    excessive buffered identities stop capture rather than assign a prediction
-   to guessed input bytes. YUYV, BGR3 and RGB3 pictures are read too: the
+   to guessed input bytes. YUYV, BGR3 and RGB3 pictures are read too. The
    agent serves pictures on a camera whose own frames it cannot hand on, and
-   `wendy run` says so when it does.
+   `wendy run` says so; but a `"frame"` stamp is never replaced by a time, so
+   when those pictures carry no frame number the node gets no frames at all.
+   The app then logs, every 10 seconds, that its camera node is not being
+   fed, and `wendy device camera list` shows the node as `cannot serve` with
+   the reason.
 2. Runs YOLOv8n, exported to Open Neural Network Exchange (ONNX) at image
    build time, through onnxruntime.
 3. Sends a `prediction` record: model `yolov8n`, the pinned model version,
@@ -199,7 +205,6 @@ always captured; it does not appear under `sources:` because it cannot be
 deselected.
 
 This one campaign works with the app running, on a single-camera device.
-It replaces the pair of campaigns the example used to ship.
 
 To fire an episode without waiting for a trigger:
 

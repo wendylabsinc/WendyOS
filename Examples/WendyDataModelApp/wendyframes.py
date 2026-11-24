@@ -3,10 +3,12 @@
 The app's camera entitlement asks for {"format": "native", "stamp": "frame"}:
 the node at the camera's own path carries the camera's own frames, H.264 or
 Motion-JPEG, and each buffer's timestamp carries sample_id = tv_sec*1e6 +
-tv_usec, not a clock reading. A camera whose own frames the agent cannot hand
-on is served as YUYV pictures instead. The kernel sequence is independent and
-detects reader drops. The app records its own dequeue time separately from the
-sample identity.
+tv_usec, not a clock reading. The agent serves pictures when it cannot hand on
+the camera's own frames, but a "frame" stamp is never replaced by a time: a
+node whose pictures carry no frame number gets no frames at all, and a read
+that waits too long says so. The kernel sequence is independent and detects
+reader drops. The app records its own dequeue time separately from the sample
+identity.
 """
 
 from __future__ import annotations
@@ -54,6 +56,9 @@ VIDIOC_STREAMOFF = _iow(19, 4)
 def _fourcc(code: str) -> int:
     return (ord(code[0]) | ord(code[1]) << 8 | ord(code[2]) << 16 | ord(code[3]) << 24)
 
+
+# How long a read waits before saying the node is not being fed.
+NO_FRAME_WARNING_SECONDS = 10.0
 
 PIX_H264 = _fourcc("H264")
 PIX_YUYV = _fourcc("YUYV")
@@ -160,6 +165,12 @@ class H264Frames:
         self._startup_dropped = 0
 
     def decode(self, payload, sample_id, boottime, dropped):
+        if dropped and not self._awaiting_keyframe:
+            # The node keeps only its newest frames: a reader that falls behind
+            # is moved on, and what it gets next refers to pictures it never
+            # saw. Decoding starts again at the next IDR.
+            self._awaiting_keyframe = True
+            self._startup_dropped = 0
         if self._awaiting_keyframe:
             # The Agent repeats SPS/PPS with IDRs. A new reader can attach
             # mid-GOP; those pictures cannot be decoded without prior state.
@@ -254,9 +265,22 @@ class CameraNode:
         """Dequeue the next frame. Blocks until one is available."""
         if getattr(self, "_decoder", None) is not None:
             while not self._decoded:
+                self._await_buffer()
                 self._read_buffer()
             return self._decoded.popleft()
+        self._await_buffer()
         return self._read_buffer()
+
+    def _await_buffer(self) -> None:
+        """Wait for a buffer, saying why there may be none each time the wait is long."""
+        while not select.select([self._fd], [], [], NO_FRAME_WARNING_SECONDS)[0]:
+            log.warning(
+                "no frame from %s in %.0f s: the agent is not feeding this app's camera node. "
+                "The likely cause is a camera that cannot serve the node the app asked for, "
+                'for example one whose frames carry no frame number for "stamp": "frame". '
+                "Run `wendy device camera list`: the camera's Status shows the node's state and the reason.",
+                self.path, NO_FRAME_WARNING_SECONDS,
+            )
 
     def read_ready(self):
         """Read at most one ready access unit; it may produce no picture."""
