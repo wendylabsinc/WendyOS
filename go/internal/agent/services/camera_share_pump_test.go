@@ -270,10 +270,12 @@ func (h *sharePumpHarness) logged(substr string) int {
 	return n
 }
 
-// The intervals an agent in the field runs with, which every other test here
-// shortens: the backoff after a failure that passes, whose last step repeats,
-// and the slower look at a camera that cannot serve its node.
-func TestSharePump_BacksOffInFourStepsAndLooksAgainAtACameraItCannotServeEveryMinute(t *testing.T) {
+// The values an agent in the field runs with, which every other test here
+// shortens: shareRetryBackoff, which nextDelay walks and whose last step it
+// repeats, and shareCannotServeRecheck. This holds the declared values only.
+// That a pump waits one recheck interval and looks again is shown, with the
+// interval shortened, by TestSharePump_ACameraThatCannotServeTheNodeIsNotJoined.
+func TestSharePump_TheRetryBackoffAndTheRecheckIntervalHoldTheirDeclaredValues(t *testing.T) {
 	if shareCannotServeRecheck != time.Minute {
 		t.Errorf("shareCannotServeRecheck = %s, want one minute", shareCannotServeRecheck)
 	}
