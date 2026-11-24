@@ -71,6 +71,14 @@ func CallerFromContext(ctx context.Context) (Caller, bool) {
 	return c, ok
 }
 
+// TrustedKeyCaller returns the caller a Closed device admitted on a trusted
+// key. Its role check already ran, so handler checks written for Wendy
+// certificates (user identity, delivery grants) accept it instead.
+func TrustedKeyCaller(ctx context.Context) (Caller, bool) {
+	c, ok := CallerFromContext(ctx)
+	return c, ok && c.Fingerprint != "" && c.Role > trustedkeys.RoleNone
+}
+
 // ClosedAuthorizer is the method-to-role check of every listener of a Closed
 // device. Open and Enrolled devices do not run it.
 type ClosedAuthorizer struct {
