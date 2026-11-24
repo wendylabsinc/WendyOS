@@ -4,6 +4,9 @@ import WendyE2ETesting
 
 // Shared state for the local validation specs. No saved sign-in or device is used.
 enum LocalCLIAssertions {
+    static let legacyDefaultDeviceNotice =
+        "The saved default device is ignored; use --device <device> or set WENDY_DEVICE for this shell."
+
     static let entitlements =
         #"[{"type":"gpio","pins":[4,17]},{"type":"i2c","device":"i2c-1"},{"type":"persist","name":"recordings","path":"/data/recordings"}]"#
     static let project =
@@ -182,11 +185,22 @@ enum LocalCLIAssertions {
         _ result: WendyE2EShellResult,
         code: String,
         exit: Int,
-        message: String
+        message: String,
+        precedingLines: [String]? = nil
     ) throws {
         #expect(result.stdout == "")
+        // global-flags.md: only the final stderr line is the JSON error record.
+        // Remove one line terminator, never skip blank or malformed final lines.
+        var lines = result.normalizedStderr.components(separatedBy: "\n")
+        if lines.last == "" {
+            lines.removeLast()
+        }
+        let lastLine = try #require(lines.last)
+        if let precedingLines {
+            #expect(Array(lines.dropLast()) == precedingLines)
+        }
         let object = try #require(
-            try JSONSerialization.jsonObject(with: Data(result.stderr.utf8)) as? [String: Any]
+            try JSONSerialization.jsonObject(with: Data(lastLine.utf8)) as? [String: Any]
         )
         #expect(Set(object.keys) == ["error"])
         let error = try #require(object["error"] as? [String: Any])

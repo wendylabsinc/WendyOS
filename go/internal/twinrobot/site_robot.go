@@ -92,6 +92,8 @@ type SiteRobot struct {
 	localizations                   []siteRobotLocalization
 	localizationSequence, poseEpoch uint64
 	poseHistory                     []sitenav.Pose
+	roomTracking                    *roomTracking
+	lastTrackingScan                time.Time
 	fusionTracker                   sitenav.PoseTracker
 	fusionFrame                     string
 	fusionEpoch                     uint64
@@ -148,6 +150,7 @@ func Open(ctx context.Context, conn grpc.ClientConnInterface, serial string) (*S
 	r.videoFrames = make(chan []byte, 8)
 	go r.receiveVideo()
 	go r.receiveObservations(stream)
+	go r.runRoomTracking()
 	go r.run()
 	return r, nil
 }
