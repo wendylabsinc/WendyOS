@@ -125,7 +125,7 @@ ssh root@<device-hostname> 'systemctl disable --now wendyos-agent-updater.timer'
 ssh root@<device-hostname> 'systemctl enable --now wendyos-agent-updater.timer'
 ```
 
-## 5. Point the data plane at the ingest service
+## 5. Point episode upload at the ingest service
 
 Enrollment stays untouched; only the episode transfer worker is redirected. The
 agent's systemd unit reads `/etc/default/wendy-agent` (`EnvironmentFile=`), so:
@@ -189,9 +189,9 @@ cd <wendyos-checkout>/Examples/WendyDataModelApp
 
 `campaign.yaml` declares a `camera: front` source and the app consumes the same
 camera, on a single-camera device, at the same time. That works because the app
-never opens the physical device: it reads the agent-fed v4l2loopback node that
-the `camera` entitlement grants, while the campaign's capture adapter reads the
-same producer. Video4Linux2 admits one holder of a capture device, and the agent
+never opens the physical device: it opens the camera's own path and reads the
+node the agent feeds for it, which the `camera` entitlement grants, while the
+campaign's capture adapter reads the same producer. Video4Linux2 admits one holder of a capture device, and the agent
 is it.
 
 Earlier revisions of this demo needed a `campaign-telemetry-only.yaml` variant

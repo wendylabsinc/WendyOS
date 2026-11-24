@@ -82,9 +82,11 @@ identity from that socket; the administrative agent socket is never exposed.
 The name says write, because that is what it grants, and the grant is stronger
 than plain logging: campaign triggers match on application event names and
 prediction attributes, so an app holding `episode-write` can start recordings.
-It grants no read access to any sensor. Reading is native: an app opens the
-agent-fed device node granted by `camera`, and frame identity arrives in-band
-with the frames.
+It grants no read access to any sensor. Reading is native: an app with the
+`camera` entitlement opens the camera at its own device path and reads the node
+the agent feeds for it. With `"stamp": "frame"` on that entitlement, each
+frame's timestamp field holds the agent's frame number, which is the frame's
+`sample_id` in the episode.
 
 | Boundary | Value |
 |---|---|
@@ -361,7 +363,7 @@ spi.close()
 
 ## Camera
 
-Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares.
+Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for cameras that produce MJPEG or H.264). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares.
 
 ```json
 { "type": "camera", "mode": "direct" }
@@ -378,7 +380,7 @@ Omit to share the camera with other apps at its shared mode (one size up to 1280
 { "type": "camera", "format": "pixels", "stamp": "time" }
 ```
 
-An app gets one node per camera. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`. Neither key can be used when any of the app's camera entries has `"mode": "direct"`: the app then gets the real device, and there is no node to configure.
+An app gets one node per camera, at the camera's own device path. On a camera that produces H.264, `"native"` and `"h264"` both carry the camera's own H.264. A camera that cannot provide the `format` asked for is served in another one, and `wendy run` says which and why. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`. Neither key can be used when any of the app's camera entries has `"mode": "direct"`: the app then gets the real device, and there is no node to configure.
 
 ## Audio
 

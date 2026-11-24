@@ -203,7 +203,7 @@ When enabled, this entitlement:
 - Configures device permissions for video capture
 - Enables access to V4L2 (Video4Linux2) and libcamera interfaces
 
-Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares.
+Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for cameras that produce MJPEG or H.264). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares.
 
 ```json
 { "type": "camera", "mode": "direct" }
@@ -220,7 +220,7 @@ Omit to share the camera with other apps at its shared mode (one size up to 1280
 { "type": "camera", "format": "pixels", "stamp": "time" }
 ```
 
-An app gets one node per camera. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`. Neither key can be used when any of the app's camera entries has `"mode": "direct"`: the app then gets the real device, and there is no node to configure.
+An app gets one node per camera, at the camera's own device path. On a camera that produces H.264, `"native"` and `"h264"` both carry the camera's own H.264. A camera that cannot provide the `format` asked for is served in another one, and `wendy run` says which and why. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`. Neither key can be used when any of the app's camera entries has `"mode": "direct"`: the app then gets the real device, and there is no node to configure.
 
 A `camera` entitlement can also carry `user`/`password` fields, but they are not read at deploy or container-create time: the CLI consults them — in place of an interactive prompt — only the first time `wendy device camera view` needs a login for that camera, storing the result on the device from there. A container-only consumer still needs that credential stored on the device before it starts, so run `wendy device camera login <id>` (or `camera view --id <id>` once) first. See the [`camera` entitlement fields](/docs/reference/app-configuration#camera) for the field reference and its plaintext-storage caveat.
 
@@ -427,8 +427,10 @@ without receiving the administrative agent socket.
 The name says write, because that is the direction it runs. It is stronger than
 plain logging: campaign triggers match on application event names and prediction
 attributes, so an app holding `episode-write` can start recordings. It grants no
-sensor read access: reading is native, through the agent-fed device node that
-`camera` grants.
+sensor read access: reading is native, through the node the agent feeds at the
+camera's own device path, which `camera` grants. With `"stamp": "frame"` on
+that entitlement, each frame's timestamp field holds the agent's frame number,
+the frame's `sample_id` in the episode.
 
 The agent mounts the app-private socket directory at `/run/wendy/data` and
 injects `WENDY_DATA_SOCKET=/run/wendy/data/data.sock`. Records use a versioned,

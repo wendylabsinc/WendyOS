@@ -121,11 +121,11 @@ Camera / V4L2 device access.
 |-------|-------------|
 | `allowlist` | Names the cameras, by device path or camera name, that this entry's `format` and `stamp` apply to. Omit to apply them to every camera. |
 | `format` | What the app's camera node carries. `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example Motion JPEG (MJPEG) or H.264. `"h264"`: H.264, one whole frame per buffer. |
-| `stamp` | What each frame's timestamp field holds on the node. `"time"` (default): the capture time. `"frame"`: the agent's frame number. |
+| `stamp` | What each frame's timestamp field holds on the node. `"time"` (default): the capture time. `"frame"`: the agent's frame number, the frame's `sample_id` in a Wendy Data episode. |
 | `user` | Username for a registered IP camera. Ignored for local cameras. |
 | `password` | Password for a registered IP camera. Ignored for local cameras. |
 
-An app gets one node per camera. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`, and neither key can be used when any of the app's camera entries has `"mode": "direct"`.
+An app gets one node per camera, at the camera's own device path. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`, and neither key can be used when any of the app's camera entries has `"mode": "direct"`.
 
 > **Security:** `user`/`password` set here are stored in **plaintext** in `wendy.json` and deployed as-is. Prefer the interactive `wendy device camera login` command, which keeps credentials out of the app config.
 
