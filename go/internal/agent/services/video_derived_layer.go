@@ -149,6 +149,21 @@ func derivedLayerEncoder(available map[string]bool) (gstEncoderResult, error) {
 	return enc, nil
 }
 
+// softwareEncoderOfH264From names the software element a derived layer makes
+// H.264 with from frames of codec on a device with these elements, or "": for
+// a codec whose layer encodes nothing, a device that cannot encode, and an
+// encoder not known to be software.
+func softwareEncoderOfH264From(codec agentpb.VideoCodec, available map[string]bool) string {
+	if !derivedTransforms[codec].encodes {
+		return ""
+	}
+	enc, err := derivedLayerEncoder(available)
+	if err != nil || !encodesH264InSoftware(enc.element) {
+		return ""
+	}
+	return enc.element
+}
+
 type derivedLayerGaveUp struct {
 	msg string
 	// afterPublishing says subscribers already hold frames this layer derived.

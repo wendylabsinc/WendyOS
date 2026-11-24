@@ -4008,6 +4008,49 @@ var v4l2NodeUsable = func(path string) bool {
 	return errno == 0
 }
 
+// h264EncoderPreference is the order in which an installed H.264 encoder is
+// chosen.
+var h264EncoderPreference = []string{
+	"nvv4l2h264enc", // NVIDIA V4L2 hardware (Jetson L4T, gstreamer1.0-plugins-nvvideo4linux2)
+	"v4l2h264enc",   // V4L2 M2M hardware (gst-plugins-good)
+	"omxh264enc",    // OpenMAX hardware (Broadcom, Qualcomm)
+	"avenc_h264",    // libavcodec bridge (gst-libav)
+	"x264enc",       // software (gst-plugins-ugly)
+	"openh264enc",   // software (gst-plugins-bad)
+	"vaapih264enc",  // Intel VA-API
+	"nvh264enc",     // NVIDIA NVENC (desktop)
+	"msdkh264enc",   // Intel Media SDK
+}
+
+type h264EncoderKind int
+
+const (
+	hardwareH264Encoder h264EncoderKind = iota + 1
+	softwareH264Encoder
+)
+
+// h264EncoderKinds says of each H.264 encoder element whether it runs on
+// hardware or in software. Selection also takes any installed element named
+// like an H.264 encoder, so an element can be chosen that has no row: nothing
+// is said of that one. vtenc_h264 has none because VideoToolbox runs it on
+// hardware or in software as it sees fit.
+var h264EncoderKinds = map[string]h264EncoderKind{
+	"nvv4l2h264enc": hardwareH264Encoder,
+	"v4l2h264enc":   hardwareH264Encoder,
+	"omxh264enc":    hardwareH264Encoder,
+	"avenc_h264":    softwareH264Encoder,
+	"x264enc":       softwareH264Encoder,
+	"openh264enc":   softwareH264Encoder,
+	"vaapih264enc":  hardwareH264Encoder,
+	"nvh264enc":     hardwareH264Encoder,
+	"msdkh264enc":   hardwareH264Encoder,
+	"vtenc_h264_hw": hardwareH264Encoder,
+}
+
+func encodesH264InSoftware(element string) bool {
+	return h264EncoderKinds[element] == softwareH264Encoder
+}
+
 // findGStreamerEncoderFromSet performs encoder selection against a precomputed
 // element availability map. When available is nil (e.g. gst-inspect listing
 // failed), it falls back to attempting x264enc.
@@ -4037,23 +4080,11 @@ func findGStreamerEncoderFromSet(available map[string]bool) (gstEncoderResult, e
 	}
 	h264Parse := hasElem("h264parse")
 
-	h264Encoders := []string{
-		"nvv4l2h264enc", // NVIDIA V4L2 hardware (Jetson L4T, gstreamer1.0-plugins-nvvideo4linux2)
-		"v4l2h264enc",   // V4L2 M2M hardware (gst-plugins-good)
-		"omxh264enc",    // OpenMAX hardware (Broadcom, Qualcomm)
-		"avenc_h264",    // libavcodec bridge (gst-libav)
-		"x264enc",       // software (gst-plugins-ugly)
-		"openh264enc",   // software (gst-plugins-bad)
-		"vaapih264enc",  // Intel VA-API
-		"nvh264enc",     // NVIDIA NVENC (desktop)
-		"msdkh264enc",   // Intel Media SDK
-	}
-
 	// H.264 is preferred when h264parse is available to normalize output to Annex B
 	// byte-stream. Without h264parse, encoders like x264enc emit stream-format=avc
 	// which discards SPS/PPS when piped raw over gRPC, making the stream undecodable.
 	if h264Parse {
-		for _, enc := range h264Encoders {
+		for _, enc := range h264EncoderPreference {
 			if hasElem(enc) {
 				return gstEncoderResult{element: enc, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, hasH264Parse: true}, nil
 			}
@@ -4086,7 +4117,7 @@ func findGStreamerEncoderFromSet(available map[string]bool) (gstEncoderResult, e
 
 	// Last resort: attempt H.264 without normalization. Hardware encoders such as
 	// nvv4l2h264enc and v4l2h264enc typically emit byte-stream natively.
-	for _, enc := range h264Encoders {
+	for _, enc := range h264EncoderPreference {
 		if hasElem(enc) {
 			return gstEncoderResult{element: enc, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, hasH264Parse: false}, nil
 		}

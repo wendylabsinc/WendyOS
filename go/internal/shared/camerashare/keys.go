@@ -2,6 +2,8 @@
 // the agent reports camera sharing, so the agent and the CLI agree on them.
 package camerashare
 
+import "strings"
+
 const (
 	// KeyMode is how a shared camera is captured, e.g. "1280x720 YUYV, 30 fps".
 	KeyMode = "share_mode"
@@ -20,7 +22,25 @@ const (
 	// agent from before that on none. A row for a node the listing leaves out,
 	// such as a camera's metadata node, never has it.
 	KeyStableID = "stable_id"
+	// KeyH264Encoder names the element that makes the camera's H.264 on this
+	// device and what kind it is, e.g. "x264enc (software)". Only a camera
+	// whose H.264 the device encodes in software has it: a camera that
+	// produces H.264 itself, a device with a hardware encoder and an agent
+	// from before the key set none.
+	KeyH264Encoder = "h264_encoder"
 )
+
+const softwareEncoderSuffix = " (software)"
+
+// SoftwareEncoder is the KeyH264Encoder value for a software element.
+func SoftwareEncoder(element string) string { return element + softwareEncoderSuffix }
+
+// SoftwareEncoderOf takes the element out of a KeyH264Encoder value, and
+// reports false for a value that does not name a software encoder.
+func SoftwareEncoderOf(value string) (element string, ok bool) {
+	element, ok = strings.CutSuffix(value, softwareEncoderSuffix)
+	return element, ok && element != ""
+}
 
 // KeyModeOfFormat is the mode of the node an app gets for the camera when its
 // entitlement asks for a format other than the default, e.g.

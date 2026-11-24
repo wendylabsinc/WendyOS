@@ -286,7 +286,7 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 	}
 	checkShareCellStamps(t, fx, cells, read)
 	checkShareCellsShowOneFrameUnderOneStamp(t, fx, cells, read, readers, shown)
-	checkShareCellStates(t, fx)
+	checkShareCellStates(t, fx, softwareEncoderNoteOnThisDevice(t, available))
 
 	for _, cell := range cells {
 		readers[cell.id].close()
@@ -386,7 +386,8 @@ func TestCameraShareNodesOfAnH264CameraFollowTheirEntitlements(t *testing.T) {
 	}
 	checkShareCellStamps(t, fx, cells, read)
 	checkShareCellsShowOneFrameUnderOneStamp(t, fx, cells, read, readers, shown)
-	checkShareCellStates(t, fx)
+	// The camera produces this H.264 itself: no encoder of the device feeds the node.
+	checkShareCellStates(t, fx, "")
 
 	for _, cell := range cells {
 		readers[cell.id].close()
@@ -697,18 +698,35 @@ func checkShareCellStamps(t *testing.T, fx *shareCaptureFixture, cells []shareCe
 	}
 }
 
+// softwareEncoderNoteOnThisDevice is what an h264 node says of the encoder
+// that feeds it from a webcam's JPEG frames here: the note for the software
+// encoders, and nothing on a device whose encoder is hardware.
+func softwareEncoderNoteOnThisDevice(t *testing.T, available map[string]bool) string {
+	t.Helper()
+	enc, err := derivedLayerEncoder(available)
+	if err != nil {
+		t.Fatalf("no encoder for the camera's H.264: %v", err)
+	}
+	switch enc.element {
+	case "x264enc", "openh264enc", "avenc_h264":
+		return "; fed by the software encoder " + enc.element
+	}
+	return ""
+}
+
 // checkShareCellStates fails unless the camera's share state lists the six
 // cells of shareCells as reading. A pixels entry names the decoder of its
-// pictures, which differs by device.
-func checkShareCellStates(t *testing.T, fx *shareCaptureFixture) {
+// pictures, which differs by device, and an h264 entry ends in h264Note: what
+// it says of a software encoder that feeds it, or nothing.
+func checkShareCellStates(t *testing.T, fx *shareCaptureFixture, h264Note string) {
 	t.Helper()
 	state := fx.svc.CameraShareReport(fx.ctx)[fx.path][camerashare.KeyState]
 	decoder := fx.svc.pictureDecoderAt(fx.path)
 	if decoder == "" {
 		t.Fatalf("the capture reports no decoder for the pictures it makes; share state: %q", state)
 	}
-	want := "ci-app-h264-frame [format h264, stamp frame] (reading), " +
-		"ci-app-h264-time [format h264, stamp time] (reading), " +
+	want := "ci-app-h264-frame [format h264, stamp frame] (reading" + h264Note + "), " +
+		"ci-app-h264-time [format h264, stamp time] (reading" + h264Note + "), " +
 		"ci-app-native-frame [format native, stamp frame] (reading), " +
 		"ci-app-native-time [format native, stamp time] (reading), " +
 		"ci-app-pixels-frame [format pixels, stamp frame] (reading; pictures decoded by " + decoder + "), " +

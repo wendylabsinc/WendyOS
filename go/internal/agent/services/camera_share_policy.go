@@ -141,12 +141,20 @@ func (m sharedMode) admits(req *agentpb.StreamVideoRequest) bool {
 // shareDecision says whether a camera is shared and, when it is, at what mode;
 // otherwise Reason says why not. AskedFormat is set when the node serves
 // another format than the app asked for, because the camera cannot be declared
-// in that one, and AskedWhyNot says why it cannot.
+// in that one, and AskedWhyNot says why it cannot. SoftwareEncoder names the
+// software element that makes the node's frames on this device, and is empty
+// for a node that carries what the camera produces, for pictures, and for an
+// encoder not known to be software.
 type shareDecision struct {
 	Shared                   bool
 	Mode                     sharedMode
 	Reason                   string
 	AskedFormat, AskedWhyNot string
+	SoftwareEncoder          string
+}
+
+func describeSoftwareEncoder(element string) string {
+	return "fed by the software encoder " + element
 }
 
 func describeServedInstead(askedFormat, servedFormat, whyNot string) string {
@@ -212,7 +220,11 @@ func shareDecisionOf(frames nodeFrames, format string) shareDecision {
 	if mode.FPS == 0 {
 		mode.FPS = defaultSharedFPS
 	}
-	return shareDecision{Shared: true, Mode: mode}
+	decision := shareDecision{Shared: true, Mode: mode}
+	if mode.compressed() && frames.nodeCodec(format) != frames.own.codec {
+		decision.SoftwareEncoder = frames.softwareEncoder
+	}
+	return decision
 }
 
 // shareFormatCodecs is the codec of the frames a compressed node format

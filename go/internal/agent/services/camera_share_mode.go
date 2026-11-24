@@ -105,8 +105,8 @@ type shareContainer struct {
 }
 
 // shareRecord is one camera shared with one container through one node.
-// cameraName, mode, stamp, askedFormat and askedWhyNot never change once the
-// record is stored. Everything else
+// cameraName, mode, stamp, askedFormat, askedWhyNot and encoderNote never
+// change once the record is stored. Everything else
 // is guarded by cameraShares.mu: cameraPath follows the camera, and
 // cameraAbsent says its last resolve did not find it; camera moves to the
 // camera's new port when it is followed there; node and nodeMade change when
@@ -128,8 +128,11 @@ type shareRecord struct {
 	// camera could not be declared in it and the node serves another format
 	// instead; askedWhyNot is why it could not. Both are empty otherwise.
 	askedFormat, askedWhyNot string
-	node                     int
-	camera                   camera.Identity
+	// encoderNote says the node's frames are made by a software encoder on
+	// this device, and names it; empty for every other node.
+	encoderNote string
+	node        int
+	camera      camera.Identity
 	// siblings are the ports (Identity.Device) of cameras of the same name and
 	// index seen present while this record's camera was present too, sorted.
 	// A camera on one of them is another camera, so the record never follows

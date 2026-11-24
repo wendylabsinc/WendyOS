@@ -719,6 +719,59 @@ func TestFindGStreamerEncoder_PrefersVP8OverOtherH264EncodersWhenH264ParseAbsent
 	}
 }
 
+// An encoder joins the preference list only with a row here: the test holds
+// its own copy of what each element is, and vtenc_h264, which VideoToolbox
+// runs on hardware or in software as it sees fit, is in neither.
+func TestH264EncoderKinds_EveryPreferredEncoderIsHardwareOrSoftware(t *testing.T) {
+	want := map[string]h264EncoderKind{
+		"nvv4l2h264enc": hardwareH264Encoder,
+		"v4l2h264enc":   hardwareH264Encoder,
+		"omxh264enc":    hardwareH264Encoder,
+		"avenc_h264":    softwareH264Encoder,
+		"x264enc":       softwareH264Encoder,
+		"openh264enc":   softwareH264Encoder,
+		"vaapih264enc":  hardwareH264Encoder,
+		"nvh264enc":     hardwareH264Encoder,
+		"msdkh264enc":   hardwareH264Encoder,
+	}
+	if len(h264EncoderPreference) != len(want) {
+		t.Errorf("the preference list holds %d encoders and this test knows %d: %v", len(h264EncoderPreference), len(want), h264EncoderPreference)
+	}
+	for _, element := range h264EncoderPreference {
+		kind, known := want[element]
+		if !known {
+			t.Errorf("%s is preferred and this test does not say whether it is hardware or software", element)
+			continue
+		}
+		if got := h264EncoderKinds[element]; got != kind {
+			t.Errorf("%s is kind %d in the table, want %d", element, got, kind)
+		}
+		if got := encodesH264InSoftware(element); got != (kind == softwareH264Encoder) {
+			t.Errorf("encodesH264InSoftware(%s) = %v", element, got)
+		}
+	}
+	if got := h264EncoderKinds["vtenc_h264_hw"]; got != hardwareH264Encoder {
+		t.Errorf("vtenc_h264_hw is kind %d, want hardware", got)
+	}
+	for _, element := range []string{"vtenc_h264", "avenc_h264_omx", "", "vp8enc"} {
+		if kind, listed := h264EncoderKinds[element]; listed || encodesH264InSoftware(element) {
+			t.Errorf("%q is in the table as kind %d: an element not known to be software must get no warning", element, kind)
+		}
+	}
+}
+
+// The preference list is what selection walks: every element of it is chosen
+// when it is the only encoder installed.
+func TestFindGStreamerEncoder_ChoosesEachEncoderOfThePreferenceList(t *testing.T) {
+	stubV4L2NodeUsable(t, true)
+	for _, element := range h264EncoderPreference {
+		result, err := findGStreamerEncoderFromSet(map[string]bool{element: true, "h264parse": true})
+		if err != nil || result.element != element {
+			t.Errorf("%s alone: got %q (%v)", element, result.element, err)
+		}
+	}
+}
+
 // With h264parse present, nothing changes: the first H.264 encoder in
 // preference order still wins and is normalized by h264parse.
 func TestFindGStreamerEncoder_H264ParseKeepsHardwarePreference(t *testing.T) {

@@ -158,3 +158,56 @@ func TestCameraShareReport_SlowDecisionStillNamesSharers(t *testing.T) {
 		}
 	}
 }
+
+// A row names the encoder of its camera's H.264 only where this device makes
+// that H.264 in software.
+func TestCameraShareReport_NamesTheSoftwareEncoderOfACamerasH264(t *testing.T) {
+	const h264Mode = "1280x720 H264, 30 fps"
+	for name, tc := range map[string]struct {
+		camera   csCamera
+		elements []string
+		encoder  string
+	}{
+		"a webcam's JPEG frames and x264enc":                  {csC920(), []string{"jpegdec", "x264enc"}, "x264enc (software)"},
+		"a webcam's JPEG frames and openh264enc":              {csC920(), []string{"jpegdec", "openh264enc"}, "openh264enc (software)"},
+		"a camera that produces H.264":                        {csH264Cam(), []string{"avdec_h264", "jpegdec", "x264enc"}, ""},
+		"a hardware encoder beside x264enc":                   {csC920(), []string{"jpegdec", "v4l2h264enc", "x264enc"}, ""},
+		"an encoder that is hardware or software as it likes": {csC920(), []string{"jpegdec", "vtenc_h264"}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCSHarness(t, tc.camera)
+			hcCanDecode(h.s, tc.elements...)
+			row := h.reportOf("/dev/" + tc.camera.base)
+			if row["share_mode_h264"] != h264Mode {
+				t.Fatalf("the camera has no h264 node to speak of: %#v", row)
+			}
+			if got, said := row["h264_encoder"]; got != tc.encoder || said != (tc.encoder != "") {
+				t.Errorf("h264_encoder = %q (present %v), want %q; row: %#v", got, said, tc.encoder, row)
+			}
+		})
+	}
+
+	t.Run("no encoder at all", func(t *testing.T) {
+		h := newCSHarness(t, csC920())
+		hcCanDecode(h.s, "jpegdec")
+		row := h.reportOf("/dev/video4")
+		if _, said := row["h264_encoder"]; said || row["share_mode_h264"] != "" || row["share_mode"] == "" {
+			t.Errorf("a device without an H.264 encoder: row = %#v, want pictures shared and no h264_encoder", row)
+		}
+	})
+
+	t.Run("the whole row", func(t *testing.T) {
+		h := newCSHarness(t, csC920())
+		sfCanDeriveFrames(h.s)
+		want := map[string]string{
+			"share_mode":        "1280x720 YUYV, 30 fps",
+			"share_mode_native": "1280x720 MJPG, 30 fps",
+			"share_mode_h264":   h264Mode,
+			"h264_encoder":      "x264enc (software)",
+			"stable_id":         "",
+		}
+		if got := h.reportOf("/dev/video4"); !reflect.DeepEqual(got, want) {
+			t.Errorf("report = %#v\nwant     %#v", got, want)
+		}
+	})
+}
