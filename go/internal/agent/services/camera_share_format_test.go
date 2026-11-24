@@ -648,6 +648,86 @@ func TestCreateCameraShares_AContainerCreatedAgainFollowsItsNewSettings(t *testi
 	if records := h.records("cv-a"); len(records) != 1 || records[0].mode != sfNativeMode || records[0].stamp != appconfig.CameraStampTime {
 		t.Errorf("after a create with another stamp: %+v", records)
 	}
+
+	// A camera that produces H.264 has the same frames for a native node and
+	// an h264 one, and both declare H264. They are still two nodes: going from
+	// one format to the other makes the node again, as going to pixels does.
+	t.Run("an H.264 camera", func(t *testing.T) {
+		h := newCSHarness(t, csH264Cam())
+		hcCanDecode(h.s, "avdec_h264")
+		installFakeProducers(h.s)
+		subscribedAs := func(r *shareRecord, kind frameKind) bool {
+			r.io.(*csNode).send(t, 1)
+			return csWaitFor(2*time.Second, func() bool {
+				hub := currentHub(h.s, "/dev/video2")
+				if hub == nil {
+					return false
+				}
+				hub.mu.Lock()
+				defer hub.mu.Unlock()
+				if len(hub.subs) != 1 {
+					return false
+				}
+				for _, sub := range hub.subs {
+					return sub.kind == kind
+				}
+				return false
+			})
+		}
+		native := []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, "")}
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", native)
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", native)
+		records := h.records("cv-a")
+		if len(records) != 1 || records[0].mode != hcNativeMode || len(h.openedNodes()) != 1 {
+			t.Fatalf("records = %+v with %d nodes opened, want one native node kept; logs: %v", records, len(h.openedNodes()), h.logs.All())
+		}
+		if !subscribedAs(records[0], nativeFrames) {
+			t.Fatalf("the native node did not subscribe for the camera's own frames; logs: %v", h.logs.All())
+		}
+
+		var removed []int
+		for i, step := range []struct {
+			format string
+			mode   sharedMode
+			kind   frameKind
+		}{
+			{appconfig.CameraFormatH264, hcH264Mode, encodedFrames},
+			{appconfig.CameraFormatPixels, hcPixelsMode, pixelFrames},
+		} {
+			stale := h.records("cv-a")[0]
+			staleNode := stale.io.(*csNode)
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(step.format, "")})
+			h.drainRemovals()
+			records := h.records("cv-a")
+			if len(records) != 1 || records[0] == stale || len(h.openedNodes()) != i+2 {
+				t.Fatalf("%s: records = %+v with %d nodes opened, want one new record on a new node; logs: %v", step.format, records, len(h.openedNodes()), h.logs.All())
+			}
+			r := records[0]
+			if r.mode != step.mode || r.stamp != appconfig.CameraStampTime || r.askedFormat != "" || r.io.(*csNode).mode != step.mode || r.pump.mode != step.mode {
+				t.Errorf("%s: the new share is %s (asked %q) on a node declaring %+v", step.format, describeShareNode(r.mode, r.stamp), r.askedFormat, r.io.(*csNode).mode)
+			}
+			removed = append(removed, stale.node)
+			if staleNode.closes.Load() != 1 || !reflect.DeepEqual(h.loop.removedAux(), removed) {
+				t.Errorf("%s: the stale node: closed %d times, removed nodes %v, want %v", step.format, staleNode.closes.Load(), h.loop.removedAux(), removed)
+			}
+			line := "camera share: cv-a was created again: its share of Logi H264 was " + describeShareNode(stale.mode, stale.stamp) +
+				" and is made again as " + describeShareNode(step.mode, appconfig.CameraStampTime)
+			if n := h.logged(line); n != 1 {
+				t.Errorf("%s: %q logged %d times; logs: %v", step.format, line, n, h.logs.All())
+			}
+			shares := h.stateShares("cv-a")
+			if len(shares) != 1 || shares[0]["node"] != float64(r.node) || shares[0]["mode"].(map[string]any)["fourcc"] != step.mode.Fourcc {
+				t.Errorf("%s: state file shares = %v", step.format, shares)
+			}
+			// A file with only pixels and capture times is version 1, which has no settings.
+			if format, stored := shares[0]["format"]; stored != step.mode.compressed() || (stored && format != step.format) {
+				t.Errorf("%s: state file share = %v", step.format, shares[0])
+			}
+			if !subscribedAs(r, step.kind) {
+				t.Errorf("%s: the new node did not subscribe for frames of kind %v", step.format, step.kind)
+			}
+		}
+	})
 }
 
 func TestCameraShareState_Version1LoadsAsPixelsWithCaptureTimes(t *testing.T) {
@@ -1534,6 +1614,7 @@ func TestSharedMode_AsksWhat(t *testing.T) {
 		"a compressed mode at the kernel's size": {sfNativeMode, kernelSized, true},
 		"another size":                           {sfNativeMode, otherSize, false},
 		"another format":                         {sfNativeMode, sfH264Mode, false},
+		"another format in the same codec":       {hcNativeMode, hcH264Mode, false},
 		"pictures and a compressed mode":         {sfPixelsMode, kernelSized, false},
 		"the same pictures":                      {sfPixelsMode, sfPixelsMode, true},
 	} {
