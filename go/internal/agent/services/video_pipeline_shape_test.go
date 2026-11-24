@@ -177,6 +177,7 @@ type fakeEncodeDemand struct {
 	mu       sync.Mutex
 	encoded  bool
 	raw      bool
+	native   bool
 	restarts int
 	encodes  []bool
 	changed  chan struct{}
@@ -196,6 +197,12 @@ func (d *fakeEncodeDemand) wantRaw() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.raw
+}
+
+func (d *fakeEncodeDemand) wantNative() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.native
 }
 
 func (d *fakeEncodeDemand) demandChanged() <-chan struct{} { return d.changed }
@@ -358,6 +365,25 @@ func TestRunShapedPipelines_DropsEncoderOnlyAfterGrace(t *testing.T) {
 	launches.none(t, grace/2)
 	if shape := launches.next(t, grace+2*time.Second); shape.encode {
 		t.Fatal("relaunch after the grace still runs the encoder")
+	}
+	if restarts, encodes := demand.reported(); restarts != 1 || !reflect.DeepEqual(encodes, []bool{true, false}) {
+		t.Errorf("restarts=%d setPipelineEncodes=%v, want 1 and [true false]", restarts, encodes)
+	}
+}
+
+func TestRunShapedPipelines_DropsEncoderForANativeOnlyAudience(t *testing.T) {
+	const grace = 150 * time.Millisecond
+	demand := newFakeEncodeDemand(true, false)
+	demand.native = true
+	launches := newRecordedLaunches()
+	runShaped(t, demand, grace, launches)
+	if shape := launches.next(t, time.Second); !shape.encode {
+		t.Fatal("first launch has no encoder for a viewer")
+	}
+	demand.set(false, false) // the viewer leaves; the native subscriber stays
+	launches.none(t, grace/2)
+	if shape := launches.next(t, grace+2*time.Second); shape.encode {
+		t.Fatal("the encoder still runs after the grace with only a native subscriber left")
 	}
 	if restarts, encodes := demand.reported(); restarts != 1 || !reflect.DeepEqual(encodes, []bool{true, false}) {
 		t.Errorf("restarts=%d setPipelineEncodes=%v, want 1 and [true false]", restarts, encodes)

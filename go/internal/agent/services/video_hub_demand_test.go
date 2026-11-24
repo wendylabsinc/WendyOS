@@ -580,8 +580,13 @@ func TestDeviceHub_DerivedFrameKeepsItsSourceIdentity(t *testing.T) {
 		t.Fatalf("subscribePixels: %v", err)
 	}
 	defer h.unsubscribe(idPix)
+	idNative, chNative, err := h.subscribeKind(nativeFrames)
+	if err != nil {
+		t.Fatalf("subscribeKind(nativeFrames): %v", err)
+	}
+	defer h.unsubscribe(idNative)
 
-	source := &videoFrame{data: []byte{0xFF, 0xD8}, codec: agentpb.VideoCodec(99), native: true,
+	source := &videoFrame{data: []byte{0xFF, 0xD8}, codec: agentpb.VideoCodec(99), native: true, tsNs: 77,
 		nativeNs: 5_000, nativeClock: "CLOCK_MONOTONIC_V4L2", nativeFlags: 0x2000, sequence: 9, sequenceValid: true}
 	if !h.produce(source) {
 		t.Fatal("produce reported no subscribers")
@@ -589,9 +594,9 @@ func TestDeviceHub_DerivedFrameKeepsItsSourceIdentity(t *testing.T) {
 	// Fixed, so the check below cannot pass on a platform whose receipt reads zero.
 	source.receiptBootNanos, source.receiptUncertaintyNanos = 123_456, 7
 
-	derived := &videoFrame{data: []byte{1, 2, 3, 4}, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW}
-	if !h.broadcastDerivedFrom(source, derived) {
-		t.Fatal("broadcastDerivedFrom reported no subscribers")
+	derived := &videoFrame{data: []byte{1, 2, 3, 4}, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, native: true}
+	if keepProducing, err := h.broadcastDerivedFrom(source, derived); err != nil || !keepProducing {
+		t.Fatalf("broadcastDerivedFrom = %v, %v, want true and no error", keepProducing, err)
 	}
 	if got := h.sampleSeq.Load(); got != source.sampleID {
 		t.Fatalf("publishing a derived frame moved the sample sequence to %d, want %d", got, source.sampleID)
@@ -603,6 +608,9 @@ func TestDeviceHub_DerivedFrameKeepsItsSourceIdentity(t *testing.T) {
 	}
 	if got.sampleID != source.sampleID {
 		t.Errorf("derived sampleID = %d, want the source's %d", got.sampleID, source.sampleID)
+	}
+	if got.tsNs != 77 {
+		t.Errorf("derived tsNs = %d, want the source's 77", got.tsNs)
 	}
 	if got.receiptBootNanos != 123_456 || got.receiptUncertaintyNanos != 7 {
 		t.Errorf("derived receipt = %d±%d, want the source's 123456±7", got.receiptBootNanos, got.receiptUncertaintyNanos)
@@ -616,11 +624,43 @@ func TestDeviceHub_DerivedFrameKeepsItsSourceIdentity(t *testing.T) {
 	if got.native {
 		t.Error("a derived frame must not be marked as the camera's own")
 	}
+	if len(chNative) != 1 || <-chNative != source {
+		t.Error("the native subscriber must receive the source and never the derived frame")
+	}
 
 	next := &videoFrame{data: []byte{0xFF, 0xD8}, codec: agentpb.VideoCodec(99), native: true}
 	h.produce(next)
 	if next.sampleID != source.sampleID+1 {
 		t.Errorf("the frame produced after a derived one got sampleID %d, want %d", next.sampleID, source.sampleID+1)
+	}
+}
+
+func TestDeviceHub_DerivedFrameIsNotPublishedWithoutASourceIdentity(t *testing.T) {
+	h, cancel := newTestHub(t)
+	defer cancel()
+	h.sampleSeq = new(atomic.Uint64)
+
+	idPix, chPix, err := h.subscribePixels()
+	if err != nil {
+		t.Fatalf("subscribePixels: %v", err)
+	}
+	defer h.unsubscribe(idPix)
+
+	oversized := &videoFrame{data: make([]byte, maxFrameBytes+1), codec: agentpb.VideoCodec(99), native: true}
+	if !h.produce(oversized) || oversized.sampleID != 0 {
+		t.Fatalf("produce numbered an oversized frame %d; the test needs one it dropped", oversized.sampleID)
+	}
+
+	derived := &videoFrame{data: []byte{1, 2, 3, 4}, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW}
+	keepProducing, err := h.broadcastDerivedFrom(oversized, derived)
+	if !errors.Is(err, errSourceHasNoSampleID) {
+		t.Fatalf("broadcastDerivedFrom error = %v, want errSourceHasNoSampleID", err)
+	}
+	if !keepProducing {
+		t.Error("a refused derived frame must not stop the producer")
+	}
+	if len(chPix) != 0 {
+		t.Error("a derived frame without a source identity was published")
 	}
 }
 

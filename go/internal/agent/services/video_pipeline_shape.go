@@ -57,9 +57,9 @@ const defaultEncoderIdleGrace = 30 * time.Second
 // hub, so every subscriber stays attached across it.
 //
 // The encoder is added as soon as a viewer or recording arrives, because it is
-// waiting for its first frame. It is dropped only after grace with raw or pixel
-// subscribers alone. With nobody at all the hub cancels ctx, so there is nothing
-// to switch to.
+// waiting for its first frame. It is dropped only after grace with no viewer or
+// recording among the subscribers that remain. With nobody at all the hub
+// cancels ctx, so there is nothing to switch to.
 //
 // launch runs one pipeline until its ctx ends or the pipeline does. Each launch
 // returns before the next starts, so the device is released in between. A
@@ -130,9 +130,9 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 		}
 	}
 	defer stopGrace()
-	// encoderIdle is the one condition for dropping the encoder: apps still read
-	// frames, and the shape they call for has none.
-	encoderIdle := func() bool { return !wanted().encode && demand.wantRaw() }
+	// encoderIdle is the one condition for dropping the encoder: the hub still
+	// has an audience, and the shape it calls for has no encoder.
+	encoderIdle := func() bool { return !wanted().encode && (demand.wantRaw() || demand.wantNative()) }
 
 	for {
 		// Re-read the hub on every pass, starting with the first: a change that

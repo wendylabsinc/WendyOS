@@ -554,8 +554,49 @@ func nativeTestCapture(svc *VideoService, hub *deviceHub) func(buffer []byte, wh
 // hubBroadcast is the callback runProducer gives a capture: it wraps a payload
 // in a frame and hands it to the hub.
 func hubBroadcast(hub *deviceHub) func([]byte, frameTimestamp, agentpb.VideoCodec) bool {
-	return func(payload []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
-		return hub.produce(&videoFrame{data: payload, tsNs: stamp.wallNs, codec: codec, nativeNs: stamp.nativeNs, nativeClock: stamp.nativeClock, nativeFlags: stamp.nativeFlags, sequence: stamp.sequence, sequenceValid: stamp.sequenceValid, auAligned: stamp.auAligned})
+	return hub.produceCaptured
+}
+
+func TestNativeCaptureMarksOnlyWholeFramesNative(t *testing.T) {
+	svc := &VideoService{logger: zap.NewNop()}
+	hub, cancel := newSampleHub(new(atomic.Uint64))
+	defer cancel()
+	camera := nativeTestCapture(svc, hub)
+
+	_, viewer := subscribeDeep(t, hub)
+	nativeID, native, err := hub.subscribeKind(nativeFrames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.unsubscribe(nativeID)
+
+	bareIDR := h264Stream(4, h264TestIDR)
+	camera(h264Stream(4, h264TestSPS, h264TestPPS0), true)
+	camera(bareIDR, true)
+	camera(h264Stream(4, h264TestInter)[:5], false) // cut short by the frame cap
+
+	if len(viewer) != 3 {
+		t.Fatalf("viewer has %d frames queued, want all 3", len(viewer))
+	}
+	parameterSets, keyframe, truncated := <-viewer, <-viewer, <-viewer
+	if !parameterSets.native {
+		t.Error("a whole buffer from the native capture is not marked native")
+	}
+	if _, startsDecoding := h264RandomAccessOffset(keyframe.data); !startsDecoding || len(keyframe.data) <= len(bareIDR) {
+		t.Fatalf("the keyframe was not given the stream's parameter sets: % x", keyframe.data)
+	}
+	if !keyframe.native {
+		t.Error("a keyframe with the stream's own parameter sets prepended is not marked native")
+	}
+	if truncated.native {
+		t.Error("a truncated buffer is marked native")
+	}
+
+	if len(native) != 2 {
+		t.Fatalf("native subscriber has %d frames queued, want the 2 whole ones", len(native))
+	}
+	if first, second := <-native, <-native; first != parameterSets || second != keyframe {
+		t.Error("native subscriber did not receive exactly the whole frames")
 	}
 }
 

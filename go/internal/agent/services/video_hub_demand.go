@@ -60,6 +60,7 @@ type pixelSink interface {
 type encodeDemand interface {
 	wantEncoded() bool
 	wantRaw() bool
+	wantNative() bool
 	demandChanged() <-chan struct{}
 	encodedStreamRestarted()
 	setPipelineEncodes(bool)
@@ -90,8 +91,7 @@ type hubDemand struct {
 	// refused is non-nil once the producer turned pixel subscribers away: it is
 	// the raw refusal's reason, evaluated only if a pixel consumer asks.
 	refused func() string
-	// nativeRefused is non-nil once the producer turned native subscribers
-	// away; see nativeNotOffered.
+
 	nativeRefused func() string
 	// held is set by pixelsFromHeldCamera and consumed, like tap, by the raw
 	// decision that follows it; refusedHeld keeps it with refused, so the pixel
@@ -128,14 +128,10 @@ func (h *deviceHub) pixelsFromHeldCamera() {
 	h.demand.held = true
 }
 
-// wantEncoded reports whether any live subscriber asked for encoded video. A
-// producer runs its encoder for these alone.
 func (h *deviceHub) wantEncoded() bool {
 	return h.wantKind(encodedFrames)
 }
 
-// wantNative reports whether any live subscriber asked for the camera's own
-// frames.
 func (h *deviceHub) wantNative() bool {
 	return h.wantKind(nativeFrames)
 }
@@ -155,10 +151,6 @@ func errNativeUnavailable(reason string) error {
 	return status.Error(codes.FailedPrecondition, "native frames are not available for this camera: "+reason)
 }
 
-// nativeNotOffered records that this producer has none of the camera's own
-// frames to give: every native subscriber waiting on it is closed with the
-// reason, and later native joins are refused up front. The reason is evaluated
-// only if a native subscriber asks, as for rawNotOffered.
 func (h *deviceHub) nativeNotOffered(reason func() string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

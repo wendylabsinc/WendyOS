@@ -481,8 +481,9 @@ type videoFrame struct {
 	// webmWhole, on a VP8 frame, is how many of its leading bytes end between
 	// two WebM elements; the rest open an element a later frame completes.
 	webmWhole int
-	// native marks a whole frame as the camera itself delivered it, as opposed
-	// to one the agent encoded, decoded or teed from a pipeline.
+	// native marks a whole frame from a native capture path. A keyframe with the
+	// stream's own parameter sets prepended stays native, because a consumer
+	// needs them to decode it.
 	native bool
 }
 
@@ -501,23 +502,18 @@ func realtimeFrameTimestamp(now time.Time) frameTimestamp {
 	return frameTimestamp{wallNs: uint64(now.UnixNano()), nativeNs: now.UnixNano(), nativeClock: "CLOCK_REALTIME_AGENT_CAPTURE"}
 }
 
-// frameKind is which of a hub's frames a subscriber asked for.
 type frameKind uint8
 
 const (
 	encodedFrames frameKind = iota
-	// rawFrames are the camera's own uncompressed bytes.
 	rawFrames
 	// pixelFrames are the same VIDEO_CODEC_RAW frames, for an in-agent consumer
 	// that only needs a picture it can read: decoded MJPEG serves it, and it is
 	// offered and refused on its own terms (video_hub_demand.go).
 	pixelFrames
-	// nativeFrames are the camera's own whole frames, whatever their codec.
 	nativeFrames
 )
 
-// receives reports whether a subscriber of this kind is handed frame. It reads
-// only the frame and the kind, never which camera the hub serves.
 func (k frameKind) receives(frame *videoFrame) bool {
 	switch k {
 	case encodedFrames:
@@ -649,7 +645,6 @@ func (h *deviceHub) subscribeAs(explicitHolder string) (int, chan *videoFrame, e
 	return h.subscribeAsKind(explicitHolder, encodedFrames)
 }
 
-// subscribeKind is subscribe with a choice of frames.
 func (h *deviceHub) subscribeKind(kind frameKind) (int, chan *videoFrame, error) {
 	return h.subscribeAsKind("", kind)
 }
@@ -884,15 +879,23 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 	return h.broadcast(frame)
 }
 
-// broadcastDerivedFrom delivers a frame the agent made from source as the same
-// sample on another plane: it takes source's identity, capture timestamps and
-// receipt, so it advances no sample sequence and reads no clock.
-func (h *deviceHub) broadcastDerivedFrom(source, derived *videoFrame) bool {
+var errSourceHasNoSampleID = errors.New("derived frame's source has no sample ID")
+
+func (h *deviceHub) broadcastDerivedFrom(source, derived *videoFrame) (keepProducing bool, err error) {
+	if source.sampleID == 0 {
+		return true, errSourceHasNoSampleID
+	}
 	derived.sampleID = source.sampleID
+	derived.tsNs = source.tsNs
+	derived.native = false
 	derived.nativeNs, derived.nativeClock, derived.nativeFlags = source.nativeNs, source.nativeClock, source.nativeFlags
 	derived.sequence, derived.sequenceValid = source.sequence, source.sequenceValid
 	derived.receiptBootNanos, derived.receiptUncertaintyNanos = source.receiptBootNanos, source.receiptUncertaintyNanos
-	return h.broadcast(derived)
+	return h.broadcast(derived), nil
+}
+
+func (h *deviceHub) produceCaptured(payload []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
+	return h.produce(&videoFrame{data: payload, tsNs: stamp.wallNs, codec: codec, nativeNs: stamp.nativeNs, nativeClock: stamp.nativeClock, nativeFlags: stamp.nativeFlags, sequence: stamp.sequence, sequenceValid: stamp.sequenceValid, auAligned: stamp.auAligned, native: stamp.native})
 }
 
 // sampleGap reports that frames were lost between two a subscriber took in
@@ -909,15 +912,15 @@ func sampleGap(prev, next uint64) bool {
 // frameKind.receives), dropping for slow consumers. Returns false when there
 // are no subscribers left (producer should stop). Late-joining subscribers
 // receive whatever frame the producer sends next; for H.264 they will not see
-// an IDR/keyframe until the next one
-// arrives naturally (at most one GOP interval away for GStreamer pipelines with
-// key-int-max set). The producers repeat SPS and PPS ahead of each IDR so that
-// it is one a late joiner can start on: h264parse config-interval=-1 in the
-// GStreamer and IP camera pipelines, h264ParameterSets on the native V4L2
-// path. VP8 is one WebM container rather than a run of frames, so
-// each VP8 frame also carries the stream's initialization and, where a Cluster
-// opening on a key frame was found, a join point for late viewers. It carries
-// how much of the frame ends between two elements too (see webmViewer).
+// an IDR/keyframe until the next one arrives naturally (at most one GOP
+// interval away for GStreamer pipelines with key-int-max set). The producers
+// repeat SPS and PPS ahead of each IDR so that it is one a late joiner can
+// start on: h264parse config-interval=-1 in the GStreamer and IP camera
+// pipelines, h264ParameterSets on the native V4L2 path. VP8 is one WebM
+// container rather than a run of frames, so each VP8 frame also carries the
+// stream's initialization and, where a Cluster opening on a key frame was
+// found, a join point for late viewers. It carries how much of the frame ends
+// between two elements too (see webmViewer).
 //
 // This is delivery only: it mints nothing. Call produce for a frame arriving
 // from the producer, and broadcast to put an existing frame onto a further
@@ -1953,8 +1956,6 @@ func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *age
 	return s.getOrCreateHubKind(ctx, path, req, origin, kind)
 }
 
-// getOrCreateHubKind is getOrCreateHub with the subscriber's kind chosen by the
-// caller, whatever codec req names.
 func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req *agentpb.StreamVideoRequest, origin string, kind frameKind) (h *deviceHub, id int, ch chan *videoFrame, err error) {
 	explicitHolder := ""
 	if streamRequestAssertsParams(req) {
@@ -2378,9 +2379,7 @@ func (s *VideoService) subscribeExistingHub(path string) (h *deviceHub, id int, 
 // When the hub loses its last subscriber the context is cancelled and this goroutine exits.
 func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) {
 	defer s.wg.Done()
-	broadcast := func(payload []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
-		return h.produce(&videoFrame{data: payload, tsNs: stamp.wallNs, codec: codec, nativeNs: stamp.nativeNs, nativeClock: stamp.nativeClock, nativeFlags: stamp.nativeFlags, sequence: stamp.sequence, sequenceValid: stamp.sequenceValid, auAligned: stamp.auAligned, native: stamp.native})
-	}
+	broadcast := h.produceCaptured
 
 	// The hub key carries the source kind: network cameras key on "ip:<id>" and
 	// have no device node to classify.
@@ -3134,11 +3133,7 @@ func (s *VideoService) setV4L2FrameInterval(fd int, path string, fps uint32) {
 }
 
 func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest) error {
-	cameraOwnFrame := func(data []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
-		stamp.native = true
-		return broadcast(data, stamp, codec)
-	}
-	return s.captureV4L2Native(ctx, s.nativeH264Emit(path, cameraOwnFrame), path, v4l2CaptureConfig{
+	return s.captureV4L2Native(ctx, s.nativeH264Emit(path, broadcast), path, v4l2CaptureConfig{
 		pixelFormat:   v4l2PixFmtH264,
 		width:         req.GetWidth(),
 		height:        req.GetHeight(),

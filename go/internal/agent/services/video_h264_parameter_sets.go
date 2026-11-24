@@ -271,6 +271,7 @@ func (s *VideoService) nativeH264Emit(path string, broadcast func([]byte, frameT
 			s.logger.Warn("H.264 keyframe has no SPS/PPS and none could be added; a viewer or recording that joins now cannot start decoding",
 				zap.String("device", path))
 		}
+		stamp.native = stamp.auAligned
 		return broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264)
 	}
 }
