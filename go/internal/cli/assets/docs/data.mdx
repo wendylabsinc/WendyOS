@@ -167,6 +167,18 @@ continuous camera streams support pre-trigger history. Audio, ROS 2, and
 telemetry begin at the trigger; snapshot cameras do not keep a video pre-buffer.
 The manifest reports the history each source actually retained.
 
+A camera source's `capture` block can set `store` to choose what the episode
+stores for that camera: `video` (the default), `frames` for single frames, each
+with its frame number and capture time, or `both`. An agent older than the
+release that added `store` rejects a campaign that uses it.
+
+```yaml
+sources:
+  - camera: front
+    capture:
+      store: both
+```
+
 See the [campaign YAML reference](/docs/advanced/clients/wendy-cli/commands/data#campaign-yaml-reference)
 for selectors, capture policies, and all fields.
 

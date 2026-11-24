@@ -391,6 +391,15 @@ Fields belonging to a different mode than the declared one are rejected.
 | `trigger` | `threshold` | Required expression `<field> <op> <number>`, for example `model.uncertainty > 0.9` or `level_db > -20`. Only `model.uncertainty` is bounded to 0 through 1; other fields carry their own units. |
 | `fragment` | `threshold` | Optional captured duration per threshold crossing. |
 | `max_resolution` | any | Camera sources only: `WxH` cap such as `1280x720`. |
+| `store` | any | Camera sources only: what the episode stores for the camera. `video` (default) stores video, `frames` stores single frames, each with its frame number and capture time, and `both` stores video and frames. |
+
+Any other `store` value, or `store` on a source that is not a camera, is
+rejected. Use `store: both` instead of listing a camera twice: a camera is
+recorded once per episode, only its last `capture` block applies, and
+deployment warns when the same camera selector is listed more than once. An
+agent older than the release that added `store` rejects a campaign that uses
+the key, because campaign parsing rejects unknown fields; leave it out to get
+`video` on those agents.
 
 What each adapter honors today: cameras implement `continuous` and `snapshot`,
 audio implements `continuous` and `threshold`, and the ROS 2 and telemetry

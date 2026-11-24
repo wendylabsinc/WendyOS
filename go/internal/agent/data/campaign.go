@@ -63,6 +63,25 @@ type SourceCapture struct {
 	Fragment string `json:"fragment,omitempty" yaml:"fragment,omitempty"`
 	// MaxResolution caps camera capture as WxH, for example 1280x720 (camera sources only).
 	MaxResolution string `json:"max_resolution,omitempty" yaml:"max_resolution,omitempty"`
+	// Store is what the episode keeps for a camera: video (default), frames, or
+	// both (camera sources only).
+	Store string `json:"store,omitempty" yaml:"store,omitempty"`
+}
+
+const (
+	CaptureStoreVideo  = "video"
+	CaptureStoreFrames = "frames"
+	CaptureStoreBoth   = "both"
+)
+
+var validCaptureStores = []string{CaptureStoreVideo, CaptureStoreFrames, CaptureStoreBoth}
+
+func (sc *SourceCapture) StoresVideo() bool {
+	return sc == nil || sc.Store != CaptureStoreFrames
+}
+
+func (sc *SourceCapture) StoresFrames() bool {
+	return sc != nil && (sc.Store == CaptureStoreFrames || sc.Store == CaptureStoreBoth)
 }
 
 // EffectiveMode returns the declared capture mode, defaulting to continuous.
@@ -353,6 +372,11 @@ func (c Campaign) planDigestInput() map[string]any {
 				"fragment":       capture.Fragment,
 				"max_resolution": capture.MaxResolution,
 			}
+			// Absent when unset, so plans deployed before store existed keep
+			// their revision.
+			if capture.Store != "" {
+				entry["capture"].(map[string]any)["store"] = capture.Store
+			}
 		}
 		sources = append(sources, entry)
 	}
@@ -639,6 +663,25 @@ func preRollParameterConflicts(c Campaign) []string {
 	return conflicts
 }
 
+// repeatedCameraSelectors names the camera selectors a campaign lists more than
+// once. Resolution keys capture policies by source, so only the last capture
+// block of a repeated camera takes effect.
+func repeatedCameraSelectors(c Campaign) []string {
+	listed := map[string]int{}
+	var repeated []string
+	for _, source := range c.Sources {
+		selector := strings.TrimSpace(source.Camera)
+		if selector == "" {
+			continue
+		}
+		listed[selector]++
+		if listed[selector] == 2 {
+			repeated = append(repeated, "camera:"+selector)
+		}
+	}
+	return repeated
+}
+
 func (m *Manager) campaignDir() string { return m.location.CampaignDir }
 
 func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
@@ -673,6 +716,9 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 	}
 	if conflicts := preRollParameterConflicts(campaign); len(conflicts) > 0 {
 		campaign.Warnings = append(campaign.Warnings, "pre-roll and explicit camera stream parameters are mutually exclusive in this release; a buffered camera arms a standby subscription that asserts no stream parameters, so both the pre-roll and the live tail record at the producer's running parameters and the explicit max_resolution or rate is reported as requested but not achieved in the episode manifest: "+strings.Join(conflicts, ", "))
+	}
+	if repeated := repeatedCameraSelectors(campaign); len(repeated) > 0 {
+		campaign.Warnings = append(campaign.Warnings, "these cameras are listed more than once; a camera is recorded once per episode and only its last capture block applies, so list each camera once and use store: both to keep video and frames: "+strings.Join(repeated, ", "))
 	}
 	if campaign.Retention.LocalQuota != "" {
 		campaign.Warnings = append(campaign.Warnings, "retention.local_quota is recorded with the plan, but this release enforces only the device-wide storage quota")
@@ -1389,6 +1435,14 @@ func validateSourceCapture(source CampaignSource) error {
 		}
 		if err := validateResolution(capture.MaxResolution); err != nil {
 			return err
+		}
+	}
+	if capture.Store != "" {
+		if source.Camera == "" {
+			return errors.New("store applies only to camera sources")
+		}
+		if !slices.Contains(validCaptureStores, capture.Store) {
+			return fmt.Errorf("store must be one of %s", strings.Join(validCaptureStores, ", "))
 		}
 	}
 	return nil
