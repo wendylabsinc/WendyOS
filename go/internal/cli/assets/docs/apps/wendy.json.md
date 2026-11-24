@@ -455,7 +455,7 @@ Camera / V4L2 device access.
 | `user` | Username for a registered IP camera. Ignored for local cameras. |
 | `password` | Password for a registered IP camera. Ignored for local cameras. |
 
-An app gets one node per camera. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries may not claim the same camera, and neither key can be combined with `"mode": "direct"`.
+An app gets one node per camera. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`, and neither key can be used when any of the app's camera entries has `"mode": "direct"`.
 
 > **Security:** `user`/`password` set here are stored in **plaintext** in `wendy.json` and deployed as-is. Prefer the interactive `wendy device camera login` command, which keeps credentials out of the app config.
 

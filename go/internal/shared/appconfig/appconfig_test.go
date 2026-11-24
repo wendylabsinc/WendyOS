@@ -407,11 +407,11 @@ func TestValidate_AllEntitlementTypes(t *testing.T) {
 		Entitlements: []Entitlement{
 			{Type: EntitlementNetwork},
 			{Type: EntitlementBluetooth},
-			{Type: EntitlementVideo, Allowlist: []string{"/dev/video0"}},
+			{Type: EntitlementVideo},
 			{Type: EntitlementGPU},
 			{Type: EntitlementPersist, Name: "data", Path: "/data"},
 			{Type: EntitlementAudio},
-			{Type: EntitlementCamera, Allowlist: []string{"/dev/video2"}},
+			{Type: EntitlementCamera},
 			{Type: EntitlementUSB},
 			{Type: EntitlementI2C, Device: "i2c-1"},
 			{Type: EntitlementGPIO, Pins: []int{7}},

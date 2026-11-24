@@ -503,11 +503,21 @@ func isCameraEntitlement(e Entitlement) bool {
 	return e.Type == EntitlementCamera || e.Type == EntitlementVideo
 }
 
+// knownOrDefault returns value when accepted lists it, and otherwise the first
+// accepted value, which is the default.
+func knownOrDefault(value string, accepted []string) string {
+	if slices.Contains(accepted, value) {
+		return value
+	}
+	return accepted[0]
+}
+
 // CameraNodeSettings reports the format and stamp of the node an app gets for
 // the camera with the given device path and name. The entry whose allowlist
 // names the camera decides, then the entry without an allowlist, then the
-// defaults. Values are not validated here: one that Validate would reject is
-// returned as written.
+// defaults. The entitlements may come from annotations written by a newer or
+// older command line, so a value this build does not know resolves to the
+// default.
 func CameraNodeSettings(entitlements []Entitlement, cameraPath, cameraName string) (format, stamp string) {
 	var chosen Entitlement
 	fallbackFound := false
@@ -527,14 +537,7 @@ func CameraNodeSettings(entitlements []Entitlement, cameraPath, cameraName strin
 			break
 		}
 	}
-	format, stamp = chosen.Format, chosen.Stamp
-	if format == "" {
-		format = CameraFormats[0]
-	}
-	if stamp == "" {
-		stamp = CameraStamps[0]
-	}
-	return format, stamp
+	return knownOrDefault(chosen.Format, CameraFormats), knownOrDefault(chosen.Stamp, CameraStamps)
 }
 
 // Entitlement represents a single entitlement entry in wendy.json.
@@ -634,26 +637,54 @@ func validateAllowlistEntries(allowlist []string, prefix string, index int) erro
 	return nil
 }
 
-func validateCameraNodeSetting(e Entitlement, key, value string, accepted []string, prefix string, index int) error {
-	if value == "" {
+func validateCameraNodeSettingValue(e Entitlement, key, value string, accepted []string, prefix string, index int) error {
+	if value == "" || slices.Contains(accepted, value) {
 		return nil
 	}
-	if !slices.Contains(accepted, value) {
-		quoted := make([]string, len(accepted))
-		for i, v := range accepted {
-			quoted[i] = fmt.Sprintf("%q", v)
-		}
-		return fmt.Errorf("%s[%d]: %s %s must be one of %s; got %q", prefix, index, e.Type, key, strings.Join(quoted, ", "), value)
+	quoted := make([]string, len(accepted))
+	for i, v := range accepted {
+		quoted[i] = fmt.Sprintf("%q", v)
 	}
-	if e.Mode == CameraModeDirect {
-		return fmt.Errorf("%s[%d]: %s %s cannot be combined with mode %q: the app gets the real device, so there is no camera node to configure", prefix, index, e.Type, key, CameraModeDirect)
+	return fmt.Errorf("%s[%d]: %s %s must be one of %s; got %q", prefix, index, e.Type, key, strings.Join(quoted, ", "), value)
+}
+
+// validateCameraNodeSettingsWithDirect rejects format or stamp on any camera or
+// video entry of an app that has a direct entry: one direct entry gives the
+// whole app the real device (CameraShareChoice), so no entry gets a node.
+func validateCameraNodeSettingsWithDirect(entitlements []Entitlement, prefix string) error {
+	direct := slices.IndexFunc(entitlements, func(e Entitlement) bool {
+		return isCameraEntitlement(e) && e.Mode == CameraModeDirect
+	})
+	if direct < 0 {
+		return nil
+	}
+	for i, e := range entitlements {
+		if !isCameraEntitlement(e) {
+			continue
+		}
+		key := ""
+		switch {
+		case e.Format != "":
+			key = "format"
+		case e.Stamp != "":
+			key = "stamp"
+		default:
+			continue
+		}
+		where := ""
+		if i != direct {
+			where = fmt.Sprintf(" on %s[%d]", prefix, direct)
+		}
+		return fmt.Errorf("%s[%d]: %s %s cannot be combined with mode %q%s: the app gets the real device, so there is no camera node to configure", prefix, i, e.Type, key, CameraModeDirect, where)
 	}
 	return nil
 }
 
 // validateCameraClaims rejects two camera or video entries that claim the same
-// camera: an entry without an allowlist claims every camera, and an entry with
-// one claims the cameras it lists, compared as exact strings.
+// camera with different node settings. An entry without an allowlist claims
+// every camera, and an entry with one claims the cameras it lists, compared as
+// exact strings. Entries that agree after defaults are accepted, because
+// manifests with several plain camera entries predate format and stamp.
 func validateCameraClaims(entitlements []Entitlement, prefix string) error {
 	for j, later := range entitlements {
 		if !isCameraEntitlement(later) {
@@ -661,6 +692,23 @@ func validateCameraClaims(entitlements []Entitlement, prefix string) error {
 		}
 		for i, earlier := range entitlements[:j] {
 			if !isCameraEntitlement(earlier) {
+				continue
+			}
+			var differences []string
+			for _, setting := range []struct {
+				key            string
+				earlier, later string
+				accepted       []string
+			}{
+				{"format", earlier.Format, later.Format, CameraFormats},
+				{"stamp", earlier.Stamp, later.Stamp, CameraStamps},
+			} {
+				a, b := knownOrDefault(setting.earlier, setting.accepted), knownOrDefault(setting.later, setting.accepted)
+				if a != b {
+					differences = append(differences, fmt.Sprintf("%s (%q and %q)", setting.key, a, b))
+				}
+			}
+			if len(differences) == 0 {
 				continue
 			}
 			var overlap string
@@ -680,7 +728,7 @@ func validateCameraClaims(entitlements []Entitlement, prefix string) error {
 				}
 				overlap = fmt.Sprintf("both allowlists contain %q", later.Allowlist[shared])
 			}
-			return fmt.Errorf("%s[%d] and %s[%d] claim the same camera: %s; an app gets one node per camera, so only one camera or video entry may claim it", prefix, i, prefix, j, overlap)
+			return fmt.Errorf("%s[%d] and %s[%d] claim the same camera (%s) but differ in %s; an app gets one node per camera, so entries that claim the same camera must agree", prefix, i, prefix, j, overlap, strings.Join(differences, " and "))
 		}
 	}
 	return nil
@@ -766,10 +814,10 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 				return fmt.Errorf("%s[%d]: serial device must be a bare USB tty node name like ttyACM0 or ttyUSB0, got %q", prefix, i, e.Device)
 			}
 		case EntitlementCamera, EntitlementVideo:
-			if err := validateCameraNodeSetting(e, "format", e.Format, CameraFormats, prefix, i); err != nil {
+			if err := validateCameraNodeSettingValue(e, "format", e.Format, CameraFormats, prefix, i); err != nil {
 				return err
 			}
-			if err := validateCameraNodeSetting(e, "stamp", e.Stamp, CameraStamps, prefix, i); err != nil {
+			if err := validateCameraNodeSettingValue(e, "stamp", e.Stamp, CameraStamps, prefix, i); err != nil {
 				return err
 			}
 		case EntitlementGPIO:
@@ -786,6 +834,9 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 		}
 	}
 
+	if err := validateCameraNodeSettingsWithDirect(entitlements, prefix); err != nil {
+		return err
+	}
 	if err := validateCameraClaims(entitlements, prefix); err != nil {
 		return err
 	}

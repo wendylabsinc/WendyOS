@@ -378,7 +378,7 @@ Omit to share the camera with other apps at its shared mode (one size up to 1280
 { "type": "camera", "format": "pixels", "stamp": "time" }
 ```
 
-An app gets one node per camera. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries may not claim the same camera. Neither key can be combined with `"mode": "direct"`, which has no node to configure.
+An app gets one node per camera. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`. Neither key can be used when any of the app's camera entries has `"mode": "direct"`: the app then gets the real device, and there is no node to configure.
 
 ## Audio
 

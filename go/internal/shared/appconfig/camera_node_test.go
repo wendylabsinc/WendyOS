@@ -56,6 +56,21 @@ func TestValidate_CameraNodeFormatAndStamp(t *testing.T) {
 			[]Entitlement{{Type: EntitlementGPU}, {Type: EntitlementVideo, Mode: "direct", Stamp: "frame"}},
 			`entitlement[1]: video stamp cannot be combined with mode "direct": the app gets the real device, so there is no camera node to configure`,
 		},
+		{
+			"direct entry beside plain entries",
+			[]Entitlement{{Type: EntitlementCamera, Mode: "direct"}, {Type: EntitlementVideo}, {Type: EntitlementCamera, Allowlist: []string{"/dev/video2"}}},
+			"",
+		},
+		{
+			"format on another entry than the direct one",
+			[]Entitlement{{Type: EntitlementCamera, Mode: "direct", Allowlist: []string{"/dev/video0"}}, {Type: EntitlementCamera, Allowlist: []string{"/dev/video2"}, Format: "native"}},
+			`entitlement[1]: camera format cannot be combined with mode "direct" on entitlement[0]: the app gets the real device, so there is no camera node to configure`,
+		},
+		{
+			"stamp on an entry before the direct one",
+			[]Entitlement{{Type: EntitlementVideo, Stamp: "time"}, {Type: EntitlementGPU}, {Type: EntitlementCamera, Mode: "direct"}},
+			`entitlement[0]: video stamp cannot be combined with mode "direct" on entitlement[2]: the app gets the real device, so there is no camera node to configure`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -64,61 +79,68 @@ func TestValidate_CameraNodeFormatAndStamp(t *testing.T) {
 	}
 }
 
-func TestValidate_CameraEntriesClaimingTheSameCamera(t *testing.T) {
-	listed := func(typ string, allowlist ...string) Entitlement {
-		return Entitlement{Type: typ, Allowlist: allowlist}
+func TestValidate_CameraEntriesClaimingTheSameCameraMustAgree(t *testing.T) {
+	entry := func(format, stamp string, allowlist ...string) Entitlement {
+		return Entitlement{Type: EntitlementCamera, Format: format, Stamp: stamp, Allowlist: allowlist}
 	}
-	const onePerCamera = "; an app gets one node per camera, so only one camera or video entry may claim it"
+	const mustAgree = "; an app gets one node per camera, so entries that claim the same camera must agree"
 	tests := []struct {
 		name    string
 		in      []Entitlement
 		wantErr string
 	}{
-		{"one entry without allowlist", []Entitlement{listed("camera")}, ""},
+		{"neither sets a key", []Entitlement{entry("", ""), entry("", "")}, ""},
+		{"both set the same values", []Entitlement{entry("native", "frame"), entry("native", "frame")}, ""},
+		{"explicit default agrees with an unset key", []Entitlement{entry("pixels", "time"), entry("", "")}, ""},
 		{
-			"disjoint allowlists",
-			[]Entitlement{listed("camera", "/dev/video0", "Brio 101"), listed("camera", "/dev/video2")},
+			"different settings for different cameras",
+			[]Entitlement{entry("native", "", "/dev/video0", "Brio 101"), entry("", "frame", "/dev/video2")},
 			"",
 		},
 		{
 			"path and name of one camera are different strings",
-			[]Entitlement{listed("camera", "/dev/video0"), listed("camera", "video0")},
+			[]Entitlement{entry("native", "", "/dev/video0"), entry("", "", "video0")},
 			"",
 		},
 		{
-			"neither has an allowlist",
-			[]Entitlement{listed("camera"), listed("camera")},
-			`entitlement[0] and entitlement[1] claim the same camera: neither has an allowlist` + onePerCamera,
+			"shared allowlist entry with the same settings",
+			[]Entitlement{entry("native", "", "/dev/video0"), entry("native", "", "/dev/video0", "/dev/video2")},
+			"",
 		},
 		{
-			"camera and its video alias",
-			[]Entitlement{listed("video"), {Type: EntitlementGPU}, listed("camera")},
-			`entitlement[0] and entitlement[2] claim the same camera: neither has an allowlist` + onePerCamera,
+			"neither has an allowlist, format differs",
+			[]Entitlement{entry("", ""), entry("native", "")},
+			`entitlement[0] and entitlement[1] claim the same camera (neither has an allowlist) but differ in format ("pixels" and "native")` + mustAgree,
+		},
+		{
+			"camera and its video alias, stamp differs",
+			[]Entitlement{{Type: EntitlementVideo, Stamp: "frame"}, {Type: EntitlementGPU}, entry("", "time")},
+			`entitlement[0] and entitlement[2] claim the same camera (neither has an allowlist) but differ in stamp ("frame" and "time")` + mustAgree,
+		},
+		{
+			"both settings differ",
+			[]Entitlement{entry("native", "frame"), entry("", "")},
+			`entitlement[0] and entitlement[1] claim the same camera (neither has an allowlist) but differ in format ("native" and "pixels") and stamp ("frame" and "time")` + mustAgree,
 		},
 		{
 			"first has no allowlist",
-			[]Entitlement{listed("camera"), listed("camera", "/dev/video0")},
-			`entitlement[0] and entitlement[1] claim the same camera: entitlement[0] has no allowlist, so it claims every camera` + onePerCamera,
+			[]Entitlement{entry("", ""), entry("native", "", "/dev/video0")},
+			`entitlement[0] and entitlement[1] claim the same camera (entitlement[0] has no allowlist, so it claims every camera) but differ in format ("pixels" and "native")` + mustAgree,
 		},
 		{
 			"second has no allowlist",
-			[]Entitlement{listed("camera", "/dev/video0"), {Type: EntitlementGPU}, listed("video")},
-			`entitlement[0] and entitlement[2] claim the same camera: entitlement[2] has no allowlist, so it claims every camera` + onePerCamera,
+			[]Entitlement{entry("", "frame", "/dev/video0"), {Type: EntitlementGPU}, {Type: EntitlementVideo}},
+			`entitlement[0] and entitlement[2] claim the same camera (entitlement[2] has no allowlist, so it claims every camera) but differ in stamp ("frame" and "time")` + mustAgree,
 		},
 		{
 			"allowlists share an entry",
-			[]Entitlement{listed("camera", "/dev/video0", "/dev/video2"), listed("camera", "/dev/video4", "/dev/video2")},
-			`entitlement[0] and entitlement[1] claim the same camera: both allowlists contain "/dev/video2"` + onePerCamera,
-		},
-		{
-			"direct entry also claims its camera",
-			[]Entitlement{{Type: EntitlementCamera, Mode: "direct", Allowlist: []string{"/dev/video0"}}, listed("camera", "/dev/video0")},
-			`entitlement[0] and entitlement[1] claim the same camera: both allowlists contain "/dev/video0"` + onePerCamera,
+			[]Entitlement{entry("native", "", "/dev/video0", "/dev/video2"), entry("", "", "/dev/video4", "/dev/video2")},
+			`entitlement[0] and entitlement[1] claim the same camera (both allowlists contain "/dev/video2") but differ in format ("native" and "pixels")` + mustAgree,
 		},
 		{
 			"third entry overlaps the first",
-			[]Entitlement{listed("camera", "a"), listed("camera", "b"), listed("camera", "c", "a")},
-			`entitlement[0] and entitlement[2] claim the same camera: both allowlists contain "a"` + onePerCamera,
+			[]Entitlement{entry("", "frame", "a"), entry("", "", "b"), entry("", "", "c", "a")},
+			`entitlement[0] and entitlement[2] claim the same camera (both allowlists contain "a") but differ in stamp ("frame" and "time")` + mustAgree,
 		},
 	}
 	for _, tt := range tests {
@@ -134,13 +156,44 @@ func TestValidate_CameraClaimErrorNamesTheServicePrefix(t *testing.T) {
 		Services: map[string]*ServiceConfig{
 			"vision": {
 				Context:      "vision",
-				Entitlements: []Entitlement{{Type: EntitlementCamera}, {Type: EntitlementCamera}},
+				Entitlements: []Entitlement{{Type: EntitlementCamera}, {Type: EntitlementCamera, Format: "native"}},
 			},
 		},
 	}
 	err := cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), `services["vision"].entitlement[0] and services["vision"].entitlement[1] claim the same camera`) {
 		t.Fatalf("Validate() = %v, want an error naming both service entries", err)
+	}
+}
+
+func TestValidate_CameraManifestsFromBeforeNodeSettingsStillValidate(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []Entitlement
+	}{
+		{"camera alone", []Entitlement{{Type: EntitlementCamera}}},
+		{"video alone", []Entitlement{{Type: EntitlementVideo}}},
+		{"video plus camera", []Entitlement{{Type: EntitlementVideo}, {Type: EntitlementCamera}}},
+		{"camera with allowlist", []Entitlement{{Type: EntitlementCamera, Allowlist: []string{"/dev/video0"}}}},
+		{"camera direct", []Entitlement{{Type: EntitlementCamera, Mode: "direct"}}},
+		{"camera direct plus video", []Entitlement{{Type: EntitlementCamera, Mode: "direct"}, {Type: EntitlementVideo}}},
+		{"two cameras", []Entitlement{{Type: EntitlementCamera}, {Type: EntitlementCamera}}},
+		{
+			"overlapping allowlists",
+			[]Entitlement{{Type: EntitlementCamera, Allowlist: []string{"/dev/video0"}}, {Type: EntitlementVideo, Allowlist: []string{"/dev/video0", "/dev/video2"}}},
+		},
+		{
+			"legacy mode, allowlist and network camera login",
+			[]Entitlement{{Type: EntitlementCamera, Mode: "legacy", Allowlist: []string{"/dev/video0"}, User: "admin", Password: "secret"}, {Type: EntitlementVideo, Mode: "detect"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &AppConfig{AppID: "com.example.app", Entitlements: tt.in}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate() rejected a manifest that validated before format and stamp existed: %v", err)
+			}
+		})
 	}
 }
 
@@ -272,6 +325,28 @@ func TestCameraNodeSettings_UnknownCameraIdentityMatchesNoAllowlist(t *testing.T
 	in := []Entitlement{{Type: EntitlementCamera, Allowlist: []string{""}, Format: "native", Stamp: "frame"}}
 	if format, stamp := CameraNodeSettings(in, "", ""); format != "pixels" || stamp != "time" {
 		t.Fatalf("CameraNodeSettings() = (%q, %q), want the defaults", format, stamp)
+	}
+}
+
+func TestCameraNodeSettings_UnknownValuesResolveToTheDefaults(t *testing.T) {
+	tests := []struct {
+		name          string
+		format, stamp string
+		wantFormat    string
+		wantStamp     string
+	}{
+		{"format from a newer command line", "h264", "frame", "pixels", "frame"},
+		{"unknown stamp", "native", "sequence", "native", "time"},
+		{"both unknown", "H264", "Frame", "pixels", "time"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := []Entitlement{ParseEntitlementAnnotation(EntitlementCamera, "format="+tt.format+",stamp="+tt.stamp)}
+			format, stamp := CameraNodeSettings(in, "/dev/video0", "Brio 101")
+			if format != tt.wantFormat || stamp != tt.wantStamp {
+				t.Fatalf("CameraNodeSettings() = (%q, %q), want (%q, %q)", format, stamp, tt.wantFormat, tt.wantStamp)
+			}
+		})
 	}
 }
 
