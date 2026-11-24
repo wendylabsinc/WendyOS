@@ -282,19 +282,45 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 			t.Fatalf("%s: reader STREAMON: %v", app.id, err)
 		}
 	}
+	// Every reader dequeues from its STREAMON on, as an app does. A node keeps
+	// only its newest shareNodeBuffers frames: a reader that streams and then
+	// waits is moved on to the newest frame, which on an H.264 node is not one
+	// it can start on.
 	const wantFrames = 10
+	type readFrames struct {
+		frames [][]byte
+		stamps []int64
+		err    error
+	}
+	reading := map[string]chan readFrames{}
+	for _, app := range apps {
+		id, done := app.id, make(chan readFrames, 1)
+		reading[id] = done
+		go func() {
+			var got readFrames
+			for len(got.frames) < wantFrames && got.err == nil {
+				frame, stamp, err := readers[id].next(ctx, 15*time.Second)
+				if err != nil {
+					got.err = fmt.Errorf("frame %d: %w", len(got.frames), err)
+					break
+				}
+				got.frames, got.stamps = append(got.frames, frame), append(got.stamps, stamp)
+			}
+			done <- got
+		}()
+	}
+	results := map[string]readFrames{}
+	for _, app := range apps {
+		results[app.id] = <-reading[app.id]
+	}
 	read := func(id string) (frames [][]byte, stamps []int64) {
 		t.Helper()
-		for len(frames) < wantFrames {
-			frame, stamp, err := readers[id].next(ctx, 15*time.Second)
-			if err != nil {
-				record, _ := shareRecordOf(svc, id)
-				t.Fatalf("%s: frame %d: %v; share state: %s; feed: %v\nshare record: %+v\nagent log: %q", id, len(frames), err,
-					svc.CameraShareReport(ctx)[path][camerashare.KeyState], fx.feed.err(), record, shareLogLines(fx.logs, id))
-			}
-			frames, stamps = append(frames, frame), append(stamps, stamp)
+		if err := results[id].err; err != nil {
+			record, _ := shareRecordOf(svc, id)
+			t.Fatalf("%s: %v; share state: %s; feed: %v\nshare record: %+v\nagent log: %q", id, err,
+				svc.CameraShareReport(ctx)[path][camerashare.KeyState], fx.feed.err(), record, shareLogLines(fx.logs, id))
 		}
-		return frames, stamps
+		return results[id].frames, results[id].stamps
 	}
 	// A sample ID is read back as tv_sec*1e6 + tv_usec: the timestamp in
 	// whole microseconds.
@@ -320,7 +346,8 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 
 	units, unitStamps := read(apps[1].id)
 	if _, randomAccess := h264RandomAccessOffset(units[0]); !randomAccess {
-		t.Fatalf("h264 node's first frame (%d bytes) cannot be decoded on its own", len(units[0]))
+		t.Fatalf("h264 node's first frame (%d bytes) cannot be decoded on its own: it holds no parameter sets followed by an IDR slice.\n%s",
+			len(units[0]), describeH264Buffers(units[:3], readers[apps[1].id].sequences))
 	}
 	for i, unit := range units {
 		if _, _, ok := h264NextNAL(unit, 0); !ok {
@@ -776,6 +803,8 @@ type shareAppReader struct {
 	fd        int
 	bufs      [][]byte
 	streaming bool
+	// sequences are the kernel's sequence numbers of the frames dequeued so far.
+	sequences []uint32
 }
 
 func openShareAppReader(t *testing.T, path string) *shareAppReader {
@@ -830,6 +859,36 @@ func (r *shareAppReader) start() error {
 	return nil
 }
 
+// describeH264Buffers lists, for each buffer a reader dequeued, its size, the
+// kernel's sequence number and the type and size of every NAL unit in it. A
+// first sequence number above the node's first says the reader did not get the
+// first frame written.
+func describeH264Buffers(buffers [][]byte, sequences []uint32) string {
+	var out strings.Builder
+	for i, buffer := range buffers {
+		fmt.Fprintf(&out, "buffer %d: %d bytes", i, len(buffer))
+		if i < len(sequences) {
+			fmt.Fprintf(&out, ", sequence %d", sequences[i])
+		}
+		out.WriteString(", NAL units (type:bytes)")
+		start, header, ok := h264NextNAL(buffer, 0)
+		if !ok {
+			out.WriteString(" none")
+		}
+		for ok {
+			next, nextHeader, more := h264NextNAL(buffer, header+1)
+			end := len(buffer)
+			if more {
+				end = next
+			}
+			fmt.Fprintf(&out, " %d:%d", buffer[header]&0x1f, end-start)
+			start, header, ok = next, nextHeader, more
+		}
+		out.WriteString("\n")
+	}
+	return out.String()
+}
+
 // dequeue takes one ready frame: a copy of it and its timestamp, with the
 // buffer queued again. ok is false when no frame was ready.
 func (r *shareAppReader) dequeue() (frame []byte, ts int64, ok bool, err error) {
@@ -847,6 +906,7 @@ func (r *shareAppReader) dequeue() (frame []byte, ts int64, ok bool, err error) 
 	}
 	frame = bytes.Clone(r.bufs[b.index()][:b.bytesUsed()])
 	ts = b.timestampNanos()
+	r.sequences = append(r.sequences, b.sequence())
 	if err := r.ioctl(vidiocQbuf, unsafe.Pointer(&b)); err != nil {
 		return nil, 0, false, fmt.Errorf("QBUF %d again: %w", b.index(), err)
 	}
