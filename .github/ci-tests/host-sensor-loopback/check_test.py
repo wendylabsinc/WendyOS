@@ -224,6 +224,7 @@ else:
     def test_declared_scope_for_other_supported_boards(self):
         for device_type, scope in (("dragonwing-iq-8275", "video-audio"),
                                    ("arduino-uno-q", "video-audio"),
+                                   ("orange-pi-5-pro", "video-audio"),
                                    ("jetson-agx-thor", "video"),
                                    ("jetson-agx-orin", "video")):
             with self.subTest(device_type=device_type):

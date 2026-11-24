@@ -33,6 +33,15 @@ func planOSInstall(ctx context.Context, opts onboarding.Options) (*onboarding.Pl
 	return buildInstallPlan(ctx, opts, resolve, installDrives)
 }
 
+// diskImagePlanGuides are the raw-media boards installation planning covers, with
+// each board's installation guide.
+var diskImagePlanGuides = map[string]string{
+	"raspberry-pi-3":  "https://docs.wendy.dev/latest/installation/wendyos-raspberry-pi-5",
+	"raspberry-pi-4":  "https://docs.wendy.dev/latest/installation/wendyos-raspberry-pi-5",
+	"raspberry-pi-5":  "https://docs.wendy.dev/latest/installation/wendyos-raspberry-pi-5",
+	"orange-pi-5-pro": "https://docs.wendy.dev/latest/installation/wendyos-orange-pi-5-pro",
+}
+
 func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(string, string, bool, int) (*deviceManifest, string, error), drives func() ([]onboarding.Drive, error)) (*onboarding.Plan, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -73,7 +82,8 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 	if !jetson && o.Carrier != "" {
 		return nil, fmt.Errorf("carrier applies only to Jetson developer kits")
 	}
-	if !jetson && o.DeviceType != "raspberry-pi-3" && o.DeviceType != "raspberry-pi-4" && o.DeviceType != "raspberry-pi-5" {
+	diskImageGuide, diskImage := diskImagePlanGuides[o.DeviceType]
+	if !jetson && !diskImage {
 		return nil, fmt.Errorf("installation planning does not yet cover %q; use wendy install --help and the board-specific installation guide", o.DeviceType)
 	}
 	if o.RootfsOnly && !isT234RecoveryDevice(o.DeviceType) {
@@ -99,7 +109,7 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 	p.Version, p.Storage = ver, o.Storage
 	p.Command = []string{"wendy", "install", "--device-type", o.DeviceType, "--version", ver}
 	p.Requirements = append(p.Requirements, "Run the returned argument array in a terminal; the installer handles disk/USB elevation and progress. Recheck target identity immediately before writing.", "Choose a device name and first-boot networking. Add --device-name and WiFi options, or --no-wifi for Ethernet. Cloud pre-enrollment is optional and requires login.")
-	p.Documentation = "https://docs.wendy.dev/latest/installation/wendyos-raspberry-pi-5"
+	p.Documentation = diskImageGuide
 	if jetson {
 		p.Documentation = "https://docs.wendy.dev/latest/installation/wendyos-nvidia-jetson-orin-nano"
 	}
