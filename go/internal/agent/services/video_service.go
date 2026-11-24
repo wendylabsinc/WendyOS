@@ -481,6 +481,9 @@ type videoFrame struct {
 	// webmWhole, on a VP8 frame, is how many of its leading bytes end between
 	// two WebM elements; the rest open an element a later frame completes.
 	webmWhole int
+	// native marks a whole frame as the camera itself delivered it, as opposed
+	// to one the agent encoded, decoded or teed from a pipeline.
+	native bool
 }
 
 type frameTimestamp struct {
@@ -491,26 +494,54 @@ type frameTimestamp struct {
 	sequence      uint32
 	sequenceValid bool
 	auAligned     bool
+	native        bool
 }
 
 func realtimeFrameTimestamp(now time.Time) frameTimestamp {
 	return frameTimestamp{wallNs: uint64(now.UnixNano()), nativeNs: now.UnixNano(), nativeClock: "CLOCK_REALTIME_AGENT_CAPTURE"}
 }
 
-// hubSubscriber is one consumer attached to a hub. Encoded, raw and pixel
-// subscribers share the producer but receive different frames (see broadcast),
-// and a raw or pixel subscriber can be turned away by the producer alone —
-// hence its own error.
-type hubSubscriber struct {
-	ch  chan *videoFrame
-	raw bool // wants VIDEO_CODEC_RAW frames instead of encoded video
-	// pixels marks an in-agent consumer of the tap's uncompressed frames. It
-	// receives the same VIDEO_CODEC_RAW frames as a raw subscriber, but is
+// frameKind is which of a hub's frames a subscriber asked for.
+type frameKind uint8
+
+const (
+	encodedFrames frameKind = iota
+	// rawFrames are the camera's own uncompressed bytes.
+	rawFrames
+	// pixelFrames are the same VIDEO_CODEC_RAW frames, for an in-agent consumer
+	// that only needs a picture it can read: decoded MJPEG serves it, and it is
 	// offered and refused on its own terms (video_hub_demand.go).
-	pixels bool
+	pixelFrames
+	// nativeFrames are the camera's own whole frames, whatever their codec.
+	nativeFrames
+)
+
+// receives reports whether a subscriber of this kind is handed frame. It reads
+// only the frame and the kind, never which camera the hub serves.
+func (k frameKind) receives(frame *videoFrame) bool {
+	switch k {
+	case encodedFrames:
+		return frame.codec == agentpb.VideoCodec_VIDEO_CODEC_H264 || frame.codec == agentpb.VideoCodec_VIDEO_CODEC_VP8
+	case rawFrames, pixelFrames:
+		return frame.codec == agentpb.VideoCodec_VIDEO_CODEC_RAW
+	case nativeFrames:
+		return frame.native
+	}
+	return false
+}
+
+func (k frameKind) readsTap() bool { return k == rawFrames || k == pixelFrames }
+
+// hubSubscriber is one consumer attached to a hub. Subscribers share the
+// producer but receive the frames their kind asked for (see frameKind.receives),
+// and any kind but encoded can be turned away by the producer alone — hence
+// its own error.
+type hubSubscriber struct {
+	ch   chan *videoFrame
+	kind frameKind
 	// closed and err are set together, under h.mu, when the producer closes this
-	// subscriber early (raw or pixels were asked for and are not offered). closed
-	// keeps broadcast and the final teardown from touching the channel twice.
+	// subscriber early (its kind was asked for and is not offered). closed keeps
+	// broadcast and the final teardown from touching the channel twice.
 	closed bool
 	err    error
 	// pendingDrops counts frames dropped for this subscriber since the last one
@@ -607,7 +638,7 @@ const maxSubscribersPerHub = 16
 // (checked atomically under h.mu so no subscriber can be added to a dying hub),
 // or codes.ResourceExhausted if the hub already has maxSubscribersPerHub active subscribers.
 func (h *deviceHub) subscribe() (int, chan *videoFrame, error) {
-	return h.subscribeAsKind("", false, false)
+	return h.subscribeAsKind("", encodedFrames)
 }
 
 // subscribeAs is subscribe, additionally recording that this subscriber's join
@@ -615,43 +646,45 @@ func (h *deviceHub) subscribe() (int, chan *videoFrame, error) {
 // non-empty. The label names the kind of consumer (see the hubHolder
 // constants) so a refused campaign can be told exactly who holds the camera.
 func (h *deviceHub) subscribeAs(explicitHolder string) (int, chan *videoFrame, error) {
-	return h.subscribeAsKind(explicitHolder, false, false)
+	return h.subscribeAsKind(explicitHolder, encodedFrames)
 }
 
-// subscribeKind is subscribe with a choice of frames: encoded video (the default)
-// or the raw capture frames the producer tees for analytic consumers.
-func (h *deviceHub) subscribeKind(raw bool) (int, chan *videoFrame, error) {
-	return h.subscribeAsKind("", raw, false)
+// subscribeKind is subscribe with a choice of frames.
+func (h *deviceHub) subscribeKind(kind frameKind) (int, chan *videoFrame, error) {
+	return h.subscribeAsKind("", kind)
 }
 
 // subscribeAsKind is the single implementation behind subscribe, subscribeAs,
 // subscribeKind and subscribePixels. The dimensions are independent:
 // explicitHolder records who, if anyone, asserted the hub's stream parameters,
-// while raw and pixels (at most one of them) select which kind of frame this
-// subscriber receives.
+// while kind selects which frames this subscriber receives.
 //
-// A raw or pixel join on a hub whose producer has already refused that kind is
-// turned away here, under h.mu, so it cannot slip in after the refusal closed
-// the others. For raw this matters beyond the wait: a camera captured as MJPEG
-// refuses raw but still publishes decoded frames for pixel subscribers, and
-// broadcast hands those to every open raw subscriber. getOrCreateHub's
-// up-front rawRefusal check runs in a separate h.mu section, so a producer's
+// A join on a hub whose producer has already refused its kind is turned away
+// here, under h.mu, so it cannot slip in after the refusal closed the others.
+// For raw this matters beyond the wait: a camera captured as MJPEG refuses raw
+// but still publishes decoded frames for pixel subscribers, and broadcast
+// hands those to every open raw subscriber. getOrCreateHub's up-front
+// rawRefusal check runs in a separate h.mu section, so a producer's
 // rawNotOffered can land between it and this one.
-func (h *deviceHub) subscribeAsKind(explicitHolder string, raw, pixels bool) (int, chan *videoFrame, error) {
+func (h *deviceHub) subscribeAsKind(explicitHolder string, kind frameKind) (int, chan *videoFrame, error) {
 	ch := make(chan *videoFrame, 4)
 	h.mu.Lock()
 	if h.ctx.Err() != nil {
 		h.mu.Unlock()
 		return 0, nil, status.Errorf(codes.Unavailable, "video hub is shutting down")
 	}
-	if reason := h.rawReason; raw && h.rawState == rawUnavailable {
+	if reason := h.rawReason; kind == rawFrames && h.rawState == rawUnavailable {
 		h.mu.Unlock()
 		return 0, nil, errRawUnavailable(reason())
 	}
-	if refused := h.demand.refused; pixels && refused != nil {
+	if refused := h.demand.refused; kind == pixelFrames && refused != nil {
 		held := h.demand.refusedHeld
 		h.mu.Unlock()
 		return 0, nil, pixelRefusal(refused, held)
+	}
+	if refused := h.demand.nativeRefused; kind == nativeFrames && refused != nil {
+		h.mu.Unlock()
+		return 0, nil, errNativeUnavailable(refused())
 	}
 	if len(h.subs) >= maxSubscribersPerHub {
 		h.mu.Unlock()
@@ -659,7 +692,7 @@ func (h *deviceHub) subscribeAsKind(explicitHolder string, raw, pixels bool) (in
 	}
 	id := h.nextID
 	h.nextID++
-	h.subs[id] = &hubSubscriber{ch: ch, raw: raw, pixels: pixels}
+	h.subs[id] = &hubSubscriber{ch: ch, kind: kind}
 	if h.subDrops == nil {
 		h.subDrops = make(map[int]uint64)
 	}
@@ -851,6 +884,17 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 	return h.broadcast(frame)
 }
 
+// broadcastDerivedFrom delivers a frame the agent made from source as the same
+// sample on another plane: it takes source's identity, capture timestamps and
+// receipt, so it advances no sample sequence and reads no clock.
+func (h *deviceHub) broadcastDerivedFrom(source, derived *videoFrame) bool {
+	derived.sampleID = source.sampleID
+	derived.nativeNs, derived.nativeClock, derived.nativeFlags = source.nativeNs, source.nativeClock, source.nativeFlags
+	derived.sequence, derived.sequenceValid = source.sequence, source.sequenceValid
+	derived.receiptBootNanos, derived.receiptUncertaintyNanos = source.receiptBootNanos, source.receiptUncertaintyNanos
+	return h.broadcast(derived)
+}
+
 // sampleGap reports that frames were lost between two a subscriber took in
 // turn. produce numbers a source's frames without a break, so the hub dropping
 // one for a slow subscriber, or a producer restart, shows as a jump in the
@@ -861,11 +905,11 @@ func sampleGap(prev, next uint64) bool {
 	return prev != 0 && next != 0 && next != prev+1
 }
 
-// broadcast delivers a frame to the subscribers that want its kind — encoded
-// video to viewers, VIDEO_CODEC_RAW frames to raw and pixel subscribers —
-// dropping for slow consumers. Returns false when there are no subscribers left
-// (producer should stop). Late-joining subscribers receive whatever frame the producer
-// sends next; for H.264 they will not see an IDR/keyframe until the next one
+// broadcast delivers a frame to the subscribers whose kind receives it (see
+// frameKind.receives), dropping for slow consumers. Returns false when there
+// are no subscribers left (producer should stop). Late-joining subscribers
+// receive whatever frame the producer sends next; for H.264 they will not see
+// an IDR/keyframe until the next one
 // arrives naturally (at most one GOP interval away for GStreamer pipelines with
 // key-int-max set). The producers repeat SPS and PPS ahead of each IDR so that
 // it is one a late joiner can start on: h264parse config-interval=-1 in the
@@ -885,7 +929,6 @@ func sampleGap(prev, next uint64) bool {
 // maxSubscribersPerHub = 16 and non-blocking selects, the lock is held for
 // O(16) nanoseconds, making the contention cost negligible.
 func (h *deviceHub) broadcast(frame *videoFrame) bool {
-	raw := frame.codec == agentpb.VideoCodec_VIDEO_CODEC_RAW
 	if frameTooLarge(frame) {
 		return true // oversized frame: drop silently, keep the hub alive
 	}
@@ -900,7 +943,7 @@ func (h *deviceHub) broadcast(frame *videoFrame) bool {
 		frame.webmWhole = h.webmJoins.whole
 	}
 	for id, sub := range h.subs {
-		if sub.closed || (sub.raw || sub.pixels) != raw {
+		if sub.closed || !sub.kind.receives(frame) {
 			continue
 		}
 		select {
@@ -926,7 +969,7 @@ func (h *deviceHub) wantRaw() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, sub := range h.subs {
-		if (sub.raw || sub.pixels) && !sub.closed {
+		if sub.kind.readsTap() && !sub.closed {
 			return true
 		}
 	}
@@ -974,7 +1017,7 @@ func (h *deviceHub) rawNotOffered(reason func() string) {
 	h.rawReason = memoiseReason(reason)
 	closed := false
 	for _, sub := range h.subs {
-		if sub.raw && !sub.closed {
+		if sub.kind == rawFrames && !sub.closed {
 			sub.err = errRawUnavailable(h.rawReason())
 			sub.closed = true
 			close(sub.ch)
@@ -1903,18 +1946,20 @@ func streamRequestAssertsParams(req *agentpb.StreamVideoRequest) bool {
 // is recorded against the subscription only when req asserts parameters
 // explicitly.
 func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *agentpb.StreamVideoRequest, origin string) (h *deviceHub, id int, ch chan *videoFrame, err error) {
-	return s.getOrCreateHubKind(ctx, path, req, origin, false)
+	kind := encodedFrames
+	if req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW {
+		kind = rawFrames
+	}
+	return s.getOrCreateHubKind(ctx, path, req, origin, kind)
 }
 
 // getOrCreateHubKind is getOrCreateHub with the subscriber's kind chosen by the
-// caller: pixels makes it an in-agent consumer of the tap (video_hub_demand.go),
-// whatever codec req names; otherwise req's codec picks raw or encoded.
-func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req *agentpb.StreamVideoRequest, origin string, pixels bool) (h *deviceHub, id int, ch chan *videoFrame, err error) {
+// caller, whatever codec req names.
+func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req *agentpb.StreamVideoRequest, origin string, kind frameKind) (h *deviceHub, id int, ch chan *videoFrame, err error) {
 	explicitHolder := ""
 	if streamRequestAssertsParams(req) {
 		explicitHolder = origin
 	}
-	raw := !pixels && req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW
 	for retries := 0; ; retries++ {
 		if retries >= maxHubRetries {
 			s.logger.Warn("hub retry limit exceeded", zap.String("device", path), zap.Int("retries", retries))
@@ -1940,16 +1985,16 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 					zap.Uint32("existing_fps", h.framerate))
 				return nil, 0, nil, status.Errorf(codes.InvalidArgument, "device already in use with different stream parameters")
 			}
-			if raw {
+			if kind == rawFrames {
 				if refusal := h.rawRefusal(); refusal != nil {
 					s.mu.Unlock()
 					return nil, 0, nil, refusal
 				}
 			}
-			// subscribeAsKind checks both refusals again under h.mu: the
+			// subscribeAsKind checks every refusal again under h.mu: the
 			// producer may refuse raw after the check above, and refuses
-			// pixels only there.
-			id, ch, err = h.subscribeAsKind(explicitHolder, raw, pixels)
+			// the other kinds only there.
+			id, ch, err = h.subscribeAsKind(explicitHolder, kind)
 			s.mu.Unlock()
 			if err != nil {
 				if st, _ := status.FromError(err); st.Code() == codes.Unavailable {
@@ -2018,7 +2063,7 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 	}
 	// New hub: the first subscriber is always within the cap, and nothing has
 	// been refused yet.
-	id, ch, _ = h.subscribeAsKind(explicitHolder, raw, pixels)
+	id, ch, _ = h.subscribeAsKind(explicitHolder, kind)
 	s.hubs[path] = h
 	s.mu.Unlock()
 
@@ -2334,7 +2379,7 @@ func (s *VideoService) subscribeExistingHub(path string) (h *deviceHub, id int, 
 func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) {
 	defer s.wg.Done()
 	broadcast := func(payload []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
-		return h.produce(&videoFrame{data: payload, tsNs: stamp.wallNs, codec: codec, nativeNs: stamp.nativeNs, nativeClock: stamp.nativeClock, nativeFlags: stamp.nativeFlags, sequence: stamp.sequence, sequenceValid: stamp.sequenceValid, auAligned: stamp.auAligned})
+		return h.produce(&videoFrame{data: payload, tsNs: stamp.wallNs, codec: codec, nativeNs: stamp.nativeNs, nativeClock: stamp.nativeClock, nativeFlags: stamp.nativeFlags, sequence: stamp.sequence, sequenceValid: stamp.sequenceValid, auAligned: stamp.auAligned, native: stamp.native})
 	}
 
 	// The hub key carries the source kind: network cameras key on "ip:<id>" and
@@ -3089,7 +3134,11 @@ func (s *VideoService) setV4L2FrameInterval(fd int, path string, fps uint32) {
 }
 
 func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest) error {
-	return s.captureV4L2Native(ctx, s.nativeH264Emit(path, broadcast), path, v4l2CaptureConfig{
+	cameraOwnFrame := func(data []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
+		stamp.native = true
+		return broadcast(data, stamp, codec)
+	}
+	return s.captureV4L2Native(ctx, s.nativeH264Emit(path, cameraOwnFrame), path, v4l2CaptureConfig{
 		pixelFormat:   v4l2PixFmtH264,
 		width:         req.GetWidth(),
 		height:        req.GetHeight(),

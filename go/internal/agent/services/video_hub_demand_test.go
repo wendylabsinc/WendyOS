@@ -41,7 +41,7 @@ func TestDeviceHub_PixelSubscriberGetsTapFramesOnly(t *testing.T) {
 	defer cancel()
 
 	idEnc, chEnc, _ := h.subscribe()
-	idRaw, chRaw, _ := h.subscribeKind(true)
+	idRaw, chRaw, _ := h.subscribeKind(rawFrames)
 	idPix, chPix, err := h.subscribePixels()
 	if err != nil {
 		t.Fatalf("subscribePixels: %v", err)
@@ -226,7 +226,7 @@ func TestDeviceHub_HeldCameraRefusalMarksPixelSubscribersOnly(t *testing.T) {
 	// Keeps the hub alive: the last unsubscribe cancels it.
 	idHold, _, _ := h.subscribe()
 	defer h.unsubscribe(idHold)
-	idRaw, chRaw, _ := h.subscribeKind(true)
+	idRaw, chRaw, _ := h.subscribeKind(rawFrames)
 	idPix, chPix, err := h.subscribePixels()
 	if err != nil {
 		t.Fatalf("subscribePixels: %v", err)
@@ -261,7 +261,7 @@ func TestDeviceHub_HeldCameraRefusalMarksPixelSubscribersOnly(t *testing.T) {
 	if _, _, err := h.subscribePixels(); !errors.Is(err, errPixelsCameraHeld) {
 		t.Fatalf("a later pixel join got %v, want the held-camera refusal", err)
 	}
-	if _, _, err := h.subscribeKind(true); errors.Is(err, errPixelsCameraHeld) || err.Error() != wantRaw {
+	if _, _, err := h.subscribeKind(rawFrames); errors.Is(err, errPixelsCameraHeld) || err.Error() != wantRaw {
 		t.Fatalf("a later raw join got %v, want exactly %q", err, wantRaw)
 	}
 
@@ -295,7 +295,7 @@ func TestDeviceHub_RawRefusedButPixelsOfferedOnMJPEG(t *testing.T) {
 	h, cancel := newTestHub(t)
 	defer cancel()
 
-	idRaw, chRaw, _ := h.subscribeKind(true)
+	idRaw, chRaw, _ := h.subscribeKind(rawFrames)
 	idPix, chPix, err := h.subscribePixels()
 	if err != nil {
 		t.Fatalf("subscribePixels: %v", err)
@@ -372,7 +372,7 @@ func TestDeviceHub_RawJoinAfterRefusalGetsNoTapFrames(t *testing.T) {
 	h.pixelsOffered(decoded)
 	h.rawNotOffered(fixedReason("camera is captured as MJPEG at 1280x720; raw frames are not offered"))
 
-	idRaw, chRaw, err := h.subscribeKind(true)
+	idRaw, chRaw, err := h.subscribeKind(rawFrames)
 	if err == nil {
 		defer h.unsubscribe(idRaw)
 	}
@@ -482,5 +482,206 @@ func TestGetOrCreateHub_PixelJoinRefusedUpFrontOnceProducerDeclined(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "ISP pipeline") {
 		t.Errorf("refusal must carry the producer's reason: %v", err)
+	}
+}
+
+func TestDeviceHub_DeliversEachFrameToTheKindsThatAskedForIt(t *testing.T) {
+	const (
+		h264    = agentpb.VideoCodec_VIDEO_CODEC_H264
+		vp8     = agentpb.VideoCodec_VIDEO_CODEC_VP8
+		raw     = agentpb.VideoCodec_VIDEO_CODEC_RAW
+		unknown = agentpb.VideoCodec(99)
+	)
+	kinds := map[string]frameKind{"encoded": encodedFrames, "raw": rawFrames, "pixels": pixelFrames, "native": nativeFrames}
+	for _, tc := range []struct {
+		name    string
+		frame   videoFrame
+		reaches []string
+	}{
+		{"H.264 from the encoder", videoFrame{codec: h264}, []string{"encoded"}},
+		{"VP8 from the encoder", videoFrame{codec: vp8}, []string{"encoded"}},
+		{"uncompressed frame from the tap", videoFrame{codec: raw}, []string{"raw", "pixels"}},
+		{"the camera's own H.264", videoFrame{codec: h264, native: true}, []string{"encoded", "native"}},
+		{"the camera's own uncompressed frame", videoFrame{codec: raw, native: true}, []string{"raw", "pixels", "native"}},
+		{"the camera's own frame in another codec", videoFrame{codec: unknown, native: true}, []string{"native"}},
+		{"a derived frame in another codec", videoFrame{codec: unknown}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, cancel := newTestHub(t)
+			defer cancel()
+			queued := map[string]chan *videoFrame{}
+			for name, kind := range kinds {
+				id, ch, err := h.subscribeKind(kind)
+				if err != nil {
+					t.Fatalf("subscribeKind(%s): %v", name, err)
+				}
+				defer h.unsubscribe(id)
+				queued[name] = ch
+			}
+
+			frame := tc.frame
+			frame.data = []byte{1}
+			if !h.broadcast(&frame) {
+				t.Fatal("broadcast reported no subscribers")
+			}
+
+			want := map[string]int{}
+			for _, name := range tc.reaches {
+				want[name] = 1
+			}
+			for name, ch := range queued {
+				if len(ch) != want[name] {
+					t.Errorf("%s subscriber has %d frames queued, want %d", name, len(ch), want[name])
+				}
+			}
+		})
+	}
+}
+
+func TestDeviceHub_NativeSubscriberDoesNotRunTheEncoder(t *testing.T) {
+	h, cancel := newTestHub(t)
+	defer cancel()
+
+	if h.wantNative() {
+		t.Error("an empty hub must not want native frames")
+	}
+	idNative, _, err := h.subscribeKind(nativeFrames)
+	if err != nil {
+		t.Fatalf("subscribeKind(nativeFrames): %v", err)
+	}
+	defer h.unsubscribe(idNative)
+	if h.wantEncoded() {
+		t.Error("a native-only hub must not want encoded video")
+	}
+	if h.wantRaw() {
+		t.Error("a native-only hub must not want the tap")
+	}
+	if !h.wantNative() {
+		t.Error("a native subscriber must make native frames wanted")
+	}
+
+	idEnc, _, _ := h.subscribe()
+	if !h.wantEncoded() {
+		t.Error("an encoded subscriber must make encoded video wanted")
+	}
+	h.unsubscribe(idEnc)
+	if h.wantEncoded() {
+		t.Error("encoded video still wanted after the only encoded subscriber left")
+	}
+}
+
+func TestDeviceHub_DerivedFrameKeepsItsSourceIdentity(t *testing.T) {
+	h, cancel := newTestHub(t)
+	defer cancel()
+	h.sampleSeq = new(atomic.Uint64)
+
+	idPix, chPix, err := h.subscribePixels()
+	if err != nil {
+		t.Fatalf("subscribePixels: %v", err)
+	}
+	defer h.unsubscribe(idPix)
+
+	source := &videoFrame{data: []byte{0xFF, 0xD8}, codec: agentpb.VideoCodec(99), native: true,
+		nativeNs: 5_000, nativeClock: "CLOCK_MONOTONIC_V4L2", nativeFlags: 0x2000, sequence: 9, sequenceValid: true}
+	if !h.produce(source) {
+		t.Fatal("produce reported no subscribers")
+	}
+	// Fixed, so the check below cannot pass on a platform whose receipt reads zero.
+	source.receiptBootNanos, source.receiptUncertaintyNanos = 123_456, 7
+
+	derived := &videoFrame{data: []byte{1, 2, 3, 4}, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW}
+	if !h.broadcastDerivedFrom(source, derived) {
+		t.Fatal("broadcastDerivedFrom reported no subscribers")
+	}
+	if got := h.sampleSeq.Load(); got != source.sampleID {
+		t.Fatalf("publishing a derived frame moved the sample sequence to %d, want %d", got, source.sampleID)
+	}
+
+	got := <-chPix
+	if got != derived {
+		t.Fatal("the pixel subscriber did not receive the derived frame")
+	}
+	if got.sampleID != source.sampleID {
+		t.Errorf("derived sampleID = %d, want the source's %d", got.sampleID, source.sampleID)
+	}
+	if got.receiptBootNanos != 123_456 || got.receiptUncertaintyNanos != 7 {
+		t.Errorf("derived receipt = %d±%d, want the source's 123456±7", got.receiptBootNanos, got.receiptUncertaintyNanos)
+	}
+	if got.nativeNs != 5_000 || got.nativeClock != "CLOCK_MONOTONIC_V4L2" || got.nativeFlags != 0x2000 {
+		t.Errorf("derived native timestamp = %d %q %#x, want the source's", got.nativeNs, got.nativeClock, got.nativeFlags)
+	}
+	if got.sequence != 9 || !got.sequenceValid {
+		t.Errorf("derived sequence = %d (valid=%v), want the source's 9", got.sequence, got.sequenceValid)
+	}
+	if got.native {
+		t.Error("a derived frame must not be marked as the camera's own")
+	}
+
+	next := &videoFrame{data: []byte{0xFF, 0xD8}, codec: agentpb.VideoCodec(99), native: true}
+	h.produce(next)
+	if next.sampleID != source.sampleID+1 {
+		t.Errorf("the frame produced after a derived one got sampleID %d, want %d", next.sampleID, source.sampleID+1)
+	}
+}
+
+func TestDeviceHub_NativeNotOfferedTurnsAwayOnlyNativeSubscribers(t *testing.T) {
+	h, cancel := newTestHub(t)
+	defer cancel()
+
+	idEnc, chEnc, _ := h.subscribe()
+	idRaw, chRaw, _ := h.subscribeKind(rawFrames)
+	idPix, chPix, _ := h.subscribePixels()
+	idNative, chNative, err := h.subscribeKind(nativeFrames)
+	if err != nil {
+		t.Fatalf("subscribeKind(nativeFrames): %v", err)
+	}
+	for _, id := range []int{idEnc, idRaw, idPix, idNative} {
+		defer h.unsubscribe(id)
+	}
+	changed := h.demandChanged()
+	drainDemand(changed)
+
+	const reason = "camera delivers decoded frames only"
+	h.nativeNotOffered(fixedReason(reason))
+
+	if _, ok := <-chNative; ok {
+		t.Fatal("native subscriber channel should be closed")
+	}
+	refusal := h.subscriberErr(idNative)
+	if status.Code(refusal) != codes.FailedPrecondition || !strings.Contains(refusal.Error(), reason) {
+		t.Fatalf("native subscriber error = %v, want FailedPrecondition carrying %q", refusal, reason)
+	}
+	if h.wantNative() {
+		t.Error("a turned-away native subscriber must not count as wanting native frames")
+	}
+	expectDemandPoke(t, changed, "the producer closed a native subscriber")
+
+	for name, id := range map[string]int{"encoded": idEnc, "raw": idRaw, "pixel": idPix} {
+		if err := h.subscriberErr(id); err != nil {
+			t.Errorf("%s subscriber inherited the native refusal: %v", name, err)
+		}
+	}
+	format := &agentpb.RawFormat{Width: 2, Height: 1, Fourcc: fourccYUYV, BytesPerLine: 4}
+	if !h.broadcast(&videoFrame{data: []byte{0, 0, 0, 1, 0x65}, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, native: true}) {
+		t.Fatal("broadcast reported no subscribers")
+	}
+	if !h.publishRaw([]byte{9, 9, 9, 9}, 7, format) {
+		t.Fatal("publishRaw reported no subscribers")
+	}
+	if len(chEnc) != 1 || len(chRaw) != 1 || len(chPix) != 1 {
+		t.Fatalf("after the refusal: encoded=%d raw=%d pixels=%d queued, want 1/1/1", len(chEnc), len(chRaw), len(chPix))
+	}
+
+	_, _, err = h.subscribeKind(nativeFrames)
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("a later native join got %v, want FailedPrecondition carrying %q", err, reason)
+	}
+	for name, kind := range map[string]frameKind{"encoded": encodedFrames, "raw": rawFrames, "pixel": pixelFrames} {
+		id, _, err := h.subscribeKind(kind)
+		if err != nil {
+			t.Errorf("a later %s join was refused: %v", name, err)
+			continue
+		}
+		defer h.unsubscribe(id)
 	}
 }

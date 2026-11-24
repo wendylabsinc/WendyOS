@@ -316,7 +316,7 @@ func firstClosed(a, b <-chan struct{}) <-chan struct{} {
 func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID uint32, mode sharedMode) (shareSubscription, error) {
 	req := &agentpb.StreamVideoRequest{DeviceId: devID}
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
-		h, id, ch, err := s.getOrCreateHubKind(ctx, path, req, hubHolderStreamClient, true)
+		h, id, ch, err := s.getOrCreateHubKind(ctx, path, req, hubHolderStreamClient, pixelFrames)
 		switch {
 		case err == nil && runsAtSharedMode(h, mode):
 			return &hubShareSubscription{hub: h, id: id, ch: ch}, nil

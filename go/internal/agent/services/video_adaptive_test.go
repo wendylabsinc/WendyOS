@@ -56,19 +56,19 @@ func TestAdaptiveRawDeliveryKeepsNewestFrameWithoutChangingOtherSubscribers(t *t
 		t.Run(tc.name, func(t *testing.T) {
 			h, cancel := newTestHub(t)
 			defer cancel()
-			id, ch, err := h.subscribeKind(tc.raw)
+			kind, codec := encodedFrames, pb.VideoCodec_VIDEO_CODEC_H264
+			if tc.raw {
+				kind, codec = rawFrames, pb.VideoCodec_VIDEO_CODEC_RAW
+			}
+			id, ch, err := h.subscribeKind(kind)
 			if err != nil {
 				t.Fatal(err)
 			}
-			otherID, other, err := h.subscribeKind(tc.raw)
+			otherID, other, err := h.subscribeKind(kind)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer h.unsubscribe(otherID)
-			codec := pb.VideoCodec_VIDEO_CODEC_H264
-			if tc.raw {
-				codec = pb.VideoCodec_VIDEO_CODEC_RAW
-			}
 			for i := 0; i < 4; i++ {
 				h.broadcast(&videoFrame{data: []byte{byte(i)}, codec: codec})
 			}

@@ -27,7 +27,7 @@ func TestDeviceHub_RawAndEncodedSubscribersGetDifferentFrames(t *testing.T) {
 	defer cancel()
 
 	idEnc, chEnc, _ := h.subscribe()
-	idRaw, chRaw, _ := h.subscribeKind(true)
+	idRaw, chRaw, _ := h.subscribeKind(rawFrames)
 	defer h.unsubscribe(idEnc)
 	defer h.unsubscribe(idRaw)
 
@@ -66,7 +66,7 @@ func TestDeviceHub_RawNotOffered_TurnsAwayOnlyRawSubscribers(t *testing.T) {
 	defer cancel()
 
 	idEnc, chEnc, _ := h.subscribe()
-	idRaw, chRaw, _ := h.subscribeKind(true)
+	idRaw, chRaw, _ := h.subscribeKind(rawFrames)
 	defer h.unsubscribe(idEnc)
 	defer h.unsubscribe(idRaw)
 
@@ -107,7 +107,7 @@ func TestDeviceHub_RawNotOffered_TurnsAwayOnlyRawSubscribers(t *testing.T) {
 
 func TestDeviceHub_ProducerTeardownSkipsAlreadyClosedRawSubscriber(t *testing.T) {
 	h, _ := newTestHub(t)
-	_, _, _ = h.subscribeKind(true)
+	_, _, _ = h.subscribeKind(rawFrames)
 	h.rawNotOffered(fixedReason("no raw"))
 	// runProducer's teardown closes every subscriber it has not closed already.
 	// A second close would panic; this is the loop it runs.

@@ -72,8 +72,8 @@ var (
 	_ encodeDemand   = (*deviceHub)(nil)
 )
 
-// hubDemand is the hub state behind pixel subscribers and encoder demand.
-// Protected by the hub's mu, like everything else on deviceHub.
+// hubDemand is the hub state behind pixel and native subscribers and encoder
+// demand. Protected by the hub's mu, like everything else on deviceHub.
 type hubDemand struct {
 	// changed is poked, never blocking, whenever the answer to wantEncoded or
 	// wantRaw may have changed. Capacity 1: a producer that was busy sees one
@@ -90,6 +90,9 @@ type hubDemand struct {
 	// refused is non-nil once the producer turned pixel subscribers away: it is
 	// the raw refusal's reason, evaluated only if a pixel consumer asks.
 	refused func() string
+	// nativeRefused is non-nil once the producer turned native subscribers
+	// away; see nativeNotOffered.
+	nativeRefused func() string
 	// held is set by pixelsFromHeldCamera and consumed, like tap, by the raw
 	// decision that follows it; refusedHeld keeps it with refused, so the pixel
 	// refusal wraps errPixelsCameraHeld.
@@ -104,7 +107,7 @@ type hubDemand struct {
 // as rawRefusal does for a raw subscriber, rather than leaving the consumer
 // waiting on frames that will never come.
 func (h *deviceHub) subscribePixels() (int, chan *videoFrame, error) {
-	return h.subscribeAsKind("", false, true)
+	return h.subscribeAsKind("", pixelFrames)
 }
 
 // pixelRefusal builds the error a refused pixel subscriber is given. held says
@@ -125,17 +128,53 @@ func (h *deviceHub) pixelsFromHeldCamera() {
 	h.demand.held = true
 }
 
-// wantEncoded reports whether any live subscriber wants encoded video: one that
-// is neither raw nor pixels. A producer runs its encoder for these alone.
+// wantEncoded reports whether any live subscriber asked for encoded video. A
+// producer runs its encoder for these alone.
 func (h *deviceHub) wantEncoded() bool {
+	return h.wantKind(encodedFrames)
+}
+
+// wantNative reports whether any live subscriber asked for the camera's own
+// frames.
+func (h *deviceHub) wantNative() bool {
+	return h.wantKind(nativeFrames)
+}
+
+func (h *deviceHub) wantKind(kind frameKind) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, sub := range h.subs {
-		if !sub.raw && !sub.pixels && !sub.closed {
+		if sub.kind == kind && !sub.closed {
 			return true
 		}
 	}
 	return false
+}
+
+func errNativeUnavailable(reason string) error {
+	return status.Error(codes.FailedPrecondition, "native frames are not available for this camera: "+reason)
+}
+
+// nativeNotOffered records that this producer has none of the camera's own
+// frames to give: every native subscriber waiting on it is closed with the
+// reason, and later native joins are refused up front. The reason is evaluated
+// only if a native subscriber asks, as for rawNotOffered.
+func (h *deviceHub) nativeNotOffered(reason func() string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.demand.nativeRefused = memoiseReason(reason)
+	closed := false
+	for _, sub := range h.subs {
+		if sub.kind == nativeFrames && !sub.closed {
+			sub.err = errNativeUnavailable(h.demand.nativeRefused())
+			sub.closed = true
+			close(sub.ch)
+			closed = true
+		}
+	}
+	if closed {
+		h.pokeDemandLocked()
+	}
 }
 
 // demandChanged returns the channel poked whenever wantEncoded or wantRaw may
@@ -194,7 +233,7 @@ func (h *deviceHub) pixelsNotOfferedLocked(reason func() string) bool {
 	h.demand.refusedHeld = held
 	closed := false
 	for _, sub := range h.subs {
-		if sub.pixels && !sub.closed {
+		if sub.kind == pixelFrames && !sub.closed {
 			sub.err = pixelRefusal(reason, held)
 			sub.closed = true
 			close(sub.ch)
@@ -236,7 +275,7 @@ func (h *deviceHub) pipelineEncodes() bool {
 // whose producer has no tap answers with errPixelsUnavailable.
 func (s *VideoService) joinHubPixels(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (*deviceHub, int, chan *videoFrame, error) {
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
-		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderStreamClient, true)
+		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderStreamClient, pixelFrames)
 		if err == nil {
 			return hub, id, ch, nil
 		}

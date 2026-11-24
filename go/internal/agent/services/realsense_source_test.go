@@ -310,7 +310,7 @@ func TestRealSenseStream_ColourEndCarriesItsReason(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ch := make(chan *videoFrame)
-			hub := &deviceHub{subs: map[int]*hubSubscriber{7: {ch: ch, raw: true}}}
+			hub := &deviceHub{subs: map[int]*hubSubscriber{7: {ch: ch, kind: rawFrames}}}
 			tc.setup(hub)
 			close(ch)
 			st := &realsenseStream{hub: hub, subID: 7, colour: ch}
