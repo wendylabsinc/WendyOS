@@ -130,6 +130,7 @@ type postboxEntryVectors struct {
 	OperatorCA     string `json:"operator_ca_cert_der_b64"`
 	VerifyAt       int64  `json:"verify_at"`
 	PlatformCap    int64  `json:"platform_cap_seconds"`
+	CapTolerance   int64  `json:"device_cap_tolerance_seconds"`
 	OrgCAVectors   []struct {
 		Name     string `json:"name"`
 		Expect   string `json:"expect"`
@@ -170,8 +171,8 @@ func TestPostboxEntryVectors(t *testing.T) {
 	var doc postboxEntryVectors
 	readVectors(t, "entry", "postbox-entry/postbox-entry-vectors-v1.json", "0efab9298df96d7a5ce8bf37cf323a5684103150731363f272d6c2f7791f4f94", &doc)
 	orgCA := b64Cert(t, doc.OrgCA)
-	if len(doc.OrgCAVectors)+len(doc.ValidityVectors) != 13 || doc.PlatformCap != int64(postboxPlatformCap/time.Second) {
-		t.Fatalf("%d+%d vectors, platform cap %d", len(doc.OrgCAVectors), len(doc.ValidityVectors), doc.PlatformCap)
+	if len(doc.OrgCAVectors)+len(doc.ValidityVectors) != 13 || doc.PlatformCap != int64(postboxPlatformCap/time.Second) || doc.CapTolerance != int64(postboxCapTolerance/time.Second) {
+		t.Fatalf("%d+%d vectors, platform cap %d, cap tolerance %d", len(doc.OrgCAVectors), len(doc.ValidityVectors), doc.PlatformCap, doc.CapTolerance)
 	}
 	deviceUUID := doc.Device[strings.LastIndex(doc.Device, "/")+1:]
 	ident := func() *postboxIdentity {
