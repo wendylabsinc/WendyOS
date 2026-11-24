@@ -160,7 +160,6 @@ func errNativeUnavailable(reason string) error {
 	return status.Error(codes.FailedPrecondition, "native frames are not available for this camera: "+reason)
 }
 
-// nativeOffered lifts a refusal an earlier start of this hub made.
 func (h *deviceHub) nativeOffered() {
 	h.mu.Lock()
 	defer h.mu.Unlock()

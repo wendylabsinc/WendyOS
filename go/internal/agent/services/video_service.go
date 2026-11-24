@@ -451,10 +451,11 @@ type videoFrame struct {
 	sequence      uint32
 	sequenceValid bool
 	// auAligned reports that data holds exactly one whole encoded access unit.
-	// Only the native V4L2 path delivers this (one V4L2 buffer per encoded
-	// frame); the GStreamer and IP camera producers read a byte stream from a
-	// pipe, so their frames are arbitrary chunk-sized slices of the stream that
-	// can begin or end mid-access-unit. Consumers that cut the stream at frame
+	// Native V4L2 capture delivers this (one V4L2 buffer per encoded frame), and
+	// so does the derived layer (one access unit per packet from its child); the
+	// GStreamer and IP camera producers read a byte stream from a pipe, so their
+	// frames are arbitrary chunk-sized slices of the stream that can begin or
+	// end mid-access-unit. Consumers that cut the stream at frame
 	// boundaries (snapshot stills, GOP-granularity rate capping) must require
 	// this flag: a chunk that merely contains an SPS/PPS/IDR prefix may still
 	// be truncated mid-IDR.
@@ -621,9 +622,7 @@ type deviceHub struct {
 	webmJoins webmJoins
 	// demand holds the pixel offer and encoder demand (video_hub_demand.go).
 	// Protected by h.mu.
-	demand hubDemand
-	// derived is handed every frame produce numbers while the producer runs a
-	// derived layer (video_derived_layer.go).
+	demand  hubDemand
 	derived atomic.Pointer[derivedLayer]
 }
 
@@ -886,7 +885,6 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 	return keepProducing
 }
 
-// feedDerivedLayer hands layer every frame produce numbers until detach.
 func (h *deviceHub) feedDerivedLayer(layer *derivedLayer) (detach func()) {
 	h.derived.Store(layer)
 	return func() { h.derived.CompareAndSwap(layer, nil) }
@@ -1214,6 +1212,8 @@ type VideoService struct {
 	// what "default" means, and its behaviour -- including that it forgets a
 	// stored control even when the write fails -- must be testable without one.
 	controlDefaultsFor func(path string, names []string) (map[string]int32, error)
+
+	derivedFailures derivedLayerFailures
 
 	// captureV4L2 replaces captureV4L2Native, so the choice between capture
 	// paths is testable without a /dev/video node.
@@ -2392,7 +2392,8 @@ func (s *VideoService) subscribeExistingHub(path string) (h *deviceHub, id int, 
 }
 
 // runProducer drives the capture loop for a single device hub.
-// It tries native V4L2 H.264 first, falling back to GStreamer when unsupported.
+// It tries the native capture sources in order (nativeCaptureSources), falling
+// back to GStreamer when none delivers.
 // When the hub loses its last subscriber the context is cancelled and this goroutine exits.
 func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) {
 	defer s.wg.Done()
@@ -2484,7 +2485,6 @@ type hubSink interface {
 
 var _ hubSink = (*deviceHub)(nil)
 
-// derivingHub is the part of a hub a derived layer is built on.
 type derivingHub interface {
 	hubSink
 	broadcastDerivedFrom(source, derived *videoFrame) (keepProducing bool, err error)
@@ -2543,11 +2543,12 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	// encoder delivers nothing else. Atomic, because the tap's pump runs on a goroutine of
 	// its own.
 	var delivered atomic.Bool
-	deriving, _ := sink.(derivingHub)
-	// gstSink is the sink of the GStreamer capture a native capture gave way to.
+	cam := localCamera{path: path, req: req, sink: sink}
+	cam.hub, _ = sink.(derivingHub)
 	gstSink := func(string) rawSink { return sink }
 	if hub, ok := sink.(hubSink); ok {
 		sink = tapDeliveries{hubSink: hub, delivered: &delivered}
+		cam.sink = sink
 		gstSink = func(whyNotNative string) rawSink {
 			return tapDeliveries{hubSink: hub, delivered: &delivered, whyNotNative: fixedReason(whyNotNative)}
 		}
@@ -2555,8 +2556,8 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	// A native capture hands on the camera's own frames and never sees a decoded
 	// one. Its first delivered frame is the proof it is the path in use, and the
 	// moment its raw, pixel and native subscribers can be told rather than left
-	// waiting: sendDeciding makes that capture's decision there.
-	sendDeciding := func(decideOnFirstNativeFrame func()) func([]byte, frameTimestamp, agentpb.VideoCodec) bool {
+	// waiting.
+	cam.sendDeciding = func(decideOnFirstNativeFrame func()) func([]byte, frameTimestamp, agentpb.VideoCodec) bool {
 		return func(data []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
 			ok := broadcast(data, stamp, codec)
 			if ok && decideOnFirstNativeFrame != nil && !delivered.Load() {
@@ -2571,18 +2572,12 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 			return ok
 		}
 	}
-	send := sendDeciding(nil)
+	send := cam.sendDeciding(nil)
 
-	err := s.streamV4L2Native(ctx, sendDeciding(func() {
-		sink.rawNotOffered(fixedReason("camera streams H.264 natively; raw frames are not offered"))
-	}), path, req)
-	if _, ok := err.(nativeH264NotSupported); ok {
-		var whyNotNative string
-		whyNotNative, err = s.captureNativeJPEGDeriving(ctx, sendDeciding, path, req, deriving, sink)
-		if whyNotNative != "" {
-			s.logger.Info("no native capture, falling back to GStreamer", zap.String("device", path), zap.String("reason", whyNotNative))
-			err = s.streamGStreamer(ctx, send, path, req, transport, libcameraID, pipeWireSource{}, gstSink(whyNotNative))
-		}
+	whyNotNative, err := s.captureNatively(ctx, cam)
+	if whyNotNative != "" {
+		s.logger.Info("no native capture, falling back to GStreamer", zap.String("device", path), zap.String("reason", whyNotNative))
+		err = s.streamGStreamer(ctx, send, path, req, transport, libcameraID, pipeWireSource{}, gstSink(whyNotNative))
 	}
 	if !isCameraInUse(err) || delivered.Load() || ctx.Err() != nil {
 		return err
@@ -2619,77 +2614,6 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	}
 	s.logger.Warn("PipeWire capture failed for a held camera",
 		zap.String("device", path), zap.Error(pwErr))
-	return err
-}
-
-// captureNativeJPEGDeriving captures a camera's JPEG frames whole and runs the
-// layer that derives pictures and H.264 from them. A non-empty whyNotNative
-// says no frame was delivered this way and why.
-func (s *VideoService) captureNativeJPEGDeriving(ctx context.Context, sendDeciding func(decideOnFirstNativeFrame func()) func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, hub derivingHub, sink rawSink) (whyNotNative string, err error) {
-	width, height, ok := nativeJPEGCaptureSize(path, req)
-	switch {
-	case req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW:
-		return "the camera was started for a raw frame request, which captures it uncompressed", nil
-	case !ok && thermalCaptureProfile(path) != nil:
-		return "thermal cameras are captured uncompressed, for their measurements", nil
-	case !ok:
-		return "the camera offers neither H.264 nor JPEG at the capture size", nil
-	case hub == nil:
-		return "the capture does not feed a camera hub", nil
-	}
-	layer, err := s.derivedLayerFor(hub, videoCodecMJPEG, path, width, height, req.GetFramerate())
-	if err != nil {
-		return fmt.Sprintf("pictures and H.264 cannot be derived from the camera's JPEG frames on this device (%v), so GStreamer captures it", err), nil
-	}
-	send := sendDeciding(func() { layer.offerTo(sink) })
-	err = s.captureDeriving(ctx, hub, layer, func(ctx context.Context) error {
-		return s.captureNativeJPEG(ctx, send, path, width, height, req.GetFramerate())
-	})
-	if notSupported, ok := err.(nativeJPEGNotSupported); ok {
-		return "the camera's JPEG frames could not be captured whole: " + notSupported.msg, nil
-	}
-	return "", err
-}
-
-func (s *VideoService) derivedLayerFor(hub derivingHub, format agentpb.VideoCodec, path string, width, height, framerate uint32) (*derivedLayer, error) {
-	gstPath, available, err := s.gstElements()
-	if err != nil {
-		return nil, fmt.Errorf("GStreamer is not usable: %w", err)
-	}
-	return newDerivedLayer(derivedLayerConfig{
-		logger: s.logger, device: path, format: format, gstPath: gstPath, available: available,
-		width: width, height: height, framerate: framerate, grace: s.encoderGrace(),
-		demand: hub, publish: hub.broadcastDerivedFrom,
-	})
-}
-
-// captureDeriving runs a native capture with layer deriving from the frames
-// it produces into hub. A layer that gives up ends the capture, with the
-// layer's error: the hub's viewers and pixel readers would otherwise wait on
-// frames that will not come.
-func (s *VideoService) captureDeriving(ctx context.Context, hub derivingHub, layer *derivedLayer, capture func(context.Context) error) error {
-	detach := hub.feedDerivedLayer(layer)
-	defer detach()
-	captureCtx, stopCapture := context.WithCancel(ctx)
-	defer stopCapture()
-	layerCtx, stopLayer := context.WithCancel(ctx)
-	defer stopLayer()
-	layerEnded := make(chan error, 1)
-	var layerGaveUp atomic.Bool
-	go func() {
-		err := layer.run(layerCtx)
-		if layerCtx.Err() == nil {
-			layerGaveUp.Store(true)
-			stopCapture()
-		}
-		layerEnded <- err
-	}()
-	err := capture(captureCtx)
-	stopLayer()
-	layerErr := <-layerEnded
-	if layerGaveUp.Load() && ctx.Err() == nil {
-		return layerErr
-	}
 	return err
 }
 
@@ -3230,6 +3154,10 @@ type v4l2CaptureConfig struct {
 	// but a RealSense depth node left at its default interval runs Z16 at
 	// ~90 fps and triples the USB bandwidth asked of it.
 	setFrameInterval bool
+	// stallLimit ends a capture that has received no frame for this long, with
+	// the error a GStreamer capture gives for a camera that went quiet. Zero
+	// waits for the camera indefinitely, as native H.264 capture always has.
+	stallLimit time.Duration
 	// formatUnsupported wraps the three "device cannot produce this format"
 	// exits (S_FMT EINVAL, a silently switched format, DQBUF dying before the
 	// first frame), so the H.264 caller keeps its typed software-encoder
@@ -3297,6 +3225,21 @@ func (s *VideoService) captureDepthZ16(ctx context.Context, emit func([]byte, fr
 // fourccName renders a V4L2 pixel format for error messages ('Z16 ', 'H264').
 func fourccName(pixfmt uint32) string {
 	return string([]byte{byte(pixfmt), byte(pixfmt >> 8), byte(pixfmt >> 16), byte(pixfmt >> 24)})
+}
+
+type captureStall struct {
+	limit     time.Duration
+	lastFrame time.Time
+	sawFrame  bool
+}
+
+func (c *captureStall) frame(now time.Time) { c.lastFrame, c.sawFrame = now, true }
+
+func (c *captureStall) expired(now time.Time) error {
+	if c.limit <= 0 || now.Sub(c.lastFrame) <= c.limit {
+		return nil
+	}
+	return gstTimeoutError(c.sawFrame, c.limit, c.limit)
 }
 
 func (s *VideoService) v4l2Capture(ctx context.Context, emit func([]byte, frameTimestamp) bool, path string, cfg v4l2CaptureConfig) error {
@@ -3436,11 +3379,15 @@ func (s *VideoService) captureV4L2Native(ctx context.Context, emit func([]byte, 
 	}
 	pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 	var framesSent int
+	stall := captureStall{limit: cfg.stallLimit, lastFrame: time.Now()}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+		if err := stall.expired(time.Now()); err != nil {
+			return err
 		}
 
 		// Poll with a short timeout so context cancellation is noticed quickly.
@@ -3513,6 +3460,7 @@ func (s *VideoService) captureV4L2Native(ctx context.Context, emit func([]byte, 
 				return nil
 			}
 			framesSent++
+			stall.frame(time.Now())
 		}
 
 		// Re-queue the buffer.
@@ -4178,9 +4126,7 @@ type gstPipelinePlan struct {
 	// tapOnly is true only for a pipeline the shaped planner built without an
 	// encoder. Its zero value means "encodes", so plans built elsewhere
 	// (planSharedJPEGPipeline, planJPEGFeedPipeline, the Argus branch) stay valid.
-	tapOnly bool
-	// nativeWhy says why this pipeline delivers none of the camera's own whole
-	// frames: the reason a native subscriber is refused with.
+	tapOnly   bool
 	nativeWhy string
 }
 

@@ -54,6 +54,13 @@ func (f *fakeV4L2) capture(ctx context.Context, emit func([]byte, frameTimestamp
 	}
 }
 
+func withFrameRates(t *testing.T, byFormat map[uint32][]uint32) {
+	t.Helper()
+	prev := frameRatesFor
+	frameRatesFor = func(_ string, pixfmt, _, _ uint32) []uint32 { return byFormat[pixfmt] }
+	t.Cleanup(func() { frameRatesFor = prev })
+}
+
 func (f *fakeV4L2) formatsAsked() []uint32 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -64,7 +71,7 @@ func (f *fakeV4L2) formatsAsked() []uint32 {
 	return formats
 }
 
-type localCameraCapture struct {
+type fakeLocalCameraCapture struct {
 	hub  *deviceHub
 	v4l2 *fakeV4L2
 	stop func() error
@@ -72,7 +79,12 @@ type localCameraCapture struct {
 
 // captureFakeLocalCamera runs captureLocalCamera for a hub the way runProducer
 // does, once subscribe has attached the test's subscribers.
-func captureFakeLocalCamera(t *testing.T, v4l2 *fakeV4L2, req *agentpb.StreamVideoRequest, subscribe func(h *deviceHub)) localCameraCapture {
+func captureFakeLocalCamera(t *testing.T, v4l2 *fakeV4L2, req *agentpb.StreamVideoRequest, subscribe func(h *deviceHub)) fakeLocalCameraCapture {
+	t.Helper()
+	return captureFakeLocalCameraWith(t, &VideoService{logger: zap.NewNop(), encoderIdleGrace: time.Second}, v4l2, req, subscribe)
+}
+
+func captureFakeLocalCameraWith(t *testing.T, svc *VideoService, v4l2 *fakeV4L2, req *agentpb.StreamVideoRequest, subscribe func(h *deviceHub)) fakeLocalCameraCapture {
 	t.Helper()
 	if v4l2.frame == nil {
 		v4l2.frame = encodeTestJPEG(t, 64, 48)
@@ -81,7 +93,7 @@ func captureFakeLocalCamera(t *testing.T, v4l2 *fakeV4L2, req *agentpb.StreamVid
 	t.Cleanup(cancelHub)
 	h.sampleSeq = new(atomic.Uint64)
 	subscribe(h)
-	svc := &VideoService{logger: zap.NewNop(), encoderIdleGrace: time.Second, captureV4L2: v4l2.capture}
+	svc.captureV4L2 = v4l2.capture
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
@@ -101,7 +113,7 @@ func captureFakeLocalCamera(t *testing.T, v4l2 *fakeV4L2, req *agentpb.StreamVid
 		return err
 	}
 	t.Cleanup(func() { stop() }) //nolint:errcheck
-	return localCameraCapture{hub: h, v4l2: v4l2, stop: stop}
+	return fakeLocalCameraCapture{hub: h, v4l2: v4l2, stop: stop}
 }
 
 var jpegWebcam = jpegSelectionCamera{defaultSize: [2]uint32{640, 480}, jpegSizes: [][2]uint32{{640, 480}}}
@@ -124,6 +136,7 @@ func waitForRefusal(t *testing.T, h *deviceHub, id int, ch chan *videoFrame, wha
 
 func TestCaptureLocalCamera_JPEGWebcamIsCapturedWholeWithTheDerivedLayer(t *testing.T) {
 	withJPEGSelectionCamera(t, jpegWebcam)
+	withFrameRates(t, map[uint32][]uint32{v4l2PixFmtMJPEG: {30, 60, 15}, v4l2PixFmtYUYV: {5}})
 	launchLog := fakeGStreamer(t, 0, derivedLayerElements...)
 	var idNative, idRaw, idPixels, idViewer int
 	var native, raw, pixels, viewer chan *videoFrame
@@ -155,15 +168,21 @@ func TestCaptureLocalCamera_JPEGWebcamIsCapturedWholeWithTheDerivedLayer(t *test
 		t.Fatalf("pixel subscriber: err=%v, %d frames from a child that wrote none", err, len(pixels))
 	}
 
-	launched := waitForLaunches(t, launchLog, 1)
-	if want := "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! " + derivedPicturesOutput; launched[0] != want {
-		t.Fatalf("child pipeline\n got %q\nwant %q", launched[0], want)
+	if launched := waitForLaunches(t, launchLog, 1); launched[0] != derivedPicturesOnly {
+		t.Fatalf("child pipeline\n got %q\nwant %q", launched[0], derivedPicturesOnly)
 	}
 	if asked := capture.v4l2.formatsAsked(); !reflect.DeepEqual(asked, []uint32{v4l2PixFmtH264, v4l2PixFmtMJPEG}) {
 		t.Fatalf("capture formats asked of the camera = %v, want H.264 then JPEG", asked)
 	}
 	if cfg := capture.v4l2.asked[1]; cfg.width != 640 || cfg.height != 480 || !cfg.exactSize {
 		t.Errorf("JPEG capture asked for %dx%d exact=%v, want exactly 640x480", cfg.width, cfg.height, cfg.exactSize)
+	} else if cfg.framerate != 60 || !cfg.setFrameInterval {
+		t.Errorf("a request without a rate captures at %d fps (set=%v), want the camera's best for JPEG at this size, 60", cfg.framerate, cfg.setFrameInterval)
+	} else if cfg.stallLimit != cameraIdleTimeout {
+		t.Errorf("JPEG capture stall limit = %v, want %v", cfg.stallLimit, cameraIdleTimeout)
+	}
+	if cfg := capture.v4l2.asked[0]; cfg.stallLimit != 0 {
+		t.Errorf("native H.264 capture got a stall limit of %v; it has none", cfg.stallLimit)
 	}
 
 	idViewer, viewer, _ = h.subscribe()
@@ -246,6 +265,208 @@ func TestCaptureLocalCamera_FallsBackToGStreamer(t *testing.T) {
 	}
 }
 
+func TestCaptureLocalCamera_ALayerThatGivesUpFallsBackToGStreamerAndIsRemembered(t *testing.T) {
+	withJPEGSelectionCamera(t, jpegWebcam)
+	launchLog := fakeGStreamerScript(t, "case \"$*\" in\n*gdpdepay*) echo 'no element \"gdpdepay\"' >&2; exit 1 ;;\nesac\nexec /bin/sleep 60\n",
+		derivedLayerElements...)
+	svc := &VideoService{logger: zap.NewNop(), encoderIdleGrace: time.Second}
+
+	var idNative, idViewer int
+	var native chan *videoFrame
+	first := captureFakeLocalCameraWith(t, svc, &fakeV4L2{}, &agentpb.StreamVideoRequest{}, func(h *deviceHub) {
+		idNative, native, _ = h.subscribeKind(nativeFrames)
+		idViewer, _, _ = h.subscribe()
+	})
+	defer first.hub.unsubscribe(idNative)
+	defer first.hub.unsubscribe(idViewer)
+
+	launched := waitForLaunches(t, launchLog, derivedFailedStartsBeforeGivingUp+1)
+	for i, pipeline := range launched[:derivedFailedStartsBeforeGivingUp] {
+		if !strings.Contains(pipeline, "gdpdepay") {
+			t.Fatalf("launch %d is not the derived layer's child: %q", i, pipeline)
+		}
+	}
+	if fallback := launched[derivedFailedStartsBeforeGivingUp]; !strings.Contains(fallback, "v4l2src device=/dev/video4 ! image/jpeg,width=640,height=480") || !strings.Contains(fallback, "x264enc") {
+		t.Fatalf("after the layer gave up the hub's viewer got %q, want today's GStreamer capture with the encoder", fallback)
+	}
+	refusal := waitForRefusal(t, first.hub, idNative, native, "native")
+	if refusal == nil || !strings.Contains(refusal.Error(), `no element "gdpdepay"`) {
+		t.Fatalf("native refusal = %v, want the reason the layer gave up", refusal)
+	}
+	if err := first.hub.terminalErr(); err != nil {
+		t.Fatalf("the hub ended with %v instead of falling back", err)
+	}
+	if err := first.stop(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the fallback capture ended with %v before it was cancelled", err)
+	}
+
+	later := captureFakeLocalCameraWith(t, svc, &fakeV4L2{}, &agentpb.StreamVideoRequest{}, func(h *deviceHub) {
+		idViewer, _, _ = h.subscribe()
+	})
+	defer later.hub.unsubscribe(idViewer)
+	launched = waitForLaunches(t, launchLog, derivedFailedStartsBeforeGivingUp+2)
+	if straight := launched[len(launched)-1]; !strings.Contains(straight, "v4l2src device=/dev/video4") {
+		t.Fatalf("a later hub paid for the layer's failure again: %q", straight)
+	}
+	if asked := later.v4l2.formatsAsked(); !reflect.DeepEqual(asked, []uint32{v4l2PixFmtH264}) {
+		t.Errorf("a later hub asked the camera for %v, want H.264 alone: JPEG capture must not be tried again yet", asked)
+	}
+}
+
+func TestNativeJPEGSource_ALayerThatGaveUpAfterPublishingEndsTheCaptureInstead(t *testing.T) {
+	for _, afterPublishing := range []bool{false, true} {
+		svc := &VideoService{logger: zap.NewNop()}
+		cam := localCamera{path: "/dev/video4"}
+		why, gaveWay := nativeJPEGSource.gaveWay(svc, cam, derivedLayerGaveUp{msg: "encoder stopped", afterPublishing: afterPublishing})
+		if gaveWay == afterPublishing || why != "encoder stopped" {
+			t.Errorf("afterPublishing=%v: gaveWay = %q, %v; whole access units must not be followed by chunks in one stream", afterPublishing, why, gaveWay)
+		}
+		if _, failed := svc.derivedFailures.recent("/dev/video4"); !failed {
+			t.Errorf("afterPublishing=%v: the camera is not remembered, so the next hub would try the layer again", afterPublishing)
+		}
+	}
+	svc := &VideoService{logger: zap.NewNop()}
+	if _, gaveWay := nativeJPEGSource.gaveWay(svc, localCamera{path: "/dev/video4"}, errCameraInUse("/dev/video4")); gaveWay {
+		t.Error("a busy camera was handed to GStreamer as if JPEG capture were unsupported")
+	}
+	if _, failed := svc.derivedFailures.recent("/dev/video4"); failed {
+		t.Error("a capture error was remembered as a layer failure")
+	}
+}
+
+func TestDerivedLayerFailures_AreForgottenAfterABoundedTime(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	failures := derivedLayerFailures{now: func() time.Time { return now }}
+	if _, failed := failures.recent("/dev/video4"); failed {
+		t.Fatal("a camera with no failure is remembered as failed")
+	}
+	failures.remember("/dev/video4", "encoder produced nothing")
+	if why, failed := failures.recent("/dev/video4"); !failed || why != "encoder produced nothing" {
+		t.Fatalf("recent = %q, %v, want the remembered reason", why, failed)
+	}
+	if _, failed := failures.recent("/dev/video6"); failed {
+		t.Fatal("one camera's failure was charged to another")
+	}
+	now = now.Add(derivedLayerRetryAfter - time.Second)
+	if _, failed := failures.recent("/dev/video4"); !failed {
+		t.Fatal("the failure was forgotten before its time")
+	}
+	now = now.Add(time.Second)
+	if _, failed := failures.recent("/dev/video4"); failed {
+		t.Fatalf("the failure is still remembered after %v", derivedLayerRetryAfter)
+	}
+}
+
+func TestCaptureNatively_TriesSourcesInOrderAndSaysWhyNoneDelivered(t *testing.T) {
+	if len(nativeCaptureSources) != 2 || nativeCaptureSources[0].format != "H.264" || nativeCaptureSources[1].format != "JPEG" {
+		t.Fatalf("native capture sources = %d, want H.264 then JPEG", len(nativeCaptureSources))
+	}
+	prev := nativeCaptureSources
+	t.Cleanup(func() { nativeCaptureSources = prev })
+	var tried []string
+	source := func(format, declined string, result error, gaveWay bool) nativeCaptureSource {
+		return nativeCaptureSource{format: format,
+			accept: func(*VideoService, localCamera) (func(context.Context) error, string) {
+				if declined != "" {
+					return nil, declined
+				}
+				return func(context.Context) error {
+					tried = append(tried, format)
+					return result
+				}, ""
+			},
+			gaveWay: func(*VideoService, localCamera, error) (string, bool) { return "no frame came", gaveWay },
+		}
+	}
+	delivered := errors.New("the capture's own result")
+
+	nativeCaptureSources = []nativeCaptureSource{
+		source("first", "", nil, true), source("second", "not for this camera", nil, false),
+		source("third", "", delivered, false), source("fourth", "", nil, false),
+	}
+	why, err := (&VideoService{}).captureNatively(context.Background(), localCamera{})
+	if why != "" || err != delivered || !reflect.DeepEqual(tried, []string{"first", "third"}) {
+		t.Fatalf("captureNatively = %q, %v after trying %v; want the third source's result", why, err, tried)
+	}
+
+	nativeCaptureSources = nativeCaptureSources[:2]
+	why, err = (&VideoService{}).captureNatively(context.Background(), localCamera{})
+	if want := "first: no frame came; second: not for this camera"; why != want || err != nil {
+		t.Fatalf("captureNatively = %q, %v; want %q", why, err, want)
+	}
+}
+
+func TestNativeJPEGCapture_DeclinesSizesAboveItsLimit(t *testing.T) {
+	big := jpegSelectionCamera{defaultSize: [2]uint32{1920, 1080}, jpegSizes: [][2]uint32{{1920, 1080}, {3840, 2160}, {2560, 1440}, {1080, 1920}}}
+	withJPEGSelectionCamera(t, big)
+	if w, h, declined := nativeJPEGCapture("/dev/video4", &agentpb.StreamVideoRequest{Width: 1920, Height: 1080}); declined != "" || w != 1920 || h != 1080 {
+		t.Fatalf("1920x1080 = %dx%d declined %q, want it captured whole", w, h, declined)
+	}
+	for _, size := range [][2]uint32{{3840, 2160}, {2560, 1440}, {1080, 1920}} {
+		_, _, declined := nativeJPEGCapture("/dev/video4", &agentpb.StreamVideoRequest{Width: size[0], Height: size[1]})
+		if !strings.Contains(declined, "above the 1920x1080 limit") {
+			t.Errorf("%dx%d declined with %q, want the size limit named", size[0], size[1], declined)
+		}
+		if _, _, ok := nativeJPEGCaptureSize("/dev/video4", &agentpb.StreamVideoRequest{Width: size[0], Height: size[1]}); ok {
+			t.Errorf("%dx%d is chosen for whole-frame JPEG capture", size[0], size[1])
+		}
+	}
+}
+
+func TestNativeJPEGFrameRate_DefaultRequestRunsAtTheRateTheShareModeDeclares(t *testing.T) {
+	modes := map[uint32][][2]uint32{v4l2PixFmtYUYV: {{1280, 720}}, v4l2PixFmtMJPEG: {{1280, 720}}}
+	for _, rates := range [][]uint32{{15, 60, 30}, {5, 24, 15}, nil} {
+		s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, modes, rates)
+		shared := s.shareDecisionFor(context.Background(), usbCam())
+		if !shared.Shared {
+			t.Fatalf("not shared: %s", shared.Reason)
+		}
+		got := nativeJPEGFrameRate("/dev/video4", &agentpb.StreamVideoRequest{}, 1280, 720)
+		if want := highestFrameRateFor("/dev/video4", v4l2PixFmtMJPEG, 1280, 720); got != want {
+			t.Errorf("rates %v: capture runs at %d, want the highest advertised, %d", rates, got, want)
+		}
+		if len(rates) > 0 && got != shared.Mode.FPS {
+			t.Errorf("rates %v: capture runs at %d but the share mode declares %d", rates, got, shared.Mode.FPS)
+		}
+		if len(rates) == 0 && got != 0 {
+			t.Errorf("a camera that advertises no rate is captured at %d, want the driver's own", got)
+		}
+		if asked := nativeJPEGFrameRate("/dev/video4", &agentpb.StreamVideoRequest{Framerate: 10}, 1280, 720); asked != 10 {
+			t.Errorf("rates %v: a request for 10 fps captures at %d", rates, asked)
+		}
+	}
+}
+
+func TestCaptureStall_EndsACaptureWhoseCameraWentQuiet(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	never := captureStall{lastFrame: start}
+	if err := never.expired(start.Add(24 * time.Hour)); err != nil {
+		t.Fatalf("a capture without a stall limit ended: %v", err)
+	}
+
+	stall := captureStall{limit: 10 * time.Second, lastFrame: start}
+	if err := stall.expired(start.Add(10 * time.Second)); err != nil {
+		t.Fatalf("ended at the limit, not after it: %v", err)
+	}
+	err := stall.expired(start.Add(10*time.Second + time.Millisecond))
+	if status.Code(err) != codes.DeadlineExceeded || !strings.Contains(err.Error(), "camera produced no video within 10s") {
+		t.Fatalf("a camera that never delivered ended with %v", err)
+	}
+
+	stall.frame(start.Add(5 * time.Second))
+	if err := stall.expired(start.Add(15 * time.Second)); err != nil {
+		t.Fatalf("a frame did not restart the limit: %v", err)
+	}
+	err = stall.expired(start.Add(15*time.Second + time.Millisecond))
+	if status.Code(err) != codes.DeadlineExceeded || !strings.Contains(err.Error(), "camera stopped producing video for 10s") {
+		t.Fatalf("a camera that stopped delivering ended with %v, want the GStreamer capture's wording", err)
+	}
+	if want := gstTimeoutError(true, cameraIdleTimeout, cameraIdleTimeout); nativeJPEGCaptureConfig(640, 480, 30).stallLimit != cameraIdleTimeout || err.Error() != want.Error() {
+		t.Errorf("JPEG capture's stall is not the GStreamer capture's: limit %v, error %q, want %q",
+			nativeJPEGCaptureConfig(640, 480, 30).stallLimit, err, want)
+	}
+}
+
 func TestCaptureDeriving_ALayerThatGivesUpEndsTheCaptureWithItsError(t *testing.T) {
 	fakeGStreamerScript(t, "echo 'no such encoder' >&2\nexit 1\n", derivedLayerElements...)
 	h, cancelHub := newTestHub(t)
@@ -266,8 +487,8 @@ func TestCaptureDeriving_ALayerThatGivesUpEndsTheCaptureWithItsError(t *testing.
 	default:
 		t.Fatal("captureDeriving returned while the capture was still running")
 	}
-	if status.Code(err) != codes.Internal || !strings.Contains(err.Error(), "no such encoder") {
-		t.Fatalf("capture ended with %v, want the layer's Internal error carrying the child's output", err)
+	if !errors.As(err, new(derivedLayerGaveUp)) || !strings.Contains(err.Error(), "no such encoder") {
+		t.Fatalf("capture ended with %v, want the layer's derivedLayerGaveUp carrying the child's output", err)
 	}
 	if h.derived.Load() != nil {
 		t.Error("the hub still feeds a layer whose capture ended")

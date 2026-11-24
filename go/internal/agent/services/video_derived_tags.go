@@ -48,9 +48,6 @@ func (t *derivedFrameTags) assign(source *videoFrame, sinceChildStart time.Durat
 	return tag
 }
 
-// source finds the frame a child's output timestamp stands for, after undoing
-// the constant shift the child reported. An output it cannot place is counted
-// and never matched to a neighbour.
 func (t *derivedFrameTags) source(outputTimestamp, shift uint64) (*videoFrame, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

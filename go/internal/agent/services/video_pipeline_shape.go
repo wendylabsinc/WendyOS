@@ -27,19 +27,20 @@ func (s pipelineShape) hasBranchNotIn(wanted pipelineShape) bool {
 	return (s.encode && !wanted.encode) || (s.pixels && !wanted.pixels)
 }
 
-// errPipelineEndedRestartable is returned by a launch whose pipeline ended by
-// itself and may be started again in the shape then wanted.
 var errPipelineEndedRestartable = errors.New("pipeline ended and can be restarted")
 
-// shapeNeeds reads from a hub's demand the branches a pipeline should run now.
 type shapeNeeds func(demand encodeDemand) pipelineShape
 
 func encoderOnDemand(demand encodeDemand) pipelineShape {
 	return pipelineShape{encode: demand.wantEncoded()}
 }
 
+// A pipeline that encodes keeps its pictures, as a camera pipeline keeps its
+// tap, so a pixel subscriber joining or leaving never restarts it under a
+// viewer or a recording.
 func branchesOnDemand(demand encodeDemand) pipelineShape {
-	return pipelineShape{encode: demand.wantEncoded(), pixels: demand.wantRaw()}
+	encode := demand.wantEncoded()
+	return pipelineShape{encode: encode, pixels: encode || demand.wantRaw()}
 }
 
 // errNoTapOnlyPipeline is returned when a shape without the encoder is asked
@@ -51,7 +52,6 @@ var errNoTapOnlyPipeline = errors.New("pipeline has no uncompressed frames to ru
 // RawFormat mjpegPixelsFormat reports.
 const mjpegPixelsStages = "videoconvert ! video/x-raw,format=YUY2"
 
-// mjpegTapTail writes those frames to the tap.
 var mjpegTapTail = fmt.Sprintf("%s ! fdsink fd=%d", mjpegPixelsStages, rawTapFD)
 
 func mjpegRawWhy(w, h uint32) string {
@@ -107,10 +107,6 @@ func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Dur
 	return runPipelinesShapedBy(ctx, demand, grace, encoderOnDemand, launch)
 }
 
-// runPipelinesShapedBy is runShapedPipelines with the rule that turns demand
-// into a shape given. A branch the subscribers call for is added at once; one
-// they stopped calling for is dropped after grace. A launch that returns
-// errPipelineEndedRestartable is started again.
 func runPipelinesShapedBy(ctx context.Context, demand encodeDemand, grace time.Duration, needs shapeNeeds, launch func(ctx context.Context, shape pipelineShape) error) error {
 	if demand == nil {
 		return launch(ctx, pipelineShape{encode: true})

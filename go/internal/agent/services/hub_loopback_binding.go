@@ -320,8 +320,9 @@ func sequenceGap(prev, curr uint32) uint64 {
 // The binding is only meaningful if each frame the pump takes off the hub
 // becomes exactly one frame on the node. Two things break that:
 //
-//   - A frame that is not a whole access unit. auAligned is set only by the
-//     native V4L2 producer, which delivers one V4L2 buffer per encoded frame.
+//   - A frame that is not a whole access unit. auAligned is set by native
+//     V4L2 capture, which delivers one V4L2 buffer per encoded frame, and by
+//     the derived layer, whose child delivers one access unit per packet.
 //     The GStreamer and IP camera producers read a byte stream from a pipe, so
 //     their frames are arbitrary chunk-sized slices that can begin or end
 //     mid-access-unit. Writing those to a node frame-for-frame produces buffers

@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -197,9 +195,14 @@ func waitForLaunches(t *testing.T, launchLog string, n int) []string {
 }
 
 const (
-	derivedPicturesOutput = "videoconvert ! video/x-raw,format=YUY2 ! gdppay ! fdsink fd=3"
-	derivedEncodedOutput  = "x264enc tune=zerolatency key-int-max=15 bframes=0 ! video/x-h264,profile=high" +
-		" ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! gdppay ! fdsink fd=1"
+	derivedPicturesOutput = "queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream" +
+		" ! videoconvert ! video/x-raw,format=YUY2 ! gdppay ! fdsink fd=3"
+	derivedEncoder = "queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream" +
+		" ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=15 bframes=0 ! video/x-h264,profile=high" +
+		" ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! gdppay ! fdsink"
+	derivedPicturesOnly       = "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! " + derivedPicturesOutput
+	derivedPicturesAndEncoder = "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! tee name=derived" +
+		" derived. ! " + derivedPicturesOutput + " derived. ! " + derivedEncoder + " fd=4"
 )
 
 func TestDerivedLayer_RunsNoChildForNativeSubscribersAlone(t *testing.T) {
@@ -236,11 +239,9 @@ func TestDerivedLayer_ShapesTheChildToItsSubscribers(t *testing.T) {
 		encoded, pixels bool
 		want            string
 	}{
-		"pictures only": {false, true, "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! " + derivedPicturesOutput},
-		"H.264 only":    {true, false, "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! videoconvert ! video/x-raw,format=I420 ! " + derivedEncodedOutput},
-		"both": {true, true, "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! tee name=derived" +
-			" derived. ! queue ! " + derivedPicturesOutput +
-			" derived. ! queue ! videoconvert ! video/x-raw,format=I420 ! " + derivedEncodedOutput},
+		"pictures only":                          {false, true, derivedPicturesOnly},
+		"a viewer alone still gets the pictures": {true, false, derivedPicturesAndEncoder},
+		"a viewer and a pixel reader":            {true, true, derivedPicturesAndEncoder},
 	} {
 		t.Run(name, func(t *testing.T) {
 			launchLog := fakeGStreamer(t, 0, derivedLayerElements...)
@@ -257,7 +258,26 @@ func TestDerivedLayer_ShapesTheChildToItsSubscribers(t *testing.T) {
 	}
 }
 
-func TestDerivedLayer_AddsABranchAtOnceAndDropsOneAfterTheGrace(t *testing.T) {
+func TestDerivedLayer_CameraWhosePicturesAreTooLargeEncodesOnly(t *testing.T) {
+	layer, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), format: videoCodecMJPEG, gstPath: "gst-launch-1.0",
+		available: map[string]bool{"gdpdepay": true, "gdppay": true, "jpegdec": true, "h264parse": true, "x264enc": true},
+		width:     1920, height: 1080, framerate: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shape := layer.needs(newFakeEncodeDemand(false, true)); shape != (pipelineShape{}) {
+		t.Errorf("shape for a pixel reader of pictures over the raw frame limit = %+v, want no child", shape)
+	}
+	shape := layer.needs(newFakeEncodeDemand(true, true))
+	if shape != (pipelineShape{encode: true}) {
+		t.Fatalf("shape for a viewer = %+v, want the encoder alone", shape)
+	}
+	if got, want := strings.Join(layer.pipelineArgs(shape)[1:], " "), "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! "+derivedEncoder+" fd=3"; got != want {
+		t.Errorf("child pipeline\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestDerivedLayer_RestartsOnlyWhenTheEncoderIsAddedOrDropped(t *testing.T) {
 	launchLog := fakeGStreamer(t, 0, derivedLayerElements...)
 	demand := newFakeEncodeDemand(false, true)
 	const grace = 400 * time.Millisecond
@@ -266,9 +286,18 @@ func TestDerivedLayer_AddsABranchAtOnceAndDropsOneAfterTheGrace(t *testing.T) {
 	waitForLaunches(t, launchLog, 1)
 
 	demand.set(true, true)
-	launched := waitForLaunches(t, launchLog, 2)
-	if !strings.Contains(launched[1], "tee name=derived") || !strings.Contains(launched[1], "x264enc") {
-		t.Fatalf("a viewer joining did not restart the child with both branches: %q", launched[1])
+	if launched := waitForLaunches(t, launchLog, 2); launched[1] != derivedPicturesAndEncoder {
+		t.Fatalf("a viewer joining did not restart the child with the encoder: %q", launched[1])
+	}
+
+	// The stand-in child prints "encoded" on its stdout, as some encoders print
+	// there; that must not end it either.
+	for _, pixelReader := range []bool{false, true, false, true} {
+		demand.set(true, pixelReader)
+		time.Sleep(grace + grace/2)
+		if launched := launchedPipelines(t, launchLog); len(launched) != 2 {
+			t.Fatalf("pixel reader present=%v restarted the child under a viewer: %q", pixelReader, launched)
+		}
 	}
 
 	viewerLeft := time.Now()
@@ -277,9 +306,8 @@ func TestDerivedLayer_AddsABranchAtOnceAndDropsOneAfterTheGrace(t *testing.T) {
 	if launched := launchedPipelines(t, launchLog); len(launched) != 2 {
 		t.Fatalf("the encoder was dropped %v after the viewer left, inside the %v grace", time.Since(viewerLeft), grace)
 	}
-	launched = waitForLaunches(t, launchLog, 3)
-	if strings.Contains(launched[2], "x264enc") || !strings.Contains(launched[2], "fdsink fd=3") {
-		t.Fatalf("after the grace the child still encodes, or lost its pictures: %q", launched[2])
+	if launched := waitForLaunches(t, launchLog, 3); launched[2] != derivedPicturesOnly {
+		t.Fatalf("after the grace the child is not pictures only: %q", launched[2])
 	}
 	restarts, encodes := demand.reported()
 	if restarts != 2 || !reflect.DeepEqual(encodes, []bool{false, true, false}) {
@@ -340,7 +368,7 @@ func TestDerivedLayer_FeedingNeverBlocksCaptureAndCountsWhatItCouldNotFeed(t *te
 }
 
 func TestDerivedLayer_TakesOnlyNumberedFramesOfItsOwnFormat(t *testing.T) {
-	layer := &derivedLayer{format: videoCodecMJPEG, feed: make(chan *videoFrame, derivedFeedQueueFrames)}
+	layer := &derivedLayer{format: videoCodecMJPEG, feed: make(chan *videoFrame, derivedFeedQueueFrames), created: time.Now()}
 	layer.feeding.Store(true)
 	unnumbered := numberedJPEG(0)
 	h264 := numberedJPEG(5)
@@ -368,14 +396,108 @@ func TestDerivedLayer_RestartsAChildThatExitsAndGivesUpWhenNoneProduces(t *testi
 	case <-time.After(10 * time.Second):
 		t.Fatal("the layer kept restarting a child that never produced a frame")
 	}
-	if status.Code(err) != codes.Internal || !strings.Contains(err.Error(), "jpegdec: cannot decode") {
-		t.Fatalf("run returned %v, want Internal carrying the child's own error output", err)
+	if !errors.As(err, new(derivedLayerGaveUp)) || !strings.Contains(err.Error(), "jpegdec: cannot decode") {
+		t.Fatalf("run returned %v, want derivedLayerGaveUp carrying the child's own error output", err)
 	}
 	if launched := launchedPipelines(t, launchLog); len(launched) != derivedFailedStartsBeforeGivingUp {
 		t.Errorf("%d children started, want %d", len(launched), derivedFailedStartsBeforeGivingUp)
 	}
 	if _, known := layer.tags.source(derivedTagBase, 0); known {
 		t.Error("a tag from before the restarts still names a frame")
+	}
+}
+
+// offerFrames stands in for a capture that keeps producing while the test runs.
+func offerFrames(t *testing.T, layer *derivedLayer) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for id := uint64(1); ctx.Err() == nil; id++ {
+			layer.take(numberedJPEG(id))
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+}
+
+func TestDerivedLayer_GivesUpOnAChildThatTakesFramesAndPublishesNothing(t *testing.T) {
+	launchLog := fakeGStreamerScript(t, "exec /bin/cat > /dev/null\n", derivedLayerElements...)
+	layer, _ := fakeDerivedLayer(t, newFakeEncodeDemand(true, true), time.Second)
+	// Long enough for the stand-in to start: a new script's first run is slow on macOS.
+	layer.firstOutputTimeout = time.Second
+	offerFrames(t, layer)
+	result := make(chan error, 1)
+	go func() { result <- layer.run(context.Background()) }()
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a child that publishes nothing ran on")
+	}
+	var gaveUp derivedLayerGaveUp
+	if !errors.As(err, &gaveUp) || !strings.Contains(gaveUp.msg, "produced no usable one for 1s") {
+		t.Fatalf("run returned %v, want derivedLayerGaveUp naming the silence", err)
+	}
+	if launched := launchedPipelines(t, launchLog); len(launched) != 1 {
+		t.Errorf("%d children started, want the silent one alone", len(launched))
+	}
+	if counts := layer.counts(); counts.fed == 0 || counts.usable != 0 {
+		t.Errorf("counts = %+v, want frames fed and no usable output", counts)
+	}
+}
+
+func TestDerivedLayer_WatchLeavesAChildAloneWhileNoFrameIsOffered(t *testing.T) {
+	layer := &derivedLayer{created: time.Now(), feed: make(chan *videoFrame, derivedFeedQueueFrames), format: videoCodecMJPEG,
+		firstOutputTimeout: 50 * time.Millisecond, idleOutputTimeout: 50 * time.Millisecond}
+	layer.feeding.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := layer.watchChild(ctx, layer.sinceCreated()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a child of a camera that delivers nothing was ended: %v", err)
+	}
+}
+
+func TestDerivedLayer_WatchCountsUsableOutputNotBytes(t *testing.T) {
+	out := &derivedPublications{}
+	layer := &derivedLayer{publish: out.publish, demand: newFakeEncodeDemand(true, true), created: time.Now(),
+		feed: make(chan *videoFrame, derivedFeedQueueFrames), format: videoCodecMJPEG,
+		firstOutputTimeout: 150 * time.Millisecond, idleOutputTimeout: 150 * time.Millisecond}
+	layer.feeding.Store(true)
+	started := layer.sinceCreated()
+	layer.lastUsableAt.Store(started)
+	offerFrames(t, layer)
+
+	// The child answers every 20 ms, but never with a tag the layer fed.
+	r, w := derivedOutputPipe(t)
+	stopWriting := make(chan struct{})
+	defer close(stopWriting)
+	go func() {
+		gdp := &gdpWriter{w: w}
+		for timestamp := uint64(1); ; timestamp++ {
+			if gdp.buffer(timestamp, []byte("nobody's")) != nil {
+				return
+			}
+			select {
+			case <-stopWriting:
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}()
+	go layer.publishOutput(layer.encodedOutput(r)) //nolint:errcheck
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := layer.watchChild(ctx, started); !errors.Is(err, errDerivedChildSilent) {
+		t.Fatalf("watch returned %v for a child whose every output is unusable, want errDerivedChildSilent", err)
+	}
+	if counts := layer.counts(); counts.unknownTags == 0 || counts.usable != 0 || counts.published != 0 {
+		t.Errorf("counts = %+v, want unknown tags and nothing usable", counts)
 	}
 }
 
@@ -394,7 +516,7 @@ func derivedOutputPipe(t *testing.T) (r, w *os.File) {
 
 func TestDerivedLayer_PublishesEachOutputUnderTheFrameItsTagNames(t *testing.T) {
 	out := &derivedPublications{}
-	layer := &derivedLayer{publish: out.publish, firstOutputTimeout: 5 * time.Second, idleOutputTimeout: 5 * time.Second}
+	layer := &derivedLayer{publish: out.publish, demand: newFakeEncodeDemand(true, true), created: time.Now()}
 	first := layer.tags.assign(numberedJPEG(41), 0)
 	second := layer.tags.assign(numberedJPEG(42), time.Millisecond)
 
@@ -418,7 +540,7 @@ func TestDerivedLayer_PublishesEachOutputUnderTheFrameItsTagNames(t *testing.T) 
 	}
 	w.Close() //nolint:errcheck
 
-	err := layer.publishOutput(derivedOutput{name: "H.264", pipe: r, maxPayload: maxFrameBytes, frame: accessUnitFrame})
+	err := layer.publishOutput(layer.encodedOutput(r))
 	if err == nil || !strings.Contains(err.Error(), "EOF") {
 		t.Fatalf("publishOutput returned %v, want the end of the pipe", err)
 	}
@@ -432,15 +554,14 @@ func TestDerivedLayer_PublishesEachOutputUnderTheFrameItsTagNames(t *testing.T) 
 	if want := []string{"unit-42@2", "unit-41@1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("published %v, want %v", got, want)
 	}
-	if counts := layer.counts(); counts.unknownTags != 1 || counts.unusable != 1 || counts.published != 2 {
-		t.Errorf("counts = %+v, want 1 unknown tag, 1 unusable output, 2 published", counts)
+	if counts := layer.counts(); counts.unknownTags != 1 || counts.unusable != 1 || counts.usable != 2 || counts.published != 2 {
+		t.Errorf("counts = %+v, want 1 unknown tag, 1 unusable output, 2 usable and published", counts)
 	}
 }
 
 func TestDerivedLayer_UndoesTheShiftTheChildReportsAndDropsMisSizedPictures(t *testing.T) {
 	out := &derivedPublications{}
-	layer := &derivedLayer{publish: out.publish, pictures: tinyTapFormat,
-		firstOutputTimeout: 5 * time.Second, idleOutputTimeout: 5 * time.Second}
+	layer := &derivedLayer{publish: out.publish, pictures: tinyTapFormat, demand: newFakeEncodeDemand(false, true), created: time.Now()}
 	tag := layer.tags.assign(numberedJPEG(9), 0)
 
 	r, w := derivedOutputPipe(t)
@@ -456,7 +577,7 @@ func TestDerivedLayer_UndoesTheShiftTheChildReportsAndDropsMisSizedPictures(t *t
 	}
 	w.Close() //nolint:errcheck
 
-	layer.publishOutput(derivedOutput{name: "pictures", pipe: r, maxPayload: maxRawFrameBytes, frame: layer.pictureFrame}) //nolint:errcheck
+	layer.publishOutput(layer.picturesOutput(r)) //nolint:errcheck
 	published := out.published()
 	if len(published) != 1 || string(published[0].data) != "abcd" || published[0].sampleID != 9 {
 		t.Fatalf("published %d pictures, want the one four-byte picture of sample 9", len(published))
@@ -469,21 +590,38 @@ func TestDerivedLayer_UndoesTheShiftTheChildReportsAndDropsMisSizedPictures(t *t
 	}
 }
 
-func TestDerivedLayer_OutputThatGoesQuietEndsTheChild(t *testing.T) {
-	layer := &derivedLayer{publish: (&derivedPublications{}).publish, firstOutputTimeout: 50 * time.Millisecond, idleOutputTimeout: 50 * time.Millisecond}
-	r, _ := derivedOutputPipe(t)
+func TestDerivedLayer_ReadsAndDiscardsPicturesNobodyWants(t *testing.T) {
+	out := &derivedPublications{}
+	demand := newFakeEncodeDemand(true, false)
+	layer := &derivedLayer{publish: out.publish, pictures: tinyTapFormat, demand: demand, created: time.Now()}
+	r, w := derivedOutputPipe(t)
+	gdp := &gdpWriter{w: w}
 	done := make(chan error, 1)
-	go func() {
-		done <- layer.publishOutput(derivedOutput{name: "H.264", pipe: r, maxPayload: maxFrameBytes, frame: accessUnitFrame})
-	}()
-	select {
-	case err := <-done:
-		if !errors.Is(err, os.ErrDeadlineExceeded) {
-			t.Fatalf("a quiet output ended with %v, want a read deadline", err)
+	go func() { done <- layer.publishOutput(layer.picturesOutput(r)) }()
+
+	write := func(sampleID uint64) {
+		t.Helper()
+		if err := gdp.buffer(layer.tags.assign(numberedJPEG(sampleID), time.Duration(sampleID)), []byte("abcd")); err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("a child that produces nothing was never noticed")
 	}
+	write(1)
+	write(2)
+	waitUntil(t, "the unwanted pictures are read", func() bool { return layer.counts().usable == 2 })
+	if n := len(out.published()); n != 0 {
+		t.Fatalf("%d pictures were published with no pixel subscriber", n)
+	}
+	if layer.lastUsableAt.Load() == 0 {
+		t.Error("a discarded picture does not count as the child producing")
+	}
+	demand.set(true, true)
+	write(3)
+	waitUntil(t, "a wanted picture is published", func() bool { return len(out.published()) == 1 })
+	if got := out.published()[0]; got.sampleID != 3 || string(got.data) != "abcd" {
+		t.Errorf("published sample %d %q, want sample 3", got.sampleID, got.data)
+	}
+	w.Close() //nolint:errcheck
+	<-done
 }
 
 func TestNewDerivedLayer_IsUnavailableWithoutEveryElementItNeeds(t *testing.T) {
@@ -603,7 +741,7 @@ func TestKeyframeArg_VideoToolboxDoesNotReorderFrames(t *testing.T) {
 	}
 }
 
-func TestRunPipelinesShapedBy_AddsAndDropsThePictureBranch(t *testing.T) {
+func TestRunPipelinesShapedBy_PixelReadersNeverRestartAPipelineThatEncodes(t *testing.T) {
 	demand := newFakeEncodeDemand(false, false)
 	demand.native = true
 	launches := newRecordedLaunches()
@@ -622,12 +760,16 @@ func TestRunPipelinesShapedBy_AddsAndDropsThePictureBranch(t *testing.T) {
 	}
 	demand.set(true, true)
 	if shape := launches.next(t, time.Second); shape != (pipelineShape{encode: true, pixels: true}) {
-		t.Fatalf("launch after a viewer joined = %+v, want both branches", shape)
+		t.Fatalf("launch after a viewer joined = %+v, want pictures and the encoder", shape)
 	}
 	demand.set(true, false)
+	launches.none(t, 3*grace)
+	demand.set(true, true)
+	launches.none(t, 3*grace)
+	demand.set(false, true)
 	launches.none(t, grace/2)
-	if shape := launches.next(t, time.Second); shape != (pipelineShape{encode: true}) {
-		t.Fatalf("launch after the grace without a pixel subscriber = %+v, want H.264 only", shape)
+	if shape := launches.next(t, time.Second); shape != (pipelineShape{pixels: true}) {
+		t.Fatalf("launch after the grace without a viewer = %+v, want pictures only", shape)
 	}
 	demand.set(false, false)
 	if shape := launches.next(t, time.Second); shape != (pipelineShape{}) {

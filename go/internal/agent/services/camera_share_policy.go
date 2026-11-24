@@ -136,13 +136,7 @@ func (s *VideoService) shareDecisionFor(ctx context.Context, dev *agentpb.VideoD
 	if plan.raw != nil {
 		captureFormat = mode.pixelFormat()
 	}
-	var best uint32
-	for _, r := range frameRatesFor(dev.GetPath(), captureFormat, mode.Width, mode.Height) {
-		if r > best {
-			best = r
-		}
-	}
-	if best > 0 {
+	if best := highestFrameRateFor(dev.GetPath(), captureFormat, mode.Width, mode.Height); best > 0 {
 		mode.FPS = best
 	}
 	return shareDecision{Shared: true, Mode: mode}
@@ -236,6 +230,16 @@ var (
 	_ [20 - unsafe.Offsetof(v4l2FrmIvalEnum{}.Numerator)]byte
 	_ [unsafe.Offsetof(v4l2FrmIvalEnum{}.Numerator) - 20]byte
 )
+
+// A shared camera's mode declares this rate and a capture that was asked for
+// none runs at it, so the two agree. Zero when the camera advertises no rate.
+func highestFrameRateFor(path string, pixfmt, width, height uint32) uint32 {
+	var best uint32
+	for _, rate := range frameRatesFor(path, pixfmt, width, height) {
+		best = max(best, rate)
+	}
+	return best
+}
 
 // vidiocEnumFrameintervals is VIDIOC_ENUM_FRAMEINTERVALS.
 const vidiocEnumFrameintervals = 0xC034564B

@@ -252,6 +252,35 @@ func TestGDPReaderSkipsAnOversizedPayloadAndStaysAligned(t *testing.T) {
 	}
 }
 
+func TestGDPReaderPassesOverAPayloadItsCallerDidNotTake(t *testing.T) {
+	var stream bytes.Buffer
+	w := &gdpWriter{w: &stream}
+	if err := w.streamHeader("video/x-raw"); err != nil {
+		t.Fatal(err)
+	}
+	for i, payload := range []string{"unwanted", "wanted", "also unwanted"} {
+		if err := w.buffer(uint64(10+i), []byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &gdpReader{r: iotest.OneByteReader(&stream), maxPayload: 64}
+	if timestamp, length, err := r.nextBufferHeader(); err != nil || timestamp != 10 || length != 8 {
+		t.Fatalf("first header = %d, %d bytes, %v", timestamp, length, err)
+	}
+	if timestamp, length, err := r.nextBufferHeader(); err != nil || timestamp != 11 || length != 6 {
+		t.Fatalf("header after an untaken payload = %d, %d bytes, %v", timestamp, length, err)
+	}
+	if payload, err := r.payload(); err != nil || string(payload) != "wanted" {
+		t.Fatalf("payload = %q, %v", payload, err)
+	}
+	if timestamp, _, err := r.nextBufferHeader(); err != nil || timestamp != 12 {
+		t.Fatalf("third header = %d, %v", timestamp, err)
+	}
+	if _, _, err := r.nextBufferHeader(); err != io.EOF {
+		t.Fatalf("after the last packet err = %v, want io.EOF", err)
+	}
+}
+
 func TestGDPReaderRefusesBytesThatAreNotAPacket(t *testing.T) {
 	whole := gdpFixture(t, gdpPayCapture)
 	for name, damage := range map[string]func([]byte){

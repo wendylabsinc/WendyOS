@@ -886,13 +886,13 @@ func (c *cameraCapture) reattachAfterRestart() error {
 // handleFrame dispatches one hub frame to the active capture mode.
 //
 // Frame-boundary-sensitive behavior (snapshot stills, GOP-granularity rate
-// capping) requires access-unit-aligned frames, which only the native V4L2
-// producer delivers; the GStreamer and IP camera producers emit arbitrary
-// byte-stream chunks (see videoFrame.auAligned). A producer's alignment is a
-// property of its pipeline and never changes mid-stream, so the first frame
-// decides: on a chunked transport snapshot mode degrades to continuous
-// recording and the rate cap is disabled, each with an honesty note that ends
-// up in the manifest's source detail.
+// capping) requires access-unit-aligned frames, which native V4L2 capture and
+// the derived layer deliver; the GStreamer and IP camera producers emit
+// arbitrary byte-stream chunks (see videoFrame.auAligned). A producer's
+// alignment is a property of its pipeline and never changes mid-stream, so the
+// first frame decides: on a chunked transport snapshot mode degrades to
+// continuous recording and the rate cap is disabled, each with an honesty note
+// that ends up in the manifest's source detail.
 func (c *cameraCapture) handleFrame(frame *videoFrame) error {
 	if !c.alignmentKnown {
 		c.alignmentKnown = true

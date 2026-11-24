@@ -35,20 +35,42 @@ func cameraOffersJPEGAt(devicePath string, width, height uint32) bool {
 	return width > 0 && height > 0 && deviceSupportsMJPEGSize(devicePath, width, height)
 }
 
-// nativeJPEGCaptureSize reports whether a camera node the agent opens itself
-// should be captured as JPEG for this request, and at what size.
-func nativeJPEGCaptureSize(devicePath string, req *agentpb.StreamVideoRequest) (width, height uint32, ok bool) {
-	if req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW || thermalCaptureProfile(devicePath) != nil {
-		return 0, 0, false
+// A JPEG frame above this size can exceed maxFrameBytes, which the hub does
+// not distribute, so larger captures stay with GStreamer.
+const nativeJPEGMaxWidth, nativeJPEGMaxHeight = 1920, 1080
+
+func nativeJPEGCapture(devicePath string, req *agentpb.StreamVideoRequest) (width, height uint32, declined string) {
+	switch {
+	case req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW:
+		return 0, 0, "the camera was started for a raw frame request, which captures it uncompressed"
+	case thermalCaptureProfile(devicePath) != nil:
+		return 0, 0, "thermal cameras are captured uncompressed, for their measurements"
 	}
 	// A default request is sized at the module's stacked metadata mode when it
 	// has one, which leaves that module to the GStreamer planner.
 	const stackedRowsCroppable = true
 	width, height = resolveV4L2CaptureSize(devicePath, req, nil, stackedRowsCroppable)
-	if !cameraOffersJPEGAt(devicePath, width, height) {
-		return 0, 0, false
+	switch {
+	case width == 0 || height == 0:
+		return 0, 0, "the camera reports no capture size"
+	case width > nativeJPEGMaxWidth || height > nativeJPEGMaxHeight:
+		return 0, 0, fmt.Sprintf("%dx%d is above the %dx%d limit for capturing JPEG frames whole", width, height, nativeJPEGMaxWidth, nativeJPEGMaxHeight)
+	case !cameraOffersJPEGAt(devicePath, width, height):
+		return 0, 0, fmt.Sprintf("the camera offers no JPEG at %dx%d", width, height)
 	}
-	return width, height, true
+	return width, height, ""
+}
+
+func nativeJPEGCaptureSize(devicePath string, req *agentpb.StreamVideoRequest) (width, height uint32, ok bool) {
+	width, height, declined := nativeJPEGCapture(devicePath, req)
+	return width, height, declined == ""
+}
+
+func nativeJPEGFrameRate(devicePath string, req *agentpb.StreamVideoRequest, width, height uint32) uint32 {
+	if rate := req.GetFramerate(); rate > 0 {
+		return rate
+	}
+	return highestFrameRateFor(devicePath, v4l2PixFmtMJPEG, width, height)
 }
 
 type nativeJPEGFrames struct {
@@ -105,6 +127,7 @@ func nativeJPEGCaptureConfig(width, height, framerate uint32) v4l2CaptureConfig 
 		exactSize:        true,
 		framerate:        framerate,
 		setFrameInterval: true,
+		stallLimit:       cameraIdleTimeout,
 		formatUnsupported: func(msg string) error {
 			return nativeJPEGNotSupported{msg: msg}
 		},

@@ -99,45 +99,71 @@ type gdpPacket struct {
 }
 
 type gdpReader struct {
-	r io.Reader
-	// maxPayload bounds a buffer's payload; caps and events have their own bound.
-	maxPayload int
-	// segmentStart is the start of the last segment event read. An element that
-	// moved every timestamp by a constant says by how much there.
+	r            io.Reader
+	maxPayload   int // of a buffer; caps and events are bounded by gdpMaxEventBytes
 	segmentStart uint64
 	header       [gdpHeaderBytes]byte
+	unread       int64
 }
 
-// next returns io.EOF when the stream ended between packets and
-// io.ErrUnexpectedEOF when it ended inside one. A payload over its bound is
-// read past and reported as errGDPPayloadTooLarge; the next call returns the
-// packet after it.
-func (g *gdpReader) next() (gdpPacket, error) {
+// nextHeader returns io.EOF when the stream ended between packets and
+// io.ErrUnexpectedEOF when it ended inside one. The packet's payload is then
+// taken with payload; whatever is left of it is passed over by the next call.
+func (g *gdpReader) nextHeader() (packet gdpPacket, length int64, err error) {
+	if err := g.skipPayload(); err != nil {
+		return gdpPacket{}, 0, err
+	}
 	h := g.header[:]
 	if _, err := io.ReadFull(g.r, h); err != nil {
-		return gdpPacket{}, err
+		return gdpPacket{}, 0, err
 	}
 	if h[0] != 1 || h[1] != 0 {
-		return gdpPacket{}, fmt.Errorf("%w: version %d.%d", errGDPNotAPacket, h[0], h[1])
+		return gdpPacket{}, 0, fmt.Errorf("%w: version %d.%d", errGDPNotAPacket, h[0], h[1])
 	}
 	if h[2]&gdpHeaderHasChecksum != 0 && binary.BigEndian.Uint16(h[58:]) != gdpChecksum(h[:58]) {
-		return gdpPacket{}, fmt.Errorf("%w: header checksum mismatch", errGDPNotAPacket)
+		return gdpPacket{}, 0, fmt.Errorf("%w: header checksum mismatch", errGDPNotAPacket)
 	}
-	packet := gdpPacket{kind: binary.BigEndian.Uint16(h[4:]), timestamp: binary.BigEndian.Uint64(h[10:])}
-	length := int64(binary.BigEndian.Uint32(h[6:]))
+	g.unread = int64(binary.BigEndian.Uint32(h[6:]))
+	return gdpPacket{kind: binary.BigEndian.Uint16(h[4:]), timestamp: binary.BigEndian.Uint64(h[10:])}, g.unread, nil
+}
+
+func (g *gdpReader) payload() ([]byte, error) {
+	payload := make([]byte, g.unread)
+	g.unread = 0
+	if _, err := io.ReadFull(g.r, payload); err != nil {
+		return nil, endedInsidePacket(err)
+	}
+	return payload, nil
+}
+
+func (g *gdpReader) skipPayload() error {
+	unread := g.unread
+	g.unread = 0
+	if _, err := io.CopyN(io.Discard, g.r, unread); err != nil {
+		return endedInsidePacket(err)
+	}
+	return nil
+}
+
+// next reads one whole packet. A payload over its bound is passed over and
+// reported as errGDPPayloadTooLarge; the next call returns the packet after it.
+func (g *gdpReader) next() (gdpPacket, error) {
+	packet, length, err := g.nextHeader()
+	if err != nil {
+		return gdpPacket{}, err
+	}
 	limit := gdpMaxEventBytes
 	if packet.kind == gdpPacketBuffer {
 		limit = g.maxPayload
 	}
 	if length > int64(limit) {
-		if _, err := io.CopyN(io.Discard, g.r, length); err != nil {
-			return gdpPacket{}, endedInsidePacket(err)
+		if err := g.skipPayload(); err != nil {
+			return gdpPacket{}, err
 		}
 		return packet, fmt.Errorf("%w: %d bytes, limit %d", errGDPPayloadTooLarge, length, limit)
 	}
-	packet.payload = make([]byte, length)
-	if _, err := io.ReadFull(g.r, packet.payload); err != nil {
-		return gdpPacket{}, endedInsidePacket(err)
+	if packet.payload, err = g.payload(); err != nil {
+		return gdpPacket{}, err
 	}
 	if packet.kind == gdpPacketSegment {
 		if start, ok := gdpSegmentStart(packet.payload); ok {
@@ -154,19 +180,39 @@ func endedInsidePacket(err error) error {
 	return err
 }
 
-func (g *gdpReader) nextBuffer() (timestamp uint64, payload []byte, err error) {
+func (g *gdpReader) nextBufferHeader() (timestamp uint64, length int64, err error) {
 	for {
-		packet, err := g.next()
-		if packet.kind != gdpPacketBuffer && errors.Is(err, errGDPPayloadTooLarge) {
-			continue
-		}
+		packet, length, err := g.nextHeader()
 		if err != nil {
-			return 0, nil, err
+			return 0, 0, err
 		}
-		if packet.kind == gdpPacketBuffer {
-			return packet.timestamp, packet.payload, nil
+		switch {
+		case packet.kind == gdpPacketBuffer && length > int64(g.maxPayload):
+			if err := g.skipPayload(); err != nil {
+				return 0, 0, err
+			}
+			return packet.timestamp, length, fmt.Errorf("%w: %d bytes, limit %d", errGDPPayloadTooLarge, length, g.maxPayload)
+		case packet.kind == gdpPacketBuffer:
+			return packet.timestamp, length, nil
+		case packet.kind == gdpPacketSegment && length <= gdpMaxEventBytes:
+			event, err := g.payload()
+			if err != nil {
+				return 0, 0, err
+			}
+			if start, ok := gdpSegmentStart(event); ok {
+				g.segmentStart = start
+			}
 		}
 	}
+}
+
+func (g *gdpReader) nextBuffer() (timestamp uint64, payload []byte, err error) {
+	timestamp, _, err = g.nextBufferHeader()
+	if err != nil {
+		return 0, nil, err
+	}
+	payload, err = g.payload()
+	return timestamp, payload, err
 }
 
 func gdpSegmentStart(segmentEvent []byte) (uint64, bool) {
