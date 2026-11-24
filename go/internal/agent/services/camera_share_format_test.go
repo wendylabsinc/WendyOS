@@ -2015,6 +2015,16 @@ func sfNameBrioByID(h *csHarness) {
 	}
 }
 
+func sfWarnings(h *csHarness, message string) int {
+	n := 0
+	for _, e := range h.logs.All() {
+		if e.Message == message && e.Level.String() == "warn" {
+			n++
+		}
+	}
+	return n
+}
+
 func TestCreateCameraShares_AnEntryNamingACameraByItsStableIDOrCampaignPathDecidesItsNode(t *testing.T) {
 	for _, entry := range []string{"by-id:" + sfBrioByID, sfBrioByID, "v4l2:/dev/video0"} {
 		t.Run(entry, func(t *testing.T) {
@@ -2050,5 +2060,116 @@ func TestCreateCameraShares_AnEntryNamingACameraByItsStableIDOrCampaignPathDecid
 				t.Errorf("a camera without a stable id reports one: %v", h.reportOf("/dev/video4"))
 			}
 		})
+	}
+}
+
+// Two entries naming one camera by different spellings pass validation, which
+// compares the allowlist strings, so the agent says what they cost the app.
+func TestCreateCameraShares_EntriesThatDisagreeOnACameraAreWarnedOfOnceAndSaidInItsState(t *testing.T) {
+	for name, tc := range map[string]struct {
+		entitlements []appconfig.Entitlement
+		mode         sharedMode
+		said         string
+	}{
+		"two spellings of the path": {
+			[]appconfig.Entitlement{
+				sfCameraEntitlement(appconfig.CameraFormatNative, "", "/dev/video0"),
+				sfCameraEntitlement(appconfig.CameraFormatH264, "", "v4l2:/dev/video0"),
+			},
+			sfPixelsMode,
+			`format falls back to pixels: the entries deciding for this camera disagree ("/dev/video0" asks for native, "v4l2:/dev/video0" asks for h264)`,
+		},
+		"the stable id and the path": {
+			[]appconfig.Entitlement{
+				sfCameraEntitlement(appconfig.CameraFormatH264, "", "/dev/video0"),
+				sfCameraEntitlement(appconfig.CameraFormatNative, "", sfBrioByID),
+			},
+			sfNativeMode,
+			`format is native (asked by "` + sfBrioByID + `"); passed over: "/dev/video0" asks for h264`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCSHarness(t, csBrio(), csC920())
+			sfCanDeriveFrames(h.s)
+			sfNameBrioByID(h)
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", tc.entitlements)
+
+			records := h.records("cv-a")
+			if len(records) != 2 {
+				t.Fatalf("records = %d, want a node for each camera; logs: %v", len(records), h.logs.All())
+			}
+			if r := records[0]; r.cameraName != "Brio 101" || r.mode != tc.mode || r.stamp != appconfig.CameraStampTime {
+				t.Errorf("%s: record holds %s, want %s", r.cameraName, describeShareNode(r.mode, r.stamp), describeShareNode(tc.mode, appconfig.CameraStampTime))
+			}
+			if n := sfWarnings(h, "camera share: cv-a: Brio 101 (/dev/video0): "+tc.said); n != 1 {
+				t.Errorf("warned %d times of the disagreement, want once; logs: %v", n, h.logs.All())
+			}
+			if n := h.logged("the entries deciding") + h.logged("passed over"); n != 1 {
+				t.Errorf("%d lines tell of a disagreement, want the one for the camera the entries name; logs: %v", n, h.logs.All())
+			}
+			wantState := "cv-a [format " + tc.mode.Format + ", stamp time] (idle; " + tc.said + ")"
+			if got := h.reportOf("/dev/video0")["share_state"]; got != wantState {
+				t.Errorf("share_state = %q\nwant         %q", got, wantState)
+			}
+			if got, want := h.reportOf("/dev/video4")["share_state"], "cv-a [format pixels, stamp time] (idle)"; got != want {
+				t.Errorf("the other camera's share_state = %q, want %q", got, want)
+			}
+			if sh := h.stateShares("cv-a")[0]; sh["settingsNote"] != tc.said {
+				t.Errorf("state file share = %v, want settingsNote %q", sh, tc.said)
+			}
+		})
+	}
+}
+
+func TestCreateCameraShares_ADisagreementOfEntriesSurvivesAnAgentRestartInTheState(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
+		sfCameraEntitlement("", appconfig.CameraStampFrame, "/dev/video0"),
+		sfCameraEntitlement("", "", "v4l2:/dev/video0"),
+	})
+	state, err := os.ReadFile(cameraSharesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.s.Shutdown()
+	h = newCSHarness(t, csBrio())
+	h.loop.aux[255] = "Brio 101"
+	h.writeState(string(state))
+	h.s.loadCameraShares()
+	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a"}})
+	want := `cv-a [format pixels, stamp time] (idle; stamp falls back to time: the entries deciding for this camera disagree ` +
+		`("/dev/video0" asks for frame, "v4l2:/dev/video0" asks for time))`
+	if got := h.reportOf("/dev/video0")["share_state"]; got != want {
+		t.Errorf("share_state = %q\nwant         %q", got, want)
+	}
+}
+
+// The node a disagreement left at the defaults is the node entries that agree
+// on the defaults ask for, so it is kept, and its state stops telling of the
+// disagreement.
+func TestCreateCameraShares_AContainerCreatedAgainWithEntriesThatAgreeNoLongerTellsOfADisagreement(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	sfCanDeriveFrames(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
+		sfCameraEntitlement(appconfig.CameraFormatNative, "", "/dev/video0"),
+		sfCameraEntitlement(appconfig.CameraFormatH264, "", "v4l2:/dev/video0"),
+	})
+	kept := h.records("cv-a")[0]
+	if _, told := h.stateShares("cv-a")[0]["settingsNote"]; !told {
+		t.Fatalf("the disagreement is not in the state file: %v", h.stateShares("cv-a"))
+	}
+
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement("", "", "v4l2:/dev/video0")})
+	if records := h.records("cv-a"); len(records) != 1 || records[0] != kept {
+		t.Fatalf("a create with the same settings made the share again: %+v", records)
+	}
+	if got, want := h.reportOf("/dev/video0")["share_state"], "cv-a [format pixels, stamp time] (idle)"; got != want {
+		t.Errorf("share_state = %q, want %q", got, want)
+	}
+	if note, told := h.stateShares("cv-a")[0]["settingsNote"]; told {
+		t.Errorf("the state file still tells of the disagreement: %q", note)
+	}
+	if n := h.logged("the entries deciding"); n != 1 {
+		t.Errorf("%d warnings of a disagreement, want only the first create's; logs: %v", n, h.logs.All())
 	}
 }

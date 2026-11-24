@@ -111,7 +111,8 @@ type shareContainer struct {
 // cameraAbsent says its last resolve did not find it; camera moves to the
 // camera's new port when it is followed there; node and nodeMade change when
 // a start makes a node lost in a reboot again; and siblings, io, pump, cancel,
-// done, adoptErr, tookRealCamera, coverFailed, modeNote, opening and retired.
+// done, adoptErr, tookRealCamera, coverFailed, modeNote, settingsNote, opening
+// and retired.
 type shareRecord struct {
 	cameraName, cameraPath string
 	// cameraAbsent is set when the record's camera was not among the present
@@ -161,6 +162,10 @@ type shareRecord struct {
 	// keeps the mode an earlier agent stored (keep_format locks it), and a
 	// share of its camera made today would get another (checkAdoptedMode).
 	modeNote string
+	// settingsNote says which of the node's settings the app's entitlement
+	// entries disagree on for this camera (appconfig.CameraNodeSettings), as
+	// of the container's last create; empty when they agree.
+	settingsNote string
 	// opening is set while a writer is being opened for the record (a start
 	// making its node again, or a sync adopting it), so only one ever is.
 	// retired is set when stopShare has run: nothing attaches to it after.
