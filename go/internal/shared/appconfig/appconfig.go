@@ -541,21 +541,28 @@ const (
 	cameraStableIDByIDScheme = "by-id:"
 )
 
-// What an entry names a camera by, the most specific first: the stable id
-// follows one physical camera, the path is whichever camera holds it since
-// boot, and the name is shared by every camera of the model.
+// What an entry names a camera by, the most specific first. A "by-id:" stable
+// id follows the camera and a "by-path:" one its port, where the device path is
+// whichever camera the kernel numbered there since boot and the name is shared
+// by every camera of the model.
 const (
 	cameraByStableID = iota
 	cameraByPath
 	cameraByName
-	cameraByNoAllowlist
-	cameraPrecedences
+	cameraNamingRanks
 )
 
-// spellings lists what an allowlist entry may hold to name the camera, by
-// precedence.
-func (c CameraIdentity) spellings() [cameraByNoAllowlist][]string {
-	var spellings [cameraByNoAllowlist][]string
+const (
+	cameraByNoAllowlist = cameraNamingRanks
+	cameraRanks         = cameraNamingRanks + 1
+)
+
+// cameraSpellings lists, by rank, what an allowlist entry may hold to name one
+// camera.
+type cameraSpellings [cameraNamingRanks][]string
+
+func (c CameraIdentity) spellings() cameraSpellings {
+	var spellings cameraSpellings
 	if c.StableID != "" {
 		spellings[cameraByStableID] = []string{c.StableID}
 		if bare, tagged := strings.CutPrefix(c.StableID, cameraStableIDByIDScheme); tagged && bare != "" {
@@ -569,6 +576,12 @@ func (c CameraIdentity) spellings() [cameraByNoAllowlist][]string {
 		spellings[cameraByName] = []string{c.Name}
 	}
 	return spellings
+}
+
+// NamedBy reports whether an allowlist entry names the camera.
+func (c CameraIdentity) NamedBy(entry string) bool {
+	spellings := c.spellings()
+	return slices.ContainsFunc(spellings[:], func(accepted []string) bool { return slices.Contains(accepted, entry) })
 }
 
 // cameraClaim is the settings one entry asks for a camera, and the allowlist
@@ -613,8 +626,25 @@ func listClaims(claims []cameraClaim, describe func(cameraClaim) string) string 
 // apply to the camera differ, the format's first. They quote allowlist entries
 // as written, which is not where the camera is now.
 func CameraNodeSettings(entitlements []Entitlement, camera CameraIdentity) (format, stamp string, conflicts []string) {
-	spellings := camera.spellings()
-	var claims [cameraPrecedences][]cameraClaim
+	return settleCameraNode(entitlements, camera.spellings())
+}
+
+// CameraNodeSettingsByPathOrName is CameraNodeSettings as an agent from before
+// stable ids resolves it: an allowlist entry names a camera only by its exact
+// device path or its exact name.
+func CameraNodeSettingsByPathOrName(entitlements []Entitlement, cameraPath, cameraName string) (format, stamp string, conflicts []string) {
+	var spellings cameraSpellings
+	if cameraPath != "" {
+		spellings[cameraByPath] = []string{cameraPath}
+	}
+	if cameraName != "" {
+		spellings[cameraByName] = []string{cameraName}
+	}
+	return settleCameraNode(entitlements, spellings)
+}
+
+func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (format, stamp string, conflicts []string) {
+	var claims [cameraRanks][]cameraClaim
 	for _, e := range entitlements {
 		if !isCameraEntitlement(e) || e.Mode == CameraModeDirect {
 			continue
@@ -624,11 +654,11 @@ func CameraNodeSettings(entitlements []Entitlement, camera CameraIdentity) (form
 			claims[cameraByNoAllowlist] = append(claims[cameraByNoAllowlist], claim)
 			continue
 		}
-		for precedence, accepted := range spellings {
+		for rank, accepted := range spellings {
 			named := slices.IndexFunc(e.Allowlist, func(entry string) bool { return slices.Contains(accepted, entry) })
 			if named >= 0 {
 				claim.by = e.Allowlist[named]
-				claims[precedence] = append(claims[precedence], claim)
+				claims[rank] = append(claims[rank], claim)
 				break
 			}
 		}
@@ -665,28 +695,22 @@ func CameraNodeSettings(entitlements []Entitlement, camera CameraIdentity) (form
 	return format, stamp, conflicts
 }
 
-// CameraAllowlistEntriesNamingNoCamera lists, in manifest order and once each,
-// the allowlist entries that name none of cameras. A direct entry configures
-// no node, so its allowlist is not looked at.
-func CameraAllowlistEntriesNamingNoCamera(entitlements []Entitlement, cameras []CameraIdentity) []string {
-	var naming []string
-	for _, camera := range cameras {
-		for _, accepted := range camera.spellings() {
-			naming = append(naming, accepted...)
-		}
-	}
-	var unmatched []string
+// CameraAllowlistEntries lists, in manifest order and once each, the allowlist
+// entries of the entries that configure a camera node. A direct entry
+// configures none.
+func CameraAllowlistEntries(entitlements []Entitlement) []string {
+	var entries []string
 	for _, e := range entitlements {
 		if !isCameraEntitlement(e) || e.Mode == CameraModeDirect {
 			continue
 		}
 		for _, entry := range e.Allowlist {
-			if !slices.Contains(naming, entry) && !slices.Contains(unmatched, entry) {
-				unmatched = append(unmatched, entry)
+			if !slices.Contains(entries, entry) {
+				entries = append(entries, entry)
 			}
 		}
 	}
-	return unmatched
+	return entries
 }
 
 // Entitlement represents a single entitlement entry in wendy.json.

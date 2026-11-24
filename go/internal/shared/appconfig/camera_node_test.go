@@ -587,6 +587,9 @@ func TestCameraNodeSettings_AnAllowlistNamesACameraByEveryIdentifierItIsShownBy(
 			if format != wantFormat || stamp != wantStamp || len(conflicts) != 0 {
 				t.Fatalf("CameraNodeSettings() = (%q, %q, %q), want (%q, %q) and no conflict", format, stamp, conflicts, wantFormat, wantStamp)
 			}
+			if got := tt.camera.NamedBy(tt.entry); got != tt.named {
+				t.Fatalf("NamedBy(%q) = %v, want %v", tt.entry, got, tt.named)
+			}
 		})
 	}
 }
@@ -689,25 +692,64 @@ func TestCameraNodeSettings_TheMostSpecificIdentifierDecidesInAnyEntryOrder(t *t
 	}
 }
 
-func TestCameraAllowlistEntriesNamingNoCamera(t *testing.T) {
-	brio := CameraIdentity{Path: "/dev/video2", Name: "Brio 101"}
+func TestCameraAllowlistEntries_AreThoseOfEntriesThatConfigureANodeOnceEachInManifestOrder(t *testing.T) {
 	entitlements := []Entitlement{
-		{Type: EntitlementCamera, Allowlist: []string{"by-id:usb-046d_HD_Pro_Webcam_C920-video-index0", "by-id:usb-046d_HD_Pro_Webcam_C920-video-index1"}, Format: "native"},
+		{Type: EntitlementCamera, Allowlist: []string{"by-id:usb-046d_HD_Pro_Webcam_C920-video-index0", "/dev/video4"}, Format: "native"},
 		{Type: EntitlementVideo, Allowlist: []string{"v4l2:/dev/video2", "/dev/video4", "Brio 100"}},
-		{Type: EntitlementCamera, Allowlist: []string{"Brio 101", "/dev/video4"}},
 		{Type: EntitlementCamera},
 		{Type: EntitlementNetwork, Allowlist: []string{"/dev/video9"}},
 	}
-	want := []string{"by-id:usb-046d_HD_Pro_Webcam_C920-video-index1", "/dev/video4", "Brio 100"}
-	if got := CameraAllowlistEntriesNamingNoCamera(entitlements, []CameraIdentity{c920, brio}); !slices.Equal(got, want) {
-		t.Errorf("entries naming no camera = %q, want %q", got, want)
-	}
-	if got := CameraAllowlistEntriesNamingNoCamera(entitlements, nil); len(got) != 6 {
-		t.Errorf("on a device without cameras, entries naming no camera = %q, want all 6 distinct entries", got)
+	want := []string{"by-id:usb-046d_HD_Pro_Webcam_C920-video-index0", "/dev/video4", "v4l2:/dev/video2", "Brio 100"}
+	if got := CameraAllowlistEntries(entitlements); !slices.Equal(got, want) {
+		t.Errorf("CameraAllowlistEntries() = %q, want %q", got, want)
 	}
 	direct := []Entitlement{{Type: EntitlementCamera, Mode: CameraModeDirect, Allowlist: []string{"/dev/video4"}}}
-	if got := CameraAllowlistEntriesNamingNoCamera(direct, []CameraIdentity{c920}); len(got) != 0 {
-		t.Errorf("a direct entry gets no node to configure, yet its entries are reported: %q", got)
+	if got := CameraAllowlistEntries(direct); len(got) != 0 {
+		t.Errorf("a direct entry gets no node to configure, yet its entries are listed: %q", got)
+	}
+}
+
+// An agent from before stable ids matched an allowlist entry only against a
+// camera's exact device path or exact name, the path first.
+func TestCameraNodeSettingsByPathOrName_ResolvesAsAnAgentFromBeforeStableIDsDoes(t *testing.T) {
+	entry := func(format, stamp string, allowlist ...string) Entitlement {
+		return Entitlement{Type: EntitlementCamera, Format: format, Stamp: stamp, Allowlist: allowlist}
+	}
+	tests := []struct {
+		name          string
+		in            []Entitlement
+		wantFormat    string
+		wantStamp     string
+		wantConflicts []string
+	}{
+		{"device path", []Entitlement{entry("native", "frame", c920.Path)}, "native", "frame", nil},
+		{"name", []Entitlement{entry("native", "frame", c920.Name)}, "native", "frame", nil},
+		{"device path as a campaign file writes it", []Entitlement{entry("native", "frame", "v4l2:"+c920.Path)}, "pixels", "time", nil},
+		{"stable id", []Entitlement{entry("native", "frame", c920.StableID)}, "pixels", "time", nil},
+		{"stable id without its prefix", []Entitlement{entry("native", "frame", "usb-046d_HD_Pro_Webcam_C920-video-index0")}, "pixels", "time", nil},
+		{
+			"an entry that agent does not match takes no part",
+			[]Entitlement{entry("native", "", c920.StableID), entry("h264", "", c920.Name)},
+			"h264", "time", nil,
+		},
+		{
+			"path decides over name",
+			[]Entitlement{entry("h264", "", c920.Name), entry("native", "", c920.Path)},
+			"native", "time",
+			[]string{`format is native (asked by allowlist entry "/dev/video0"); passed over: allowlist entry "HD Pro Webcam C920: HD Pro Webc" asks for h264`},
+		},
+		{"entry without an allowlist", []Entitlement{entry("", "frame")}, "pixels", "frame", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, order := range entitlementOrders(tt.in) {
+				format, stamp, conflicts := CameraNodeSettingsByPathOrName(order, c920.Path, c920.Name)
+				if format != tt.wantFormat || stamp != tt.wantStamp || !slices.Equal(conflicts, tt.wantConflicts) {
+					t.Fatalf("CameraNodeSettingsByPathOrName(%+v) = (%q, %q)\nconflicts %q\nwant (%q, %q)\nconflicts %q",
+						order, format, stamp, conflicts, tt.wantFormat, tt.wantStamp, tt.wantConflicts)
+				}
+			}
+		})
 	}
 }
 

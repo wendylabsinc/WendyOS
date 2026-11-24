@@ -167,45 +167,153 @@ func TestPrintCameraShareNotice_SlowAgentPrintsNothing(t *testing.T) {
 
 const c920StableID = "by-id:usb-Sonix_Technology_Co.__Ltd._HD_Pro_Webcam_C920_HD_Pro_Webcam_C920-video-index0"
 
-// c920Row is the camera's row as an agent that reports stable ids lists it.
+var c920Modes = map[string]string{"pixels": "1280x720 YUYV, 30 fps", "native": "1280x720 MJPG, 30 fps", "h264": "1280x720 H264, 30 fps"}
+
+// c920Row is the camera's row from an agent that matches allowlist entries by
+// stable id: it puts stable_id on the row.
 func c920Row() *hwCap {
-	row := shareRowAt("HD Pro Webcam C920: HD Pro Webc (video0)", "/dev/video0", map[string]string{
-		"pixels": "1280x720 YUYV, 30 fps", "native": "1280x720 MJPG, 30 fps", "h264": "1280x720 H264, 30 fps"})
+	row := c920RowFromAnAgentBeforeStableIDs()
 	row.Properties[camerashare.KeyStableID] = c920StableID
 	return row
 }
 
+func c920RowFromAnAgentBeforeStableIDs() *hwCap {
+	return shareRowAt("HD Pro Webcam C920: HD Pro Webc (video0)", "/dev/video0", c920Modes)
+}
+
+func cameraCfg(format, stamp string, allowlist ...string) *appconfig.AppConfig {
+	return &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: allowlist, Format: format, Stamp: stamp},
+	}}
+}
+
+const (
+	c920SharedNative = `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 1280x720 MJPG, 30 fps, format native, stamp frame. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+	c920SharedPlain  = `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 1280x720 YUYV, 30 fps, format pixels, stamp time. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+	selectsNoNode    = ` selects no shared camera's node on this device, so its entitlement's format and stamp reach none. "wendy device camera list --json" prints each camera's stable_id, path and name.`
+)
+
 func TestCameraShareNotice_AnEntryNamingACameraByItsStableIDGivesItsFormatAndStamp(t *testing.T) {
 	for _, entry := range []string{c920StableID, strings.TrimPrefix(c920StableID, "by-id:"), "v4l2:/dev/video0"} {
-		cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
-			{Type: appconfig.EntitlementCamera, Allowlist: []string{entry}, Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame},
-		}}
-		got := cameraShareNotice([]*appconfig.AppConfig{cfg}, []*hwCap{c920Row()})
-		want := `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 1280x720 MJPG, 30 fps, format native, stamp frame. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
-		if got != want {
-			t.Errorf("allowlist %q:\ngot  %q\nwant %q", entry, got, want)
+		cfgs := []*appconfig.AppConfig{cameraCfg(appconfig.CameraFormatNative, appconfig.CameraStampFrame, entry)}
+		if got := cameraShareNotice(cfgs, []*hwCap{c920Row()}); got != c920SharedNative {
+			t.Errorf("allowlist %q:\ngot  %q\nwant %q", entry, got, c920SharedNative)
 		}
-		if lines := cameraAllowlistNotices([]*appconfig.AppConfig{cfg}, []*hwCap{c920Row()}); len(lines) != 0 {
+		if lines := cameraAllowlistNotices(cfgs, []*hwCap{c920Row()}); len(lines) != 0 {
 			t.Errorf("allowlist %q names the camera, yet: %q", entry, lines)
 		}
 	}
 }
 
-func TestCameraAllowlistNotices_OneLineForEachEntryThatNamesNoCameraOnTheDevice(t *testing.T) {
+// A camera without udev names has no stable id, and its agent still matches
+// the "v4l2:" spelling: the row carries the key, empty.
+func TestCameraShareNotice_ACameraWithoutAStableIDOnAnAgentThatMatchesThemIsResolvedByItsRules(t *testing.T) {
+	row := c920RowFromAnAgentBeforeStableIDs()
+	row.Properties[camerashare.KeyStableID] = ""
+	cfgs := []*appconfig.AppConfig{cameraCfg(appconfig.CameraFormatNative, appconfig.CameraStampFrame, "v4l2:/dev/video0")}
+	if got := cameraShareNotice(cfgs, []*hwCap{row}); got != c920SharedNative {
+		t.Errorf("got  %q\nwant %q", got, c920SharedNative)
+	}
+	if lines := cameraAllowlistNotices(cfgs, []*hwCap{row}); len(lines) != 0 {
+		t.Errorf("the entry names the camera, yet: %q", lines)
+	}
+}
+
+// An agent from before stable ids matches an allowlist entry only against a
+// camera's exact device path or name, and serves the defaults for any other
+// spelling: the notice must not promise what that agent does not serve.
+func TestCameraShareNotice_AnAgentFromBeforeStableIDsIsResolvedAsItResolves(t *testing.T) {
+	rows := []*hwCap{c920RowFromAnAgentBeforeStableIDs()}
+	bare := strings.TrimPrefix(c920StableID, "by-id:")
+	for _, entry := range []string{"v4l2:/dev/video0", c920StableID, bare} {
+		cfgs := []*appconfig.AppConfig{cameraCfg(appconfig.CameraFormatNative, appconfig.CameraStampFrame, entry)}
+		if got := cameraShareNotice(cfgs, rows); got != c920SharedPlain {
+			t.Errorf("allowlist %q:\ngot  %q\nwant %q", entry, got, c920SharedPlain)
+		}
+	}
+	for _, entry := range []string{"/dev/video0", "HD Pro Webcam C920: HD Pro Webc"} {
+		cfgs := []*appconfig.AppConfig{cameraCfg(appconfig.CameraFormatNative, appconfig.CameraStampFrame, entry)}
+		if got := cameraShareNotice(cfgs, rows); got != c920SharedNative {
+			t.Errorf("allowlist %q:\ngot  %q\nwant %q", entry, got, c920SharedNative)
+		}
+		if lines := cameraAllowlistNotices(cfgs, rows); len(lines) != 0 {
+			t.Errorf("allowlist %q names the camera as that agent matches, yet: %q", entry, lines)
+		}
+	}
+
+	cfgs := []*appconfig.AppConfig{
+		cameraCfg(appconfig.CameraFormatNative, "", "v4l2:/dev/video0", c920StableID, "/dev/video9"),
+		cameraCfg(appconfig.CameraFormatNative, "", bare, "v4l2:/dev/video0"),
+	}
+	want := []string{
+		`Camera: allowlist entry "/dev/video9"` + selectsNoNode,
+		`Camera: the agent on this device predates stable id and "v4l2:" allowlist entries and matches an entry only against a camera's device path or name, so these select no camera's node: "v4l2:/dev/video0", "` + c920StableID + `", "` + bare + `". Update the agent, or name the camera by its device path or name.`,
+	}
+	if got := cameraAllowlistNotices(cfgs, rows); !slices.Equal(got, want) {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func TestCameraAllowlistNotices_OneLineForEachEntryThatSelectsNoSharedCamerasNode(t *testing.T) {
 	typo := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
 		{Type: appconfig.EntitlementCamera, Allowlist: []string{c920StableID + "0", "/dev/video0"}, Format: appconfig.CameraFormatNative},
 		{Type: appconfig.EntitlementCamera, Allowlist: []string{"HD Pro Webcam C920", "HD Pro Webcam C920: HD Pro Webc"}, Format: appconfig.CameraFormatNative},
 	}}
-	sameTypo := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Allowlist: []string{"HD Pro Webcam C920"}}}}
+	sameTypo := cameraCfg("", "", "HD Pro Webcam C920")
 	direct := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Mode: "direct", Allowlist: []string{"/dev/video9"}}}}
-	const hint = `, so its entitlement's format and stamp reach none. "wendy device camera list --json" prints each camera's stable_id, path and name.`
 	want := []string{
-		`Camera: allowlist entry "` + c920StableID + `0" names no camera on this device` + hint,
-		`Camera: allowlist entry "HD Pro Webcam C920" names no camera on this device` + hint,
+		`Camera: allowlist entry "` + c920StableID + `0"` + selectsNoNode,
+		`Camera: allowlist entry "HD Pro Webcam C920"` + selectsNoNode,
 	}
 	got := cameraAllowlistNotices([]*appconfig.AppConfig{typo, nil, sameTypo, direct}, []*hwCap{c920Row()})
 	if !slices.Equal(got, want) {
 		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
+// An entry that names a camera the app reads without a share node configures
+// nothing, which is not the same as naming nothing.
+func TestCameraAllowlistNotices_AnEntryNamingACameraThatIsNotSharedThroughANodeSaysSo(t *testing.T) {
+	network := &hwCap{Category: "camera", Description: "RLC-520A (video200)", DevicePath: "/dev/video200",
+		Properties: map[string]string{camerashare.KeyStableID: "ip-mac:aa:00:00:00:00:01"}}
+	metadata := &hwCap{Category: "camera", Description: "HD Pro Webcam C920: HD Pro Webc (video1)", DevicePath: "/dev/video1", Properties: map[string]string{"transport": "usb"}}
+	thermal := &hwCap{Category: "camera", Description: "Lepton (video4)", DevicePath: "/dev/video4",
+		Properties: map[string]string{camerashare.KeyStableID: "by-path:platform-usb-0:1.3:1.0-video-index0", camerashare.KeyUnavailable: "a thermal camera is not shared"}}
+	rows := []*hwCap{c920Row(), metadata, network, thermal}
+	cfgs := []*appconfig.AppConfig{cameraCfg(appconfig.CameraFormatNative, "",
+		"ip-mac:aa:00:00:00:00:01", "v4l2:/dev/video200", "/dev/video1", "by-path:platform-usb-0:1.3:1.0-video-index0", "HD Pro Webcam C920: HD Pro Webc")}
+	want := []string{
+		`Camera: allowlist entry "ip-mac:aa:00:00:00:00:01" names RLC-520A (video200), which is not shared through a node, so the entry configures nothing.`,
+		`Camera: allowlist entry "v4l2:/dev/video200" names RLC-520A (video200), which is not shared through a node, so the entry configures nothing.`,
+		`Camera: allowlist entry "/dev/video1" names HD Pro Webcam C920: HD Pro Webc (video1), which is not shared through a node, so the entry configures nothing.`,
+		`Camera: allowlist entry "by-path:platform-usb-0:1.3:1.0-video-index0" names Lepton (video4), which is not shared through a node (a thermal camera is not shared), so the entry configures nothing.`,
+	}
+	if got := cameraAllowlistNotices(cfgs, rows); !slices.Equal(got, want) {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
+// Entries that name one camera by different identifiers pass validation, which
+// has no device to ask, so the deploy says what the agent will make of them.
+func TestCameraSettingsConflictNotices_OneLineForEachCameraWhoseEntriesDisagree(t *testing.T) {
+	bare := strings.TrimPrefix(c920StableID, "by-id:")
+	disagreeing := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: appconfig.CameraFormatH264, Stamp: appconfig.CameraStampFrame},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{bare}, Format: appconfig.CameraFormatNative},
+	}}
+	brio := shareRowAt("Brio 101 (video2)", "/dev/video2", c920Modes)
+	brio.Properties[camerashare.KeyStableID] = ""
+	want := []string{`Camera: HD Pro Webcam C920: HD Pro Webc (video0): format is native (asked by allowlist entry "` + bare + `"); passed over: allowlist entry "/dev/video0" asks for h264; ` +
+		`stamp is time (asked by allowlist entry "` + bare + `"); passed over: allowlist entry "/dev/video0" asks for frame.`}
+	rows := []*hwCap{c920Row(), brio}
+	if got := cameraSettingsConflictNotices([]*appconfig.AppConfig{disagreeing, shareCfg(""), disagreeing}, rows); !slices.Equal(got, want) {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+
+	// The agent before stable ids does not match the stable id entry, so for it
+	// nothing disagrees.
+	if got := cameraSettingsConflictNotices([]*appconfig.AppConfig{disagreeing}, []*hwCap{c920RowFromAnAgentBeforeStableIDs()}); len(got) != 0 {
+		t.Fatalf("an agent that matches one of the entries is told of a disagreement: %q", got)
 	}
 }
 
@@ -218,20 +326,50 @@ func (hw listingHW) ListHardwareCapabilities(context.Context, *agentpb.ListHardw
 	return &agentpb.ListHardwareCapabilitiesResponse{Capabilities: hw.rows}, nil
 }
 
-func TestPrintCameraShareNotice_AnEntryThatNamesNoCameraIsSaidUnderTheShareLine(t *testing.T) {
+func printedCameraNotice(t *testing.T, rows []*hwCap, cfgs ...*appconfig.AppConfig) []string {
+	t.Helper()
+	conn := &grpcclient.AgentConnection{AgentService: listingHW{rows: rows}}
+	out := strings.TrimSpace(captureStderr(t, func() { printCameraShareNotice(context.Background(), conn, cfgs...) }))
+	if out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
+}
+
+func TestPrintCameraShareNotice_PrintsTheShareLineThenDisagreementsThenEntriesThatConfigureNothing(t *testing.T) {
 	cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
-		{Type: appconfig.EntitlementCamera, Allowlist: []string{"by-id:usb-Typo-video-index0"}, Format: appconfig.CameraFormatNative},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0", "by-id:usb-Typo-video-index0"}, Format: appconfig.CameraFormatH264},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{c920StableID}, Format: appconfig.CameraFormatNative},
 	}}
-	conn := &grpcclient.AgentConnection{AgentService: listingHW{rows: []*hwCap{c920Row()}}}
-	lines := strings.Split(strings.TrimSpace(captureStderr(t, func() { printCameraShareNotice(context.Background(), conn, cfg) })), "\n")
-	if len(lines) != 2 || !strings.Contains(lines[0], "format pixels, stamp time") ||
-		!strings.Contains(lines[1], `allowlist entry "by-id:usb-Typo-video-index0" names no camera on this device`) {
-		t.Fatalf("printed %q, want the share line with the defaults and one line for the entry", lines)
+	lines := printedCameraNotice(t, []*hwCap{c920Row()}, cfg)
+	if len(lines) != 3 || !strings.Contains(lines[0], "this app shares") || !strings.Contains(lines[0], "format native, stamp time") ||
+		!strings.Contains(lines[1], `passed over: allowlist entry "/dev/video0" asks for h264`) ||
+		!strings.Contains(lines[2], `allowlist entry "by-id:usb-Typo-video-index0" selects no shared camera's node`) {
+		t.Fatalf("printed %q, want the share line, the disagreement and the entry that selects nothing", lines)
+	}
+}
+
+// With no camera that can be shared, an agent that shares cameras still says
+// so in its rows, and an entry that then configures nothing is not passed over
+// in silence.
+func TestPrintCameraShareNotice_WithNoCameraToShareAnEntryThatConfiguresNothingIsStillSaid(t *testing.T) {
+	thermal := &hwCap{Category: "camera", Description: "Lepton (video4)", DevicePath: "/dev/video4",
+		Properties: map[string]string{camerashare.KeyStableID: "", camerashare.KeyUnavailable: "a thermal camera is not shared"}}
+	cfg := cameraCfg(appconfig.CameraFormatNative, "", "/dev/video0", "/dev/video4")
+	lines := printedCameraNotice(t, []*hwCap{thermal}, cfg)
+	want := []string{
+		`Camera: allowlist entry "/dev/video0"` + selectsNoNode,
+		`Camera: allowlist entry "/dev/video4" names Lepton (video4), which is not shared through a node (a thermal camera is not shared), so the entry configures nothing.`,
+	}
+	if !slices.Equal(lines, want) {
+		t.Fatalf("printed %q\nwant    %q", lines, want)
 	}
 
-	// An agent that shares nothing gives no node for an entry to configure.
-	conn = &grpcclient.AgentConnection{AgentService: listingHW{rows: []*hwCap{shareRow("Brio 101 (video0)", "")}}}
-	if out := captureStderr(t, func() { printCameraShareNotice(context.Background(), conn, cfg) }); out != "" {
-		t.Fatalf("an agent that shares no camera printed %q", out)
+	// An agent that says nothing of sharing gives no node for an entry to configure.
+	if lines := printedCameraNotice(t, []*hwCap{shareRow("Brio 101 (video0)", "")}, cfg); lines != nil {
+		t.Fatalf("an agent that reports no sharing printed %q", lines)
+	}
+	if lines := printedCameraNotice(t, nil, cfg); lines != nil {
+		t.Fatalf("a device without camera rows printed %q", lines)
 	}
 }
