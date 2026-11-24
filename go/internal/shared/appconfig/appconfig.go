@@ -582,7 +582,7 @@ func (c cameraClaim) asker() string {
 	if c.by == "" {
 		return "an entry without an allowlist"
 	}
-	return fmt.Sprintf("%q", c.by)
+	return fmt.Sprintf("allowlist entry %q", c.by)
 }
 
 // listClaims describes each claim, sorted and without repeats, so the text
@@ -610,7 +610,8 @@ func listClaims(claims []cameraClaim, describe func(cameraClaim) string) string 
 // value this build does not know resolves to the default.
 //
 // conflicts holds one sentence for each setting on which the entries that
-// apply to the camera differ, the format's first.
+// apply to the camera differ, the format's first. They quote allowlist entries
+// as written, which is not where the camera is now.
 func CameraNodeSettings(entitlements []Entitlement, camera CameraIdentity) (format, stamp string, conflicts []string) {
 	spellings := camera.spellings()
 	var claims [cameraPrecedences][]cameraClaim

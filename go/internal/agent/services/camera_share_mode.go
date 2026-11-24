@@ -164,7 +164,9 @@ type shareRecord struct {
 	modeNote string
 	// settingsNote says which of the node's settings the app's entitlement
 	// entries disagree on for this camera (appconfig.CameraNodeSettings), as
-	// of the container's last create; empty when they agree.
+	// of the container's last create; empty when they agree, and when that
+	// create did not see the camera. It quotes allowlist entries as written,
+	// which says nothing of where the camera is now.
 	settingsNote string
 	// opening is set while a writer is being opened for the record (a start
 	// making its node again, or a sync adopting it), so only one ever is.

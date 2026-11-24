@@ -616,35 +616,35 @@ func TestCameraNodeSettings_TheMostSpecificIdentifierDecidesInAnyEntryOrder(t *t
 			"stable id decides over device path",
 			[]Entitlement{entry("native", "", c920.StableID), entry("h264", "", c920.Path)},
 			"native", "time",
-			[]string{`format is native (asked by "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: "/dev/video0" asks for h264`},
+			[]string{`format is native (asked by allowlist entry "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: allowlist entry "/dev/video0" asks for h264`},
 		},
 		{
 			"stable id without its prefix decides over the campaign spelling of the path",
 			[]Entitlement{entry("", "frame", bareStableID), entry("", "", "v4l2:"+c920.Path)},
 			"pixels", "frame",
-			[]string{`stamp is frame (asked by "usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: "v4l2:/dev/video0" asks for time`},
+			[]string{`stamp is frame (asked by allowlist entry "usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: allowlist entry "v4l2:/dev/video0" asks for time`},
 		},
 		{
 			"device path as a campaign file writes it decides over name",
 			[]Entitlement{entry("h264", "", "v4l2:"+c920.Path), entry("native", "frame", c920.Name)},
 			"h264", "time",
 			[]string{
-				`format is h264 (asked by "v4l2:/dev/video0"); passed over: "HD Pro Webcam C920: HD Pro Webc" asks for native`,
-				`stamp is time (asked by "v4l2:/dev/video0"); passed over: "HD Pro Webcam C920: HD Pro Webc" asks for frame`,
+				`format is h264 (asked by allowlist entry "v4l2:/dev/video0"); passed over: allowlist entry "HD Pro Webcam C920: HD Pro Webc" asks for native`,
+				`stamp is time (asked by allowlist entry "v4l2:/dev/video0"); passed over: allowlist entry "HD Pro Webcam C920: HD Pro Webc" asks for frame`,
 			},
 		},
 		{
 			"stable id decides over path, name and an entry without an allowlist",
 			[]Entitlement{entry("native", "", c920.StableID), entry("h264", "", c920.Path), entry("h264", "", c920.Name), entry("", "")},
 			"native", "time",
-			[]string{`format is native (asked by "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: "/dev/video0" asks for h264, ` +
-				`"HD Pro Webcam C920: HD Pro Webc" asks for h264, an entry without an allowlist asks for pixels`},
+			[]string{`format is native (asked by allowlist entry "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: allowlist entry "/dev/video0" asks for h264, ` +
+				`allowlist entry "HD Pro Webcam C920: HD Pro Webc" asks for h264, an entry without an allowlist asks for pixels`},
 		},
 		{
 			"entry naming both path and stable id counts as naming the stable id",
 			[]Entitlement{entry("native", "", c920.Path, bareStableID), entry("h264", "", "v4l2:"+c920.Path)},
 			"native", "time",
-			[]string{`format is native (asked by "usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: "v4l2:/dev/video0" asks for h264`},
+			[]string{`format is native (asked by allowlist entry "usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: allowlist entry "v4l2:/dev/video0" asks for h264`},
 		},
 		{
 			"the two spellings of the stable id that disagree give the default",
@@ -652,16 +652,16 @@ func TestCameraNodeSettings_TheMostSpecificIdentifierDecidesInAnyEntryOrder(t *t
 			"pixels", "frame",
 			[]string{
 				`format falls back to pixels: the entries deciding for this camera disagree (` +
-					`"by-id:usb-046d_HD_Pro_Webcam_C920-video-index0" asks for native, "usb-046d_HD_Pro_Webcam_C920-video-index0" asks for h264)`,
-				`stamp is frame (asked by "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0", "usb-046d_HD_Pro_Webcam_C920-video-index0"); ` +
-					`passed over: "/dev/video0" asks for time`,
+					`allowlist entry "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0" asks for native, allowlist entry "usb-046d_HD_Pro_Webcam_C920-video-index0" asks for h264)`,
+				`stamp is frame (asked by allowlist entry "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0", allowlist entry "usb-046d_HD_Pro_Webcam_C920-video-index0"); ` +
+					`passed over: allowlist entry "/dev/video0" asks for time`,
 			},
 		},
 		{
 			"the two spellings of the path that disagree give the default",
 			[]Entitlement{entry("native", "", c920.Path), entry("native", "frame", "v4l2:"+c920.Path)},
 			"native", "time",
-			[]string{`stamp falls back to time: the entries deciding for this camera disagree ("/dev/video0" asks for time, "v4l2:/dev/video0" asks for frame)`},
+			[]string{`stamp falls back to time: the entries deciding for this camera disagree (allowlist entry "/dev/video0" asks for time, allowlist entry "v4l2:/dev/video0" asks for frame)`},
 		},
 		{
 			"entries without an allowlist that disagree give the default",

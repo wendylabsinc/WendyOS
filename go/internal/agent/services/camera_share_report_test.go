@@ -33,6 +33,7 @@ func TestCameraShareReport_NamesModeAppsAndStates(t *testing.T) {
 		"share_unavailable_native": sfCannotDerive,
 		"share_unavailable_h264":   sfCannotDerive,
 		"shared_with":              "cv-a, cv-b, cv-c",
+		"stable_id":                "",
 		"share_state":              "cv-a [format pixels, stamp time] (reading), cv-b [format pixels, stamp time] (waiting: held by cv-x at 1920x1080), cv-c [format pixels, stamp time] (not sharing: took the real camera after a replug)",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -43,7 +44,7 @@ func TestCameraShareReport_NamesModeAppsAndStates(t *testing.T) {
 func TestCameraShareReport_UnsharedCameraSaysWhy(t *testing.T) {
 	h := newCSHarness(t, csFormatlessCam())
 	got := h.s.CameraShareReport(context.Background())["/dev/video2"]
-	want := map[string]string{"share_unavailable": "the camera's formats could not be read"}
+	want := map[string]string{"share_unavailable": "the camera's formats could not be read", "stable_id": ""}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("report = %#v, want %#v", got, want)
 	}
@@ -58,7 +59,7 @@ func TestCameraShareReport_UnsupportedFreshStartFallsBackToRealCamera(t *testing
 		t.Fatal("unsupported module left a share node covering the real camera")
 	}
 	got := h.s.CameraShareReport(context.Background())["/dev/video0"]
-	want := map[string]string{"share_unavailable": errShareFreshStartUnsupported.Error()}
+	want := map[string]string{"share_unavailable": errShareFreshStartUnsupported.Error(), "stable_id": ""}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("report = %#v, want %#v", got, want)
 	}

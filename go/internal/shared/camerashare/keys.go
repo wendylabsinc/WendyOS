@@ -13,8 +13,10 @@ const (
 	// "cv-a [format pixels, stamp time] (reading), cv-b [format native, stamp frame] (idle)".
 	KeyState = "share_state"
 	// KeyStableID is the camera's stable id as the camera list gives it, e.g.
-	// "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"; absent for a camera
-	// without one. An entitlement's allowlist may name the camera by it.
+	// "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0", and empty for a camera
+	// without one. An entitlement's allowlist may name the camera by it. The
+	// key is on every row of an agent that matches allowlist entries by stable
+	// id and by "v4l2:" path: an agent from before that sets it on none.
 	KeyStableID = "stable_id"
 )
 

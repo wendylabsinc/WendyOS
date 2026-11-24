@@ -201,6 +201,8 @@ func (s *VideoService) CreateCameraShares(ctx context.Context, containerID, appI
 		}
 		cams = append(cams, dev)
 	}
+	creation.notesBefore = s.takeSettingsNotes(containerID)
+	defer s.persistChangedSettingsNotes(creation.notesBefore)
 	for i, dev := range cams {
 		if err := ctx.Err(); err != nil {
 			for _, rest := range cams[i:] {
@@ -214,8 +216,42 @@ func (s *VideoService) CreateCameraShares(ctx context.Context, containerID, appI
 
 // shareCreation is one CreateCameraShares call in flight. removed (guarded by
 // cameraShares.mu) is set by a RemoveCameraShares of the same container, after
-// which the call stores nothing more.
-type shareCreation struct{ removed bool }
+// which the call stores nothing more. notesBefore holds the settings note each
+// record of the container had when the call began.
+type shareCreation struct {
+	removed     bool
+	notesBefore map[*shareRecord]string
+}
+
+// takeSettingsNotes clears the settings note of every record of a container
+// and returns what each held. A create resolves the settings of the cameras it
+// sees, so a record whose camera it does not see must not keep the word of
+// entitlements that may have changed.
+func (s *VideoService) takeSettingsNotes(containerID string) map[*shareRecord]string {
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	c := s.shares.containers[containerID]
+	if c == nil {
+		return nil
+	}
+	notes := make(map[*shareRecord]string, len(c.shares))
+	for _, r := range c.shares {
+		notes[r], r.settingsNote = r.settingsNote, ""
+	}
+	return notes
+}
+
+func (s *VideoService) persistChangedSettingsNotes(before map[*shareRecord]string) {
+	s.shares.mu.Lock()
+	changed := false
+	for r, note := range before {
+		changed = changed || (r.settingsNote != note && !r.retired)
+	}
+	s.shares.mu.Unlock()
+	if changed {
+		s.persistCameraShares()
+	}
+}
 
 // Why a share made in time is not stored.
 const (
@@ -301,16 +337,16 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		s.logRealCamera(true, containerID, dev, "its sysfs identity could not be read: "+err.Error())
 		return
 	}
+	noteBefore := ""
 	if existing := s.shareOfCamera(containerID, id); existing != nil {
+		noteBefore = creation.notesBefore[existing]
 		if existing.mode.asksWhat(decision.Mode) && existing.stamp == stamp && existing.askedFormat == decision.AskedFormat {
 			s.shares.mu.Lock()
-			renoted := existing.settingsNote != settingsNote
 			existing.settingsNote = settingsNote
 			s.shares.mu.Unlock()
-			if renoted {
-				s.persistCameraShares()
+			if settingsNote != noteBefore {
+				s.warnOfSettingsNote(containerID, dev, settingsNote)
 			}
-			s.warnOfSettingsNote(containerID, dev, settingsNote)
 			return
 		}
 		// A record left from an earlier container of this name: this
@@ -362,7 +398,9 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		s.shareLogger().Warn(fmt.Sprintf("camera share: %s: %s (%s): %s", containerID, dev.GetName(), dev.GetPath(),
 			describeServedInstead(decision.AskedFormat, decision.Mode.Format, decision.AskedWhyNot)))
 	}
-	s.warnOfSettingsNote(containerID, dev, settingsNote)
+	if settingsNote != noteBefore {
+		s.warnOfSettingsNote(containerID, dev, settingsNote)
+	}
 }
 
 func (s *VideoService) warnOfSettingsNote(containerID string, dev *agentpb.VideoDevice, settingsNote string) {
@@ -3312,12 +3350,14 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 	for _, dev := range listed.devices {
 		switch dev.GetTransport() {
 		case agentpb.VideoTransport_VIDEO_TRANSPORT_ROS2, agentpb.VideoTransport_VIDEO_TRANSPORT_IP:
+			// Read through its own node, never a share node: its row says only
+			// what an allowlist entry could name it by.
+			if dev.GetPath() != "" {
+				report[dev.GetPath()] = map[string]string{camerashare.KeyStableID: dev.GetStableId()}
+			}
 			continue
 		}
-		props := map[string]string{}
-		if stableID := dev.GetStableId(); stableID != "" {
-			props[camerashare.KeyStableID] = stableID
-		}
+		props := map[string]string{camerashare.KeyStableID: dev.GetStableId()}
 		// Who shares a camera comes from the records, not from a decision, so
 		// a decision that misses the budget costs only the mode or reason.
 		if with, state := s.shareStatesOf(dev.GetPath()); len(with) > 0 {
@@ -3356,9 +3396,7 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 				}
 			}
 		}
-		if len(props) > 0 {
-			report[dev.GetPath()] = props
-		}
+		report[dev.GetPath()] = props
 	}
 	return report
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -2056,8 +2058,8 @@ func TestCreateCameraShares_AnEntryNamingACameraByItsStableIDOrCampaignPathDecid
 			if got, want := row["stable_id"], "by-id:"+sfBrioByID; got != want {
 				t.Errorf("the camera's row gives stable_id %q, want %q", got, want)
 			}
-			if _, has := h.reportOf("/dev/video4")["stable_id"]; has {
-				t.Errorf("a camera without a stable id reports one: %v", h.reportOf("/dev/video4"))
+			if id, said := h.reportOf("/dev/video4")["stable_id"]; !said || id != "" {
+				t.Errorf("a camera without a stable id gives stable_id %q (present %v), want it present and empty: the key says the agent matches stable ids", id, said)
 			}
 		})
 	}
@@ -2077,7 +2079,7 @@ func TestCreateCameraShares_EntriesThatDisagreeOnACameraAreWarnedOfOnceAndSaidIn
 				sfCameraEntitlement(appconfig.CameraFormatH264, "", "v4l2:/dev/video0"),
 			},
 			sfPixelsMode,
-			`format falls back to pixels: the entries deciding for this camera disagree ("/dev/video0" asks for native, "v4l2:/dev/video0" asks for h264)`,
+			`format falls back to pixels: the entries deciding for this camera disagree (allowlist entry "/dev/video0" asks for native, allowlist entry "v4l2:/dev/video0" asks for h264)`,
 		},
 		"the stable id and the path": {
 			[]appconfig.Entitlement{
@@ -2085,7 +2087,7 @@ func TestCreateCameraShares_EntriesThatDisagreeOnACameraAreWarnedOfOnceAndSaidIn
 				sfCameraEntitlement(appconfig.CameraFormatNative, "", sfBrioByID),
 			},
 			sfNativeMode,
-			`format is native (asked by "` + sfBrioByID + `"); passed over: "/dev/video0" asks for h264`,
+			`format is native (asked by allowlist entry "` + sfBrioByID + `"); passed over: allowlist entry "/dev/video0" asks for h264`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -2138,7 +2140,7 @@ func TestCreateCameraShares_ADisagreementOfEntriesSurvivesAnAgentRestartInTheSta
 	h.s.loadCameraShares()
 	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a"}})
 	want := `cv-a [format pixels, stamp time] (idle; stamp falls back to time: the entries deciding for this camera disagree ` +
-		`("/dev/video0" asks for frame, "v4l2:/dev/video0" asks for time))`
+		`(allowlist entry "/dev/video0" asks for frame, allowlist entry "v4l2:/dev/video0" asks for time))`
 	if got := h.reportOf("/dev/video0")["share_state"]; got != want {
 		t.Errorf("share_state = %q\nwant         %q", got, want)
 	}
@@ -2171,5 +2173,84 @@ func TestCreateCameraShares_AContainerCreatedAgainWithEntriesThatAgreeNoLongerTe
 	}
 	if n := h.logged("the entries deciding"); n != 1 {
 		t.Errorf("%d warnings of a disagreement, want only the first create's; logs: %v", n, h.logs.All())
+	}
+}
+
+func TestCreateCameraShares_ADisagreementThatHasNotChangedIsNotWarnedOfAgain(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	sfCanDeriveFrames(h.s)
+	disagreeing := []appconfig.Entitlement{
+		sfCameraEntitlement(appconfig.CameraFormatNative, "", "/dev/video0"),
+		sfCameraEntitlement(appconfig.CameraFormatH264, "", "v4l2:/dev/video0"),
+	}
+	for range 3 {
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", disagreeing)
+	}
+	if n := h.logged("the entries deciding"); n != 1 {
+		t.Errorf("3 creates with one disagreement warned %d times, want once; logs: %v", n, h.logs.All())
+	}
+	if _, told := h.stateShares("cv-a")[0]["settingsNote"]; !told {
+		t.Errorf("the disagreement left the state file: %v", h.stateShares("cv-a"))
+	}
+
+	disagreeing[1].Stamp = appconfig.CameraStampFrame
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", disagreeing)
+	if n := h.logged("stamp falls back to time"); n != 1 {
+		t.Errorf("a disagreement that changed warned %d times, want once; logs: %v", n, h.logs.All())
+	}
+}
+
+// A create that does not see a record's camera cannot say what its entries
+// make of it, so the record stops telling of the last create's disagreement.
+func TestCreateCameraShares_ACorrectedManifestCreatedWhileTheCameraIsAwayDropsTheDisagreement(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	sfCanDeriveFrames(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
+		sfCameraEntitlement(appconfig.CameraFormatNative, "", "/dev/video0"),
+		sfCameraEntitlement(appconfig.CameraFormatH264, "", "v4l2:/dev/video0"),
+	})
+	kept := h.records("cv-a")[0]
+	if _, told := h.stateShares("cv-a")[0]["settingsNote"]; !told {
+		t.Fatalf("the disagreement is not in the state file: %v", h.stateShares("cv-a"))
+	}
+
+	h.takeOut("video0")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement("", "", "/dev/video0")})
+	h.mu.Lock()
+	h.cams["video0"] = csBrio()
+	h.mu.Unlock()
+
+	if records := h.records("cv-a"); len(records) != 1 || records[0] != kept {
+		t.Fatalf("records = %+v, want the record made before the camera went", records)
+	}
+	if got, want := h.reportOf("/dev/video0")["share_state"], "cv-a [format pixels, stamp time] (idle)"; got != want {
+		t.Errorf("share_state after the camera came back = %q, want %q", got, want)
+	}
+	if note, told := h.stateShares("cv-a")[0]["settingsNote"]; told {
+		t.Errorf("the state file still tells of the disagreement: %q", note)
+	}
+}
+
+// A network camera is read through its own node, not through a share node, so
+// its row carries the stable id an allowlist entry may hold and no share mode.
+func TestCameraShareReport_ANetworkCamerasRowGivesItsStableIDAndNoShareMode(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	dir := t.TempDir()
+	h.s.registry = ipcam.NewRegistry(filepath.Join(dir, "cameras.json"))
+	h.s.credentials = ipcam.NewCredentialStore(filepath.Join(dir, "credentials.json"))
+	cam, err := h.s.registry.Upsert(ipcam.Camera{MAC: "aa:00:00:00:00:01", Model: "RLC-520A", Address: "10.98.0.50"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.credentials.Set(cam.MAC, ipcam.Credential{Username: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	h.loop.mu.Lock()
+	h.loop.nodePaths[cam.ID] = "/dev/video200"
+	h.loop.mu.Unlock()
+
+	want := map[string]string{"stable_id": "ip-mac:aa:00:00:00:00:01"}
+	if got := h.reportOf("/dev/video200"); !reflect.DeepEqual(got, want) {
+		t.Errorf("the network camera's row = %v, want %v", got, want)
 	}
 }
