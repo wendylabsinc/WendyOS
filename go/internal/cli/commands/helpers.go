@@ -645,11 +645,15 @@ var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, 
 	}
 	defer conn.Close()
 
+	// A local-key connection to a Closed device is TLS but not the cloud
+	// mTLS this flag stands for (a Provisioned row, its mTLS port advertised):
+	// a Closed device advertises its plaintext port.
+	cloudMTLS := conn.IsMTLS && !conn.IsLocalOperator
 	resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err != nil {
-		return conn.IsMTLS, resp, errors.Join(mtlsErr, err)
+		return cloudMTLS, resp, errors.Join(mtlsErr, err)
 	}
-	return conn.IsMTLS, resp, nil
+	return cloudMTLS, resp, nil
 }
 
 var discoverLANDevices = func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {

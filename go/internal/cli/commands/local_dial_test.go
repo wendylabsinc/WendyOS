@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
@@ -489,5 +491,29 @@ func TestLadderNeverReadsCloseAfterVerifiedLocalHandshakeAsKeyRefused(t *testing
 	_, _, err = dialAgentLadderWithCerts(ladderCtx(t), newDialTarget("box", ln.Addr().String()), nil)
 	if !errors.Is(err, errNoAuthenticatedEndpoint) {
 		t.Fatalf("err = %v, want a verified-device failure with no plaintext", err)
+	}
+}
+
+// A Closed device this computer holds a key for stays a Closed row: the
+// local-key connection is not cloud mTLS, so the row is not Provisioned and
+// its advertised (plaintext) port is dialled as is.
+func TestDiscoverRowOfClosedDeviceReachedWithLocalKey(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	setPinCache(t)
+	forbidPlaintext(t)
+	owner := useLocalKey(t)
+	host, portStr, _ := net.SplitHostPort(startLocalOnlyAgent(t, owner))
+	port, _ := strconv.Atoi(portStr)
+	dev := models.LANDevice{DisplayName: "box", IPAddress: host, Port: port, Access: "closed", IsWendyDevice: true}
+
+	row, err := lanProber(ladderCtx(t), dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lanProvisionedDisplay(&row); got != "Closed" {
+		t.Errorf("row shows %q, want Closed", got)
+	}
+	if got := lanAgentPort(row); got != port {
+		t.Errorf("row dials port %d, want the advertised %d", got, port)
 	}
 }
