@@ -396,11 +396,16 @@ func main() {
 	// Access shape of a device that is not enrolled: Open (no trusted-keys
 	// file, today's behaviour) or Closed (only trusted keys get in). Enrolled
 	// devices keep the file unused, so unenrolling returns them to Closed. A
-	// file that cannot be used refuses the start instead of leaving the
-	// device Open.
+	// file that cannot be used keeps the device Closed with no key trusted;
+	// it never exits, because a crash loop under the supervisor ends on an
+	// image agent that may not know the file, and an Enrolled device must
+	// still start on its enrollment.
 	accessKeys, err := trustedkeys.Open(filepath.Join(configPath, trustedkeys.FileName))
+	if seedErr := configpartition.TrustedKeysSeedError(); err == nil && seedErr != nil {
+		accessKeys, err = trustedkeys.Unusable(filepath.Join(configPath, trustedkeys.FileName)), seedErr
+	}
 	if err != nil {
-		logger.Fatal("refusing to start: the device access file is unusable; fix it, or remove it to reopen the device", zap.Error(err))
+		logger.Error("the device access file is unusable: Closed with no trusted key until it is fixed, removed or the device is reset", zap.Error(err))
 	}
 	// closedAccess is set once enrollment is known: Closed = not enrolled and
 	// the file present. restartForAccess is set once the agent restart exists;
@@ -1524,31 +1529,27 @@ func main() {
 		startBLEPeripheral(certPEM, chainPEM, keyPEM)
 	}
 	// Closed: callers prove a trusted key over TLS on the mTLS port.
-	var closedCertPEM, closedKeyPEM string
-	if closedAccess {
-		closedCertPEM, closedKeyPEM, err = mtls.ClosedServerIdentity(configPath, time.Now())
+	startClosedKeyServer := func(certPEM, keyPEM string) error {
+		tlsConfig, err := mtls.NewTrustedKeyTLSConfig(certPEM, keyPEM, accessKeys, trustedkeys.RoleViewer)
 		if err != nil {
-			logger.Fatal("refusing to start: cannot make the closed-device TLS identity", zap.Error(err))
-		}
-		tlsConfig, err := mtls.NewTrustedKeyTLSConfig(closedCertPEM, closedKeyPEM, accessKeys, trustedkeys.RoleViewer)
-		if err != nil {
-			logger.Fatal("refusing to start: cannot build the closed-device TLS config", zap.Error(err))
+			return fmt.Errorf("building its TLS config: %w", err)
 		}
 		authz := &interceptor.ClosedAuthorizer{Logger: logger, Listener: interceptor.ClosedKeyListener, Keys: accessKeys}
-		srv := grpc.NewServer(append(remoteSeenOptions(),
+		// The authorizer first: a refused call must not approve an agent on trial.
+		srv := grpc.NewServer(append([]grpc.ServerOption{
 			grpc.Creds(credentials.NewTLS(tlsConfig)),
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 			grpc.ChainUnaryInterceptor(authz.Unary()),
 			grpc.ChainStreamInterceptor(authz.Stream()),
-			grpc.InitialWindowSize(8*1024*1024),
-			grpc.InitialConnWindowSize(16*1024*1024),
-		)...)
+			grpc.InitialWindowSize(8 * 1024 * 1024),
+			grpc.InitialConnWindowSize(16 * 1024 * 1024),
+		}, remoteSeenOptions()...)...)
 		registerAuthenticatedServices(srv)
-		mustMapEveryMethod(logger, srv)
+		logUnmappedMethods(logger, srv)
 		lis, err := listenForAccess(accessPolicy, strconv.Itoa(mtlsPortNum))
 		if err != nil {
-			logger.Fatal("Failed to listen on the closed-device TLS port", zap.Int("port", mtlsPortNum), zap.Error(err))
+			return fmt.Errorf("listening on port %d: %w", mtlsPortNum, err)
 		}
 		mtlsMu.Lock()
 		mtlsServer = srv // stopped at shutdown with the other servers
@@ -1562,6 +1563,18 @@ func main() {
 				logger.Error("closed-device TLS server error", zap.Error(err))
 			}
 		}()
+		return nil
+	}
+	var closedCertPEM, closedKeyPEM string
+	if closedAccess {
+		// Failures here log and skip the TLS listener instead of exiting (see
+		// the access file above): the device stays Closed with no key way in.
+		closedCertPEM, closedKeyPEM, err = mtls.ClosedServerIdentity(configPath, time.Now())
+		if err != nil {
+			logger.Error("closed device without its TLS listener: cannot make its TLS identity", zap.Error(err))
+		} else if err := startClosedKeyServer(closedCertPEM, closedKeyPEM); err != nil {
+			logger.Error("closed device without its TLS listener", zap.Error(err))
+		}
 	}
 
 	// Advertise the device's Ethernet addresses so hosts can prefer the cable.
@@ -1598,11 +1611,13 @@ func main() {
 	if !alreadyProvisioned {
 		// Closed: the plaintext port answers GetAccess, and the keyless apps
 		// set when the owner switched it on; everything else is refused.
-		plainOpts := remoteSeenOptions()
+		// The authorizer first: a refused call must not approve an agent on trial.
+		var plainOpts []grpc.ServerOption
 		if closedAccess {
 			authz := &interceptor.ClosedAuthorizer{Logger: logger, Listener: interceptor.ClosedKeylessListener, Keys: accessKeys}
 			plainOpts = append(plainOpts, grpc.ChainUnaryInterceptor(authz.Unary()), grpc.ChainStreamInterceptor(authz.Stream()))
 		}
+		plainOpts = append(plainOpts, remoteSeenOptions()...)
 		agentServer = grpc.NewServer(append(plainOpts,
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
@@ -1620,7 +1635,7 @@ func main() {
 		)...)
 		registerAllServices(agentServer)
 		if closedAccess {
-			mustMapEveryMethod(logger, agentServer)
+			logUnmappedMethods(logger, agentServer)
 		}
 
 		agentLis, err := listenForAccess(accessPolicy, agentPort)
@@ -1695,7 +1710,7 @@ func main() {
 		agentpbv2.RegisterWendyUnitreeServiceServer(localSocketServer, unitreeSvc)
 		agentpbv2.RegisterWendyUnitreeRobotServiceServer(localSocketServer, unitreeRobotSvc)
 		if closedAccess {
-			mustMapEveryMethod(logger, localSocketServer)
+			logUnmappedMethods(logger, localSocketServer)
 		}
 
 		// oci.AdminAgentSocketHostPath is the single source of truth for this
@@ -2384,11 +2399,12 @@ func remoteSeenOptions() []grpc.ServerOption {
 	}
 }
 
-// mustMapEveryMethod refuses to start a Closed device listener that serves a
-// call without a role: it would be denied to everyone, so it is a missing
-// role decision, not a working call.
-func mustMapEveryMethod(logger *zap.Logger, srv *grpc.Server) {
+// logUnmappedMethods reports calls a Closed device listener serves without a
+// role. The authorizer denies them to everyone and the access table test fails
+// the build on them, so this never exits: a crash loop would end on an image
+// agent that may not know the access file.
+func logUnmappedMethods(logger *zap.Logger, srv *grpc.Server) {
 	if unmapped := interceptor.Unmapped(srv); len(unmapped) > 0 {
-		logger.Fatal("refusing to start: agent calls without a role in the access table", zap.Strings("methods", unmapped))
+		logger.Error("agent calls without a role in the access table are denied to everyone", zap.Strings("methods", unmapped))
 	}
 }

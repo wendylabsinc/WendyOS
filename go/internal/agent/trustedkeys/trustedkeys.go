@@ -21,8 +21,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
@@ -79,7 +82,11 @@ var (
 	ErrAlreadyExists = errors.New("that key is already trusted; remove it first to change its role")
 	ErrLastOwner     = errors.New("that is the last owner key; add another owner first")
 	ErrActorNotOwner = errors.New("your key is no longer an owner on this device")
+	ErrBadLabel      = fmt.Errorf("a key label is at most %d bytes of printable text", MaxLabelLen)
 )
+
+// MaxLabelLen bounds a key label, which other owners see in key lists.
+const MaxLabelLen = 128
 
 // Entry is one trusted key as stored on disk.
 type Entry struct {
@@ -163,14 +170,29 @@ func keyAlgorithm(pub any) string {
 }
 
 // Open loads path. A missing file is an Open device. A file that exists but
-// cannot be read or validated is an error: the caller must fail closed, never
-// fall back to an Open device.
+// cannot be read or validated is an error, and the store returned with it is
+// Closed with no keys: an agent that keeps running fails closed instead of
+// exiting, which under the supervisor would fall back to an image agent that
+// may not know the file and come up Open.
 func Open(path string) (*Store, error) {
 	f, err := load(path)
 	if err != nil {
-		return nil, err
+		return Unusable(path), err
 	}
 	return &Store{path: path, file: f}, nil
+}
+
+// Unusable is a Closed device that trusts no key, for an access file (or an
+// install seed) that exists but cannot be used. Nothing can change it; the
+// file must be fixed or removed, or the device reset.
+func Unusable(path string) *Store {
+	return &Store{path: path, file: &fileFormat{Shape: shapeClosed}}
+}
+
+// Validate reports whether data is an access file Open would load.
+func Validate(data []byte) error {
+	_, err := parse(data)
+	return err
 }
 
 func load(path string) (*fileFormat, error) {
@@ -279,6 +301,9 @@ func (s *Store) List() []Entry {
 func newEntry(spki []byte, role Role, label, addedBy string, now time.Time) (Entry, error) {
 	if role == RoleNone {
 		return Entry{}, errors.New("a role is required: owner, operator or viewer")
+	}
+	if len(label) > MaxLabelLen || !utf8.ValidString(label) || strings.IndexFunc(label, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return Entry{}, ErrBadLabel
 	}
 	if err := checkKey(spki); err != nil {
 		return Entry{}, err

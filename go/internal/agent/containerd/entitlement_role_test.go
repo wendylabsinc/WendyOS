@@ -31,3 +31,30 @@ func TestDeployEntitlementsByCallerRole(t *testing.T) {
 		}
 	}
 }
+
+// Exec and attach run with the app's privileges, so they need the role that
+// could have deployed its entitlements, read back from its labels.
+func TestExecAndAttachNeedTheRoleTheAppsEntitlementsNeed(t *testing.T) {
+	bg := context.Background()
+	as := func(r trustedkeys.Role) context.Context { return trustedkeys.WithCallerRole(bg, r) }
+	build := retirementContainerForTest{id: "app", labels: wendyLabels("app", "", "1", nil,
+		[]appconfig.Entitlement{{Type: appconfig.EntitlementBuild}}, "", nil)}
+	for _, c := range []struct {
+		name string
+		ctx  context.Context
+		ok   bool
+	}{
+		{"keyless", as(trustedkeys.RoleNone), false},
+		{"operator", as(trustedkeys.RoleOperator), false},
+		{"owner", as(trustedkeys.RoleOwner), true},
+		{"open or enrolled", bg, true},
+	} {
+		if err := roleMayDrive(c.ctx, build); (err == nil) != c.ok {
+			t.Errorf("%s into a build app: err=%v, want allowed=%v", c.name, err, c.ok)
+		}
+	}
+	plain := retirementContainerForTest{id: "app", labels: wendyLabels("app", "", "1", nil, nil, "", nil)}
+	if err := roleMayDrive(as(trustedkeys.RoleOperator), plain); err != nil {
+		t.Errorf("operator into a plain app: %v", err)
+	}
+}

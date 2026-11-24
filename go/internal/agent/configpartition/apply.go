@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/sysextfs"
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/network"
@@ -1112,10 +1113,13 @@ func applyHandoffs(logger *zap.Logger, configPath string) {
 	applyWendyConf(logger, configDir, configPath)
 	applyPreProvisioning(logger, configDir, configPath)
 	applyClockFloor(logger, configDir, configPath)
-	// A seed that cannot be installed must not leave this boot Open: refuse
-	// to start, and systemd retries with the seed still in place.
-	if err := applyTrustedKeysSeed(logger, configDir, configPath); err != nil {
-		logger.Fatal("refusing to start: the owner key seeded at install could not be installed", zap.Error(err))
+	// A seed that cannot be installed stays on the config partition for the
+	// installer to replace, and the agent keeps this boot Closed with no key
+	// trusted (TrustedKeysSeedError); it never exits, which under the
+	// supervisor would end on an image agent that may come up Open.
+	trustedKeysSeedErr = applyTrustedKeysSeed(logger, configDir, configPath)
+	if trustedKeysSeedErr != nil {
+		logger.Error("the owner key seeded at install is not installed; the device stays Closed with no trusted key", zap.Error(trustedKeysSeedErr))
 	}
 	applyExtensions(logger, configDir)
 }
@@ -1124,6 +1128,18 @@ func applyHandoffs(logger *zap.Logger, configPath string) {
 // access file's name in configPath (trustedkeys.FileName).
 const trustedKeysFile = "trusted-keys.json"
 
+// trustedKeysSeedApplied in configPath holds the SHA-256 of the last seed
+// installed, so a seed whose removal failed is not installed again after the
+// owner reopens the device.
+const trustedKeysSeedApplied = "trusted-keys.seed-applied"
+
+var trustedKeysSeedErr error
+
+// TrustedKeysSeedError is why a seed on the config partition was not
+// installed by Apply, or nil. The agent then treats the device as Closed with
+// no trusted key.
+func TrustedKeysSeedError() error { return trustedKeysSeedErr }
+
 // applyTrustedKeysSeed installs the access file `wendy os install` placed on
 // the config partition as configPath/trusted-keys.json (0600), so the device
 // starts Closed with the installer's key as its first owner, then deletes the
@@ -1131,10 +1147,9 @@ const trustedKeysFile = "trusted-keys.json"
 //
 // A device that already has an access file ignores the seed: anyone holding
 // the storage can write /config, and it must not become a way to add an owner
-// to a device that has one. The seed is copied as-is, not parsed: the agent
-// refuses to start on an access file it cannot use, so a bad seed leaves the
-// device refusing to start, never Open. An error means a seed is present but
-// not installed; the caller must not start.
+// to a device that has one. A seed the agent could not load is left in place
+// and not installed. An error means a seed is present but not installed; the
+// device must then not start Open.
 func applyTrustedKeysSeed(logger *zap.Logger, cfgDir, configPath string) error {
 	src := filepath.Join(cfgDir, trustedKeysFile)
 	data, err := os.ReadFile(src)
@@ -1144,17 +1159,30 @@ func applyTrustedKeysSeed(logger *zap.Logger, cfgDir, configPath string) error {
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", src, err)
 	}
+	sum := sha256.Sum256(data)
+	applied := filepath.Join(configPath, trustedKeysSeedApplied)
+	if prev, err := os.ReadFile(applied); err == nil && string(prev) == hex.EncodeToString(sum[:]) {
+		logger.Warn("configpartition: the seed on the config partition was installed before; removing it")
+		os.Remove(src) //nolint:errcheck
+		return nil
+	}
 	dst := filepath.Join(configPath, trustedKeysFile)
 	if _, err := os.Lstat(dst); err == nil {
 		logger.Warn("configpartition: device already has trusted keys; ignoring and removing the seed on the config partition")
 		os.Remove(src) //nolint:errcheck
 		return nil
 	}
+	if err := trustedkeys.Validate(data); err != nil {
+		return fmt.Errorf("the seed %s is unusable; reinstall with a fresh one: %w", src, err)
+	}
 	if err := os.MkdirAll(configPath, 0o700); err != nil {
 		return err
 	}
 	if err := atomicfile.Write(dst, data, 0o600); err != nil {
 		return fmt.Errorf("installing trusted keys: %w", err)
+	}
+	if err := atomicfile.Write(applied, []byte(hex.EncodeToString(sum[:])), 0o600); err != nil {
+		logger.Warn("configpartition: cannot record the installed seed", zap.Error(err))
 	}
 	if err := os.Remove(src); err != nil {
 		logger.Warn("configpartition: failed to remove trusted keys seed", zap.Error(err))

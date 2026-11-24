@@ -395,6 +395,10 @@ func newAuthorizedRegistry(backend ociregistry.Interface) ociregistry.Interface 
 func trustedKeyMiddleware(keys *trustedkeys.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The cap authorizationMiddleware applies, which this one replaces.
+			if strings.Contains(r.URL.Path, "/manifests/") {
+				r.Body = http.MaxBytesReader(w, r.Body, maxManifestBody)
+			}
 			if r.TLS == nil {
 				if !keys.KeylessApps() {
 					_ = ociregistry.WriteError(w, ociregistry.ErrUnauthorized)
