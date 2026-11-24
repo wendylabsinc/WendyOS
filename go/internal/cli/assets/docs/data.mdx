@@ -181,17 +181,20 @@ sources:
       store: both
 ```
 
-With `frames`, a camera that has whole frames of its own, such as a webcam
-that offers JPEG, stores them in `segment-NNNNNN.mjpeg` files, a new file
-every 10 seconds, and `index.jsonl` gives each frame's sample ID, capture
-time, file, byte offset, and size under codec `VIDEO_CODEC_MJPEG`. `both`
-writes those files beside the `segment-NNNNNN.h264` video and lists both in
-the same index, told apart by `segment` and `codec`. `playable.mp4` is made
-from the video only, so a `frames` source seals without one. A camera whose
-own frames are already H.264 has one stream, stored once as video for every
-`store` value. A camera with no whole frames of its own, such as a network
-camera, records video instead, and the source's detail in the episode
-manifest says that frames were requested and why they were not stored.
+With `frames`, a camera that has whole frames of its own stores them. A
+webcam's JPEG frames go in `segment-NNNNNN.mjpeg` files, a new file every 10
+seconds, and `index.jsonl` gives each frame's sample ID, capture time, file,
+byte offset, and size under codec `VIDEO_CODEC_MJPEG`. A webcam has frames of
+its own only when the agent captures it natively: at a size up to 1920x1080,
+on a device with the GStreamer elements that turn its JPEG into pictures and
+H.264. Any other camera, such as a network camera, records video instead, for
+the whole episode, and the source's detail in the episode manifest says that
+frames were requested and why they were not stored. `both` writes the frame
+files beside the `segment-NNNNNN.h264` video and lists both in the same index,
+told apart by `segment` and `codec`; the source's frame and drop counts are
+then sums over both. `playable.mp4` is made from the video only, so a `frames`
+source whose frames are JPEG seals without one. A camera whose own frames are
+already H.264 has one stream, stored once as video for every `store` value.
 
 See the [campaign YAML reference](/docs/advanced/clients/wendy-cli/commands/data#campaign-yaml-reference)
 for selectors, capture policies, and all fields.
@@ -258,9 +261,13 @@ when you are ready to enable model downloads and automatic capture.
 ## Current limits
 
 - Camera snapshots and capture-rate caps require a transport that supplies
-  complete encoded frames, currently local V4L2 cameras with native H.264.
-  Other camera transports record continuously and report unapplied policies
-  in the manifest. Audio supports continuous and level-threshold capture;
+  complete encoded frames: currently local V4L2 cameras the agent captures
+  natively, which are those with H.264 output and webcams whose JPEG it
+  captures whole (see `store` above). Other camera transports record
+  continuously and report unapplied policies in the manifest. A rate cap is
+  applied to video by whole groups of pictures and to a camera's own JPEG
+  frames one frame at a time, so under `store: both` the two hold different
+  samples. Audio supports continuous and level-threshold capture;
   ROS 2 and telemetry support continuous capture only.
 - Buffered continuous cameras use their producer's current parameters.
   Explicit `max_resolution` or `rate` settings on those sources are reported

@@ -64,16 +64,21 @@ device deployment; it does not fan deployment out to every fleet member.
   camera selector warns at deployment and only its last capture block applies.
   An agent older than the release that added `store` rejects a campaign that
   uses the key as an unknown field, so omit it there to get `video`.
-- `store: frames` writes a camera's own whole frames, such as a webcam's JPEG,
-  to `segment-NNNNNN.mjpeg` files (a new file every 10 seconds) and indexes
-  each in `index.jsonl` with its sample ID, capture time, file, byte offset,
-  and size under codec `VIDEO_CODEC_MJPEG`. `store: both` writes them beside
+- `store: frames` writes a camera's own whole frames. A webcam's JPEG frames
+  go to `segment-NNNNNN.mjpeg` files (a new file every 10 seconds), each
+  indexed in `index.jsonl` with its sample ID, capture time, file, byte offset,
+  and size under codec `VIDEO_CODEC_MJPEG`. A webcam has frames of its own only
+  when the agent captures it natively: at a size up to 1920x1080, on a device
+  with the GStreamer elements that turn its JPEG into pictures and H.264. Any
+  other camera, such as a network camera, records video instead for the whole
+  episode; read the source's detail in the episode manifest for the reason
+  before assuming frames exist. `store: both` writes the frame files beside
   the `segment-NNNNNN.h264` video in the same index, told apart by `segment`
-  and `codec`. `playable.mp4` comes from the video only, so a `frames` source
-  has none. A camera whose own frames are already H.264 has one stream, stored
-  once as video for every `store` value. A camera with no whole frames of its
-  own, such as a network camera, records video instead; read the source's
-  detail in the episode manifest for the reason before assuming frames exist.
+  and `codec`; the source's frame and drop counts are then sums over both, and
+  a `rate` cap keeps whole groups of pictures of video but single JPEG frames.
+  `playable.mp4` comes from the video only, so a `frames` source whose frames
+  are JPEG has none. A camera whose own frames are already H.264 has one
+  stream, stored once as video for every `store` value.
 - Audio supports `continuous` and `threshold`, such as
   `trigger: "level_db > -20"` and `fragment: 30s`. ROS 2 and telemetry support
   `continuous`. Other mode/kind combinations validate, warn, and record
