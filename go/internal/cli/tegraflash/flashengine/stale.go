@@ -168,20 +168,29 @@ func (t staleTarget) extents(diskSize int64) []t234.Extent {
 // clearStale clears what the previous installation left on each disk of the
 // plan. Any failure is ErrOldDataNotCleared.
 func (e *engine) clearStale(targets []staleTarget) error {
-	for _, t := range targets {
-		if err := e.clearStaleOn(t); err != nil {
+	sizes := make([]int64, len(targets))
+	for i, t := range targets {
+		size, err := e.deviceSize(t.device)
+		if err != nil {
+			return fmt.Errorf("%w on %s, so the flash stopped before the boot firmware or OS was changed: %w", ErrOldDataNotCleared, t.device, err)
+		}
+		for _, x := range t.written {
+			if x.Start < 0 || x.End < x.Start || (size > 0 && x.End > size) {
+				return fmt.Errorf("%w: planned write [%d, %d) does not fit %s (disk capacity %d bytes)", ErrOldDataNotCleared, x.Start, x.End, t.device, size)
+			}
+		}
+		sizes[i] = size
+	}
+	for i, t := range targets {
+		if err := e.clearStaleOn(t, sizes[i]); err != nil {
 			return fmt.Errorf("%w on %s, so the flash stopped before the boot firmware or OS was changed: %w", ErrOldDataNotCleared, t.device, err)
 		}
 	}
 	return nil
 }
 
-func (e *engine) clearStaleOn(t staleTarget) error {
+func (e *engine) clearStaleOn(t staleTarget, size int64) error {
 	fmt.Fprintf(e.out, "Clearing the previous installation's data on %s…\n", t.device)
-	size, err := e.deviceSize(t.device)
-	if err != nil {
-		return err
-	}
 	if size == 0 {
 		e.logf("a dry run does not know the size of %s; a flash can also clear the grown data partition's tail", t.device)
 	} else {
