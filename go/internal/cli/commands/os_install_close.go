@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -74,7 +75,11 @@ func verifyClosedAfterBoot(ctx context.Context, name string) error {
 	cliLogln("Waiting for %s to boot to check that it started Closed. Keep it connected to this computer.", host)
 	var last string
 	for {
-		if seen, ok := closedAccessState(ctx, host); ok {
+		seen, ok, refused := closedAccessState(ctx, host)
+		if refused != nil {
+			return fmt.Errorf("OS written, but this computer refuses to connect to %s: %w", host, refused)
+		}
+		if ok {
 			cliLogln("%s started Closed; this computer's local key is its owner.", host)
 			return nil
 		} else if seen != "" && seen != last {
@@ -94,25 +99,29 @@ func verifyClosedAfterBoot(ctx context.Context, name string) error {
 
 // closedAccessState asks host for its access shape. ok means Closed with this
 // computer's key as owner; otherwise seen says what was found ("" when the
-// device did not answer).
-func closedAccessState(ctx context.Context, host string) (seen string, ok bool) {
+// device did not answer). refused is an identity refusal (a pin this
+// computer holds for the name), which waiting does not change.
+func closedAccessState(ctx context.Context, host string) (seen string, ok bool, refused error) {
 	conn, err := connectInstallDriverDevice(ctx, host)
+	if errors.Is(err, errDeviceIdentityRefused) {
+		return "", false, err
+	}
 	if err != nil {
-		return "", false
+		return "", false, nil
 	}
 	defer conn.Close()
 	resp, err := agentpbv2.NewWendyAccessServiceClient(conn.Conn).GetAccess(ctx, &agentpbv2.GetAccessRequest{})
 	switch {
 	case status.Code(err) == codes.Unimplemented:
-		return "Open: its agent does not support access shapes and ignored --close", false
+		return "Open: its agent does not support access shapes and ignored --close", false, nil
 	case err != nil:
-		return "", false
+		return "", false, nil
 	case resp.GetShape() != agentpbv2.AccessShape_ACCESS_SHAPE_CLOSED:
-		return accessShapeNames[resp.GetShape()] + ", not Closed", false
+		return accessShapeNames[resp.GetShape()] + ", not Closed", false, nil
 	case resp.GetCallerRole() != agentpbv2.TrustedKeyRole_TRUSTED_KEY_ROLE_OWNER:
-		return "Closed, but this computer's key is not its owner", false
+		return "Closed, but this computer's key is not its owner", false, nil
 	}
-	return "", true
+	return "", true, nil
 }
 
 // localKeyLabel is "<hostname>/<user>", so an owner can tell whose key it is.

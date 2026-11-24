@@ -127,3 +127,34 @@ func TestInstallCloseNeverLeavesTheDeviceOpenSilently(t *testing.T) {
 		}
 	}
 }
+
+// A board reinstalled under a name this computer pinned to its old device key
+// is refused at once with the unpin hint, not after the whole boot wait.
+func TestInstallCloseSurfacesAPinMismatchAtOnce(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	setPinCache(t)
+	mine := useLocalKey(t)
+	origDial, origUSB, origWait := dialInstallDriverDevice, usbDirectCandidatesFn, closeBootWait
+	t.Cleanup(func() { dialInstallDriverDevice, usbDirectCandidatesFn, closeBootWait = origDial, origUSB, origWait })
+	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
+	closeBootWait = time.Minute
+	at := func(addr string) {
+		dialInstallDriverDevice = func(ctx context.Context, _ string) (*grpcclient.AgentConnection, error) {
+			return connectWithAutoTLS(ctx, addr)
+		}
+	}
+	at(startLocalOnlyAgent(t, mine))
+	if err := verifyClosedAfterBoot(context.Background(), "box"); err != nil {
+		t.Fatal(err)
+	}
+
+	at(startLocalOnlyAgent(t, mine)) // a new device key, same address
+	start := time.Now()
+	err := verifyClosedAfterBoot(context.Background(), "box")
+	if err == nil || !strings.Contains(err.Error(), "wendy device unpin") {
+		t.Fatalf("err = %v, want the pin refusal with its unpin hint", err)
+	}
+	if waited := time.Since(start); waited > 20*time.Second {
+		t.Errorf("refusal took %s, want it at once", waited)
+	}
+}
