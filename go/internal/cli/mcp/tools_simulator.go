@@ -56,7 +56,11 @@ type SimulatorInfo struct {
 }
 
 type SimulatorCreateOptions struct {
+	// Version is the WendyOS version to download, or for a Wendy Lite
+	// profile the Wendy Lite version, branch or commit to build.
 	Name, Profile, Image, Version string
+	// Nightly builds the Wendy Lite nightly tag; only the CLI sets it.
+	Nightly bool
 	// Arch is the guest architecture, arm64 or amd64; empty uses the host's
 	// default, and ARM64 for a local image.
 	Arch    string
@@ -64,6 +68,9 @@ type SimulatorCreateOptions struct {
 }
 
 var simulatorVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
+
+// liteSimulatorVersionPattern also accepts the slashes of a branch name.
+var liteSimulatorVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+/-]{0,127}$`)
 
 func (o SimulatorCreateOptions) Validate() error {
 	if err := vm.ValidName(o.Name); err != nil {
@@ -78,6 +85,12 @@ func (o SimulatorCreateOptions) Validate() error {
 	if o.Image != "" && o.Version != "" {
 		return fmt.Errorf("image and version cannot be combined")
 	}
+	if o.Nightly && (o.Image != "" || o.Version != "") {
+		return fmt.Errorf("nightly cannot be combined with image or version")
+	}
+	if o.Nightly && !vm.IsLiteProfile(o.Profile) {
+		return fmt.Errorf("nightly applies to wendy-lite and wendy-lite-native")
+	}
 	if len(o.Image) > 4096 {
 		return fmt.Errorf("image path exceeds 4096 bytes")
 	}
@@ -87,7 +100,11 @@ func (o SimulatorCreateOptions) Validate() error {
 	if o.Arch != "" && vm.IsLiteProfile(o.Profile) {
 		return fmt.Errorf("arch applies to WendyOS simulators; %s runs ESP32-C6 firmware", o.Profile)
 	}
-	if o.Version != "" && !simulatorVersionPattern.MatchString(o.Version) {
+	if o.Version != "" && vm.IsLiteProfile(o.Profile) {
+		if !liteSimulatorVersionPattern.MatchString(o.Version) {
+			return fmt.Errorf("version must be a Wendy Lite version, branch or commit of at most 128 letters, digits, dots, dashes, underscores, plus signs or slashes")
+		}
+	} else if o.Version != "" && !simulatorVersionPattern.MatchString(o.Version) {
 		return fmt.Errorf("version must be a release tag of at most 128 letters, digits, dots, dashes, underscores or plus signs")
 	}
 	return nil
@@ -106,11 +123,11 @@ func (s *mcpServer) registerSimulatorTools(srv *server.MCPServer) {
 	list = append(list, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("simulator_list", list...), s.handleSimulatorList)
 	create := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Create a stopped local simulator from a published or local image. Downloads may take several minutes. Use simulator_start to boot and verify it. wendy-lite runs WASM firmware; wendy-lite-native runs native ESP-IDF firmware with OTA slots. Both use ESP32-C6 with esp-emu; image must be a merged flash binary."),
+		mcpgo.WithDescription("Create a stopped local simulator from a published or local image. Downloads may take several minutes. Use simulator_start to boot and verify it. wendy-lite runs WASM firmware; wendy-lite-native runs native ESP-IDF firmware with OTA slots. Both use ESP32-C6 with esp-emu. Without image, they build Wendy Lite on this computer: this needs EIM and git, and a first build installs ESP-IDF and takes many minutes. image must be a merged flash binary."),
 		mcpgo.WithString("name", mcpgo.Required(), mcpgo.Description("1–32 lowercase letters, digits or dashes; starts and ends with a letter or digit")),
 		mcpgo.WithString("profile", mcpgo.Enum("generic", "go2", "g1", "so101", "rosmaster-r2", "wendy-lite", "wendy-lite-native"), mcpgo.DefaultString("generic")),
 		mcpgo.WithString("image", mcpgo.Description("Local raw, ZIP, gzip or zstd image path; mutually exclusive with version")),
-		mcpgo.WithString("version", mcpgo.Description("Published version; omitted downloads latest stable")),
+		mcpgo.WithString("version", mcpgo.Description("Published version; omitted downloads latest stable. For wendy-lite and wendy-lite-native: the Wendy Lite version, branch or commit to build; omitted builds the latest release")),
 		mcpgo.WithString("arch", mcpgo.Enum("arm64", "amd64"), mcpgo.Description("Guest architecture; omitted uses this computer's default (a local image is treated as arm64)")),
 		mcpgo.WithInteger("disk_gib", mcpgo.Min(1), mcpgo.Max(1024), mcpgo.DefaultNumber(16)),
 	}

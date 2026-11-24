@@ -6,10 +6,13 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
+	"slices"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/litebuild"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
@@ -51,10 +54,21 @@ func prepareLiteFlash(name string, data []byte) ([]byte, error) {
 	return img.Bytes(), nil
 }
 
+// createLiteSimulator creates a stopped Wendy Lite simulator. Without
+// opts.Image, it builds Wendy Lite from source for the simulator profile, as
+// wendy install builds it for a board (buildLiteFirmware): the latest
+// release, the nightly tag with opts.Nightly, or opts.Version.
 func createLiteSimulator(ctx context.Context, store *vm.Store, opts wendymcp.SimulatorCreateOptions) (*wendymcp.SimulatorInfo, error) {
 	if opts.Image != "" && opts.Version != "" {
 		return nil, fmt.Errorf("image and version cannot be combined")
 	}
+	if opts.Image != "" && opts.Nightly {
+		return nil, fmt.Errorf("image and nightly cannot be combined")
+	}
+	if opts.Nightly && opts.Version != "" {
+		return nil, fmt.Errorf("nightly and version cannot be combined")
+	}
+	// Before the build, which takes minutes.
 	if err := store.CheckCreatable(opts.Name); err != nil {
 		return nil, err
 	}
@@ -62,67 +76,30 @@ func createLiteSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Sim
 	if profile == "" {
 		profile = vm.ProfileWendyLite
 	}
-	firmwareID := "esp32c6"
-	if profile == vm.ProfileWendyLiteNative {
-		firmwareID = "esp32c6_native"
-	}
-	path, version, source := opts.Image, "", "local"
-	if path == "" {
-		manifest, err := fetchMainManifestContext(ctx)
+	var data []byte
+	version, source := "", "local"
+	if opts.Image == "" {
+		// The build output goes to stderr: stdout is the JSON-RPC channel of
+		// the MCP server and the desktop app.
+		fw, err := buildLiteFirmwareFn(ctx, liteBuildOptions{
+			nightly:     opts.Nightly,
+			version:     opts.Version,
+			attrs:       liteSimulatorAttrs(profile),
+			simulator:   profile,
+			out:         os.Stderr,
+			versionHint: liteSimulatorVersionHint(opts.Name, profile),
+		})
 		if err != nil {
 			return nil, err
 		}
-		firmware, ok := manifest.Firmware[firmwareID]
-		if !ok {
-			return nil, fmt.Errorf("no published %s firmware; supply a merged --image", firmwareID)
-		}
-		version = opts.Version
-		if version == "" {
-			version = firmware.Latest
-		}
-		fm, err := fetchFirmwareManifestContext(ctx, firmware.ManifestPath)
-		if err != nil {
+		data, version, source = fw.img.Bytes(), fw.src.Version, "build"
+	} else {
+		var err error
+		if data, err = readLiteFirmwareFile(ctx, opts.Image); err != nil {
 			return nil, err
 		}
-		if fm.FirmwareID != "" && fm.FirmwareID != firmwareID {
-			return nil, fmt.Errorf("firmware manifest does not describe %s", firmwareID)
-		}
-		info, err := getFirmwareInfo(fm, version)
-		if err != nil {
-			return nil, err
-		}
-
-		dir, err := os.MkdirTemp("", "wendy-lite-simulator-")
-		if err != nil {
-			return nil, err
-		}
-		defer os.RemoveAll(dir)
-		path, err = downloadLiteSimulatorImage(ctx, dir, info)
-		if err != nil {
-			return nil, err
-		}
-		if err := verifyMCPSimulatorImage(ctx, path, info.Checksum); err != nil {
-			return nil, err
-		}
-		source = "release"
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	stat, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !stat.Mode().IsRegular() {
-		return nil, fmt.Errorf("firmware must be a regular file")
-	}
-	data, err := io.ReadAll(io.LimitReader(simulatorContextReader{ctx: ctx, reader: f}, maxLiteFirmwareBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	data, err = prepareLiteFlash(opts.Name, data)
+	data, err := prepareLiteFlash(opts.Name, data)
 	if err != nil {
 		return nil, err
 	}
@@ -143,15 +120,99 @@ func createLiteSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Sim
 	return readMCPSimulator(store, opts.Name)
 }
 
-func downloadLiteSimulatorImage(ctx context.Context, dir string, info *imageInfo) (string, error) {
-	if info.ImageSize < 0 || info.ImageSize > maxLiteFirmwareBytes {
-		return "", fmt.Errorf("Lite firmware manifest size must be at most 16 MiB")
+// readLiteFirmwareFile reads a local merged firmware image, up to one byte
+// more than prepareLiteFlash accepts.
+func readLiteFirmwareFile(ctx context.Context, path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
-	limit := int64(maxLiteFirmwareBytes)
-	if info.ImageSize > 0 {
-		limit = info.ImageSize
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, err
 	}
-	return downloadMCPSimulatorImageWithLimit(ctx, dir, info.DownloadURL, limit)
+	if !stat.Mode().IsRegular() {
+		return nil, fmt.Errorf("firmware must be a regular file")
+	}
+	return io.ReadAll(io.LimitReader(simulatorContextReader{ctx: ctx, reader: f}, maxLiteFirmwareBytes+1))
+}
+
+// liteSimulatorAttrs returns the Wendy Lite build values of a simulator
+// profile. esp-emu emulates an ESP32-C6, so the board is a custom ESP32-C6:
+// a board of the master configuration could add pins or peripherals that
+// esp-emu does not have. 8MiB of flash gives the WASM runtime its partition
+// table and native apps their OTA slots, and stays below the 16 MiB that
+// prepareLiteFlash accepts. A simulator has no camera or microphone and is
+// never enrolled, so SensorLink and the Cloud tunnel are off. The master
+// configuration derives the other values from these; a question left is an
+// error (liteSimulatorPrompter).
+func liteSimulatorAttrs(profile string) map[string]string {
+	appType := "wasm"
+	if profile == vm.ProfileWendyLiteNative {
+		appType = "native"
+	}
+	return map[string]string{
+		"board":           "custom",
+		litebuild.Chip:    "esp32c6",
+		"flash_size":      "8MiB",
+		litebuild.AppType: appType,
+		"sensor_link_av":  "false",
+		"cloud_tunnel":    "false",
+	}
+}
+
+// liteSimulatorVersionHint is the hint of a Wendy Lite version that cannot
+// be built, for the simulator name of the profile.
+func liteSimulatorVersionHint(name, profile string) string {
+	return fmt.Sprintf("Specify a Wendy Lite version: wendy vm create %s --profile %s --version <version>", name, profile)
+}
+
+// liteSimulatorGiven returns the configurator values of attrs, the values of
+// a simulator profile. Each must be an attribute and a value of the master
+// configuration m of Wendy Lite src.
+func liteSimulatorGiven(m *litebuild.Model, src litebuild.Source, profile string, attrs map[string]string) (map[string]any, error) {
+	given := make(map[string]any, len(attrs))
+	for _, name := range slices.Sorted(maps.Keys(attrs)) {
+		value, err := m.ParseValue(name, attrs[name])
+		if err != nil {
+			return nil, liteSimulatorIncompatible(src, profile, err)
+		}
+		given[name] = value
+	}
+	return given, nil
+}
+
+// liteSimulatorIncompatible is the error of a Wendy Lite version that cannot
+// be built with the values of a simulator profile.
+func liteSimulatorIncompatible(src litebuild.Source, profile string, err error) error {
+	return fmt.Errorf("Wendy Lite %s cannot be built for the %s simulator: %w", src, profile, err)
+}
+
+// liteSimulatorPrompter answers no question, even in a terminal: the values
+// of a simulator profile must leave none. A question means that the Wendy
+// Lite version has an attribute that this CLI does not know.
+type liteSimulatorPrompter struct {
+	litebuild.TUIPrompter // for Info
+	src                   litebuild.Source
+	profile               string
+}
+
+func (p *liteSimulatorPrompter) Select(q litebuild.Question) (int, error) {
+	return 0, p.question(q)
+}
+
+func (p *liteSimulatorPrompter) Confirm(q litebuild.Question) (bool, error) {
+	return false, p.question(q)
+}
+
+func (p *liteSimulatorPrompter) Text(q litebuild.Question, _ func(string) error) (string, error) {
+	return "", p.question(q)
+}
+
+func (p *liteSimulatorPrompter) question(q litebuild.Question) error {
+	return fmt.Errorf("Wendy Lite %s asks for %q (%s), which the %s simulator does not set: update the Wendy CLI, or choose another Wendy Lite version with --version",
+		p.src, q.Attr.Title(), q.Attr.Name, p.profile)
 }
 
 func isLiteSimulator(name string) bool {

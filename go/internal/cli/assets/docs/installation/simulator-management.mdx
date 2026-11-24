@@ -204,6 +204,14 @@ to skip that prompt.
 For scripts, pass the name explicitly; the profile defaults to `generic` without
 an interactive terminal, with `--json`, or with `--yes`.
 
+The Wendy Lite profiles run ESP32-C6 firmware, which `wendy vm create` builds on
+this computer from the Wendy Lite sources, as `wendy install --device-type esp32`
+does for a board. The build needs EIM and git, and the first one installs
+ESP-IDF. It asks no questions: the profile sets the build. It builds the latest
+Wendy Lite release by default. Choose another version, branch or commit with
+`--version`, or the nightly build with `--nightly`. To use firmware you built
+yourself, pass a merged ESP32-C6 image with `--image`.
+
 The VM name is optional for `start`, `stop`, `logs`, and `rm` in an interactive
 terminal. Leave it out to choose a VM from a list; scripts should continue to
 pass the name explicitly.

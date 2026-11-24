@@ -261,6 +261,12 @@ func EIMVersion(idfVersion string) string {
 // when it is missing. Without eim it returns an error wrapping
 // ErrEIMNotInstalled.
 func EnsureIDF(ctx context.Context, version string) error {
+	return EnsureIDFTo(ctx, version, os.Stdout)
+}
+
+// EnsureIDFTo is EnsureIDF with the install messages and the eim output
+// written to w instead of stdout.
+func EnsureIDFTo(ctx context.Context, version string, w io.Writer) error {
 	if err := CheckEIM(ctx); err != nil {
 		return err
 	}
@@ -289,9 +295,9 @@ func EnsureIDF(ctx context.Context, version string) error {
 		}
 	}
 
-	fmt.Fprintf(os.Stdout, "Installing ESP-IDF %s (this may take a while)...\n", version)
+	fmt.Fprintf(w, "Installing ESP-IDF %s (this may take a while)...\n", version)
 	installCmd := execCommandContext(ctx, "eim", "install", "-i", version, "-n", "true")
-	installCmd.Stdout = os.Stdout
+	installCmd.Stdout = w
 	installCmd.Stderr = os.Stderr
 	if err := installCmd.Run(); err != nil {
 		return fmt.Errorf("installing ESP-IDF %s via eim: %w", version, err)

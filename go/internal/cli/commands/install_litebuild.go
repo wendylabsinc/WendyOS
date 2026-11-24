@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"maps"
@@ -102,6 +103,25 @@ type liteBuildOptions struct {
 	// versionHint replaces "Specify a Wendy Lite version with --version" in
 	// the error of a Wendy Lite version that cannot be built.
 	versionHint string
+
+	// simulator is the profile of the simulator that the firmware is built
+	// for (see createLiteSimulator). attrs are then the profile's values,
+	// nothing is asked, and the answers of the last install are neither used
+	// nor replaced.
+	simulator string
+	// out receives the build output; nil is stdout.
+	out io.Writer
+	// beforeBuild runs after the questions, before ESP-IDF is installed and
+	// the build starts: the install asks for the device configuration there.
+	beforeBuild func() error
+}
+
+// output returns the writer of the build output.
+func (o liteBuildOptions) output() io.Writer {
+	if o.out == nil {
+		return os.Stdout
+	}
+	return o.out
 }
 
 // parseBuildAttrs reads the --build-attr flags: NAME=VALUE, each name once.
@@ -234,6 +254,9 @@ func liteBuildPickerItem() tui.PickerItem {
 var (
 	runLiteBuildFn = runLiteBuild
 
+	// buildLiteFirmwareFn builds the firmware of a Wendy Lite simulator.
+	buildLiteFirmwareFn = buildLiteFirmware
+
 	// fetchLiteCatalog returns the boards with published firmware and their
 	// targets: a catalog entry with no build yet would otherwise reach the
 	// picker and fail immediately after selection, and a target with no
@@ -301,8 +324,9 @@ var (
 //  7. idf.py merge-bin, and write wendy_conf into the merged image
 //  8. flash it as the catalog firmware is flashed, then enroll
 //
-// The build folder stays in the cache for the next build of the same
-// commit, which is incremental when the answers are the same.
+// Steps 1 to 7 are buildLiteFirmware, with step 4 as its beforeBuild. The
+// build folder stays in the cache for the next build of the same commit,
+// which is incremental when the answers are the same.
 func runLiteBuild(ctx context.Context, o liteBuildOptions) error {
 	interactive := isInteractiveTerminal()
 	// In a terminal, JSON is on only with an explicit --json (see
@@ -312,138 +336,30 @@ func runLiteBuild(ctx context.Context, o liteBuildOptions) error {
 		return usageErrorf("the Wendy Lite build does not support --json")
 	}
 
-	if err := ensureLiteBuildEIM(ctx); err != nil {
-		return err
-	}
-
-	if err := litebuild.CheckGit(); err != nil {
-		return err
-	}
-	dir, src, release, err := openLiteBuildFolder(ctx, espidftoolchain.WendyLiteGitURL, o.nightly, o.version)
-	if err != nil {
-		return o.withVersionHint(err)
-	}
-	defer release()
-
-	// Questions, from the master configuration of the folder: the code that
-	// is built.
-	model, err := litebuild.LoadFile(litebuild.MasterConfPath(dir))
-	if errors.Is(err, fs.ErrNotExist) {
-		return o.withVersionHint(liteBuildIncompatible(src))
-	}
-	if err != nil {
-		return err
-	}
-	configurator, err := litebuild.NewConfigurator(model, nil)
-	if err != nil {
-		return err
-	}
-	configurator.Given, err = liteBuildGiven(model, o.attrs, o.required)
-	if err != nil {
-		return err
-	}
-	answersPath, answersErr := liteBuildAnswersPath()
-	// Without a terminal, the answers of the last run are not used: the
-	// result depends only on the command line.
-	if answersErr == nil && interactive {
-		configurator.Previous = litebuild.LoadAnswers(model, answersPath)
-	}
-	var prompter litebuild.Prompter = &litebuild.TUIPrompter{In: os.Stdin, Out: os.Stderr}
-	if !interactive {
-		prompter = &noTerminalPrompter{litebuild.TUIPrompter{Out: os.Stderr}}
-	}
-	fmt.Println()
-	result, err := configurator.Run(prompter)
-	if errors.Is(err, tui.ErrCancelled) {
-		return ErrUserCancelled
-	}
-	var givenErr *litebuild.GivenError
-	if errors.As(err, &givenErr) {
-		if _, ok := o.attrs[givenErr.Name]; ok {
-			return usageErrorf("--build-attr %v", err)
-		}
-		return fmt.Errorf("Wendy Lite cannot be built for this board: %w", err)
-	}
-	if err != nil {
-		return err
-	}
-	if answersErr == nil {
-		answersErr = litebuild.SaveAnswers(model, answersPath, configurator.Previous, result.Inputs)
-	}
-	if answersErr != nil {
-		fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf("The answers are not saved for the next run: %v", answersErr)))
-	}
-	build, err := liteBuildSteps(model, result)
-	if err != nil {
-		return err
-	}
-	// Before the long build: the flasher must know the chip.
-	chip, err := chipModelForTarget(build.chip)
-	if err != nil {
-		return err
-	}
-	// Not used by the build: written to compare with configure.py's
-	// sdkconfig.defaults.wendy.
-	sdkconfigText := model.SdkconfigText(model.Header(result.Inputs), result.Inputs, result.Solution)
-	if err := os.WriteFile(filepath.Join(dir, "sdkconfig.wendy.go"), []byte(sdkconfigText), 0o644); err != nil {
-		return err
-	}
-
 	// Device configuration: the wendy_conf partition. It holds the Wi-Fi
 	// password, so it stays in memory, out of the build folder.
-	prov, err := resolveLiteProvisioning(ctx, o.wifi, o.deviceName, o.preOpts)
-	if err != nil {
-		return err
-	}
-	payload, err := wendyConfPayload(prov.conf)
-	if err != nil {
-		return fmt.Errorf("serializing device config: %w", err)
-	}
-
-	fmt.Println()
-	if err := espidftoolchain.EnsureIDF(ctx, build.eimVersion); err != nil {
-		return err
-	}
-
-	fmt.Printf("\nBuild folder: %s\n", dir)
-	sourceVersion, err := litebuild.SourceVersion(ctx, dir)
-	if err != nil {
-		return err
-	}
-	reason, err := liteBuildConfigureReason(dir, model.BuildProfile(result.Inputs), sourceVersion, build.eimVersion)
-	if err != nil {
-		return err
-	}
-	if reason == "" {
-		fmt.Println("The build folder is configured for these answers: tools/configure.py is skipped.")
-	} else {
-		fmt.Printf("Configuring the build: %s.\n", reason)
-		if err := resetLiteBuildFolder(ctx, dir); err != nil {
+	var prov *liteProvisioning
+	var payload []byte
+	o.beforeBuild = func() error {
+		var err error
+		prov, err = resolveLiteProvisioning(ctx, o.wifi, o.deviceName, o.preOpts)
+		if err != nil {
 			return err
 		}
-		configureArgs := append([]string{"tools/configure.py"}, build.configure...)
-		if err := runLiteBuildCommand(ctx, dir, build.eimVersion, "python", configureArgs...); err != nil {
-			return fmt.Errorf("tools/configure.py: %w", err)
+		payload, err = wendyConfPayload(prov.conf)
+		if err != nil {
+			return fmt.Errorf("serializing device config: %w", err)
 		}
+		return nil
 	}
-	if err := runLiteBuildCommand(ctx, dir, build.eimVersion, "idf.py", build.idfArgs("build")...); err != nil {
-		return fmt.Errorf("idf.py build: %w", err)
-	}
-	if err := runLiteBuildCommand(ctx, dir, build.eimVersion, "idf.py", build.idfArgs("merge-bin")...); err != nil {
-		return fmt.Errorf("idf.py merge-bin: %w", err)
-	}
-
-	img, err := LoadEspFlashImage(filepath.Join(dir, "build", "merged-binary.bin"))
+	fw, err := buildLiteFirmware(ctx, o)
 	if err != nil {
-		return fmt.Errorf("loading the merged image: %w", err)
+		return err
 	}
-	if err := img.SetPartition("wendy_conf", payload); err != nil {
+	if err := fw.img.SetPartition("wendy_conf", payload); err != nil {
 		return fmt.Errorf("writing config to firmware image: %w", err)
 	}
-	// The image is in memory: another build can use the cache during the
-	// flash.
-	release()
-	fmt.Printf("\nBuilt Wendy Lite %s for the %s.\n", src, chipModelName(chip))
+	fmt.Printf("\nBuilt Wendy Lite %s for the %s.\n", fw.src, chipModelName(fw.chip))
 
 	port, autoDiscover, err := detectLiteInstallPort(o.port, interactive)
 	if err != nil {
@@ -453,14 +369,170 @@ func runLiteBuild(ctx context.Context, o liteBuildOptions) error {
 		return err
 	}
 	// No version: the device reports the version it was built with.
-	return flashLiteImage(ctx, img, chip, port, autoDiscover, prov, "")
+	return flashLiteImage(ctx, fw.img, fw.chip, port, autoDiscover, prov, "")
+}
+
+// liteFirmware is a Wendy Lite build: the merged flash image, without the
+// wendy_conf partition.
+type liteFirmware struct {
+	img  *EspFlashImage
+	chip chipModel
+	src  litebuild.Source
+}
+
+// buildLiteFirmware builds Wendy Lite from source: steps 1 to 7 of
+// runLiteBuild, with o.beforeBuild as step 4, and without writing
+// wendy_conf. The image is in memory, and the build cache is unlocked when
+// it returns.
+func buildLiteFirmware(ctx context.Context, o liteBuildOptions) (*liteFirmware, error) {
+	out := o.output()
+	interactive := isInteractiveTerminal()
+
+	if err := ensureLiteBuildEIM(ctx, interactive || o.simulator == ""); err != nil {
+		return nil, err
+	}
+
+	if err := litebuild.CheckGit(); err != nil {
+		return nil, err
+	}
+	dir, src, release, err := openLiteBuildFolder(ctx, out, espidftoolchain.WendyLiteGitURL, o.nightly, o.version)
+	if err != nil {
+		return nil, o.withVersionHint(err)
+	}
+	defer release()
+
+	// Questions, from the master configuration of the folder: the code that
+	// is built.
+	model, err := litebuild.LoadFile(litebuild.MasterConfPath(dir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, o.withVersionHint(liteBuildIncompatible(src))
+	}
+	if err != nil {
+		return nil, err
+	}
+	configurator, err := litebuild.NewConfigurator(model, nil)
+	if err != nil {
+		return nil, err
+	}
+	if o.simulator != "" {
+		configurator.Given, err = liteSimulatorGiven(model, src, o.simulator, o.attrs)
+	} else {
+		configurator.Given, err = liteBuildGiven(model, o.attrs, o.required)
+	}
+	if err != nil {
+		return nil, err
+	}
+	answersPath, answersErr := liteBuildAnswersPath()
+	// Without a terminal, the answers of the last run are not used: the
+	// result depends only on the command line. A simulator build asks
+	// nothing, and keeps the answers of the install.
+	saveAnswers := o.simulator == ""
+	if answersErr == nil && interactive && saveAnswers {
+		configurator.Previous = litebuild.LoadAnswers(model, answersPath)
+	}
+	var prompter litebuild.Prompter = &litebuild.TUIPrompter{In: os.Stdin, Out: os.Stderr}
+	switch {
+	case o.simulator != "":
+		prompter = &liteSimulatorPrompter{TUIPrompter: litebuild.TUIPrompter{Out: os.Stderr}, src: src, profile: o.simulator}
+	case !interactive:
+		prompter = &noTerminalPrompter{litebuild.TUIPrompter{Out: os.Stderr}}
+	}
+	fmt.Fprintln(out)
+	result, err := configurator.Run(prompter)
+	if errors.Is(err, tui.ErrCancelled) {
+		return nil, ErrUserCancelled
+	}
+	var givenErr *litebuild.GivenError
+	if errors.As(err, &givenErr) {
+		if o.simulator != "" {
+			return nil, liteSimulatorIncompatible(src, o.simulator, err)
+		}
+		if _, ok := o.attrs[givenErr.Name]; ok {
+			return nil, usageErrorf("--build-attr %v", err)
+		}
+		return nil, fmt.Errorf("Wendy Lite cannot be built for this board: %w", err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if saveAnswers {
+		if answersErr == nil {
+			answersErr = litebuild.SaveAnswers(model, answersPath, configurator.Previous, result.Inputs)
+		}
+		if answersErr != nil {
+			fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf("The answers are not saved for the next run: %v", answersErr)))
+		}
+	}
+	build, err := liteBuildSteps(model, result)
+	if err != nil {
+		return nil, err
+	}
+	// Before the long build: the flasher must know the chip.
+	chip, err := chipModelForTarget(build.chip)
+	if err != nil {
+		return nil, err
+	}
+	// Not used by the build: written to compare with configure.py's
+	// sdkconfig.defaults.wendy.
+	sdkconfigText := model.SdkconfigText(model.Header(result.Inputs), result.Inputs, result.Solution)
+	if err := os.WriteFile(filepath.Join(dir, "sdkconfig.wendy.go"), []byte(sdkconfigText), 0o644); err != nil {
+		return nil, err
+	}
+
+	if o.beforeBuild != nil {
+		if err := o.beforeBuild(); err != nil {
+			return nil, err
+		}
+	}
+
+	fmt.Fprintln(out)
+	if err := espidftoolchain.EnsureIDFTo(ctx, build.eimVersion, out); err != nil {
+		return nil, err
+	}
+
+	fmt.Fprintf(out, "\nBuild folder: %s\n", dir)
+	sourceVersion, err := litebuild.SourceVersion(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	reason, err := liteBuildConfigureReason(dir, model.BuildProfile(result.Inputs), sourceVersion, build.eimVersion)
+	if err != nil {
+		return nil, err
+	}
+	if reason == "" {
+		fmt.Fprintln(out, "The build folder is configured for these answers: tools/configure.py is skipped.")
+	} else {
+		fmt.Fprintf(out, "Configuring the build: %s.\n", reason)
+		if err := resetLiteBuildFolder(ctx, dir); err != nil {
+			return nil, err
+		}
+		configureArgs := append([]string{"tools/configure.py"}, build.configure...)
+		if err := runLiteBuildCommand(ctx, out, dir, build.eimVersion, "python", configureArgs...); err != nil {
+			return nil, fmt.Errorf("tools/configure.py: %w", err)
+		}
+	}
+	if err := runLiteBuildCommand(ctx, out, dir, build.eimVersion, "idf.py", build.idfArgs("build")...); err != nil {
+		return nil, fmt.Errorf("idf.py build: %w", err)
+	}
+	if err := runLiteBuildCommand(ctx, out, dir, build.eimVersion, "idf.py", build.idfArgs("merge-bin")...); err != nil {
+		return nil, fmt.Errorf("idf.py merge-bin: %w", err)
+	}
+
+	img, err := LoadEspFlashImage(filepath.Join(dir, "build", "merged-binary.bin"))
+	if err != nil {
+		return nil, fmt.Errorf("loading the merged image: %w", err)
+	}
+	// The image is in memory: another build can use the cache now, during
+	// the flash for example.
+	release()
+	return &liteFirmware{img: img, chip: chip, src: src}, nil
 }
 
 // ensureLiteBuildEIM checks that EIM is installed, and offers to install it
-// when it is not.
-func ensureLiteBuildEIM(ctx context.Context) error {
+// when it is not and offer is true.
+func ensureLiteBuildEIM(ctx context.Context, offer bool) error {
 	err := espidftoolchain.CheckEIM(ctx)
-	if !errors.Is(err, espidftoolchain.ErrEIMNotInstalled) {
+	if !errors.Is(err, espidftoolchain.ErrEIMNotInstalled) || !offer {
 		return err
 	}
 	installed, installErr := installMissingEIM(ctx, false)
@@ -476,13 +548,13 @@ func ensureLiteBuildEIM(ctx context.Context) error {
 // openLiteBuildFolder returns the build folder of the Wendy Lite version to
 // build, and that version: the nightly tag with nightly, else version, else
 // the latest release (see litebuild.ResolveSource) of the wendy-lite
-// repository at url. It locks the build cache first: release unlocks it, and calling it
-// more than once is harmless. It checks that the version has a master
+// repository at url. Its progress goes to out. It locks the build cache
+// first: release unlocks it, and calling it more than once is harmless. It checks that the version has a master
 // configuration (checkLiteBuildSource): a version without it changes
 // nothing in the cache. Then it removes the old build folders
 // (litebuild.PruneBuildFolders), and reuses or clones the folder of the
 // commit (litebuild.PrepareSources).
-func openLiteBuildFolder(ctx context.Context, url string, nightly bool, version string) (dir string, src litebuild.Source, release func(), err error) {
+func openLiteBuildFolder(ctx context.Context, out io.Writer, url string, nightly bool, version string) (dir string, src litebuild.Source, release func(), err error) {
 	root, err := liteBuildRoot()
 	if err != nil {
 		return "", litebuild.Source{}, nil, err
@@ -505,7 +577,7 @@ func openLiteBuildFolder(ctx context.Context, url string, nightly bool, version 
 		}
 	}()
 
-	fmt.Printf("Looking up %s at %s...\n", liteBuildRequest(nightly, version), url)
+	fmt.Fprintf(out, "Looking up %s at %s...\n", liteBuildRequest(nightly, version), url)
 	src, err = litebuild.ResolveSource(ctx, url, nightly, version)
 	if err != nil {
 		return "", litebuild.Source{}, nil, err
@@ -513,7 +585,7 @@ func openLiteBuildFolder(ctx context.Context, url string, nightly bool, version 
 	if err := checkLiteBuildSource(ctx, root, url, src); err != nil {
 		return "", litebuild.Source{}, nil, err
 	}
-	logf := func(format string, args ...any) { fmt.Printf(format+"\n", args...) }
+	logf := func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) }
 	warnf := func(format string, args ...any) {
 		fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf(format, args...)))
 	}
@@ -626,13 +698,14 @@ func resetLiteBuildFolder(ctx context.Context, dir string) error {
 }
 
 // runLiteBuildCommand runs name in dir, in the environment of the ESP-IDF
-// version (an eim name), with the output in the terminal.
-func runLiteBuildCommand(ctx context.Context, dir, version, name string, args ...string) error {
+// version (an eim name), with its standard output in out and its errors in
+// the terminal.
+func runLiteBuildCommand(ctx context.Context, out io.Writer, dir, version, name string, args ...string) error {
 	cmd := espidftoolchain.EIMCommandContext(ctx, version, name, args...)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
-	fmt.Printf("\n%s\n", tui.Dim(fmt.Sprintf("Running in ESP-IDF %s: %s %s", version, name, strings.Join(args, " "))))
+	fmt.Fprintf(out, "\n%s\n", tui.Dim(fmt.Sprintf("Running in ESP-IDF %s: %s %s", version, name, strings.Join(args, " "))))
 	return cmd.Run()
 }
 

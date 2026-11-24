@@ -5,6 +5,7 @@ package commands
 import (
 	"context"
 	"encoding/binary"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -228,7 +229,7 @@ func TestOpenLiteBuildFolder(t *testing.T) {
 		{name: "nightly", nightly: true, content: "nightly", want: litebuild.Source{Name: "nightly", Version: commits.nightly, Commit: commits.nightly}},
 		{name: "branch", version: "feature/x", content: "branch", want: litebuild.Source{Name: "feature/x", Version: commits.branch, Commit: commits.branch}},
 	} {
-		dir, src, release, err := openLiteBuildFolder(ctx, url, tc.nightly, tc.version)
+		dir, src, release, err := openLiteBuildFolder(ctx, io.Discard, url, tc.nightly, tc.version)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -248,7 +249,7 @@ func TestOpenLiteBuildFolder(t *testing.T) {
 	// A version without master configuration: an error that names it, and
 	// the cache does not change.
 	before := liteBuildFolders(t, root)
-	if _, _, _, err := openLiteBuildFolder(ctx, url, false, "0.9.0"); err == nil || err.Error() != "Wendy Lite 0.9.0 is not compatible with this version of the CLI. Specify a Wendy Lite version with --version" {
+	if _, _, _, err := openLiteBuildFolder(ctx, io.Discard, url, false, "0.9.0"); err == nil || err.Error() != "Wendy Lite 0.9.0 is not compatible with this version of the CLI. Specify a Wendy Lite version with --version" {
 		t.Errorf("version without master configuration: %v", err)
 	}
 	if after := liteBuildFolders(t, root); !slices.Equal(after, before) {
@@ -256,20 +257,20 @@ func TestOpenLiteBuildFolder(t *testing.T) {
 	}
 
 	// While a build holds the cache, another one stops.
-	_, _, release, err := openLiteBuildFolder(ctx, url, false, "")
+	_, _, release, err := openLiteBuildFolder(ctx, io.Discard, url, false, "")
 	if err != nil {
 		t.Fatalf("the cache stayed locked after the failure: %v", err)
 	}
-	if _, _, _, err := openLiteBuildFolder(ctx, url, false, ""); err == nil || !strings.Contains(err.Error(), "another Wendy Lite build is running") {
+	if _, _, _, err := openLiteBuildFolder(ctx, io.Discard, url, false, ""); err == nil || !strings.Contains(err.Error(), "another Wendy Lite build is running") {
 		t.Errorf("with the cache locked: %v", err)
 	}
 	release()
 
 	// An unknown ref: an error naming it, and the cache is unlocked.
-	if _, _, _, err := openLiteBuildFolder(ctx, url, false, "does-not-exist"); err == nil || !strings.Contains(err.Error(), "does-not-exist") {
+	if _, _, _, err := openLiteBuildFolder(ctx, io.Discard, url, false, "does-not-exist"); err == nil || !strings.Contains(err.Error(), "does-not-exist") {
 		t.Errorf("unknown ref: %v, want an error naming it", err)
 	}
-	_, _, release, err = openLiteBuildFolder(ctx, url, false, "")
+	_, _, release, err = openLiteBuildFolder(ctx, io.Discard, url, false, "")
 	if err != nil {
 		t.Fatalf("the cache stayed locked after the failure: %v", err)
 	}
@@ -341,7 +342,7 @@ func TestLiteBuildConfigureReason(t *testing.T) {
 func TestResetLiteBuildFolder(t *testing.T) {
 	url, _ := liteTestRepo(t)
 	setLiteBuildRoot(t)
-	dir, _, release, err := openLiteBuildFolder(context.Background(), url, false, "feature/x")
+	dir, _, release, err := openLiteBuildFolder(context.Background(), io.Discard, url, false, "feature/x")
 	if err != nil {
 		t.Fatal(err)
 	}

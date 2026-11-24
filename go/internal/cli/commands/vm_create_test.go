@@ -230,6 +230,47 @@ func TestVMCreateHasAnArchFlag(t *testing.T) {
 	}
 }
 
+func TestVMCreateWendyLiteFlags(t *testing.T) {
+	stubVMCreatePrompts(t)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	calls := stubLiteSimulatorBuild(t, liteTestImage())
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"lite1", "--profile", "wendy-lite", "--pr", "12"}, "wendy-lite does not use --pr or --disk"},
+		{[]string{"lite1", "--profile", "wendy-lite", "--disk", "8"}, "wendy-lite does not use --pr or --disk"},
+		{[]string{"lite1", "--profile", "wendy-lite", "--nightly", "--version", "1.0.0"}, "--nightly and --version cannot be combined"},
+		{[]string{"lite1", "--profile", "wendy-lite", "--image", "fw.bin", "--nightly"}, "--image cannot be combined with --nightly or --version"},
+	} {
+		cmd := newVMCreateCmd()
+		cmd.SetArgs(tc.args)
+		cmd.SetOut(&strings.Builder{})
+		cmd.SetErr(&strings.Builder{})
+		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v: %v, want %q", tc.args, err, tc.want)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatal("refused flags were built")
+	}
+
+	cmd := newVMCreateCmd()
+	cmd.SetArgs([]string{"lite1", "--profile", "wendy-lite", "--nightly"})
+	out := &strings.Builder{}
+	cmd.SetOut(out)
+	cmd.SetErr(&strings.Builder{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 1 || !(*calls)[0].nightly || (*calls)[0].simulator != "wendy-lite" {
+		t.Fatalf("builds: %+v", *calls)
+	}
+	if !strings.Contains(out.String(), `Created Wendy Lite simulator "lite1"`) {
+		t.Fatalf("output: %q", out.String())
+	}
+}
+
 func TestVMCreateRefusesArchForWendyLite(t *testing.T) {
 	stubVMCreatePrompts(t)
 	configDir := t.TempDir()
