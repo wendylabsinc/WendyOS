@@ -7,10 +7,12 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"github.com/wendylabsinc/wendy/go/internal/cli/localkey"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -124,8 +126,27 @@ func closedAccessState(ctx context.Context, host string) (seen string, ok bool, 
 	return "", true, nil
 }
 
-// localKeyLabel is "<hostname>/<user>", so an owner can tell whose key it is.
+// maxKeyLabelLen is the agent's limit on a key label in bytes
+// (trustedkeys.MaxLabelLen); a longer one is refused.
+const maxKeyLabelLen = 128
+
+// localKeyLabel is "<hostname>/<user>", so an owner can tell whose key it is,
+// within the agent's label limit.
 func localKeyLabel() string {
+	return capKeyLabel(hostUserLabel())
+}
+
+// capKeyLabel drops control characters and cuts s to maxKeyLabelLen bytes on
+// a character boundary.
+func capKeyLabel(s string) string {
+	s = tui.StripControl(s)
+	if len(s) > maxKeyLabelLen {
+		s = strings.ToValidUTF8(s[:maxKeyLabelLen], "")
+	}
+	return s
+}
+
+func hostUserLabel() string {
 	host, _ := os.Hostname()
 	if host == "" {
 		host = "unknown"

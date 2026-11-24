@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
@@ -22,6 +23,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc"
 )
 
 // runWendy runs the CLI against the device at addr and returns what it
@@ -267,4 +270,39 @@ func TestDeviceAccessChangesNeedYesWithoutATerminal(t *testing.T) {
 		}
 	}
 	mustRun(t, dev.Addr, "Access: Open", "device", "access")
+}
+
+type labelAccessClient struct {
+	agentpbv2.WendyAccessServiceClient
+	keys []*agentpbv2.TrustedKey
+}
+
+func (c labelAccessClient) ListTrustedKeys(context.Context, *agentpbv2.ListTrustedKeysRequest, ...grpc.CallOption) (*agentpbv2.ListTrustedKeysResponse, error) {
+	return &agentpbv2.ListTrustedKeysResponse{Keys: c.keys}, nil
+}
+
+// A label is another owner's free text: it cannot reach the terminal with
+// control characters or forge rows.
+func TestDeviceKeysListEscapesLabels(t *testing.T) {
+	useLocalKey(t)
+	c := labelAccessClient{keys: []*agentpbv2.TrustedKey{
+		{Fingerprint: "sha256:aa", Role: agentpbv2.TrustedKeyRole_TRUSTED_KEY_ROLE_OWNER, Label: "alice\nsha256:ff\towner\x1b[2J"},
+		{Fingerprint: "sha256:bb", Role: agentpbv2.TrustedKeyRole_TRUSTED_KEY_ROLE_VIEWER, Label: "bob"},
+	}}
+	var out bytes.Buffer
+	if err := runDeviceKeysList(context.Background(), c, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(out.String(), "\n"); lines != 3 || strings.ContainsRune(out.String(), '\x1b') {
+		t.Fatalf("printed %d lines (want 3: header and 2 keys) or an escape:\n%q", lines, out.String())
+	}
+}
+
+// The default label fits the agent's limit, cut on a character boundary.
+func TestLocalKeyLabelFitsTheAgentLimit(t *testing.T) {
+	long := strings.Repeat("é", maxKeyLabelLen) // 2 bytes each
+	got := capKeyLabel("host\x07/" + long)
+	if len(got) > maxKeyLabelLen || !utf8.ValidString(got) || strings.ContainsRune(got, '\x07') {
+		t.Fatalf("capKeyLabel = %q (%d bytes), want valid UTF-8 within %d bytes, no control characters", got, len(got), maxKeyLabelLen)
+	}
 }

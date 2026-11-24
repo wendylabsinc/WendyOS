@@ -16,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/localkey"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -415,11 +416,13 @@ func runDeviceKeysList(ctx context.Context, c agentpbv2.WendyAccessServiceClient
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "FINGERPRINT\tROLE\tLABEL\tADDED\tADDED BY")
 	for _, v := range views {
-		label := v.Label
+		// Labels are free text from other owners: control characters would
+		// reach the terminal and could forge rows.
+		label := tui.StripControl(v.Label)
 		if v.ThisKey {
 			label = strings.TrimSpace(label + " (this computer)")
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", v.Fingerprint, v.Role, label, v.AddedAt, v.AddedBy)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", tui.StripControl(v.Fingerprint), v.Role, label, v.AddedAt, tui.StripControl(v.AddedBy))
 	}
 	return w.Flush()
 }
