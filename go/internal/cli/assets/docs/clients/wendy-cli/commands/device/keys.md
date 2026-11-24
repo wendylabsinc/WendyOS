@@ -1,11 +1,11 @@
 # `wendy device keys`
 
-Manages the keys a **Closed** device trusts (see [`wendy device access`](access.md)). The key that closed the device, or that `wendy install --close` seeded, is its first owner. Every command needs an owner key.
+Manages the keys a **Closed** device trusts (see [`wendy device access`](./access.md)). The key that closed the device, or that `wendy install --close` seeded, is its first owner. Every command needs an owner key.
 
 ```sh
 wendy device keys list
 wendy device keys add <public-key-file|-> --role <owner|operator|viewer> [--label <name>]
-wendy device keys remove <fingerprint>
+wendy device keys remove <fingerprint> [--yes]
 ```
 
 ## Roles
@@ -23,7 +23,7 @@ Each key has exactly one role; to change it, remove the key and add it again. Th
 1. On the other computer: `wendy auth local-key show > alice.pub`.
 2. On an owner's computer: `wendy device keys add alice.pub --role operator --label alice`.
 
-`add` reads the first PEM `PUBLIC KEY` block in the file, so the whole output of `wendy auth local-key show` works as is; `-` reads stdin. A private key is refused. `list` marks this computer's own key.
+`add` reads the first PEM `PUBLIC KEY` block in the file, so the whole output of `wendy auth local-key show` works as is; `-` reads stdin. A private key is refused. `list` marks this computer's own key. A label is at most 128 bytes of printable text. `remove` asks first; without a terminal it needs `--yes`.
 
 ## How the CLI connects to a Closed device
 

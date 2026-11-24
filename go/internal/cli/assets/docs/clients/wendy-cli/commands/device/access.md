@@ -5,17 +5,17 @@ Shows and changes who may use a device that is **not enrolled in Wendy Cloud**. 
 | Shape | Who gets in |
 | --- | --- |
 | Open | anyone on the device's network (the default, as before) |
-| Closed | only callers proving a key the device trusts, each with one role (see [`wendy device keys`](keys.md)) |
+| Closed | only callers proving a key the device trusts, each with one role (see [`wendy device keys`](./keys.md)) |
 | Enrolled | Wendy Cloud decides; the commands below are refused |
 
 ```sh
 wendy device access                  # shape, keyless apps switch, your key's role
-wendy device access close            # Open -> Closed; this computer's key becomes the owner
-wendy device access open             # Closed -> Open; drops every key (owner only)
+wendy device access close [--yes]    # Open -> Closed; this computer's key becomes the owner
+wendy device access open [--yes]     # Closed -> Open; drops every key (owner only)
 wendy device access keyless <on|off> # owner only
 ```
 
-`wendy discover` marks a Closed device with `◐`.
+`close` and `open` ask first; without a terminal they need `--yes`. `wendy discover` marks a Closed device with `◐`.
 
 ## Closing a device
 
