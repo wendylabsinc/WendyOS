@@ -1220,3 +1220,212 @@ func TestArmedStoreOnAnH264CameraStoresThePreRollOnceAsVideo(t *testing.T) {
 		})
 	}
 }
+
+func snapshotEvery(interval time.Duration) *data.SourceCapture {
+	return &data.SourceCapture{Mode: captureModeSnapshot, Interval: interval.String()}
+}
+
+func (cam *storeTestCamera) subscriptionsEverMade() int {
+	cam.hub.mu.Lock()
+	defer cam.hub.mu.Unlock()
+	return cam.hub.nextID
+}
+
+// assertEachRecordIsOneWholeFile checks that the index names the given files
+// in order, each record covering its file from the first byte to the last.
+func assertEachRecordIsOneWholeFile(t *testing.T, r storeRecording, names ...string) {
+	t.Helper()
+	records, files := r.index(t), r.files(t)
+	if len(records) != len(names) {
+		t.Fatalf("%d index record(s), want one for each of %v", len(records), names)
+	}
+	for i, name := range names {
+		record := records[i]
+		if record.Segment != storeTestSegmentDir+name || record.ByteOffset != 0 || record.ByteSize != len(files[name]) {
+			t.Errorf("record %d addresses %d byte(s) at offset %d of %s, want the whole %d-byte %s", i, record.ByteSize, record.ByteOffset, record.Segment, len(files[name]), storeTestSegmentDir+name)
+		}
+	}
+}
+
+const (
+	snapshotEverySecond     = "Test Cam (snapshot mode: one still per 1s)"
+	snapshotOfUnstampedTime = "Test Cam (pipeline PTS unavailable; canonical time uses bounded agent receipt; snapshot mode: one still per 1s; "
+)
+
+// A webcam captured as JPEG has already made a whole picture for every
+// instant, so each still is that frame and nothing is encoded for the source.
+// The viewer's video of the same frames is not the capture's.
+func TestSnapshotOnAJPEGCameraWritesTheCamerasOwnFramesAsStills(t *testing.T) {
+	cam := newKernelClockCamera(t)
+	var stills []*videoFrame
+	r := cam.record(t, snapshotEvery(time.Second), 2, func() {
+		cam.waitForCaptureSubscriptions(t, 0, 1)
+		for i, frame := range []struct {
+			receivedAt time.Duration
+			isStill    bool
+		}{
+			{600 * time.Millisecond, true},
+			{900 * time.Millisecond, false},
+			{1700 * time.Millisecond, true},
+			{3600 * time.Millisecond, true},
+			{3700 * time.Millisecond, false},
+		} {
+			jpeg := jpegAt(uint64(i+1), frame.receivedAt, testJPEG(byte(0x50+i), 40+i))
+			cam.deliver(t, jpeg)
+			cam.derive(t, jpeg, testRAUFrame)
+			if frame.isStill {
+				stills = append(stills, jpeg)
+			}
+		}
+		cam.waitForCaptureSubscriptions(t, 0, 1)
+		if made := cam.subscriptionsEverMade(); made != 2 {
+			t.Errorf("the hub has had %d subscription(s), want the viewer's and the capture's one for the camera's own frames", made)
+		}
+	}, 3)
+
+	assertFileNames(t, r, "snapshot-000001.jpg", "snapshot-000002.jpg", "snapshot-000003.jpg")
+	assertEachRecordIsOneWholeFile(t, r, "snapshot-000001.jpg", "snapshot-000002.jpg", "snapshot-000003.jpg")
+	assertRecordsAddress(t, r, indexedAsJPEG, stills)
+	assertKernelCaptureTimes(t, r, indexedAsJPEG)
+	if r.result.Count != 3 {
+		t.Errorf("count = %d, want the 3 stills", r.result.Count)
+	}
+	// The interval from 2.5s to 3.5s had no frame. The capture's end is read
+	// from the real clock, so the intervals after the last still are not pinned.
+	if r.result.Drops == nil || *r.result.Drops < 1 || r.result.DropAccounting != "missed_snapshot_intervals" {
+		t.Errorf("drops = %v under %q, want at least the one interval without a frame under missed_snapshot_intervals", r.result.Drops, r.result.DropAccounting)
+	}
+	if r.result.SourceDetail != snapshotEverySecond {
+		t.Errorf("detail = %q, want %q", r.result.SourceDetail, snapshotEverySecond)
+	}
+}
+
+func TestSnapshotOnAnH264CameraWritesKeyFramesWithTheirParameterSets(t *testing.T) {
+	cam := newKernelClockCamera(t)
+	keyFrameBehindOtherBytes := nativeH264At(5, 1800*time.Millisecond, append([]byte{9, 9}, testRAUFrame...))
+	frames := []*videoFrame{
+		nativeH264At(1, 600*time.Millisecond, testInterFrame),
+		nativeH264At(2, 700*time.Millisecond, testRAUFrame),
+		nativeH264At(3, 900*time.Millisecond, testRAUFrame),
+		nativeH264At(4, 1700*time.Millisecond, testInterFrame),
+		keyFrameBehindOtherBytes,
+		nativeH264At(6, 3600*time.Millisecond, testRAUFrame),
+	}
+	r := cam.recordFrames(t, snapshotEvery(time.Second), 2, frames, 3)
+
+	assertFileNames(t, r, "snapshot-000001.h264", "snapshot-000002.h264", "snapshot-000003.h264")
+	assertEachRecordIsOneWholeFile(t, r, "snapshot-000001.h264", "snapshot-000002.h264", "snapshot-000003.h264")
+	keyFrameAlone := *keyFrameBehindOtherBytes
+	keyFrameAlone.data = testRAUFrame
+	assertRecordsAddress(t, r, indexedAsH264, []*videoFrame{frames[1], &keyFrameAlone, frames[5]})
+	assertKernelCaptureTimes(t, r, indexedAsH264)
+	if r.result.Count != 3 || r.result.DropAccounting != "missed_snapshot_intervals" {
+		t.Errorf("count = %d under %q, want 3 stills under missed_snapshot_intervals", r.result.Count, r.result.DropAccounting)
+	}
+	if r.result.SourceDetail != snapshotEverySecond {
+		t.Errorf("detail = %q, want %q", r.result.SourceDetail, snapshotEverySecond)
+	}
+}
+
+// A producer that refuses a camera's own frames delivers video, in production
+// as byte chunks, which snapshot mode has always recorded continuously. Video
+// in whole access units yields key frame stills.
+func TestSnapshotOnACameraWithoutFramesOfItsOwnTakesItsVideoAndSaysWhy(t *testing.T) {
+	const refused = "snapshot mode stores a camera's own frames as stills, but this camera's own frames cannot be stored: " + gstreamerHasNoWholeFrames + "; its video is used instead for the whole episode"
+
+	t.Run("video in byte chunks is recorded continuously", func(t *testing.T) {
+		cam := newKernelClockCamera(t)
+		cam.hub.nativeNotOffered(fixedReason(gstreamerHasNoWholeFrames))
+		chunks := []*videoFrame{
+			chunkAt(1, 1000*time.Millisecond, testRAUFrame),
+			chunkAt(2, 1033*time.Millisecond, []byte{0, 0, 0, 1, 0x41, 1, 0, 0}),
+			chunkAt(3, 2066*time.Millisecond, []byte{0, 1, 0x41, 2}),
+		}
+		r := cam.recordFrames(t, snapshotEvery(time.Second), 2, chunks, 3)
+
+		assertFileNames(t, r, "segment-000001.h264")
+		assertRecordsAddress(t, r, indexedAsH264, chunks)
+		want := snapshotOfUnstampedTime + refused + "; snapshot stills require a transport that delivers whole access units (native V4L2 H.264); this stream arrives as byte chunks, so the source records continuously instead)"
+		if r.result.SourceDetail != want {
+			t.Errorf("detail = %q, want %q", r.result.SourceDetail, want)
+		}
+	})
+
+	t.Run("video in whole access units is stored as key frame stills", func(t *testing.T) {
+		cam := newKernelClockCamera(t)
+		cam.hub.nativeNotOffered(fixedReason(gstreamerHasNoWholeFrames))
+		frames := []*videoFrame{
+			h264At(1, 700*time.Millisecond, testRAUFrame),
+			h264At(2, 733*time.Millisecond, testInterFrame),
+			h264At(3, 1800*time.Millisecond, testRAUFrame),
+		}
+		r := cam.recordFrames(t, snapshotEvery(time.Second), 2, frames, 2)
+
+		assertFileNames(t, r, "snapshot-000001.h264", "snapshot-000002.h264")
+		assertEachRecordIsOneWholeFile(t, r, "snapshot-000001.h264", "snapshot-000002.h264")
+		assertRecordsAddress(t, r, indexedAsH264, []*videoFrame{frames[0], frames[2]})
+		if want := snapshotOfUnstampedTime + refused + ")"; r.result.SourceDetail != want {
+			t.Errorf("detail = %q, want %q", r.result.SourceDetail, want)
+		}
+		if r.result.DropAccounting != "missed_snapshot_intervals" {
+			t.Errorf("drop accounting = %q, want missed_snapshot_intervals", r.result.DropAccounting)
+		}
+	})
+}
+
+func TestSnapshotWhoseOwnFramesAreRefusedLaterGoesOnWithTheVideoAndSaysWhy(t *testing.T) {
+	cam := newKernelClockCamera(t)
+	var stills, chunks []*videoFrame
+	r := cam.record(t, snapshotEvery(time.Second), 2, func() {
+		stills = []*videoFrame{
+			jpegAt(1, 600*time.Millisecond, testJPEG(1, 40)),
+			jpegAt(2, 1700*time.Millisecond, testJPEG(2, 50)),
+		}
+		for _, still := range stills {
+			cam.deliver(t, still)
+		}
+		cam.hub.nativeNotOffered(fixedReason(gstreamerHasNoWholeFrames))
+		cam.waitForCaptureSubscriptions(t, 1, 0)
+		chunks = []*videoFrame{
+			chunkAt(3, 2800*time.Millisecond, testRAUFrame),
+			chunkAt(4, 2833*time.Millisecond, []byte{0, 0, 0, 1, 0x41, 1, 0, 0}),
+		}
+		for _, chunk := range chunks {
+			cam.deliver(t, chunk)
+		}
+	}, 4)
+
+	assertFileNames(t, r, "snapshot-000001.jpg", "snapshot-000002.jpg", "segment-000001.h264")
+	assertRecordsAddress(t, r, indexedAsJPEG, stills)
+	assertRecordsAddress(t, r, indexedAsH264, chunks)
+	assertDetailSays(t, r,
+		"snapshot mode: one still per 1s",
+		"snapshot mode stores a camera's own frames as stills, but this camera's own frames stopped being available after 2 stored still(s): "+gstreamerHasNoWholeFrames+"; its video is used instead for the rest of the episode, even if the camera offers them again",
+		"this stream arrives as byte chunks, so the source records continuously instead",
+	)
+}
+
+func TestSnapshotOfJPEGFramesCountsTheIntervalsWithoutAStill(t *testing.T) {
+	c := newStoreTestCapture(t, &fakeReceipt{}, snapshotEvery(time.Second))
+	c.mode, c.interval = captureModeSnapshot, int64(time.Second)
+
+	// No frame came in the first two intervals, in the two between the stills,
+	// or in the two whole intervals after the last one.
+	for i, at := range []time.Duration{2500 * time.Millisecond, 2700 * time.Millisecond, 5100 * time.Millisecond} {
+		if err := c.handleFrame(jpegAt(uint64(i+1), at, testJPEG(byte(i), 20))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.finishSnapshotAccounting(int64(8200 * time.Millisecond))
+
+	names, err := filepath.Glob(filepath.Join(c.dir, "snapshot-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 2 || filepath.Base(names[0]) != "snapshot-000001.jpg" || filepath.Base(names[1]) != "snapshot-000002.jpg" {
+		t.Fatalf("stills = %v, want two JPEG files", names)
+	}
+	if c.result.Count != 2 || c.result.Drops == nil || *c.result.Drops != 6 || c.result.DropAccounting != "missed_snapshot_intervals" {
+		t.Fatalf("count = %d, drops = %v under %q; want 2 stills and 6 missed intervals", c.result.Count, c.result.Drops, c.result.DropAccounting)
+	}
+}

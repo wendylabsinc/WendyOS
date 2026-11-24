@@ -19,12 +19,34 @@ var cameraSegmentExtensions = map[agentpb.VideoCodec]string{
 	videoCodecMJPEG:                     ".mjpeg",
 }
 
+// cameraStillExtensions names the file format of one frame stored alone, for
+// the codecs whose segment format is a stream of frames.
+var cameraStillExtensions = map[agentpb.VideoCodec]string{
+	videoCodecMJPEG: ".jpg",
+}
+
+func cameraStillExtension(codec agentpb.VideoCodec) string {
+	if extension, alone := cameraStillExtensions[codec]; alone {
+		return extension
+	}
+	return cameraSegmentExtensions[codec]
+}
+
 func isOwnFormatFrame(frame *videoFrame) bool {
 	return frame.native && !encodedFrames.receives(frame)
 }
 
+func snapshotInterval(capture *data.SourceCapture) time.Duration {
+	if capture.EffectiveMode() != captureModeSnapshot {
+		return 0
+	}
+	return capture.IntervalDuration()
+}
+
 func subscriptionKindsFor(capture *data.SourceCapture) (primary frameKind, nativeBeside bool) {
 	switch {
+	case snapshotInterval(capture) > 0:
+		return nativeFrames, false
 	case capture.EffectiveMode() == captureModeSnapshot || !capture.StoresFrames():
 		return encodedFrames, false
 	case capture.StoresVideo():
@@ -66,16 +88,19 @@ func nativeRefusalReason(err error) string {
 }
 
 func ownFramesUnavailableNote(capture *data.SourceCapture, cause error, storedBefore uint64) string {
-	instead := "video is recorded instead"
-	if capture.StoresVideo() {
+	asked, stored, instead := "store: "+capture.Store+" was requested", "frame(s)", "video is recorded instead"
+	switch {
+	case snapshotInterval(capture) > 0:
+		asked, stored, instead = "snapshot mode stores a camera's own frames as stills", "still(s)", "its video is used instead"
+	case capture.StoresVideo():
 		instead = "only video is recorded"
 	}
 	if storedBefore == 0 {
-		return fmt.Sprintf("store: %s was requested, but this camera's own frames cannot be stored: %s; %s for the whole episode",
-			capture.Store, nativeRefusalReason(cause), instead)
+		return fmt.Sprintf("%s, but this camera's own frames cannot be stored: %s; %s for the whole episode",
+			asked, nativeRefusalReason(cause), instead)
 	}
-	return fmt.Sprintf("store: %s was requested, but this camera's own frames stopped being available after %d stored frame(s): %s; %s for the rest of the episode, even if the camera offers them again",
-		capture.Store, storedBefore, nativeRefusalReason(cause), instead)
+	return fmt.Sprintf("%s, but this camera's own frames stopped being available after %d stored %s: %s; %s for the rest of the episode, even if the camera offers them again",
+		asked, storedBefore, stored, nativeRefusalReason(cause), instead)
 }
 
 func ownFramesAreVideoNote(capture *data.SourceCapture, codec agentpb.VideoCodec) string {
@@ -369,7 +394,7 @@ func (c *cameraCapture) ownFramesNoLongerStored(cause error) {
 		return
 	}
 	c.ownFramesRefused = true
-	c.notes = append(c.notes, ownFramesUnavailableNote(c.source.Capture, cause, c.ownFrameStream.indexed))
+	c.notes = append(c.notes, ownFramesUnavailableNote(c.source.Capture, cause, c.ownFrameStream.indexed+uint64(c.snapshotNumber)))
 }
 
 // recordedStreamChanged forgets what was learned from the stream recorded so

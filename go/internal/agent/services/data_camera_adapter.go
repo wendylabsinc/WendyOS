@@ -283,16 +283,14 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 		}
 	}
 	mode := "continuous"
-	var interval time.Duration
 	var notes []string
 	capture := source.Capture
-	if capture.EffectiveMode() == captureModeSnapshot {
-		if d := capture.IntervalDuration(); d > 0 {
-			mode, interval = captureModeSnapshot, d
-			notes = append(notes, fmt.Sprintf("snapshot mode: one still per %s", d))
-		} else {
-			notes = append(notes, "snapshot mode requested without a valid interval; recording continuously")
-		}
+	interval := snapshotInterval(capture)
+	if interval > 0 {
+		mode = captureModeSnapshot
+		notes = append(notes, fmt.Sprintf("snapshot mode: one still per %s", interval))
+	} else if capture.EffectiveMode() == captureModeSnapshot {
+		notes = append(notes, "snapshot mode requested without a valid interval; recording continuously")
 	}
 	var rateCap float64
 	if capture != nil && capture.Rate > 0 {
@@ -1202,12 +1200,16 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 // writeSnapshot implements snapshot capture: one standalone decodable still
 // per campaign interval.
 //
-// Decodability rests on two checks, both required. handleFrame only routes
-// access-unit-aligned frames here (H.264 a camera produces itself, one whole
-// encoded frame per buffer, or H.264 the derived layer makes from a camera
-// captured as JPEG, one access unit per source frame — byte-chunked
-// transports degrade to continuous recording), and
-// frameRandomAccess then verifies the unit carries its own SPS/PPS/IDR trio.
+// The capture asks the hub for the camera's own frames (subscriptionKindsFor).
+// A camera captured as JPEG delivers whole pictures, and each still is one of
+// them, byte for byte; no encoder runs for the source. A camera whose own
+// frames are H.264, or whose own frames are refused so that its video is taken
+// instead, yields key frame stills.
+//
+// Decodability of an H.264 still rests on two checks, both required.
+// handleFrame only routes access-unit-aligned frames here (byte-chunked
+// transports degrade to continuous recording), and frameRandomAccess then
+// verifies the unit carries its own SPS/PPS/IDR trio.
 // Together they guarantee a written still is a complete, self-contained
 // access unit; a keyframe that still lacks parameter sets (the camera did not
 // inline them and the producer had none to add, see h264ParameterSets) is
@@ -1243,7 +1245,7 @@ func (c *cameraCapture) writeSnapshot(frame *videoFrame) error {
 	c.missedIntervals += uint64(idx - c.lastSnapshotIdx - 1)
 	c.lastSnapshotIdx = idx
 	c.snapshotNumber++
-	name := fmt.Sprintf("snapshot-%06d%s", c.snapshotNumber, cameraSegmentExtensions[frame.codec])
+	name := fmt.Sprintf("snapshot-%06d%s", c.snapshotNumber, cameraStillExtension(frame.codec))
 	f, err := os.OpenFile(filepath.Join(c.dir, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
 	if err != nil {
 		return err
