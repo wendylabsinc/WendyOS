@@ -201,6 +201,15 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 					mode = preEnrollSkip
 				}
 			}
+			// --close keeps the device to this computer's key; enrolling it
+			// is the owner's later step ('wendy device enroll'), so it is
+			// neither combined nor offered.
+			if closeDevice && mode == preEnrollForced {
+				return usageErrorf("--close cannot be combined with --pre-enroll: a Closed device is enrolled by its owner afterwards with 'wendy device enroll'")
+			}
+			if closeDevice {
+				mode = preEnrollSkip
+			}
 			preOpts := preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}
 			if closeDevice {
 				seed, err := buildOwnerKeysSeed(cmd.OutOrStdout())

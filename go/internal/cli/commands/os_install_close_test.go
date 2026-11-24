@@ -158,3 +158,12 @@ func TestInstallCloseSurfacesAPinMismatchAtOnce(t *testing.T) {
 		t.Errorf("refusal took %s, want it at once", waited)
 	}
 }
+
+// --close keeps a device to this computer's key; pre-enrolling it would
+// enroll it in the background and fail the Closed check after first boot.
+func TestInstallCloseRefusesPreEnroll(t *testing.T) {
+	err := executeRootForError(t, "os", "install", "--close", "--pre-enroll", "--device-name", "box")
+	if err == nil || !strings.Contains(err.Error(), "--pre-enroll") || !strings.Contains(err.Error(), "wendy device enroll") {
+		t.Fatalf("err = %v, want the --close/--pre-enroll refusal", err)
+	}
+}
