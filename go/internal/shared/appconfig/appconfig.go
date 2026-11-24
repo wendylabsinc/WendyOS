@@ -503,8 +503,6 @@ func isCameraEntitlement(e Entitlement) bool {
 	return e.Type == EntitlementCamera || e.Type == EntitlementVideo
 }
 
-// knownOrDefault returns value when accepted lists it, and otherwise the first
-// accepted value, which is the default.
 func knownOrDefault(value string, accepted []string) string {
 	if slices.Contains(accepted, value) {
 		return value
@@ -513,31 +511,52 @@ func knownOrDefault(value string, accepted []string) string {
 }
 
 // CameraNodeSettings reports the format and stamp of the node an app gets for
-// the camera with the given device path and name. The entry whose allowlist
-// names the camera decides, then the entry without an allowlist, then the
-// defaults. The entitlements may come from annotations written by a newer or
-// older command line, so a value this build does not know resolves to the
-// default.
+// the camera with the given device path and name. An entry whose allowlist
+// names the device path decides before one that names the camera by name, which
+// decides before an entry without an allowlist; with none, the defaults apply.
+//
+// The result does not depend on the order of the entries, because the agent
+// rebuilds them from container labels sorted by type and never sees manifest
+// order: when the deciding entries disagree on a setting, that setting is the
+// default. The labels may also come from a newer or older command line, so a
+// value this build does not know resolves to the default.
 func CameraNodeSettings(entitlements []Entitlement, cameraPath, cameraName string) (format, stamp string) {
-	var chosen Entitlement
-	fallbackFound := false
+	const (
+		byPath = iota
+		byName
+		withoutAllowlist
+		precedences
+	)
+	var deciding [precedences][]Entitlement
 	for _, e := range entitlements {
 		if !isCameraEntitlement(e) || e.Mode == CameraModeDirect {
 			continue
 		}
-		if len(e.Allowlist) == 0 {
-			if !fallbackFound {
-				chosen, fallbackFound = e, true
-			}
-			continue
-		}
-		if (cameraPath != "" && slices.Contains(e.Allowlist, cameraPath)) ||
-			(cameraName != "" && slices.Contains(e.Allowlist, cameraName)) {
-			chosen = e
-			break
+		switch {
+		case len(e.Allowlist) == 0:
+			deciding[withoutAllowlist] = append(deciding[withoutAllowlist], e)
+		case cameraPath != "" && slices.Contains(e.Allowlist, cameraPath):
+			deciding[byPath] = append(deciding[byPath], e)
+		case cameraName != "" && slices.Contains(e.Allowlist, cameraName):
+			deciding[byName] = append(deciding[byName], e)
 		}
 	}
-	return knownOrDefault(chosen.Format, CameraFormats), knownOrDefault(chosen.Stamp, CameraStamps)
+	for _, entries := range deciding {
+		if len(entries) == 0 {
+			continue
+		}
+		format, stamp = knownOrDefault(entries[0].Format, CameraFormats), knownOrDefault(entries[0].Stamp, CameraStamps)
+		for _, e := range entries[1:] {
+			if knownOrDefault(e.Format, CameraFormats) != format {
+				format = CameraFormats[0]
+			}
+			if knownOrDefault(e.Stamp, CameraStamps) != stamp {
+				stamp = CameraStamps[0]
+			}
+		}
+		return format, stamp
+	}
+	return CameraFormats[0], CameraStamps[0]
 }
 
 // Entitlement represents a single entitlement entry in wendy.json.
@@ -648,18 +667,62 @@ func validateCameraNodeSettingValue(e Entitlement, key, value string, accepted [
 	return fmt.Errorf("%s[%d]: %s %s must be one of %s; got %q", prefix, index, e.Type, key, strings.Join(quoted, ", "), value)
 }
 
+// locatedEntitlement is an entitlement with the manifest position error
+// messages name it by, for example `services["vision"].entitlement[1]`.
+type locatedEntitlement struct {
+	Entitlement
+	location string
+}
+
+func locateEntitlements(entitlements []Entitlement, prefix string) []locatedEntitlement {
+	located := make([]locatedEntitlement, len(entitlements))
+	for i, e := range entitlements {
+		located[i] = locatedEntitlement{Entitlement: e, location: fmt.Sprintf("%s[%d]", prefix, i)}
+	}
+	return located
+}
+
+// containerEntitlements is the one definition of what a service's container
+// gets: the app's entitlements, then the service's own. svc may be nil.
+func (c *AppConfig) containerEntitlements(name string, svc *ServiceConfig) []locatedEntitlement {
+	located := locateEntitlements(c.Entitlements, "entitlement")
+	if svc != nil {
+		located = append(located, locateEntitlements(svc.Entitlements, fmt.Sprintf("services[%q].entitlement", name))...)
+	}
+	return located
+}
+
+// ContainerEntitlements returns the entitlements a service's container gets:
+// the app's, then the service's own. svc may be nil.
+func (c *AppConfig) ContainerEntitlements(svc *ServiceConfig) []Entitlement {
+	located := c.containerEntitlements("", svc)
+	entitlements := make([]Entitlement, len(located))
+	for i, e := range located {
+		entitlements[i] = e.Entitlement
+	}
+	return entitlements
+}
+
+func validateCameraEntries(entries []locatedEntitlement) error {
+	if err := validateCameraNodeSettingsWithDirect(entries); err != nil {
+		return err
+	}
+	return validateCameraClaims(entries)
+}
+
 // validateCameraNodeSettingsWithDirect rejects format or stamp on any camera or
-// video entry of an app that has a direct entry: one direct entry gives the
-// whole app the real device (CameraShareChoice), so no entry gets a node.
-func validateCameraNodeSettingsWithDirect(entitlements []Entitlement, prefix string) error {
-	direct := slices.IndexFunc(entitlements, func(e Entitlement) bool {
-		return isCameraEntitlement(e) && e.Mode == CameraModeDirect
+// video entry of a container that has a direct entry: one direct entry gives
+// the whole container the real device (CameraShareChoice), so no entry gets a
+// node.
+func validateCameraNodeSettingsWithDirect(entries []locatedEntitlement) error {
+	direct := slices.IndexFunc(entries, func(e locatedEntitlement) bool {
+		return isCameraEntitlement(e.Entitlement) && e.Mode == CameraModeDirect
 	})
 	if direct < 0 {
 		return nil
 	}
-	for i, e := range entitlements {
-		if !isCameraEntitlement(e) {
+	for i, e := range entries {
+		if !isCameraEntitlement(e.Entitlement) {
 			continue
 		}
 		key := ""
@@ -673,9 +736,9 @@ func validateCameraNodeSettingsWithDirect(entitlements []Entitlement, prefix str
 		}
 		where := ""
 		if i != direct {
-			where = fmt.Sprintf(" on %s[%d]", prefix, direct)
+			where = " on " + entries[direct].location
 		}
-		return fmt.Errorf("%s[%d]: %s %s cannot be combined with mode %q%s: the app gets the real device, so there is no camera node to configure", prefix, i, e.Type, key, CameraModeDirect, where)
+		return fmt.Errorf("%s: %s %s cannot be combined with mode %q%s: the app gets the real device, so there is no camera node to configure", e.location, e.Type, key, CameraModeDirect, where)
 	}
 	return nil
 }
@@ -685,13 +748,13 @@ func validateCameraNodeSettingsWithDirect(entitlements []Entitlement, prefix str
 // every camera, and an entry with one claims the cameras it lists, compared as
 // exact strings. Entries that agree after defaults are accepted, because
 // manifests with several plain camera entries predate format and stamp.
-func validateCameraClaims(entitlements []Entitlement, prefix string) error {
-	for j, later := range entitlements {
-		if !isCameraEntitlement(later) {
+func validateCameraClaims(entries []locatedEntitlement) error {
+	for j, later := range entries {
+		if !isCameraEntitlement(later.Entitlement) {
 			continue
 		}
-		for i, earlier := range entitlements[:j] {
-			if !isCameraEntitlement(earlier) {
+		for _, earlier := range entries[:j] {
+			if !isCameraEntitlement(earlier.Entitlement) {
 				continue
 			}
 			var differences []string
@@ -716,9 +779,9 @@ func validateCameraClaims(entitlements []Entitlement, prefix string) error {
 			case len(earlier.Allowlist) == 0 && len(later.Allowlist) == 0:
 				overlap = "neither has an allowlist"
 			case len(earlier.Allowlist) == 0:
-				overlap = fmt.Sprintf("%s[%d] has no allowlist, so it claims every camera", prefix, i)
+				overlap = earlier.location + " has no allowlist, so it claims every camera"
 			case len(later.Allowlist) == 0:
-				overlap = fmt.Sprintf("%s[%d] has no allowlist, so it claims every camera", prefix, j)
+				overlap = later.location + " has no allowlist, so it claims every camera"
 			default:
 				shared := slices.IndexFunc(later.Allowlist, func(camera string) bool {
 					return slices.Contains(earlier.Allowlist, camera)
@@ -728,7 +791,7 @@ func validateCameraClaims(entitlements []Entitlement, prefix string) error {
 				}
 				overlap = fmt.Sprintf("both allowlists contain %q", later.Allowlist[shared])
 			}
-			return fmt.Errorf("%s[%d] and %s[%d] claim the same camera (%s) but differ in %s; an app gets one node per camera, so entries that claim the same camera must agree", prefix, i, prefix, j, overlap, strings.Join(differences, " and "))
+			return fmt.Errorf("%s and %s claim the same camera (%s) but differ in %s; an app gets one node per camera, so entries that claim the same camera must agree", earlier.location, later.location, overlap, strings.Join(differences, " and "))
 		}
 	}
 	return nil
@@ -834,10 +897,7 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 		}
 	}
 
-	if err := validateCameraNodeSettingsWithDirect(entitlements, prefix); err != nil {
-		return err
-	}
-	if err := validateCameraClaims(entitlements, prefix); err != nil {
+	if err := validateCameraEntries(locateEntitlements(entitlements, prefix)); err != nil {
 		return err
 	}
 
@@ -1105,6 +1165,9 @@ func (c *AppConfig) Validate() error {
 		if err := validateEntitlements(svc.Entitlements, fmt.Sprintf("services[%q].entitlement", name)); err != nil {
 			return err
 		}
+		if err := validateCameraEntries(c.containerEntitlements(name, svc)); err != nil {
+			return err
+		}
 		if err := ValidateReadiness(fmt.Sprintf("services[%q].readiness", name), svc.Readiness); err != nil {
 			return err
 		}
@@ -1331,6 +1394,9 @@ func (c *AppConfig) ValidateComposeCompanion() error {
 		if err := validateEntitlements(svc.Entitlements, fmt.Sprintf("services[%q].entitlement", name)); err != nil {
 			return err
 		}
+		if err := validateCameraEntries(c.containerEntitlements(name, svc)); err != nil {
+			return err
+		}
 		if err := ValidateReadiness(fmt.Sprintf("services[%q].readiness", name), svc.Readiness); err != nil {
 			return err
 		}
@@ -1372,10 +1438,7 @@ func (c *AppConfig) validateServiceROS2(name string, svc *ServiceConfig) error {
 	// entitlements, so validate the effective network mode rather than the
 	// service slice alone. This also catches a service that isolates an
 	// inherited device/peripherals scope from the host network.
-	entitlements := make([]Entitlement, 0, len(c.Entitlements)+len(svc.Entitlements))
-	entitlements = append(entitlements, c.Entitlements...)
-	entitlements = append(entitlements, svc.Entitlements...)
-	return validateROS2Config(fmt.Sprintf("services[%q].frameworks.ros2", name), ros2, entitlements)
+	return validateROS2Config(fmt.Sprintf("services[%q].frameworks.ros2", name), ros2, c.ContainerEntitlements(svc))
 }
 
 // isValidI2CDevice reports whether device is a safe I2C device name (i2c-N).

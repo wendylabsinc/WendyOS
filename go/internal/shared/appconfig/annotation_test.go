@@ -219,6 +219,33 @@ func TestBuildEntitlementAnnotationsKeepsEachCameraEntrysNodeSettings(t *testing
 	}
 }
 
+func TestCameraNodeKeysStayOutOfOtherEntitlementsAnnotations(t *testing.T) {
+	cfg, err := LoadFromBytes([]byte(`{"appId": "com.example.app", "entitlements": [{"type":"network","mode":"none","format":"x,mode=host"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	value := EntitlementAnnotationValue(cfg.Entitlements[0])
+	if value != "mode=none" {
+		t.Fatalf("annotation = %q, want %q", value, "mode=none")
+	}
+	if got := ParseEntitlementAnnotation(EntitlementNetwork, value); got.Mode != "none" {
+		t.Fatalf("network mode read back as %q, want %q", got.Mode, "none")
+	}
+
+	for _, typ := range []string{EntitlementNetwork, EntitlementBluetooth, EntitlementPersist} {
+		got := ParseEntitlementAnnotation(typ, "format=native,stamp=frame")
+		if got.Format != "" || got.Stamp != "" {
+			t.Errorf("%s annotation decoded camera node keys: %+v", typ, got)
+		}
+		if value := EntitlementAnnotationValue(Entitlement{Type: typ, Format: CameraFormatNative, Stamp: CameraStampFrame}); value != "" {
+			t.Errorf("%s annotation = %q, want no camera node keys", typ, value)
+		}
+	}
+}
+
 func TestBuildEntitlementAnnotationsIndexesDistinctSerialDevices(t *testing.T) {
 	want := []Entitlement{
 		{Type: EntitlementSerial, Device: "ttyUSB0"},

@@ -119,7 +119,7 @@ Camera / V4L2 device access.
 
 | Field | Description |
 |-------|-------------|
-| `allowlist` | Restrict access to specific device paths. Omit to allow all cameras. |
+| `allowlist` | Names the cameras, by device path or camera name, that this entry's `format` and `stamp` apply to. Omit to apply them to every camera. |
 | `format` | What the app's camera node carries. `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example Motion JPEG (MJPEG) or H.264. |
 | `stamp` | What each frame's timestamp field holds on the node. `"time"` (default): the capture time. `"frame"`: the agent's frame number. |
 | `user` | Username for a registered IP camera. Ignored for local cameras. |

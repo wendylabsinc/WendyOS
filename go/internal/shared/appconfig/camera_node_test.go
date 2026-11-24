@@ -2,7 +2,10 @@ package appconfig
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -150,48 +153,147 @@ func TestValidate_CameraEntriesClaimingTheSameCameraMustAgree(t *testing.T) {
 	}
 }
 
-func TestValidate_CameraClaimErrorNamesTheServicePrefix(t *testing.T) {
-	cfg := &AppConfig{
-		AppID: "com.example.app",
-		Services: map[string]*ServiceConfig{
-			"vision": {
-				Context:      "vision",
-				Entitlements: []Entitlement{{Type: EntitlementCamera}, {Type: EntitlementCamera, Format: "native"}},
-			},
+func TestValidate_CameraRulesApplyToTheEntitlementsAContainerGets(t *testing.T) {
+	const noNode = ": the app gets the real device, so there is no camera node to configure"
+	const mustAgree = "; an app gets one node per camera, so entries that claim the same camera must agree"
+	tests := []struct {
+		name     string
+		topLevel string
+		services map[string]string
+		wantErr  string
+	}{
+		{
+			"service agrees with the app",
+			`[{"type": "camera", "format": "native"}]`,
+			map[string]string{"vision": `[{"type": "video", "format": "native"}]`},
+			"",
+		},
+		{
+			"two services differ from each other but not from the app",
+			`[{"type": "gpu"}]`,
+			map[string]string{"vision": `[{"type": "camera", "format": "native"}]`, "viewer": `[{"type": "camera"}]`},
+			"",
+		},
+		{
+			"service sets a format the app's plain entry does not",
+			`[{"type": "camera"}]`,
+			map[string]string{"vision": `[{"type": "camera", "format": "native"}]`},
+			`entitlement[0] and services["vision"].entitlement[0] claim the same camera (neither has an allowlist) but differ in format ("pixels" and "native")` + mustAgree,
+		},
+		{
+			"service allowlist entry differs from the app's entry for every camera",
+			`[{"type": "gpu"}, {"type": "camera", "stamp": "frame"}]`,
+			map[string]string{"vision": `[{"type": "camera", "allowlist": ["/dev/video0"]}]`},
+			`entitlement[1] and services["vision"].entitlement[0] claim the same camera (entitlement[1] has no allowlist, so it claims every camera) but differ in stamp ("frame" and "time")` + mustAgree,
+		},
+		{
+			"app is direct and a service sets a format",
+			`[{"type": "camera", "mode": "direct"}]`,
+			map[string]string{"vision": `[{"type": "camera", "format": "native"}]`},
+			`services["vision"].entitlement[0]: camera format cannot be combined with mode "direct" on entitlement[0]` + noNode,
+		},
+		{
+			"service is direct and the app sets a stamp",
+			`[{"type": "video", "stamp": "frame"}]`,
+			map[string]string{"vision": `[{"type": "gpu"}, {"type": "camera", "mode": "direct"}]`},
+			`entitlement[0]: video stamp cannot be combined with mode "direct" on services["vision"].entitlement[1]` + noNode,
+		},
+		{
+			"conflict inside one service",
+			`[]`,
+			map[string]string{"vision": `[{"type": "camera"}, {"type": "camera", "format": "native"}]`},
+			`services["vision"].entitlement[0] and services["vision"].entitlement[1] claim the same camera (neither has an allowlist) but differ in format ("pixels" and "native")` + mustAgree,
 		},
 	}
-	err := cfg.Validate()
-	if err == nil || !strings.Contains(err.Error(), `services["vision"].entitlement[0] and services["vision"].entitlement[1] claim the same camera`) {
-		t.Fatalf("Validate() = %v, want an error naming both service entries", err)
+	for _, tt := range tests {
+		var services []string
+		for name, entitlements := range tt.services {
+			services = append(services, `"`+name+`": {"context": "`+name+`", "entitlements": `+entitlements+`}`)
+		}
+		manifest := []byte(`{"appId": "com.example.app", "entitlements": ` + tt.topLevel + `, "services": {` + strings.Join(services, ", ") + `}}`)
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadFromBytes(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertValidationError(t, cfg.Validate(), tt.wantErr)
+		})
+		t.Run(tt.name+" as a compose companion", func(t *testing.T) {
+			cfg, err := LoadFromBytes(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertValidationError(t, cfg.ValidateComposeCompanion(), tt.wantErr)
+		})
+	}
+}
+
+func TestContainerEntitlements(t *testing.T) {
+	cfg := &AppConfig{Entitlements: []Entitlement{{Type: EntitlementGPU}, {Type: EntitlementCamera}}}
+	svc := &ServiceConfig{Entitlements: []Entitlement{{Type: EntitlementCamera, Format: CameraFormatNative}}}
+	want := []Entitlement{{Type: EntitlementGPU}, {Type: EntitlementCamera}, {Type: EntitlementCamera, Format: CameraFormatNative}}
+	if got := cfg.ContainerEntitlements(svc); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ContainerEntitlements(svc) = %+v, want %+v", got, want)
+	}
+	if got := cfg.ContainerEntitlements(nil); !reflect.DeepEqual(got, cfg.Entitlements) {
+		t.Fatalf("ContainerEntitlements(nil) = %+v, want %+v", got, cfg.Entitlements)
 	}
 }
 
 func TestValidate_CameraManifestsFromBeforeNodeSettingsStillValidate(t *testing.T) {
 	tests := []struct {
-		name string
-		in   []Entitlement
+		name     string
+		manifest string
 	}{
-		{"camera alone", []Entitlement{{Type: EntitlementCamera}}},
-		{"video alone", []Entitlement{{Type: EntitlementVideo}}},
-		{"video plus camera", []Entitlement{{Type: EntitlementVideo}, {Type: EntitlementCamera}}},
-		{"camera with allowlist", []Entitlement{{Type: EntitlementCamera, Allowlist: []string{"/dev/video0"}}}},
-		{"camera direct", []Entitlement{{Type: EntitlementCamera, Mode: "direct"}}},
-		{"camera direct plus video", []Entitlement{{Type: EntitlementCamera, Mode: "direct"}, {Type: EntitlementVideo}}},
-		{"two cameras", []Entitlement{{Type: EntitlementCamera}, {Type: EntitlementCamera}}},
+		{"camera alone", `{"appId": "com.example.app", "entitlements": [{"type": "camera"}]}`},
+		{"video alone", `{"appId": "com.example.app", "entitlements": [{"type": "video"}]}`},
+		{"video plus camera", `{"appId": "com.example.app", "entitlements": [{"type": "video"}, {"type": "camera"}]}`},
+		{"camera with allowlist", `{"appId": "com.example.app", "entitlements": [{"type": "camera", "allowlist": ["/dev/video0"]}]}`},
+		{"camera direct", `{"appId": "com.example.app", "entitlements": [{"type": "camera", "mode": "direct"}]}`},
+		{"camera direct plus video", `{"appId": "com.example.app", "entitlements": [{"type": "camera", "mode": "direct"}, {"type": "video"}]}`},
+		{"two cameras", `{"appId": "com.example.app", "entitlements": [{"type": "camera"}, {"type": "camera"}]}`},
 		{
 			"overlapping allowlists",
-			[]Entitlement{{Type: EntitlementCamera, Allowlist: []string{"/dev/video0"}}, {Type: EntitlementVideo, Allowlist: []string{"/dev/video0", "/dev/video2"}}},
+			`{"appId": "com.example.app", "entitlements": [
+				{"type": "camera", "allowlist": ["/dev/video0"]},
+				{"type": "video", "allowlist": ["/dev/video0", "/dev/video2"]}
+			]}`,
 		},
 		{
 			"legacy mode, allowlist and network camera login",
-			[]Entitlement{{Type: EntitlementCamera, Mode: "legacy", Allowlist: []string{"/dev/video0"}, User: "admin", Password: "secret"}, {Type: EntitlementVideo, Mode: "detect"}},
+			`{"appId": "com.example.app", "entitlements": [
+				{"type": "camera", "mode": "legacy", "allowlist": ["/dev/video0"], "user": "admin", "password": "secret"},
+				{"type": "video", "mode": "detect"}
+			]}`,
+		},
+		{
+			"camera on the app and on a service",
+			`{"appId": "com.example.app", "entitlements": [{"type": "camera"}],
+				"services": {"vision": {"context": "vision", "entitlements": [{"type": "video"}, {"type": "camera", "allowlist": ["/dev/video0"]}]}}}`,
+		},
+		{
+			"direct app with a plain camera service",
+			`{"appId": "com.example.app", "entitlements": [{"type": "camera", "mode": "direct"}],
+				"services": {"vision": {"context": "vision", "entitlements": [{"type": "camera"}]}}}`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &AppConfig{AppID: "com.example.app", Entitlements: tt.in}
+			path := filepath.Join(t.TempDir(), "wendy.json")
+			if err := os.WriteFile(path, []byte(tt.manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadFromFile(path)
+			if err != nil {
+				t.Fatalf("LoadFromFile() rejected a manifest that loaded before format and stamp existed: %v", err)
+			}
 			if err := cfg.Validate(); err != nil {
 				t.Fatalf("Validate() rejected a manifest that validated before format and stamp existed: %v", err)
+			}
+			for _, warning := range ValidateJSON([]byte(tt.manifest)) {
+				if !strings.Contains(warning, "is deprecated") {
+					t.Errorf("unexpected warning: %s", warning)
+				}
 			}
 		})
 	}
@@ -326,6 +428,83 @@ func TestCameraNodeSettings_UnknownCameraIdentityMatchesNoAllowlist(t *testing.T
 	if format, stamp := CameraNodeSettings(in, "", ""); format != "pixels" || stamp != "time" {
 		t.Fatalf("CameraNodeSettings() = (%q, %q), want the defaults", format, stamp)
 	}
+}
+
+func TestCameraNodeSettings_DoesNotDependOnEntryOrder(t *testing.T) {
+	const path, name = "/dev/video0", "Brio 101"
+	tests := []struct {
+		name       string
+		in         []Entitlement
+		wantFormat string
+		wantStamp  string
+	}{
+		{
+			"one camera named by name and by path: the path entry decides",
+			[]Entitlement{
+				{Type: EntitlementVideo, Allowlist: []string{name}, Format: "native"},
+				{Type: EntitlementCamera, Allowlist: []string{path}},
+			},
+			"pixels", "time",
+		},
+		{
+			"path entry decides over name entry and entry without allowlist",
+			[]Entitlement{
+				{Type: EntitlementCamera, Stamp: "frame"},
+				{Type: EntitlementCamera, Allowlist: []string{name}, Stamp: "frame"},
+				{Type: EntitlementCamera, Allowlist: []string{path}, Format: "native"},
+			},
+			"native", "time",
+		},
+		{
+			"name entry decides over entry without allowlist",
+			[]Entitlement{
+				{Type: EntitlementCamera, Format: "native"},
+				{Type: EntitlementVideo, Allowlist: []string{name}, Stamp: "frame"},
+			},
+			"pixels", "frame",
+		},
+		{
+			"entry naming both path and name counts as naming the path",
+			[]Entitlement{
+				{Type: EntitlementCamera, Allowlist: []string{name}, Stamp: "frame"},
+				{Type: EntitlementCamera, Allowlist: []string{name, path}, Format: "native"},
+			},
+			"native", "time",
+		},
+		{
+			"deciding entries that disagree on one setting give its default",
+			[]Entitlement{
+				{Type: EntitlementCamera, Allowlist: []string{path}, Format: "native", Stamp: "frame"},
+				{Type: EntitlementVideo, Allowlist: []string{path}, Stamp: "frame"},
+				{Type: EntitlementCamera, Allowlist: []string{path}, Format: "native", Stamp: "frame"},
+			},
+			"pixels", "frame",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, order := range entitlementOrders(tt.in) {
+				format, stamp := CameraNodeSettings(order, path, name)
+				if format != tt.wantFormat || stamp != tt.wantStamp {
+					t.Errorf("CameraNodeSettings(%+v) = (%q, %q), want (%q, %q)", order, format, stamp, tt.wantFormat, tt.wantStamp)
+				}
+			}
+		})
+	}
+}
+
+func entitlementOrders(entitlements []Entitlement) [][]Entitlement {
+	if len(entitlements) <= 1 {
+		return [][]Entitlement{slices.Clone(entitlements)}
+	}
+	var orders [][]Entitlement
+	for i, first := range entitlements {
+		rest := slices.Delete(slices.Clone(entitlements), i, i+1)
+		for _, order := range entitlementOrders(rest) {
+			orders = append(orders, append([]Entitlement{first}, order...))
+		}
+	}
+	return orders
 }
 
 func TestCameraNodeSettings_UnknownValuesResolveToTheDefaults(t *testing.T) {
