@@ -47,10 +47,14 @@ device deployment; it does not fan deployment out to every fleet member.
   through `30s`, defaults to `2s`, and accepts late app results after sensor
   capture stops. It extends episode lifetime, not sensor recording duration.
 - Camera `continuous` and `snapshot` modes are implemented. Snapshot requires
-  `interval`, for example `2s`, and a transport that delivers whole access
-  units. Byte-chunk streams record continuously and explain this in the
-  manifest. Rate caps also depend on transport and can be best effort at GOP
-  granularity. A snapshot is not guaranteed to be a JPEG.
+  `interval`, for example `2s`, and a camera that delivers whole frames. Each
+  still is one of the camera's own frames: a webcam the agent captures
+  natively stores its JPEG frame, unchanged, as `snapshot-NNNNNN.jpg`, and a
+  camera whose own frames are H.264 stores a key frame as
+  `snapshot-NNNNNN.h264`. Read the index `codec` or the file extension rather
+  than assuming JPEG. Byte-chunk streams record continuously and explain this
+  in the manifest, with the reason the camera's own frames were not used. Rate
+  caps also depend on transport and can be best effort at GOP granularity.
 - Camera `max_resolution: 1280x720` and continuous `rate` request stream
   parameters. Buffered capture keeps the existing producer parameters and
   reports these requests as unachieved. For an exact resolution/rate request,
@@ -77,8 +81,9 @@ device deployment; it does not fan deployment out to every fleet member.
   and `codec`; the source's frame and drop counts are then sums over both, and
   a `rate` cap keeps whole groups of pictures of video but single JPEG frames.
   `playable.mp4` comes from the video only, so a `frames` source whose frames
-  are JPEG has none. A camera whose own frames are already H.264 has one
-  stream, stored once as video for every `store` value.
+  are JPEG has none, and neither has a snapshot source whose stills are JPEG.
+  A camera whose own frames are already H.264 has one stream, stored once as
+  video for every `store` value.
 - Audio supports `continuous` and `threshold`, such as
   `trigger: "level_db > -20"` and `fragment: 30s`. ROS 2 and telemetry support
   `continuous`. Other mode/kind combinations validate, warn, and record

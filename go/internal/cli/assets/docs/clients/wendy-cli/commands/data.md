@@ -395,6 +395,13 @@ Fields belonging to a different mode than the declared one are rejected.
 
 Any other `store` value, `store` on a source that is not a camera, or `store`
 with `mode: snapshot` is rejected; snapshot mode always stores single frames.
+Each snapshot still is one of the camera's own frames. A webcam the agent
+captures natively as JPEG stores that JPEG frame, unchanged, in a
+`snapshot-NNNNNN.jpg` file, and nothing is encoded for the source. A camera
+whose own frames are H.264 stores a key frame with its parameter sets in a
+`snapshot-NNNNNN.h264` file. `index.jsonl` gives each still's sample ID,
+capture time, file, and codec. A source that holds only JPEG stills has no
+`playable.mp4`.
 Use `store: both` instead of listing a camera twice: a camera is
 recorded once per episode, only its last `capture` block applies, and
 deployment warns when the same camera selector is listed more than once. An
@@ -409,10 +416,12 @@ deploys, and deployment prints a warning naming each source whose requested
 mode is not implemented for its kind; those sources record continuously for
 now.
 
-Camera snapshots and the continuous capture-rate cap require a stream that
-delivers whole encoded frames, currently local V4L2 cameras with native H.264.
+Camera snapshots and the continuous capture-rate cap require a camera that
+delivers whole frames, currently local V4L2 cameras the agent captures
+natively: those with H.264 output and webcams whose JPEG it captures whole.
 IP cameras and GStreamer-encoded streams record continuously at their stream
-rate instead; the episode's source detail reports the unapplied policy.
+rate instead; the episode's source detail reports the unapplied policy and,
+for a snapshot source, why the camera's own frames were not used.
 Snapshot cameras do not maintain a video pre-buffer. Audio threshold capture
 uses `level_db`, for example `trigger: "level_db > -20"`, to retain WAV
 fragments during an active episode. It does not itself start a campaign.

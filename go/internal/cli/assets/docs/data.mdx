@@ -170,9 +170,11 @@ The manifest reports the history each source actually retained.
 A camera source's `capture` block can set `store` to choose what the episode
 stores of that camera's continuous recording: `video` (the default), `frames`
 for single frames, each with its frame number and capture time, or `both`.
-`store` is rejected with `mode: snapshot`, which always stores single frames.
-An agent older than the release that added `store` rejects a campaign that
-uses it.
+`store` is rejected with `mode: snapshot`, which always stores single frames:
+a webcam the agent captures natively stores its own JPEG frame, unchanged, as
+`snapshot-NNNNNN.jpg`, and a camera whose own frames are H.264 stores a key
+frame as `snapshot-NNNNNN.h264`. An agent older than the release that added
+`store` rejects a campaign that uses it.
 
 ```yaml
 sources:
@@ -193,8 +195,9 @@ frames were requested and why they were not stored. `both` writes the frame
 files beside the `segment-NNNNNN.h264` video and lists both in the same index,
 told apart by `segment` and `codec`; the source's frame and drop counts are
 then sums over both. `playable.mp4` is made from the video only, so a `frames`
-source whose frames are JPEG seals without one. A camera whose own frames are
-already H.264 has one stream, stored once as video for every `store` value.
+source whose frames are JPEG seals without one, as does a snapshot source
+whose stills are JPEG. A camera whose own frames are already H.264 has one
+stream, stored once as video for every `store` value.
 
 See the [campaign YAML reference](/docs/advanced/clients/wendy-cli/commands/data#campaign-yaml-reference)
 for selectors, capture policies, and all fields.
