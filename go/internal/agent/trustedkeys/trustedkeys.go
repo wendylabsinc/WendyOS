@@ -163,12 +163,14 @@ func keyAlgorithm(pub any) string {
 }
 
 // Open loads path. A missing file is an Open device. A file that exists but
-// cannot be read or validated is an error: the caller must fail closed, never
-// fall back to an Open device.
+// cannot be read or validated is an error, and the store returned with it is
+// Closed with no keys: an agent that keeps running fails closed instead of
+// exiting, which under the supervisor would fall back to an image agent that
+// may not know the file and come up Open.
 func Open(path string) (*Store, error) {
 	f, err := load(path)
 	if err != nil {
-		return nil, err
+		return &Store{path: path, file: &fileFormat{Shape: shapeClosed}}, err
 	}
 	return &Store{path: path, file: f}, nil
 }

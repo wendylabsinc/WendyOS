@@ -101,8 +101,10 @@ func TestStoreShapeLifecycle(t *testing.T) {
 	}
 }
 
-// A file that is present but unusable never loads as Open.
-func TestOpenRefusesUnusableFile(t *testing.T) {
+// A file that is present but unusable never loads as Open: Open reports it
+// and returns a Closed store that trusts no key, so the agent keeps running
+// fail-closed instead of exiting into the supervisor's image-agent fallback.
+func TestOpenUnusableFileFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string, mode os.FileMode) string {
 		p := filepath.Join(dir, name)
@@ -120,8 +122,18 @@ func TestOpenRefusesUnusableFile(t *testing.T) {
 		"unknown shape":  write("shape.json", `{"shape":"open","keys":[]}`, 0o600),
 		"group writable": write("mode.json", `{"shape":"closed","keys":[]}`, 0o620),
 	} {
-		if _, err := Open(path); err == nil {
+		s, err := Open(path)
+		if err == nil {
 			t.Errorf("%s: loaded", name)
+		}
+		if !s.Closed() || s.KeylessApps() || len(s.List()) != 0 {
+			t.Errorf("%s: closed=%v keyless=%v keys=%d, want Closed with no key", name, s.Closed(), s.KeylessApps(), len(s.List()))
+		}
+		if _, err := s.Close(newSPKI(t), "", time.Now()); !errors.Is(err, ErrAlreadyClosed) {
+			t.Errorf("%s: Close = %v, want ErrAlreadyClosed", name, err)
+		}
+		if err := s.Reopen(""); err == nil {
+			t.Errorf("%s: reopened without an owner", name)
 		}
 	}
 }
