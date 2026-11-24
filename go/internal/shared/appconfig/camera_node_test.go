@@ -416,7 +416,7 @@ func TestCameraNodeSettings(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			format, stamp := CameraNodeSettings(tt.in, path, name)
+			format, stamp, _ := CameraNodeSettings(tt.in, CameraIdentity{Path: path, Name: name})
 			if format != tt.wantFormat || stamp != tt.wantStamp {
 				t.Fatalf("CameraNodeSettings() = (%q, %q), want (%q, %q)", format, stamp, tt.wantFormat, tt.wantStamp)
 			}
@@ -426,7 +426,7 @@ func TestCameraNodeSettings(t *testing.T) {
 
 func TestCameraNodeSettings_UnknownCameraIdentityMatchesNoAllowlist(t *testing.T) {
 	in := []Entitlement{{Type: EntitlementCamera, Allowlist: []string{""}, Format: "native", Stamp: "frame"}}
-	if format, stamp := CameraNodeSettings(in, "", ""); format != "pixels" || stamp != "time" {
+	if format, stamp, _ := CameraNodeSettings(in, CameraIdentity{}); format != "pixels" || stamp != "time" {
 		t.Fatalf("CameraNodeSettings() = (%q, %q), want the defaults", format, stamp)
 	}
 }
@@ -485,7 +485,7 @@ func TestCameraNodeSettings_DoesNotDependOnEntryOrder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, order := range entitlementOrders(tt.in) {
-				format, stamp := CameraNodeSettings(order, path, name)
+				format, stamp, _ := CameraNodeSettings(order, CameraIdentity{Path: path, Name: name})
 				if format != tt.wantFormat || stamp != tt.wantStamp {
 					t.Errorf("CameraNodeSettings(%+v) = (%q, %q), want (%q, %q)", order, format, stamp, tt.wantFormat, tt.wantStamp)
 				}
@@ -508,6 +508,152 @@ func entitlementOrders(entitlements []Entitlement) [][]Entitlement {
 	return orders
 }
 
+// The identifiers `wendy device camera list --json` and a campaign file show
+// for one camera.
+var c920 = CameraIdentity{
+	Path:     "/dev/video0",
+	StableID: "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0",
+	Name:     "HD Pro Webcam C920: HD Pro Webc",
+}
+
+func TestCameraNodeSettings_AnAllowlistNamesACameraByEveryIdentifierItIsShownBy(t *testing.T) {
+	onPort := CameraIdentity{Path: "/dev/video0", StableID: "by-path:pci-0000:00:14.0-usb-0:2:1.0-video-index0", Name: c920.Name}
+	tests := []struct {
+		name   string
+		camera CameraIdentity
+		entry  string
+		named  bool
+	}{
+		{"device path", c920, "/dev/video0", true},
+		{"device path as a campaign file writes it", c920, "v4l2:/dev/video0", true},
+		{"stable id as the camera list prints it", c920, "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0", true},
+		{"stable id without its by-id prefix", c920, "usb-046d_HD_Pro_Webcam_C920-video-index0", true},
+		{"name", c920, "HD Pro Webcam C920: HD Pro Webc", true},
+		{"port stable id as the camera list prints it", onPort, "by-path:pci-0000:00:14.0-usb-0:2:1.0-video-index0", true},
+		{"port stable id without its prefix", onPort, "pci-0000:00:14.0-usb-0:2:1.0-video-index0", false},
+		{"another device path", c920, "/dev/video2", false},
+		{"another device path as a campaign file writes it", c920, "v4l2:/dev/video2", false},
+		{"another camera's stable id", c920, "by-id:usb-046d_HD_Pro_Webcam_C920-video-index1", false},
+		{"part of the stable id", c920, "usb-046d_HD_Pro_Webcam_C920", false},
+		{"name with the path's prefix", c920, "v4l2:HD Pro Webcam C920: HD Pro Webc", false},
+		{"path with the stable id's prefix", c920, "by-id:/dev/video0", false},
+		{"prefix alone on a camera without a path", CameraIdentity{Name: c920.Name}, "v4l2:", false},
+		{"prefix alone on a camera whose stable id is only the prefix", CameraIdentity{StableID: "by-id:"}, "", false},
+		{"empty entry on a camera without a stable id", CameraIdentity{Path: "/dev/video0"}, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := []Entitlement{{Type: EntitlementCamera, Allowlist: []string{"/dev/video9", tt.entry}, Format: "native", Stamp: "frame"}}
+			wantFormat, wantStamp := "pixels", "time"
+			if tt.named {
+				wantFormat, wantStamp = "native", "frame"
+			}
+			format, stamp, conflicts := CameraNodeSettings(in, tt.camera)
+			if format != wantFormat || stamp != wantStamp || len(conflicts) != 0 {
+				t.Fatalf("CameraNodeSettings() = (%q, %q, %q), want (%q, %q) and no conflict", format, stamp, conflicts, wantFormat, wantStamp)
+			}
+		})
+	}
+}
+
+func TestCameraNodeSettings_TheMostSpecificIdentifierDecidesInAnyEntryOrder(t *testing.T) {
+	const bareStableID = "usb-046d_HD_Pro_Webcam_C920-video-index0"
+	entry := func(format, stamp string, allowlist ...string) Entitlement {
+		return Entitlement{Type: EntitlementCamera, Format: format, Stamp: stamp, Allowlist: allowlist}
+	}
+	tests := []struct {
+		name          string
+		in            []Entitlement
+		wantFormat    string
+		wantStamp     string
+		wantConflicts []string
+	}{
+		{
+			"the spellings of one identifier agree",
+			[]Entitlement{
+				entry("native", "frame", c920.StableID), entry("native", "frame", bareStableID),
+				entry("native", "frame", c920.Path), entry("native", "frame", "v4l2:"+c920.Path),
+				entry("native", "frame", c920.Name), entry("native", "frame"),
+			},
+			"native", "frame", nil,
+		},
+		{
+			"stable id decides over device path",
+			[]Entitlement{entry("native", "", c920.StableID), entry("h264", "", c920.Path)},
+			"native", "time",
+			[]string{`format is native (asked by "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: "/dev/video0" asks for h264`},
+		},
+		{
+			"stable id without its prefix decides over the campaign spelling of the path",
+			[]Entitlement{entry("", "frame", bareStableID), entry("", "", "v4l2:"+c920.Path)},
+			"pixels", "frame",
+			[]string{`stamp is frame (asked by "usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: "v4l2:/dev/video0" asks for time`},
+		},
+		{
+			"device path as a campaign file writes it decides over name",
+			[]Entitlement{entry("h264", "", "v4l2:"+c920.Path), entry("native", "frame", c920.Name)},
+			"h264", "time",
+			[]string{
+				`format is h264 (asked by "v4l2:/dev/video0"); passed over: "HD Pro Webcam C920: HD Pro Webc" asks for native`,
+				`stamp is time (asked by "v4l2:/dev/video0"); passed over: "HD Pro Webcam C920: HD Pro Webc" asks for frame`,
+			},
+		},
+		{
+			"stable id decides over path, name and an entry without an allowlist",
+			[]Entitlement{entry("native", "", c920.StableID), entry("h264", "", c920.Path), entry("h264", "", c920.Name), entry("", "")},
+			"native", "time",
+			[]string{`format is native (asked by "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: "/dev/video0" asks for h264, ` +
+				`"HD Pro Webcam C920: HD Pro Webc" asks for h264, an entry without an allowlist asks for pixels`},
+		},
+		{
+			"entry naming both path and stable id counts as naming the stable id",
+			[]Entitlement{entry("native", "", c920.Path, bareStableID), entry("h264", "", "v4l2:"+c920.Path)},
+			"native", "time",
+			[]string{`format is native (asked by "usb-046d_HD_Pro_Webcam_C920-video-index0"); passed over: "v4l2:/dev/video0" asks for h264`},
+		},
+		{
+			"the two spellings of the stable id that disagree give the default",
+			[]Entitlement{entry("native", "frame", c920.StableID), entry("h264", "frame", bareStableID), entry("h264", "", c920.Path)},
+			"pixels", "frame",
+			[]string{
+				`format falls back to pixels: the entries deciding for this camera disagree (` +
+					`"by-id:usb-046d_HD_Pro_Webcam_C920-video-index0" asks for native, "usb-046d_HD_Pro_Webcam_C920-video-index0" asks for h264)`,
+				`stamp is frame (asked by "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0", "usb-046d_HD_Pro_Webcam_C920-video-index0"); ` +
+					`passed over: "/dev/video0" asks for time`,
+			},
+		},
+		{
+			"the two spellings of the path that disagree give the default",
+			[]Entitlement{entry("native", "", c920.Path), entry("native", "frame", "v4l2:"+c920.Path)},
+			"native", "time",
+			[]string{`stamp falls back to time: the entries deciding for this camera disagree ("/dev/video0" asks for time, "v4l2:/dev/video0" asks for frame)`},
+		},
+		{
+			"entries without an allowlist that disagree give the default",
+			[]Entitlement{entry("native", ""), entry("h264", "")},
+			"pixels", "time",
+			[]string{`format falls back to pixels: the entries deciding for this camera disagree (` +
+				`an entry without an allowlist asks for h264, an entry without an allowlist asks for native)`},
+		},
+		{
+			"entries naming other cameras take no part",
+			[]Entitlement{entry("native", "", c920.StableID), entry("h264", "frame", "/dev/video2", "by-id:usb-Other-video-index0", "Brio 101")},
+			"native", "time", nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, order := range entitlementOrders(tt.in) {
+				format, stamp, conflicts := CameraNodeSettings(order, c920)
+				if format != tt.wantFormat || stamp != tt.wantStamp || !slices.Equal(conflicts, tt.wantConflicts) {
+					t.Fatalf("CameraNodeSettings(%+v) = (%q, %q)\nconflicts %q\nwant (%q, %q)\nconflicts %q",
+						order, format, stamp, conflicts, tt.wantFormat, tt.wantStamp, tt.wantConflicts)
+				}
+			}
+		})
+	}
+}
+
 func TestCameraNodeSettings_UnknownValuesResolveToTheDefaults(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -523,7 +669,7 @@ func TestCameraNodeSettings_UnknownValuesResolveToTheDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := []Entitlement{ParseEntitlementAnnotation(EntitlementCamera, "format="+tt.format+",stamp="+tt.stamp)}
-			format, stamp := CameraNodeSettings(in, "/dev/video0", "Brio 101")
+			format, stamp, _ := CameraNodeSettings(in, CameraIdentity{Path: "/dev/video0", Name: "Brio 101"})
 			if format != tt.wantFormat || stamp != tt.wantStamp {
 				t.Fatalf("CameraNodeSettings() = (%q, %q), want (%q, %q)", format, stamp, tt.wantFormat, tt.wantStamp)
 			}

@@ -12,6 +12,10 @@ const (
 	// KeyState gives each sharing app's node settings and state, e.g.
 	// "cv-a [format pixels, stamp time] (reading), cv-b [format native, stamp frame] (idle)".
 	KeyState = "share_state"
+	// KeyStableID is the camera's stable id as the camera list gives it, e.g.
+	// "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"; absent for a camera
+	// without one. An entitlement's allowlist may name the camera by it.
+	KeyStableID = "stable_id"
 )
 
 // KeyModeOfFormat is the mode of the node an app gets for the camera when its

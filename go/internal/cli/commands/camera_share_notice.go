@@ -44,6 +44,16 @@ func cameraNameOf(description string) string {
 	return description
 }
 
+// cameraIdentityOf gathers what a hardware row says an allowlist may name the
+// camera by. An agent from before stable ids in the rows gives none.
+func cameraIdentityOf(c *agentpb.ListHardwareCapabilitiesResponse_HardwareCapability) appconfig.CameraIdentity {
+	return appconfig.CameraIdentity{
+		Path:     c.GetDevicePath(),
+		StableID: c.GetProperties()[camerashare.KeyStableID],
+		Name:     cameraNameOf(c.GetDescription()),
+	}
+}
+
 // cameraShareNotice returns the one line telling the developer that the app
 // will share the camera(s) the agent reports a shared mode for, with the mode,
 // format and stamp of the node each config's entitlements give it. A camera
@@ -61,7 +71,7 @@ func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*agentpb.ListHardware
 			if cfg == nil || appconfig.CameraShareChoice(cfg.Entitlements) != appconfig.CameraShareShared {
 				continue
 			}
-			asked, stamp := appconfig.CameraNodeSettings(cfg.Entitlements, c.GetDevicePath(), cameraNameOf(c.GetDescription()))
+			asked, stamp, _ := appconfig.CameraNodeSettings(cfg.Entitlements, cameraIdentityOf(c))
 			props, served, mode := c.GetProperties(), "", ""
 			for _, format := range appconfig.CameraFormatsServedFor(asked) {
 				if mode = props[sharedCameraModeKey(format)]; mode != "" {

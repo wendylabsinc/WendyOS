@@ -2004,3 +2004,51 @@ func TestSharedMode_AsksWhat(t *testing.T) {
 		}
 	}
 }
+
+const sfBrioByID = "usb-Logitech_Brio_101_2331AP04K2S8-video-index0"
+
+// sfNameBrioByID gives the camera at /dev/video0 the stable id a camera
+// listing reports for it, "by-id:" and sfBrioByID.
+func sfNameBrioByID(h *csHarness) {
+	h.s.readStableNames = func() map[string]stableNames {
+		return map[string]stableNames{"/dev/video0": {byID: sfBrioByID, byPath: "platform-usb1-usb-0:2.1:1.0-video-index0"}}
+	}
+}
+
+func TestCreateCameraShares_AnEntryNamingACameraByItsStableIDOrCampaignPathDecidesItsNode(t *testing.T) {
+	for _, entry := range []string{"by-id:" + sfBrioByID, sfBrioByID, "v4l2:/dev/video0"} {
+		t.Run(entry, func(t *testing.T) {
+			h := newCSHarness(t, csBrio(), csC920())
+			sfCanDeriveFrames(h.s)
+			sfNameBrioByID(h)
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
+				sfCameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame, entry),
+			})
+
+			want := map[string]string{
+				"Brio 101": describeShareNode(sfNativeMode, appconfig.CameraStampFrame),
+				"C920":     describeShareNode(sfPixelsMode, appconfig.CameraStampTime),
+			}
+			records := h.records("cv-a")
+			if len(records) != len(want) {
+				t.Fatalf("records = %d, want %d; logs: %v", len(records), len(want), h.logs.All())
+			}
+			for _, r := range records {
+				if got := describeShareNode(r.mode, r.stamp); got != want[r.cameraName] || r.io.(*csNode).mode != r.mode || r.askedFormat != "" {
+					t.Errorf("%s: record holds %s (asked %q) and its node declares %+v, want %s",
+						r.cameraName, got, r.askedFormat, r.io.(*csNode).mode, want[r.cameraName])
+				}
+			}
+			row := h.reportOf("/dev/video0")
+			if got, want := row["share_state"], "cv-a [format native, stamp frame] (idle)"; got != want {
+				t.Errorf("share_state = %q, want %q", got, want)
+			}
+			if got, want := row["stable_id"], "by-id:"+sfBrioByID; got != want {
+				t.Errorf("the camera's row gives stable_id %q, want %q", got, want)
+			}
+			if _, has := h.reportOf("/dev/video4")["stable_id"]; has {
+				t.Errorf("a camera without a stable id reports one: %v", h.reportOf("/dev/video4"))
+			}
+		})
+	}
+}

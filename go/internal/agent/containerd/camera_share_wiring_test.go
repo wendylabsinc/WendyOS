@@ -320,12 +320,14 @@ func TestCameraShareCoverLogsEachErrorWithTheAppName(t *testing.T) {
 // The share manager is given the entitlements the container's labels carry,
 // so each camera's node gets the format and stamp its entry asks for.
 func TestCreateCameraSharesPassesTheLabelsEntitlements(t *testing.T) {
+	const c920StableID = "by-id:usb-Sonix_Technology_Co.__Ltd._HD_Pro_Webcam_C920_HD_Pro_Webcam_C920-video-index0"
 	fake := &fakeCameraShares{}
 	c := &Client{logger: zap.NewNop()}
 	c.SetCameraShareProvider(fake)
 	entitlements := []appconfig.Entitlement{
 		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame},
 		{Type: appconfig.EntitlementCamera, Allowlist: []string{"Brio 101"}, Format: appconfig.CameraFormatH264},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{c920StableID}, Format: appconfig.CameraFormatH264, Stamp: appconfig.CameraStampFrame},
 		{Type: appconfig.EntitlementNetwork, Mode: "host"},
 	}
 	labels := wendyLabels("app", "", "1.0.0", nil, entitlements, "", nil)
@@ -337,17 +339,24 @@ func TestCreateCameraSharesPassesTheLabelsEntitlements(t *testing.T) {
 	c.createCameraShares(context.Background(), "app", "app", labels)
 
 	got := fake.createdWith("app")
-	want := []cameraEntry{{"/dev/video0", appconfig.CameraFormatNative, appconfig.CameraStampFrame}, {"Brio 101", appconfig.CameraFormatH264, ""}}
+	want := []cameraEntry{
+		{"/dev/video0", appconfig.CameraFormatNative, appconfig.CameraStampFrame}, {"Brio 101", appconfig.CameraFormatH264, ""},
+		{c920StableID, appconfig.CameraFormatH264, appconfig.CameraStampFrame},
+	}
 	if entries := cameraEntriesOf(got); !reflect.DeepEqual(entries, want) {
 		t.Errorf("camera entries passed on = %+v, want %+v", entries, want)
 	}
-	for _, tc := range []struct{ path, name, format, stamp string }{
-		{"/dev/video0", "C920", appconfig.CameraFormatNative, appconfig.CameraStampFrame},
-		{"/dev/video2", "Brio 101", appconfig.CameraFormatH264, appconfig.CameraStampTime},
-		{"/dev/video4", "Other", appconfig.CameraFormatPixels, appconfig.CameraStampTime},
+	for _, tc := range []struct {
+		camera        appconfig.CameraIdentity
+		format, stamp string
+	}{
+		{appconfig.CameraIdentity{Path: "/dev/video0", Name: "C920"}, appconfig.CameraFormatNative, appconfig.CameraStampFrame},
+		{appconfig.CameraIdentity{Path: "/dev/video2", Name: "Brio 101"}, appconfig.CameraFormatH264, appconfig.CameraStampTime},
+		{appconfig.CameraIdentity{Path: "/dev/video4", Name: "Other"}, appconfig.CameraFormatPixels, appconfig.CameraStampTime},
+		{appconfig.CameraIdentity{Path: "/dev/video6", StableID: c920StableID, Name: "HD Pro Webcam C920: HD Pro Webc"}, appconfig.CameraFormatH264, appconfig.CameraStampFrame},
 	} {
-		if format, stamp := appconfig.CameraNodeSettings(got, tc.path, tc.name); format != tc.format || stamp != tc.stamp {
-			t.Errorf("%s (%s): settings from the passed entitlements = (%q, %q), want (%q, %q)", tc.path, tc.name, format, stamp, tc.format, tc.stamp)
+		if format, stamp, conflicts := appconfig.CameraNodeSettings(got, tc.camera); format != tc.format || stamp != tc.stamp || len(conflicts) != 0 {
+			t.Errorf("%+v: settings from the passed entitlements = (%q, %q) with conflicts %q, want (%q, %q)", tc.camera, format, stamp, conflicts, tc.format, tc.stamp)
 		}
 	}
 }
@@ -410,7 +419,7 @@ func TestCameraEntriesAreReadBackFromADeploysLabels(t *testing.T) {
 				t.Fatalf("entries passed to the share manager = %+v, want %+v", passed, tc.entitlements)
 			}
 			for _, cam := range tc.cameras {
-				if format, stamp := appconfig.CameraNodeSettings(passed, cam.path, cam.name); format != cam.format || stamp != cam.stamp {
+				if format, stamp, _ := appconfig.CameraNodeSettings(passed, appconfig.CameraIdentity{Path: cam.path, Name: cam.name}); format != cam.format || stamp != cam.stamp {
 					t.Errorf("%s (%s): node settings = (%q, %q), want (%q, %q)", cam.path, cam.name, format, stamp, cam.format, cam.stamp)
 				}
 			}

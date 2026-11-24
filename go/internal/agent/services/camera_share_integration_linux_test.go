@@ -529,7 +529,7 @@ func createShareCells(t *testing.T, fx *shareCaptureFixture, cells []shareCell, 
 				cell.id, shareRefusalReason(fx.logs, cell.id), cell.entitlements, shareLogLines(fx.logs, cell.id))
 		}
 		fx.made = append(fx.made, r.node)
-		resolvedFormat, resolvedStamp := appconfig.CameraNodeSettings(cell.entitlements, r.cameraPath, r.cameraName)
+		resolvedFormat, resolvedStamp, _ := appconfig.CameraNodeSettings(cell.entitlements, appconfig.CameraIdentity{Path: r.cameraPath, Name: r.cameraName})
 		diagnosis := fmt.Sprintf("entitlements passed: %+v\nsettings they resolve to for %q at %s: %s\nshare record: %+v\nagent log: %q",
 			cell.entitlements, r.cameraName, r.cameraPath, describeShareSettings(resolvedFormat, resolvedStamp), r, shareLogLines(fx.logs, cell.id))
 		if r.askedFormat == cell.format {

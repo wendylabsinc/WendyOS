@@ -275,7 +275,8 @@ func (s *VideoService) noteFreshStartSupport(err error) {
 
 // createCameraShare shares one camera with a container, or logs why not.
 func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID string, dev *agentpb.VideoDevice, entitlements []appconfig.Entitlement, creation *shareCreation) {
-	format, stamp := appconfig.CameraNodeSettings(entitlements, dev.GetPath(), dev.GetName())
+	format, stamp, _ := appconfig.CameraNodeSettings(entitlements,
+		appconfig.CameraIdentity{Path: dev.GetPath(), StableID: dev.GetStableId(), Name: dev.GetName()})
 	// The policy goes first, so a camera it refuses (CSI, thermal, depth) is
 	// logged with that reason. shareDecisionFor can block well past the
 	// budget (its GStreamer element listing is not context-aware), so it runs
@@ -3294,6 +3295,9 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 			continue
 		}
 		props := map[string]string{}
+		if stableID := dev.GetStableId(); stableID != "" {
+			props[camerashare.KeyStableID] = stableID
+		}
 		// Who shares a camera comes from the records, not from a decision, so
 		// a decision that misses the budget costs only the mode or reason.
 		if with, state := s.shareStatesOf(dev.GetPath()); len(with) > 0 {

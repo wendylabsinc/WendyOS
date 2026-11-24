@@ -525,53 +525,143 @@ func knownOrDefault(value string, accepted []string) string {
 	return accepted[0]
 }
 
+// CameraIdentity holds the identifiers one camera is shown to users by. A
+// camera may lack any of them.
+type CameraIdentity struct {
+	// Path is the device path, for example "/dev/video0".
+	Path string
+	// StableID is the stable id as the camera list prints it, for example
+	// "by-id:usb-046d_HD_Pro_Webcam_C920-video-index0".
+	StableID string
+	Name     string
+}
+
+const (
+	cameraPathScheme         = "v4l2:"
+	cameraStableIDByIDScheme = "by-id:"
+)
+
+// What an entry names a camera by, the most specific first: the stable id
+// follows one physical camera, the path is whichever camera holds it since
+// boot, and the name is shared by every camera of the model.
+const (
+	cameraByStableID = iota
+	cameraByPath
+	cameraByName
+	cameraByNoAllowlist
+	cameraPrecedences
+)
+
+// spellings lists what an allowlist entry may hold to name the camera, by
+// precedence.
+func (c CameraIdentity) spellings() [cameraByNoAllowlist][]string {
+	var spellings [cameraByNoAllowlist][]string
+	if c.StableID != "" {
+		spellings[cameraByStableID] = []string{c.StableID}
+		if bare, tagged := strings.CutPrefix(c.StableID, cameraStableIDByIDScheme); tagged && bare != "" {
+			spellings[cameraByStableID] = append(spellings[cameraByStableID], bare)
+		}
+	}
+	if c.Path != "" {
+		spellings[cameraByPath] = []string{c.Path, cameraPathScheme + c.Path}
+	}
+	if c.Name != "" {
+		spellings[cameraByName] = []string{c.Name}
+	}
+	return spellings
+}
+
+// cameraClaim is the settings one entry asks for a camera, and the allowlist
+// entry it names the camera by; by is "" for an entry without an allowlist.
+type cameraClaim struct {
+	by            string
+	format, stamp string
+}
+
+func (c cameraClaim) asker() string {
+	if c.by == "" {
+		return "an entry without an allowlist"
+	}
+	return fmt.Sprintf("%q", c.by)
+}
+
+// listClaims describes each claim, sorted and without repeats, so the text
+// does not depend on entry order.
+func listClaims(claims []cameraClaim, describe func(cameraClaim) string) string {
+	described := make([]string, len(claims))
+	for i, c := range claims {
+		described[i] = describe(c)
+	}
+	slices.Sort(described)
+	return strings.Join(slices.Compact(described), ", ")
+}
+
 // CameraNodeSettings reports the format and stamp of the node an app gets for
-// the camera with the given device path and name. An entry whose allowlist
-// names the device path decides before one that names the camera by name, which
-// decides before an entry without an allowlist; with none, the defaults apply.
+// a camera. An entry's allowlist names the camera by its stable id (as the
+// camera list prints it, or without a "by-id:" prefix), its device path (alone
+// or after "v4l2:") or its name. An entry naming the stable id decides before
+// one naming the path, which decides before one naming the name, which decides
+// before an entry without an allowlist; with none, the defaults apply.
 //
 // The result does not depend on the order of the entries, because the agent
 // rebuilds them from container labels sorted by type and never sees manifest
 // order: when the deciding entries disagree on a setting, that setting is the
 // default. The labels may also come from a newer or older command line, so a
 // value this build does not know resolves to the default.
-func CameraNodeSettings(entitlements []Entitlement, cameraPath, cameraName string) (format, stamp string) {
-	const (
-		byPath = iota
-		byName
-		withoutAllowlist
-		precedences
-	)
-	var deciding [precedences][]Entitlement
+//
+// conflicts holds one sentence for each setting on which the entries that
+// apply to the camera differ, the format's first.
+func CameraNodeSettings(entitlements []Entitlement, camera CameraIdentity) (format, stamp string, conflicts []string) {
+	spellings := camera.spellings()
+	var claims [cameraPrecedences][]cameraClaim
 	for _, e := range entitlements {
 		if !isCameraEntitlement(e) || e.Mode == CameraModeDirect {
 			continue
 		}
-		switch {
-		case len(e.Allowlist) == 0:
-			deciding[withoutAllowlist] = append(deciding[withoutAllowlist], e)
-		case cameraPath != "" && slices.Contains(e.Allowlist, cameraPath):
-			deciding[byPath] = append(deciding[byPath], e)
-		case cameraName != "" && slices.Contains(e.Allowlist, cameraName):
-			deciding[byName] = append(deciding[byName], e)
-		}
-	}
-	for _, entries := range deciding {
-		if len(entries) == 0 {
+		claim := cameraClaim{format: knownOrDefault(e.Format, CameraFormats), stamp: knownOrDefault(e.Stamp, CameraStamps)}
+		if len(e.Allowlist) == 0 {
+			claims[cameraByNoAllowlist] = append(claims[cameraByNoAllowlist], claim)
 			continue
 		}
-		format, stamp = knownOrDefault(entries[0].Format, CameraFormats), knownOrDefault(entries[0].Stamp, CameraStamps)
-		for _, e := range entries[1:] {
-			if knownOrDefault(e.Format, CameraFormats) != format {
-				format = CameraFormats[0]
-			}
-			if knownOrDefault(e.Stamp, CameraStamps) != stamp {
-				stamp = CameraStamps[0]
+		for precedence, accepted := range spellings {
+			named := slices.IndexFunc(e.Allowlist, func(entry string) bool { return slices.Contains(accepted, entry) })
+			if named >= 0 {
+				claim.by = e.Allowlist[named]
+				claims[precedence] = append(claims[precedence], claim)
+				break
 			}
 		}
-		return format, stamp
 	}
-	return CameraFormats[0], CameraStamps[0]
+	deciding := slices.IndexFunc(claims[:], func(tier []cameraClaim) bool { return len(tier) > 0 })
+	if deciding < 0 {
+		return CameraFormats[0], CameraStamps[0], nil
+	}
+	settle := func(setting, fallback string, asked func(cameraClaim) string) string {
+		ask := func(c cameraClaim) string { return c.asker() + " asks for " + asked(c) }
+		served := asked(claims[deciding][0])
+		differs := func(c cameraClaim) bool { return asked(c) != served }
+		if slices.ContainsFunc(claims[deciding], differs) {
+			conflicts = append(conflicts, fmt.Sprintf("%s falls back to %s: the entries deciding for this camera disagree (%s)",
+				setting, fallback, listClaims(claims[deciding], ask)))
+			return fallback
+		}
+		var passedOver []cameraClaim
+		for _, tier := range claims[deciding+1:] {
+			for _, c := range tier {
+				if differs(c) {
+					passedOver = append(passedOver, c)
+				}
+			}
+		}
+		if len(passedOver) > 0 {
+			conflicts = append(conflicts, fmt.Sprintf("%s is %s (asked by %s); passed over: %s",
+				setting, served, listClaims(claims[deciding], cameraClaim.asker), listClaims(passedOver, ask)))
+		}
+		return served
+	}
+	format = settle("format", CameraFormats[0], func(c cameraClaim) string { return c.format })
+	stamp = settle("stamp", CameraStamps[0], func(c cameraClaim) string { return c.stamp })
+	return format, stamp, conflicts
 }
 
 // Entitlement represents a single entitlement entry in wendy.json.

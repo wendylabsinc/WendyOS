@@ -163,3 +163,26 @@ func TestPrintCameraShareNotice_SlowAgentPrintsNothing(t *testing.T) {
 		t.Fatalf("printed %q", out)
 	}
 }
+
+const c920StableID = "by-id:usb-Sonix_Technology_Co.__Ltd._HD_Pro_Webcam_C920_HD_Pro_Webcam_C920-video-index0"
+
+// c920Row is the camera's row as an agent that reports stable ids lists it.
+func c920Row() *hwCap {
+	row := shareRowAt("HD Pro Webcam C920: HD Pro Webc (video0)", "/dev/video0", map[string]string{
+		"pixels": "1280x720 YUYV, 30 fps", "native": "1280x720 MJPG, 30 fps", "h264": "1280x720 H264, 30 fps"})
+	row.Properties[camerashare.KeyStableID] = c920StableID
+	return row
+}
+
+func TestCameraShareNotice_AnEntryNamingACameraByItsStableIDGivesItsFormatAndStamp(t *testing.T) {
+	for _, entry := range []string{c920StableID, strings.TrimPrefix(c920StableID, "by-id:"), "v4l2:/dev/video0"} {
+		cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
+			{Type: appconfig.EntitlementCamera, Allowlist: []string{entry}, Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame},
+		}}
+		got := cameraShareNotice([]*appconfig.AppConfig{cfg}, []*hwCap{c920Row()})
+		want := `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 1280x720 MJPG, 30 fps, format native, stamp frame. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+		if got != want {
+			t.Errorf("allowlist %q:\ngot  %q\nwant %q", entry, got, want)
+		}
+	}
+}
