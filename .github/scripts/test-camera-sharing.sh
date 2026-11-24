@@ -20,7 +20,10 @@ if [[ "$module_version" != 0.15.4 ]]; then
   printf 'Expected v4l2loopback module version 0.15.4; found <%s>. Build the exact pinned checkout without its .gitversion development marker before loading it.\n' "$module_version" >&2
   exit 2
 fi
-for element in v4l2src jpegdec videoconvert queue fdsink; do
+# The second list is what deriving pictures and H.264 from a camera's own frames
+# needs; without it an app's native or h264 node is served as pixels.
+for element in v4l2src jpegdec videoconvert queue fdsink \
+  fdsrc gdpdepay gdppay tee x264enc h264parse; do
   gst-inspect-1.0 "$element" > /dev/null
 done
 if ! command -v unshare > /dev/null; then
@@ -32,7 +35,7 @@ trap 'rm -f "$output/"*.test' EXIT
 services=./go/internal/agent/services
 devcover=./go/internal/agent/devcover
 share_test=TestCameraShareTwoReadersDecodeRealFrames
-share_tests=(TestCameraShareTwoReadersDecodeRealFrames TestShareNodeWriter_DeclaresModeAndReportsReaders TestShareNode_StaysACameraWhileTheWriterIsAway TestShareNode_FreshStartForLateAndRestartedReaders TestShareNode_FreshStartSuppressesSyntheticFrames TestShareNode_FreshStartForReadIO)
+share_tests=(TestCameraShareTwoReadersDecodeRealFrames TestShareNodeWriter_DeclaresModeAndReportsReaders TestShareNode_StaysACameraWhileTheWriterIsAway TestShareNode_FreshStartForLateAndRestartedReaders TestShareNode_FreshStartSuppressesSyntheticFrames TestShareNode_FreshStartForReadIO TestCameraShareNodesFollowTheirEntitlements TestShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength TestShareNodeWriter_BufferTimestampReadsBackAsTheCaptureTimeOrTheSampleID)
 cover_test=TestCover_BindsSourceInsideTargetNamespaceOnly
 
 python3 - "$output" <<'PY'
@@ -73,7 +76,7 @@ go test -race -tags regression_camera_fixture -overlay "$output/no-setns.json" -
 
 run_share() {
   sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted WENDY_GSTREAMER_REQUIRED=1 \
-    python3 .github/scripts/run-owned-media-test.py --timeout 180 -- \
+    python3 .github/scripts/run-owned-media-test.py --timeout 300 -- \
     "$1" -test.run "$2" -test.v -test.count=1 -test.timeout=0
 }
 # In a private mount namespace of its own: a cover that misses the target
@@ -110,7 +113,7 @@ require_rejected() {
   grep -qF "$message" "$log" || { echo "Regression rejected $mutation without: $message" >&2; exit 1; }
 }
 
-run_share "$output/services.test" '^Test(CameraShareTwoReadersDecodeRealFrames|ShareNodeWriter_DeclaresModeAndReportsReaders|ShareNode_StaysACameraWhileTheWriterIsAway|ShareNode_FreshStartForLateAndRestartedReaders|ShareNode_FreshStartSuppressesSyntheticFrames|ShareNode_FreshStartForReadIO)$' | tee "$output/normal.log"
+run_share "$output/services.test" '^Test(CameraShareTwoReadersDecodeRealFrames|ShareNodeWriter_DeclaresModeAndReportsReaders|ShareNode_StaysACameraWhileTheWriterIsAway|ShareNode_FreshStartForLateAndRestartedReaders|ShareNode_FreshStartSuppressesSyntheticFrames|ShareNode_FreshStartForReadIO|CameraShareNodesFollowTheirEntitlements|ShareNodeWriter_CompressedNodeCarriesWholeFramesOfAnyLength|ShareNodeWriter_BufferTimestampReadsBackAsTheCaptureTimeOrTheSampleID)$' | tee "$output/normal.log"
 require_passed "$output/normal.log" "${share_tests[@]}"
 
 if run_share "$output/sharing-disabled.test" "^${share_test}\$" > "$output/sharing-disabled.log" 2>&1; then
