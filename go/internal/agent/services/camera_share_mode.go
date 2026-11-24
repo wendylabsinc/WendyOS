@@ -387,6 +387,7 @@ func (s *VideoService) liveHubAtOtherMode(path string, mode sharedMode) bool {
 func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req *agentpb.StreamVideoRequest, mode sharedMode, kind frameKind) (sub shareSubscription, retry bool, err error) {
 	// Read before s.mu: the share records have their own lock, never nested.
 	_, apps, _ := s.sharedModeOf(path)
+	seqKey := s.sampleSeqKey(path)
 	ended := status.Errorf(codes.InvalidArgument,
 		"video stream ended: camera %s is now shared with %s and runs only at its shared mode, %s; reconnect without a size or rate",
 		path, strings.Join(apps, ", "), mode)
@@ -419,7 +420,7 @@ func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req
 		ctx:       hctx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
-		sampleSeq: s.sampleSeqLocked(path),
+		sampleSeq: s.sampleSeqLocked(seqKey),
 	}
 	id, ch, _ := h.subscribeKind(kind)
 	s.hubs[path] = h

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -109,6 +111,192 @@ func TestSampleIdentitiesSurviveProducerRestart(t *testing.T) {
 	}
 	if other := service.sampleSeqLocked("/dev/video1"); other == first {
 		t.Fatal("two devices share one sample counter")
+	}
+}
+
+// numberFrames has hub number n frames and returns the sample IDs they got.
+func numberFrames(hub *deviceHub, n int) []uint64 {
+	var ids []uint64
+	for range n {
+		frame := &videoFrame{data: []byte{1}, codec: agentpb.VideoCodec_VIDEO_CODEC_H264}
+		hub.produce(frame)
+		ids = append(ids, frame.sampleID)
+	}
+	return ids
+}
+
+// viewerHub joins the camera at path as a viewer that names no parameters
+// does, and returns its hub and how to leave it and wait for it to end.
+func viewerHub(t *testing.T, s *VideoService, path string, req *agentpb.StreamVideoRequest) (*deviceHub, func()) {
+	t.Helper()
+	hub, id, _, err := s.getOrCreateHub(context.Background(), path, req, hubHolderStreamClient)
+	if err != nil {
+		t.Fatalf("joining %s: %v", path, err)
+	}
+	return hub, func() {
+		hub.unsubscribe(id)
+		select {
+		case <-hub.done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("the hub of %s did not end", path)
+		}
+	}
+}
+
+// putCameraAt has c answer at /dev/<base>, as udev gives a camera that comes
+// back whatever video node is free.
+func (h *csHarness) putCameraAt(base string, c csCamera) {
+	c.base = base
+	h.mu.Lock()
+	h.cams[base] = c
+	h.mu.Unlock()
+}
+
+// A camera that comes back at another device path is the same camera: the
+// sample IDs go on from where they were, however the hub at its new path is
+// made. An app that reads them off its node, and an episode's index, never
+// see one twice.
+func TestSampleIdentitiesGoOnWhenACameraComesBackAtAnotherPath(t *testing.T) {
+	for name, hubAtNewPath := range map[string]func(t *testing.T, s *VideoService) (hub *deviceHub, wantNext uint64){
+		"a viewer's join": func(t *testing.T, s *VideoService) (*deviceHub, uint64) {
+			hub, leave := viewerHub(t, s, "/dev/video2", &agentpb.StreamVideoRequest{})
+			t.Cleanup(leave)
+			return hub, 3
+		},
+		"an episode capture that takes a viewer's hub over": func(t *testing.T, s *VideoService) (*deviceHub, uint64) {
+			defaulted, leave := viewerHub(t, s, "/dev/video2", &agentpb.StreamVideoRequest{})
+			t.Cleanup(leave)
+			if ids := numberFrames(defaulted, 1); !slices.Equal(ids, []uint64{3}) {
+				t.Fatalf("the viewer's hub numbered its frame %v, want [3]", ids)
+			}
+			req := &agentpb.StreamVideoRequest{Width: 640, Height: 480, Framerate: 30}
+			hub, id, _, _, _, _, _, err := s.joinHubForCapture(context.Background(), "/dev/video2", req, encodedFrames)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { hub.unsubscribe(id) })
+			if hub == defaulted {
+				t.Fatal("the capture joined the viewer's hub instead of taking it over")
+			}
+			return hub, 4
+		},
+		"a camera node that takes a viewer's hub over": func(t *testing.T, s *VideoService) (*deviceHub, uint64) {
+			held, leave := viewerHub(t, s, "/dev/video2", &agentpb.StreamVideoRequest{Width: 640, Height: 480})
+			t.Cleanup(leave)
+			if ids := numberFrames(held, 1); !slices.Equal(ids, []uint64{3}) {
+				t.Fatalf("the viewer's hub numbered its frame %v, want [3]", ids)
+			}
+			share, err := s.joinHubForShare(context.Background(), "/dev/video2", 2, testSharedMode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(share.Leave)
+			hub := currentHub(s, "/dev/video2")
+			if hub == nil || hub == held {
+				t.Fatal("the node joined the viewer's hub instead of taking it over")
+			}
+			return hub, 4
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCSHarness(t, csBrio())
+			installFakeProducers(h.s)
+			hub, leave := viewerHub(t, h.s, "/dev/video0", &agentpb.StreamVideoRequest{})
+			if ids := numberFrames(hub, 2); !slices.Equal(ids, []uint64{1, 2}) {
+				t.Fatalf("sample IDs before the camera went = %v, want [1 2]", ids)
+			}
+			leave()
+
+			h.takeOut("video0")
+			h.putCameraAt("video2", csBrio())
+			back, wantNext := hubAtNewPath(t, h.s)
+			if ids := numberFrames(back, 2); !slices.Equal(ids, []uint64{wantNext, wantNext + 1}) {
+				t.Fatalf("sample IDs at the camera's new path = %v, want them to go on at %d", ids, wantNext)
+			}
+		})
+	}
+}
+
+// Another camera that takes a path has its own sample IDs, and the camera that
+// had the path before goes on with its own when it is back.
+func TestSampleIdentitiesOfACameraThatTakesAnothersPathAreItsOwn(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	installFakeProducers(h.s)
+	for _, turn := range []struct {
+		camera csCamera
+		want   []uint64
+	}{
+		{csBrio(), []uint64{1, 2}},
+		{csC920(), []uint64{1, 2}},
+		{csBrio(), []uint64{3, 4}},
+		{csC920(), []uint64{3, 4}},
+	} {
+		h.putCameraAt("video0", turn.camera)
+		hub, leave := viewerHub(t, h.s, "/dev/video0", &agentpb.StreamVideoRequest{})
+		if ids := numberFrames(hub, 2); !slices.Equal(ids, turn.want) {
+			t.Fatalf("%s at /dev/video0: sample IDs = %v, want %v", turn.camera.name, ids, turn.want)
+		}
+		leave()
+	}
+}
+
+// Two cameras of one model that udev gives no by-id name are told apart by
+// the port each is on: plugged in together they number their frames apart,
+// and each goes on with its own numbers when the two come back at each other's
+// paths.
+func TestSampleIdentitiesOfSameModelCamerasPluggedInTogetherStayApart(t *testing.T) {
+	left := csBrio()
+	right := csCamera{"video2", "Brio 101", left.formats, camera.Identity{Device: csPort("1-2.2"), Index: "0", Name: "Brio 101"}}
+	h := newCSHarness(t, left, right)
+	installFakeProducers(h.s)
+	if names := h.s.readStableNames(); len(names) != 0 {
+		t.Fatalf("the test needs cameras without by-id names, got %v", names)
+	}
+
+	leftHub, leaveLeft := viewerHub(t, h.s, "/dev/video0", &agentpb.StreamVideoRequest{})
+	rightHub, leaveRight := viewerHub(t, h.s, "/dev/video2", &agentpb.StreamVideoRequest{})
+	var leftIDs, rightIDs []uint64
+	for range 2 {
+		leftIDs = append(leftIDs, numberFrames(leftHub, 1)...)
+		rightIDs = append(rightIDs, numberFrames(rightHub, 1)...)
+	}
+	leftIDs = append(leftIDs, numberFrames(leftHub, 1)...)
+	if !slices.Equal(leftIDs, []uint64{1, 2, 3}) || !slices.Equal(rightIDs, []uint64{1, 2}) {
+		t.Fatalf("sample IDs = %v and %v, want [1 2 3] and [1 2]: each camera numbers its own frames", leftIDs, rightIDs)
+	}
+	leaveLeft()
+	leaveRight()
+
+	h.putCameraAt("video0", right)
+	h.putCameraAt("video2", left)
+	leftHub, leaveLeft = viewerHub(t, h.s, "/dev/video2", &agentpb.StreamVideoRequest{})
+	defer leaveLeft()
+	rightHub, leaveRight = viewerHub(t, h.s, "/dev/video0", &agentpb.StreamVideoRequest{})
+	defer leaveRight()
+	if l, r := numberFrames(leftHub, 1), numberFrames(rightHub, 1); !slices.Equal(l, []uint64{4}) || !slices.Equal(r, []uint64{3}) {
+		t.Fatalf("after the two swapped paths, sample IDs = %v and %v, want [4] and [3]", l, r)
+	}
+}
+
+// A network camera and a ROS 2 topic have no device node: their hub key is
+// already their own, and stays their sample counter's key.
+func TestSampleSeqKey_OnlyALocalVideoNodeIsKeyedByItsCamera(t *testing.T) {
+	s := &VideoService{}
+	s.cameraIdentity = func(base string) (camera.Identity, error) {
+		return camera.Identity{Device: csPort("1-3"), Index: "0", Name: "the camera at " + base}, nil
+	}
+	for hubKey, want := range map[string]string{
+		"/dev/video4":  "sysfs\x00" + csPort("1-3") + "\x000\x00the camera at video4",
+		"ip:200":       "ip:200",
+		"ros2:3":       "ros2:3",
+		"/dev/media0":  "/dev/media0",
+		"/dev/video":   "/dev/video",
+		"video4":       "video4",
+		"/dev/video4x": "/dev/video4x",
+	} {
+		if got := s.sampleSeqKey(hubKey); got != want {
+			t.Errorf("sample counter key of %q = %q, want %q", hubKey, got, want)
+		}
 	}
 }
 

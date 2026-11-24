@@ -645,9 +645,9 @@ type deviceHub struct {
 	// (camera_share_mode.go) and closed by unsubscribe once no subscriber
 	// holds the hub's parameters as an episode capture. Protected by h.mu.
 	captureFree chan struct{}
-	// sampleSeq is the per-device sample counter, shared with every hub that
-	// has served the same device key. It outlives the hub so sample identities
-	// stay monotonic across producer restarts within one episode.
+	// sampleSeq is the per-camera sample counter, shared with every hub that
+	// has served the same camera (sampleSeqKey). It outlives the hub so sample
+	// identities stay monotonic across producer restarts within one episode.
 	sampleSeq *atomic.Uint64
 	// Whether this producer tees raw capture frames (video_raw_tap.go). Undecided
 	// until the producer has chosen its capture path; a raw subscriber that joins
@@ -1249,7 +1249,7 @@ type VideoService struct {
 	// stored control even when the write fails -- must be testable without one.
 	controlDefaultsFor func(path string, names []string) (map[string]int32, error)
 
-	// derivedFailures holds, by camera (cameraFailureKey), why the derived
+	// derivedFailures holds, by camera (cameraIdentityKey), why the derived
 	// layer gave its frames up; sourceRefusals, by camera and native source,
 	// why a capture from that source handed nothing on.
 	derivedFailures captureFailures
@@ -1275,9 +1275,10 @@ type VideoService struct {
 
 	mu   sync.Mutex
 	hubs map[string]*deviceHub
-	// sampleSeqs holds one sample counter per device key, outliving the hubs so
-	// a producer restart does not reissue sample identities the harness has
-	// already handed out for that source.
+	// sampleSeqs holds one sample counter per source (sampleSeqKey), outliving
+	// the hubs so a producer restart, or a camera that comes back at another
+	// device path, does not reissue sample identities the harness has already
+	// handed out for that source.
 	sampleSeqs map[string]*atomic.Uint64
 
 	// shares holds the cameras containers share (camera_share_mode.go). Its
@@ -2013,6 +2014,7 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 	if streamRequestAssertsParams(req) {
 		explicitHolder = origin
 	}
+	seqKey := s.sampleSeqKey(path)
 	for retries := 0; ; retries++ {
 		if retries >= maxHubRetries {
 			s.logger.Warn("hub retry limit exceeded", zap.String("device", path), zap.Int("retries", retries))
@@ -2112,7 +2114,7 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 		width:     req.GetWidth(),
 		height:    req.GetHeight(),
 		framerate: req.GetFramerate(),
-		sampleSeq: s.sampleSeqLocked(path),
+		sampleSeq: s.sampleSeqLocked(seqKey),
 	}
 	// New hub: the first subscriber is always within the cap, and nothing has
 	// been refused yet.
@@ -2268,6 +2270,7 @@ func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *a
 // cancelled, so every reattaching subscriber lands on it rather than racing
 // this takeover to create a competing defaulted hub.
 func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (h *deviceHub, id int, ch chan *videoFrame, retry bool, err error) {
+	seqKey := s.sampleSeqKey(key)
 	s.mu.Lock()
 	old, exists := s.hubs[key]
 	if !exists || old.ctx.Err() != nil {
@@ -2299,7 +2302,7 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		width:     req.GetWidth(),
 		height:    req.GetHeight(),
 		framerate: req.GetFramerate(),
-		sampleSeq: s.sampleSeqLocked(key),
+		sampleSeq: s.sampleSeqLocked(seqKey),
 	}
 	id, ch, _ = h.subscribeAsKind(hubHolderEpisodeCapture, kind)
 	s.hubs[key] = h
@@ -2390,17 +2393,32 @@ func (s *VideoService) startReplacementHub(ctx context.Context, key string, old,
 	return nil
 }
 
-// sampleSeqLocked returns the sample counter for a device key, creating it on
-// first use. Callers must hold s.mu. Counters are never removed: a device that
-// comes back must not restart identities a consumer has already seen.
-func (s *VideoService) sampleSeqLocked(path string) *atomic.Uint64 {
+// sampleSeqKey is the key of the sample counter of the hub at hubKey. A local
+// video node is keyed by the camera that answers there now (cameraIdentityKey),
+// so the counter goes with the camera to whatever path it comes back at and
+// another camera at this path has its own. Any other source is keyed by its
+// hub key. It reads udev's names and sysfs, so it is called before s.mu is
+// taken.
+func (s *VideoService) sampleSeqKey(hubKey string) string {
+	base, local := strings.CutPrefix(hubKey, "/dev/")
+	if _, node := videoNodeNumber(base); !local || !node {
+		return hubKey
+	}
+	return s.cameraIdentityKey(hubKey)
+}
+
+// sampleSeqLocked returns the sample counter for a key (sampleSeqKey), creating
+// it on first use. Callers must hold s.mu. Counters are never removed: a
+// device that comes back must not restart identities a consumer has already
+// seen.
+func (s *VideoService) sampleSeqLocked(key string) *atomic.Uint64 {
 	if s.sampleSeqs == nil {
 		s.sampleSeqs = make(map[string]*atomic.Uint64)
 	}
-	seq := s.sampleSeqs[path]
+	seq := s.sampleSeqs[key]
 	if seq == nil {
 		seq = new(atomic.Uint64)
-		s.sampleSeqs[path] = seq
+		s.sampleSeqs[key] = seq
 	}
 	return seq
 }

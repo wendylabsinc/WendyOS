@@ -115,7 +115,7 @@ func TestShareDecision_H264CameraWithoutPicturesServesItsOwnFramesAndSaysWhy(t *
 		"decoding failed recently": {
 			func(t *testing.T) *VideoService {
 				s := hcService(t, "avdec_h264")
-				s.derivedFailures.remember(s.cameraFailureKey(usbCam().GetPath()), "the decoder gave no picture", false)
+				s.derivedFailures.remember(s.cameraIdentityKey(usbCam().GetPath()), "the decoder gave no picture", false)
 				return s
 			}, hcNativeMode, "decoding this camera's frames failed: the decoder gave no picture",
 		},
@@ -393,7 +393,7 @@ func TestCameraShares_PicturesGivenUpAtRunTimeHoldCannotServeAndTheNextCreateSer
 			node.next(t)
 
 			// What captureDeriving does when the camera's picture layer gives up.
-			h.s.derivedFailures.remember(h.s.cameraFailureKey("/dev/video2"), tc.gaveUp.msg, tc.gaveUp.lasting)
+			h.s.derivedFailures.remember(h.s.cameraIdentityKey("/dev/video2"), tc.gaveUp.msg, tc.gaveUp.lasting)
 			hub.rawNotOffered(fixedReason("pictures cannot be decoded from this camera's frames: " + tc.gaveUp.msg))
 
 			whyNoPictures := "decoding this camera's frames failed: " + tc.gaveUp.msg
@@ -524,7 +524,7 @@ func TestCaptureFailures_AreRememberedForTheCameraNotItsPath(t *testing.T) {
 		return h.s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels).Mode.Format
 	}
 
-	h.s.derivedFailures.remember(h.s.cameraFailureKey("/dev/video2"), errDerivedFramesReordered.Error(), true)
+	h.s.derivedFailures.remember(h.s.cameraIdentityKey("/dev/video2"), errDerivedFramesReordered.Error(), true)
 	h.s.sourceRefusals.remember(h.s.sourceRefusalKey("/dev/video2", "JPEG"), "no usable frame", false)
 	if got := servedAt("/dev/video2"); got != appconfig.CameraFormatNative {
 		t.Fatalf("the camera whose stream reorders is served %s, want its own frames", got)
@@ -544,7 +544,7 @@ func TestCaptureFailures_AreRememberedForTheCameraNotItsPath(t *testing.T) {
 	}
 }
 
-func TestCameraFailureKey_PrefersTheSerialThenTheSysfsIdentityThenThePath(t *testing.T) {
+func TestCameraIdentityKey_PrefersTheSerialThenTheSysfsIdentityThenThePath(t *testing.T) {
 	s := &VideoService{}
 	s.cameraIdentity = func(base string) (camera.Identity, error) {
 		if base == "video4" {
@@ -561,7 +561,7 @@ func TestCameraFailureKey_PrefersTheSerialThenTheSysfsIdentityThenThePath(t *tes
 		"/dev/video4": "sysfs\x00" + csPort("1-3") + "\x000\x00Brio 101",
 		"/dev/video9": "/dev/video9",
 	} {
-		if got := s.cameraFailureKey(path); got != want {
+		if got := s.cameraIdentityKey(path); got != want {
 			t.Errorf("key of %s = %q, want %q", path, got, want)
 		}
 	}

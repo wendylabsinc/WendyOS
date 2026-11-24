@@ -322,7 +322,7 @@ func TestNativeJPEGSource_ALayerThatGaveUpAfterPublishingEndsTheCaptureInstead(t
 		if gaveWay == afterPublishing || why != "encoder stopped" {
 			t.Errorf("afterPublishing=%v: gaveWay = %q, %v; whole access units must not be followed by chunks in one stream", afterPublishing, why, gaveWay)
 		}
-		if _, failed := svc.derivedFailures.recent(svc.cameraFailureKey("/dev/video4")); !failed {
+		if _, failed := svc.derivedFailures.recent(svc.cameraIdentityKey("/dev/video4")); !failed {
 			t.Errorf("afterPublishing=%v: the camera is not remembered, so the next hub would try the layer again", afterPublishing)
 		}
 	}
@@ -330,7 +330,7 @@ func TestNativeJPEGSource_ALayerThatGaveUpAfterPublishingEndsTheCaptureInstead(t
 	if _, gaveWay := nativeJPEGSource.gaveWay(svc, localCamera{path: "/dev/video4"}, errCameraInUse("/dev/video4")); gaveWay {
 		t.Error("a busy camera was handed to GStreamer as if JPEG capture were unsupported")
 	}
-	if _, failed := svc.derivedFailures.recent(svc.cameraFailureKey("/dev/video4")); failed {
+	if _, failed := svc.derivedFailures.recent(svc.cameraIdentityKey("/dev/video4")); failed {
 		t.Error("a capture error was remembered as a layer failure")
 	}
 }

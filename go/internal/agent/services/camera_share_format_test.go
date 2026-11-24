@@ -231,7 +231,7 @@ func TestShareDecision_AFormatTheCameraCannotProvideIsServedAsPictures(t *testin
 			func(t *testing.T) *VideoService {
 				s := jpegCamera(t)
 				sfCanDeriveFrames(s)
-				s.derivedFailures.remember(s.cameraFailureKey(usbCam().GetPath()), "the encoder gave no frame", false)
+				s.derivedFailures.remember(s.cameraIdentityKey(usbCam().GetPath()), "the encoder gave no frame", false)
 				return s
 			},
 			sfPixelsMode,
@@ -940,24 +940,21 @@ func TestRecover_SameModelCamerasThatSwapPathsKeepTheirSettingsNotTheirPathsEntr
 }
 
 // A camera with an h264 or native node and a "frame" stamp goes while its app
-// reads and comes back: the node covers it again and is fed again. An h264
-// node resumes on a frame the app can decode alone. The sample IDs come from a
-// counter kept for the camera's path, so they go on where they were when the
-// camera is back at its path, and start again at 1, repeating IDs the app has
-// read, when it is back at another one.
+// reads and comes back, at its path or at another one: the node covers it
+// again and is fed again. An h264 node resumes on a frame the app can decode
+// alone. The sample IDs go on where they were, so the app reads none twice.
 func TestRecover_ANodeWithAFrameStampIsCoveredAndFedAgainAfterAReplug(t *testing.T) {
 	elsewhere := csBrio()
 	elsewhere.base = "video2"
 	for _, tc := range []struct {
-		name        string
-		format      string
-		back        csCamera
-		wantNumbers []uint64
+		name   string
+		format string
+		back   csCamera
 	}{
-		{"h264, back at its path", appconfig.CameraFormatH264, csBrio(), []uint64{3, 4, 5}},
-		{"native, back at its path", appconfig.CameraFormatNative, csBrio(), []uint64{3, 4, 5}},
-		{"h264, back at another path", appconfig.CameraFormatH264, elsewhere, []uint64{1, 2, 3}},
-		{"native, back at another path", appconfig.CameraFormatNative, elsewhere, []uint64{1, 2, 3}},
+		{"h264, back at its path", appconfig.CameraFormatH264, csBrio()},
+		{"native, back at its path", appconfig.CameraFormatNative, csBrio()},
+		{"h264, back at another path", appconfig.CameraFormatH264, elsewhere},
+		{"native, back at another path", appconfig.CameraFormatNative, elsewhere},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prev := shareRetryBackoff
@@ -1037,8 +1034,8 @@ func TestRecover_ANodeWithAFrameStampIsCoveredAndFedAgainAfterAReplug(t *testing
 				sampleID, size := capture(fp.hub(1), randomAccess)
 				numbers, sizes = append(numbers, sampleID), append(sizes, size)
 			}
-			if !reflect.DeepEqual(numbers, tc.wantNumbers) {
-				t.Fatalf("sample IDs after the replug = %v, want %v", numbers, tc.wantNumbers)
+			if want := []uint64{3, 4, 5}; !reflect.DeepEqual(numbers, want) {
+				t.Fatalf("sample IDs after the replug = %v, want %v: they go on from the 2 before it", numbers, want)
 			}
 			for i := range numbers {
 				if i == 0 && tc.format == appconfig.CameraFormatH264 {
