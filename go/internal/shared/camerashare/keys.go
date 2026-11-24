@@ -19,7 +19,7 @@ const (
 // "share_mode_native". The default format's mode is under KeyMode.
 func KeyModeOfFormat(format string) string { return KeyMode + "_" + format }
 
-// KeyUnavailableOfFormat is why the camera cannot be declared in a format
-// other than the default, e.g. "share_unavailable_native". An app that asks
-// for that format gets a node of the default format instead.
+// KeyUnavailableOfFormat is why a shared camera cannot be declared in a
+// format, e.g. "share_unavailable_native". An app that asks for that format
+// gets a node of another format instead (appconfig.CameraFormatsServedFor).
 func KeyUnavailableOfFormat(format string) string { return KeyUnavailable + "_" + format }

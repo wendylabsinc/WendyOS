@@ -3253,8 +3253,9 @@ var _ hardware.CameraShareReporter = (*VideoService)(nil)
 // CameraShareReport describes how each local camera is shared, by device path,
 // for the hardware listing (internal/shared/camerashare names the keys). A
 // camera that is shared carries its mode in each node format it can be shared
-// in; one that is not carries why. When containers share it, it also names
-// them and each one's node settings and state.
+// in and why it cannot be shared in the others; one that is not shared carries
+// why. When containers share it, it also names them and each one's node
+// settings and state.
 //
 // Nothing is cached: every call decides afresh with shareDecisionFor, which
 // only reads (its GStreamer listing is memoised), on its own goroutine and
@@ -3300,23 +3301,26 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 				s.shares.mu.Lock()
 				unsupported := s.shares.freshStartUnsupported
 				s.shares.mu.Unlock()
-				// The default format's mode and refusal keep the keys an
-				// older command line reads. Another format says why it is
+				// The default format's mode and a camera's refusal keep the
+				// keys an older command line reads. A format says why it is
 				// not to be had only on a camera that is shared: an app that
-				// asks for it gets the default format's node there.
-				defaultFormat, otherFormats := appconfig.CameraFormats[0], appconfig.CameraFormats[1:]
-				switch byDefault := decisions[defaultFormat]; {
-				case !byDefault.Shared:
-					props[camerashare.KeyUnavailable] = byDefault.Reason
+				// asks for it gets a node of another format there.
+				defaultFormat := appconfig.CameraFormats[0]
+				shared := slices.ContainsFunc(appconfig.CameraFormats, func(format string) bool { return decisions[format].Shared })
+				switch {
+				case !shared:
+					props[camerashare.KeyUnavailable] = decisions[defaultFormat].Reason
 				case unsupported:
 					props[camerashare.KeyUnavailable] = errShareFreshStartUnsupported.Error()
 				default:
-					props[camerashare.KeyMode] = byDefault.Mode.String()
-					for _, format := range otherFormats {
-						if decision := decisions[format]; decision.Shared {
-							props[camerashare.KeyModeOfFormat(format)] = decision.Mode.String()
-						} else {
+					for _, format := range appconfig.CameraFormats {
+						switch decision := decisions[format]; {
+						case !decision.Shared:
 							props[camerashare.KeyUnavailableOfFormat(format)] = decision.Reason
+						case format == defaultFormat:
+							props[camerashare.KeyMode] = decision.Mode.String()
+						default:
+							props[camerashare.KeyModeOfFormat(format)] = decision.Mode.String()
 						}
 					}
 				}

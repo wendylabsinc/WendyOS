@@ -500,6 +500,20 @@ var (
 	CameraStamps  = []string{CameraStampTime, CameraStampFrame}
 )
 
+// CameraFormatsServedFor lists the formats a node may carry for an app that
+// asks for one, the asked format first: the first the camera can be declared in
+// is served. Pictures stand in for a format the camera cannot provide, and the
+// camera's own frames for pictures that cannot be made from them.
+func CameraFormatsServedFor(asked string) []string {
+	served := []string{asked}
+	for _, format := range []string{CameraFormatPixels, CameraFormatNative} {
+		if format != asked {
+			served = append(served, format)
+		}
+	}
+	return served
+}
+
 func isCameraEntitlement(e Entitlement) bool {
 	return e.Type == EntitlementCamera || e.Type == EntitlementVideo
 }

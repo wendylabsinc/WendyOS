@@ -121,7 +121,7 @@ type shareRecord struct {
 	mode         sharedMode
 	stamp        string
 	// askedFormat is the format the app's entitlement asked for when the
-	// camera could not be declared in it and the node serves pictures
+	// camera could not be declared in it and the node serves another format
 	// instead; askedWhyNot is why it could not. Both are empty otherwise.
 	askedFormat, askedWhyNot string
 	node                     int

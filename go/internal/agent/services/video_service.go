@@ -208,6 +208,41 @@ func bestDefaultFrameSize(fd int, pixfmt uint32) (uint32, uint32) {
 	return fallbackW, fallbackH
 }
 
+// defaultedCaptureSize fills in the width and height a capture request left
+// unset. "No preference" must not become "smallest mode the driver has" (see
+// bestDefaultFrameSize); what the caller named is kept verbatim.
+func defaultedCaptureSize(fd int, pixfmt, width, height uint32) (uint32, uint32) {
+	if width != 0 && height != 0 {
+		return width, height
+	}
+	bestW, bestH := bestDefaultFrameSize(fd, pixfmt)
+	if bestW == 0 || bestH == 0 {
+		return width, height
+	}
+	if width == 0 {
+		width = bestW
+	}
+	if height == 0 {
+		height = bestH
+	}
+	return width, height
+}
+
+// captureSizeFor is the size a native capture of pixfmt asks the camera for
+// when its request names width and height, read without taking the camera.
+// Behind a var so tests can describe a camera without a V4L2 node.
+var captureSizeFor = func(path string, pixfmt, width, height uint32) (uint32, uint32) {
+	if width != 0 && height != 0 {
+		return width, height
+	}
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return 0, 0
+	}
+	defer unix.Close(fd) //nolint:errcheck
+	return defaultedCaptureSize(fd, pixfmt, width, height)
+}
+
 // frameSizeProbeFormats lists the pixel formats worth asking a camera about when
 // enumerating its frame sizes: every raw format the capture path can actually
 // negotiate (rawPixelFormats), plus MJPEG.
@@ -3275,23 +3310,11 @@ func (s *VideoService) captureV4L2Native(ctx context.Context, emit func([]byte, 
 	// Configure the capture format.
 	var vfmt v4l2Format
 	vfmt.Type = v4l2BufTypeVideoCapture
-	vfmt.Width = cfg.width
-	vfmt.Height = cfg.height
-	// "No preference" must not become "smallest mode the driver has" — see
-	// bestDefaultFrameSize. Only fills in what the caller left unset, so an
-	// explicit request is still honoured verbatim.
-	if vfmt.Width == 0 || vfmt.Height == 0 {
-		if w, h := bestDefaultFrameSize(fd, cfg.pixelFormat); w > 0 && h > 0 {
-			if vfmt.Width == 0 {
-				vfmt.Width = w
-			}
-			if vfmt.Height == 0 {
-				vfmt.Height = h
-			}
-			s.logger.Info("selected default capture size",
-				zap.String("device", path), zap.Uint32("width", vfmt.Width),
-				zap.Uint32("height", vfmt.Height))
-		}
+	vfmt.Width, vfmt.Height = defaultedCaptureSize(fd, cfg.pixelFormat, cfg.width, cfg.height)
+	if vfmt.Width != cfg.width || vfmt.Height != cfg.height {
+		s.logger.Info("selected default capture size",
+			zap.String("device", path), zap.Uint32("width", vfmt.Width),
+			zap.Uint32("height", vfmt.Height))
 	}
 	vfmt.PixelFormat = cfg.pixelFormat
 	vfmt.Field = v4l2FieldNone
@@ -4340,7 +4363,7 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 		plan.rawWhy = mjpegRawWhy(capW, capH)
 		plan.nativeWhy = gstDecodedNativeWhy
 		// Decoded frames still reach in-agent consumers, as YUYV, when one fits.
-		plan.pixels = mjpegPixelsFormat(capW, capH)
+		plan.pixels = yuyvPictureFormat(capW, capH)
 	case capW == 0 || capH == 0:
 		plan.rawWhyLazy = func() string { return rawWhyNoCaptureSize(devicePath) }
 	case rawFormatFor(devicePath, capW, capH) == nil:

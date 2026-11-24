@@ -19,12 +19,13 @@ func shareTestService(t *testing.T, formats []uint32, sizes map[uint32][][2]uint
 	t.Helper()
 	withRawModes(t, sizes)
 	prevBest, prevMJPEG, prevRates, prevDepth := bestDefaultFrameSizeForDevice, deviceSupportsMJPEGSize, frameRatesFor, isDepthOrInfraredNode
+	prevCaptureSize := captureSizeFor
 	t.Cleanup(func() {
 		bestDefaultFrameSizeForDevice, deviceSupportsMJPEGSize, frameRatesFor, isDepthOrInfraredNode = prevBest, prevMJPEG, prevRates, prevDepth
+		captureSizeFor = prevCaptureSize
 	})
-	bestDefaultFrameSizeForDevice = func(string) (uint32, uint32) {
-		var w, h uint32
-		for _, list := range sizes {
+	largestDefault := func(lists ...[][2]uint32) (w, h uint32) {
+		for _, list := range lists {
 			for _, m := range list {
 				if m[0] <= defaultMaxDefaultWidth && m[1] <= defaultMaxDefaultHeight && m[0]*m[1] > w*h {
 					w, h = m[0], m[1]
@@ -33,6 +34,16 @@ func shareTestService(t *testing.T, formats []uint32, sizes map[uint32][][2]uint
 		}
 		return w, h
 	}
+	bestDefaultFrameSizeForDevice = func(string) (uint32, uint32) {
+		var lists [][][2]uint32
+		for pixfmt, list := range sizes {
+			if pixfmt != v4l2PixFmtH264 {
+				lists = append(lists, list)
+			}
+		}
+		return largestDefault(lists...)
+	}
+	captureSizeFor = func(_ string, pixfmt, _, _ uint32) (uint32, uint32) { return largestDefault(sizes[pixfmt]) }
 	deviceSupportsMJPEGSize = func(_ string, w, h uint32) bool {
 		for _, m := range sizes[v4l2PixFmtMJPEG] {
 			if m[0] == w && m[1] == h {
@@ -128,9 +139,6 @@ func TestShareDecision_RefusalsNameTheirReason(t *testing.T) {
 		mutate func(t *testing.T, s *VideoService, dev *agentpb.VideoDevice)
 		want   string
 	}{
-		{"h264", func(_ *testing.T, s *VideoService, _ *agentpb.VideoDevice) {
-			s.capturePixelFormats = func(string) ([]uint32, bool) { return []uint32{v4l2PixFmtYUYV, v4l2PixFmtH264}, true }
-		}, "the camera produces H.264 itself; sharing it comes in a later release"},
 		{"csi", func(_ *testing.T, _ *VideoService, d *agentpb.VideoDevice) {
 			d.Transport = agentpb.VideoTransport_VIDEO_TRANSPORT_CSI
 		}, "CSI cameras are not shared yet"},

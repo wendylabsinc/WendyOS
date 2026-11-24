@@ -624,3 +624,15 @@ func TestSchema_ValidatesCameraNodeKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestCameraFormatsServedFor_AskedFormatThenPicturesThenTheCamerasOwnFrames(t *testing.T) {
+	for asked, want := range map[string][]string{
+		CameraFormatPixels: {CameraFormatPixels, CameraFormatNative},
+		CameraFormatNative: {CameraFormatNative, CameraFormatPixels},
+		CameraFormatH264:   {CameraFormatH264, CameraFormatPixels, CameraFormatNative},
+	} {
+		if got := CameraFormatsServedFor(asked); !slices.Equal(got, want) {
+			t.Errorf("served for %s = %v, want %v", asked, got, want)
+		}
+	}
+}

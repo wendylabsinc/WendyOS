@@ -34,7 +34,13 @@ func sfCanDeriveFrames(s *VideoService) {
 	s.gstMemo.mu.Unlock()
 }
 
-const sfCannotDerive = "the camera's own frames are not captured whole: pictures and H.264 cannot be derived from its frames on this device: GStreamer lacks gdpdepay, gdppay, h264parse"
+// What the test cameras' captures say of their own frames: none of them
+// offers H.264, and the JPEG source says why it does not hand theirs on.
+const (
+	sfNoOwnFrames  = "H.264: the camera offers no H.264; JPEG: "
+	sfNotWhole     = "the camera's own frames are not captured whole: " + sfNoOwnFrames
+	sfCannotDerive = sfNotWhole + "pictures and H.264 cannot be derived from its frames on this device: GStreamer lacks gdpdepay, gdppay, h264parse"
+)
 
 func sfCameraEntitlement(format, stamp string, allowlist ...string) appconfig.Entitlement {
 	return appconfig.Entitlement{Type: appconfig.EntitlementCamera, Format: format, Stamp: stamp, Allowlist: allowlist}
@@ -215,7 +221,7 @@ func TestShareDecision_AFormatTheCameraCannotProvideIsServedAsPictures(t *testin
 				return s
 			},
 			sharedMode{640, 480, "UYVY", 1280, 30, "pixels", 0},
-			"the camera's own frames are not captured whole: the camera offers no JPEG at 640x480",
+			sfNotWhole + "the camera offers no JPEG at 640x480",
 		},
 		"the device cannot derive from its frames": {jpegCamera, sfPixelsMode, sfCannotDerive},
 		"deriving from its frames failed recently": {
@@ -226,7 +232,7 @@ func TestShareDecision_AFormatTheCameraCannotProvideIsServedAsPictures(t *testin
 				return s
 			},
 			sfPixelsMode,
-			"the camera's own frames are not captured whole: deriving pictures and H.264 from this camera's frames failed recently: the encoder gave no frame",
+			sfNotWhole + "deriving pictures and H.264 from this camera's frames failed recently: the encoder gave no frame",
 		},
 	}
 	for name, tc := range cases {
@@ -478,7 +484,8 @@ func TestCreateCameraShares_AFrameStampNodeWithNoFrameNumbersIsNotJoinedAndSaysW
 		t.Fatalf("records = %+v; logs: %v", records, h.logs.All())
 	}
 	r := records[0]
-	why := `the camera's own frames are not captured whole (pictures and H.264 cannot be derived from its frames on this device: GStreamer lacks gdpdepay, gdppay, h264parse), so its pictures carry no frame number for the "frame" stamp`
+	why := "the camera's own frames are not captured whole (" + sfNoOwnFrames + "pictures and H.264 cannot be derived from its frames on this device: GStreamer lacks gdpdepay, gdppay, h264parse)" +
+		`, so its pictures carry no frame number for the "frame" stamp`
 	want := "cv-a [format pixels, stamp frame] (cannot serve: " + why + ")"
 	if !csWaitFor(2*time.Second, func() bool { return h.reportOf("/dev/video0")["share_state"] == want }) {
 		t.Fatalf("share_state with no reader = %q\nwant                         %q", h.reportOf("/dev/video0")["share_state"], want)

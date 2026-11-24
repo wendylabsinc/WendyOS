@@ -31,38 +31,95 @@ const (
 // format. A camera type whose format is new adds an entry to derivedTransforms
 // and nothing else here.
 type derivedTransform struct {
-	decoderElements []string
-	inputCaps       func(width, height, framerate uint32) string
-	decodeStages    string
-	pictureStages   string
-	pictures        func(width, height uint32) *agentpb.RawFormat
-	rawWhy          func(width, height uint32) string
+	inputCaps func(width, height, framerate uint32) string
+	// decoders are the ways to decode the format, the preferred one first.
+	decoders      []derivedDecoder
+	pictureStages string
+	pictures      func(width, height uint32) *agentpb.RawFormat
+	rawWhy        func(width, height uint32) string
+	// encodes adds the H.264 branch. A format that is H.264 already has none:
+	// viewers and recordings get the camera's own frames.
+	encodes bool
+	// reorders reports a frame whose picture a decoder hands back out of turn.
+	// GStreamer's decoders then move timestamps between pictures, so no picture
+	// of such a stream can be paired with its frame. Nil when no frame does.
+	reorders func(frame []byte) bool
 }
+
+// derivedDecoder is one way to decode a format: the stages from the framed
+// input to pictures in system memory, and the elements they need.
+type derivedDecoder struct {
+	element  string
+	stages   string
+	elements []string
+}
+
+const h264RawWhy = "camera streams H.264 natively; raw frames are not offered"
 
 var derivedTransforms = map[agentpb.VideoCodec]derivedTransform{
 	videoCodecMJPEG: {
-		decoderElements: []string{"jpegdec"},
 		inputCaps: func(width, height, framerate uint32) string {
 			return fmt.Sprintf("image/jpeg, width=(int)%d, height=(int)%d, framerate=(fraction)%d/1", width, height, framerate)
 		},
-		decodeStages:  "jpegdec",
-		pictureStages: mjpegPixelsStages,
-		pictures:      mjpegPixelsFormat,
+		decoders:      []derivedDecoder{{element: "jpegdec", stages: "jpegdec", elements: []string{"jpegdec"}}},
+		pictureStages: yuyvPictureStages,
+		pictures:      yuyvPictureFormat,
 		rawWhy:        mjpegRawWhy,
+		encodes:       true,
+	},
+	agentpb.VideoCodec_VIDEO_CODEC_H264: {
+		inputCaps: func(_, _, framerate uint32) string {
+			return fmt.Sprintf("video/x-h264, stream-format=(string)byte-stream, alignment=(string)au, framerate=(fraction)%d/1", framerate)
+		},
+		decoders: []derivedDecoder{
+			// nvv4l2decoder hands on NVMM memory, which videoconvert cannot read.
+			{element: "nvv4l2decoder", stages: "h264parse ! nvv4l2decoder ! nvvidconv ! video/x-raw", elements: []string{"nvv4l2decoder", "nvvidconv"}},
+			{element: "v4l2h264dec", stages: "h264parse ! v4l2h264dec", elements: []string{"v4l2h264dec"}},
+			// Frame threads hold back as many pictures as there are threads.
+			{element: "avdec_h264", stages: "h264parse ! avdec_h264 thread-type=slice", elements: []string{"avdec_h264"}},
+			{element: "openh264dec", stages: "h264parse ! openh264dec", elements: []string{"openh264dec"}},
+		},
+		pictureStages: yuyvPictureStages,
+		pictures:      yuyvPictureFormat,
+		rawWhy:        func(uint32, uint32) string { return h264RawWhy },
+		reorders:      h264PictureIsBidirectional,
 	},
 }
 
 var derivedFramingElements = []string{"gdpdepay", "gdppay", "h264parse"}
 
-func derivedLayerMissingElements(transform derivedTransform, available map[string]bool) []string {
-	var missing []string
-	for _, element := range append(append([]string(nil), derivedFramingElements...), transform.decoderElements...) {
-		if !available[element] {
-			missing = append(missing, element)
+// derivedLayerDecoder chooses the first of a format's decoders this GStreamer
+// can run, or says what it lacks.
+func derivedLayerDecoder(transform derivedTransform, available map[string]bool) (derivedDecoder, error) {
+	lacking := func(elements []string) (missing []string) {
+		for _, element := range elements {
+			if !available[element] {
+				missing = append(missing, element)
+			}
 		}
+		return missing
+	}
+	missing := lacking(derivedFramingElements)
+	var chosen *derivedDecoder
+	var choices []string
+	for i, decoder := range transform.decoders {
+		if len(lacking(decoder.elements)) == 0 {
+			chosen = &transform.decoders[i]
+			break
+		}
+		choices = append(choices, strings.Join(decoder.elements, " with "))
+	}
+	if chosen == nil && len(transform.decoders) == 1 {
+		missing = append(missing, lacking(transform.decoders[0].elements)...)
 	}
 	sort.Strings(missing)
-	return missing
+	if chosen == nil && len(transform.decoders) != 1 {
+		missing = append(missing, "a decoder ("+strings.Join(choices, ", ")+")")
+	}
+	if len(missing) > 0 {
+		return derivedDecoder{}, fmt.Errorf("GStreamer lacks %s", strings.Join(missing, ", "))
+	}
+	return *chosen, nil
 }
 
 // derivedLayerEncoder chooses the H.264 encoder a derived layer runs. The
@@ -93,7 +150,10 @@ type derivedLayerGaveUp struct {
 
 func (e derivedLayerGaveUp) Error() string { return e.msg }
 
-var errDerivedChildSilent = errors.New("the pipeline took frames and produced no usable one")
+var (
+	errDerivedChildSilent     = errors.New("the pipeline took frames and produced no usable one")
+	errDerivedFramesReordered = errors.New("the camera's frames are decoded out of order, so no picture can be paired with the frame it came from")
+)
 
 type derivedLayer struct {
 	logger    *zap.Logger
@@ -101,6 +161,7 @@ type derivedLayer struct {
 	format    agentpb.VideoCodec
 	transform derivedTransform
 	gstPath   string
+	decoder   derivedDecoder
 	encoder   gstEncoderResult
 	grace     time.Duration
 
@@ -114,11 +175,13 @@ type derivedLayer struct {
 	feeding atomic.Bool
 	tags    derivedFrameTags
 
-	fed, notFed, unusable, usable, published, childRuns atomic.Uint64
-	failedStarts                                        int
+	fed, notFed, awaitedStart, unusable, usable, published, childRuns atomic.Uint64
+	failedStarts                                                      int
 
-	// Nanoseconds since created, of the last frame capture offered and of the
-	// last usable output; the watch on a child compares them.
+	// Nanoseconds since created, of the last frame the child was given or had
+	// no room for and of the last usable output; the watch on a child compares
+	// them. A frame passed over while feeding waits for one decoding can start
+	// on is neither.
 	created                   time.Time
 	lastOffered, lastUsableAt atomic.Int64
 
@@ -143,12 +206,15 @@ func newDerivedLayer(cfg derivedLayerConfig) (*derivedLayer, error) {
 	if !known {
 		return nil, fmt.Errorf("no derived frames are defined for %s", codecIndexName(cfg.format))
 	}
-	if missing := derivedLayerMissingElements(transform, cfg.available); len(missing) > 0 {
-		return nil, fmt.Errorf("GStreamer lacks %s", strings.Join(missing, ", "))
-	}
-	enc, err := derivedLayerEncoder(cfg.available)
+	decoder, err := derivedLayerDecoder(transform, cfg.available)
 	if err != nil {
 		return nil, err
+	}
+	var enc gstEncoderResult
+	if transform.encodes {
+		if enc, err = derivedLayerEncoder(cfg.available); err != nil {
+			return nil, err
+		}
 	}
 	framerate := cfg.framerate
 	if framerate == 0 {
@@ -156,7 +222,7 @@ func newDerivedLayer(cfg derivedLayerConfig) (*derivedLayer, error) {
 	}
 	return &derivedLayer{
 		logger: cfg.logger, device: cfg.device, format: cfg.format, transform: transform,
-		gstPath: cfg.gstPath, encoder: enc, grace: cfg.grace,
+		gstPath: cfg.gstPath, decoder: decoder, encoder: enc, grace: cfg.grace,
 		width: cfg.width, height: cfg.height, framerate: framerate,
 		pictures: transform.pictures(cfg.width, cfg.height),
 		demand:   cfg.demand, publish: cfg.publish,
@@ -165,6 +231,14 @@ func newDerivedLayer(cfg derivedLayerConfig) (*derivedLayer, error) {
 		firstOutputTimeout: firstFrameTimeout, idleOutputTimeout: cameraIdleTimeout,
 		restartPause: derivedRestartPause,
 	}, nil
+}
+
+// elementInUse names the element a failed child is reported under.
+func (l *derivedLayer) elementInUse() string {
+	if l.transform.encodes {
+		return l.encoder.element
+	}
+	return l.decoder.element
 }
 
 func (l *derivedLayer) sinceCreated() int64 { return int64(time.Since(l.created)) }
@@ -176,10 +250,10 @@ func (l *derivedLayer) take(frame *videoFrame) {
 	if frame.codec != l.format || frame.sampleID == 0 || !l.feeding.Load() {
 		return
 	}
-	l.lastOffered.Store(l.sinceCreated())
 	select {
 	case l.feed <- frame:
 	default:
+		l.lastOffered.Store(l.sinceCreated())
 		l.notFed.Add(1)
 	}
 }
@@ -192,7 +266,10 @@ func (l *derivedLayer) offerTo(sink rawSink) {
 }
 
 func (l *derivedLayer) needs(demand encodeDemand) pipelineShape {
-	shape := branchesOnDemand(demand)
+	shape := pipelineShape{pixels: demand.wantRaw()}
+	if l.transform.encodes {
+		shape = branchesOnDemand(demand)
+	}
 	shape.pixels = shape.pixels && l.pictures != nil
 	return shape
 }
@@ -215,7 +292,7 @@ func outputFDs(shape pipelineShape) (pictures, encoded int) {
 
 func (l *derivedLayer) pipelineArgs(shape pipelineShape) []string {
 	picturesFD, encodedFD := outputFDs(shape)
-	decode := "fdsrc fd=0 ! gdpdepay ! " + l.transform.decodeStages
+	decode := "fdsrc fd=0 ! gdpdepay ! " + l.decoder.stages
 	pictures := fmt.Sprintf("%s ! %s ! gdppay ! fdsink fd=%d", rawTapQueue, l.transform.pictureStages, picturesFD)
 	encoded := fmt.Sprintf("%s ! %s ! gdppay ! fdsink fd=%d", leakyRawQueue,
 		encoderSegment(l.encoder.element, l.encoder.hasH264Parse, keyframeIntervalFrames(l.framerate)), encodedFD)
@@ -238,15 +315,17 @@ func (l *derivedLayer) launch(ctx context.Context, shape pipelineShape) error {
 		return ctx.Err()
 	}
 	usableBefore := l.usable.Load()
-	silent, err := l.runChild(ctx, shape)
+	stopped, err := l.runChild(ctx, shape)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	produced := l.usable.Load() > usableBefore
 	switch {
+	case errors.Is(stopped, errDerivedFramesReordered):
+		return derivedLayerGaveUp{msg: stopped.Error(), afterPublishing: l.published.Load() > 0}
 	case produced:
 		l.failedStarts = 0
-	case silent:
+	case errors.Is(stopped, errDerivedChildSilent):
 		return derivedLayerGaveUp{msg: status.Convert(err).Message(), afterPublishing: l.published.Load() > 0}
 	default:
 		if l.failedStarts++; l.failedStarts >= derivedFailedStartsBeforeGivingUp {
@@ -293,7 +372,9 @@ func (l *derivedLayer) encodedOutput(pipe *os.File) derivedOutput {
 		}}
 }
 
-func (l *derivedLayer) runChild(ctx context.Context, shape pipelineShape) (silent bool, runErr error) {
+// runChild runs one child until it ends or ctx does. stopped is what ended it
+// from this side, nil when ctx did.
+func (l *derivedLayer) runChild(ctx context.Context, shape pipelineShape) (stopped, runErr error) {
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	args := l.pipelineArgs(shape)
@@ -317,7 +398,7 @@ func (l *derivedLayer) runChild(ctx context.Context, shape pipelineShape) (silen
 	}
 	stdinR, stdinW, err := pipe()
 	if err != nil {
-		return false, status.Errorf(codes.Internal, "failed to create derived frame pipe: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to create derived frame pipe: %v", err)
 	}
 	cmd.Stdin = stdinR
 	childEnds := []*os.File{stdinR}
@@ -332,7 +413,7 @@ func (l *derivedLayer) runChild(ctx context.Context, shape pipelineShape) (silen
 		r, w, err := pipe()
 		if err != nil {
 			closeOpened()
-			return false, status.Errorf(codes.Internal, "failed to create derived frame pipe: %v", err)
+			return nil, status.Errorf(codes.Internal, "failed to create derived frame pipe: %v", err)
 		}
 		cmd.ExtraFiles = append(cmd.ExtraFiles, w)
 		childEnds = append(childEnds, w)
@@ -340,13 +421,13 @@ func (l *derivedLayer) runChild(ctx context.Context, shape pipelineShape) (silen
 	}
 	if err := cmd.Start(); err != nil {
 		closeOpened()
-		return false, status.Errorf(codes.Internal, "failed to start derived frame pipeline: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to start derived frame pipeline: %v", err)
 	}
 	for _, f := range childEnds {
 		f.Close() //nolint:errcheck
 	}
 	l.childRuns.Add(1)
-	l.logger.Info("derived frame pipeline started", zap.String("device", l.device),
+	l.logger.Info("derived frame pipeline started", zap.String("device", l.device), zap.String("decoder", l.decoder.element),
 		zap.String("encoder", l.encoder.element), zap.Bool("encodes", shape.encode), zap.Bool("pictures", shape.pixels))
 	before := l.counts()
 
@@ -364,7 +445,6 @@ func (l *derivedLayer) runChild(ctx context.Context, shape pipelineShape) (silen
 		running.Go(func() { ended <- l.publishOutput(output) })
 	}
 
-	var stopped error
 	select {
 	case <-ctx.Done():
 	case stopped = <-ended:
@@ -379,9 +459,9 @@ func (l *derivedLayer) runChild(ctx context.Context, shape pipelineShape) (silen
 	waitErr := cmd.Wait()
 	l.logger.Info("derived frame pipeline stopped", append(l.counts().since(before).fields(), zap.String("device", l.device))...)
 	if ctx.Err() != nil {
-		return false, ctx.Err()
+		return nil, ctx.Err()
 	}
-	return errors.Is(stopped, errDerivedChildSilent), gstCameraPipelineError(l.device, l.encoder.element,
+	return stopped, gstCameraPipelineError(l.device, l.elementInUse(),
 		strings.TrimSpace(stderr.buf.String()), waitErr, status.Errorf(codes.Internal, "derived frame pipeline ended: %v", stopped))
 }
 
@@ -395,17 +475,33 @@ func (l *derivedLayer) discardQueuedFrames() {
 	}
 }
 
+// feedChild gives the child every frame from one decoding can start on, and
+// waits for the next such frame after a gap in the frames it is handed.
 func (l *derivedLayer) feedChild(ctx context.Context, stdin *os.File) error {
 	gdp := &gdpWriter{w: stdin}
 	if err := gdp.streamHeader(l.transform.inputCaps(l.width, l.height, l.framerate)); err != nil {
 		return fmt.Errorf("child stopped reading frames: %w", err)
 	}
 	started := time.Now()
+	awaitingStart, previous := true, uint64(0)
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case frame := <-l.feed:
+			awaitingStart = awaitingStart || sampleGap(previous, frame.sampleID)
+			previous = frame.sampleID
+			if awaitingStart {
+				if _, startsHere := frameRandomAccess(frame); !startsHere {
+					l.awaitedStart.Add(1)
+					continue
+				}
+				awaitingStart = false
+			}
+			if l.transform.reorders != nil && l.transform.reorders(frame.data) {
+				return errDerivedFramesReordered
+			}
+			l.lastOffered.Store(l.sinceCreated())
 			tag := l.tags.assign(frame, time.Since(started))
 			if err := gdp.buffer(tag, frame.data); err != nil {
 				return fmt.Errorf("child stopped reading frames: %w", err)
@@ -415,9 +511,9 @@ func (l *derivedLayer) feedChild(ctx context.Context, stdin *os.File) error {
 	}
 }
 
-// watchChild ends a child that capture keeps offering frames to and that has
-// produced no usable output for the limit. A camera that stopped delivering
-// is the capture's to report, so a child nobody offers frames to is left alone.
+// watchChild ends a child that keeps being given frames and that has produced
+// no usable output for the limit. A camera that stopped delivering is the
+// capture's to report, so a child nobody gives frames to is left alone.
 func (l *derivedLayer) watchChild(ctx context.Context, started int64) error {
 	check := time.NewTicker(max(min(l.firstOutputTimeout, l.idleOutputTimeout)/10, time.Millisecond))
 	defer check.Stop()
@@ -475,20 +571,22 @@ func (l *derivedLayer) publishOutput(output derivedOutput) error {
 }
 
 type derivedLayerCounts struct {
-	fed, notFed, unknownTags, unusable, usable, published, childRuns uint64
+	fed, notFed, awaitedStart, unknownTags, unusable, usable, published, childRuns uint64
 }
 
 func (l *derivedLayer) counts() derivedLayerCounts {
 	return derivedLayerCounts{
-		fed: l.fed.Load(), notFed: l.notFed.Load(), unknownTags: l.tags.unknownOutputs(), unusable: l.unusable.Load(),
+		fed: l.fed.Load(), notFed: l.notFed.Load(), awaitedStart: l.awaitedStart.Load(),
+		unknownTags: l.tags.unknownOutputs(), unusable: l.unusable.Load(),
 		usable: l.usable.Load(), published: l.published.Load(), childRuns: l.childRuns.Load(),
 	}
 }
 
 func (c derivedLayerCounts) since(before derivedLayerCounts) derivedLayerCounts {
 	return derivedLayerCounts{
-		fed: c.fed - before.fed, notFed: c.notFed - before.notFed, unknownTags: c.unknownTags - before.unknownTags,
-		unusable: c.unusable - before.unusable, usable: c.usable - before.usable, published: c.published - before.published,
+		fed: c.fed - before.fed, notFed: c.notFed - before.notFed, awaitedStart: c.awaitedStart - before.awaitedStart,
+		unknownTags: c.unknownTags - before.unknownTags,
+		unusable:    c.unusable - before.unusable, usable: c.usable - before.usable, published: c.published - before.published,
 		childRuns: c.childRuns - before.childRuns,
 	}
 }
@@ -496,6 +594,7 @@ func (c derivedLayerCounts) since(before derivedLayerCounts) derivedLayerCounts 
 func (c derivedLayerCounts) fields() []zap.Field {
 	return []zap.Field{
 		zap.Uint64("frames_fed", c.fed), zap.Uint64("frames_not_fed", c.notFed),
+		zap.Uint64("frames_passed_over_awaiting_a_start", c.awaitedStart),
 		zap.Uint64("outputs_with_unknown_tag", c.unknownTags), zap.Uint64("outputs_unusable", c.unusable),
 		zap.Uint64("outputs_usable", c.usable), zap.Uint64("frames_published", c.published), zap.Uint64("child_runs", c.childRuns),
 	}

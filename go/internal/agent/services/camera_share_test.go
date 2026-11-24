@@ -52,6 +52,12 @@ func csH264Cam() csCamera {
 		camera.Identity{Device: csPort("1-2.2"), Index: "0", Name: "Logi H264"}}
 }
 
+// csFormatlessCam lists no formats, so no policy shares it.
+func csFormatlessCam() csCamera {
+	return csCamera{"video2", "Blank Cam", nil,
+		camera.Identity{Device: csPort("1-2.2"), Index: "0", Name: "Blank Cam"}}
+}
+
 func csC920() csCamera {
 	return csCamera{"video4", "C920", []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG},
 		camera.Identity{Device: csPort("1-2.3"), Index: "0", Name: "C920"}}
@@ -223,7 +229,9 @@ func (h *csHarness) vanish(nr int) {
 // in a temporary directory.
 func newCSHarness(t *testing.T, cams ...csCamera) *csHarness {
 	t.Helper()
-	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, brioSizes(), []uint32{30})
+	sizes := brioSizes()
+	sizes[v4l2PixFmtH264] = sizes[v4l2PixFmtYUYV]
+	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG}, sizes, []uint32{30})
 	h := &csHarness{t: t, s: s, loop: s.loopback.(*fakeLoopback), cams: map[string]csCamera{}, openErr: map[string]error{},
 		freshStartErr: map[string]error{},
 		clock:         &csClock{now: time.Unix(1_000_000, 0)}, held: map[string][]deviceHolder{}, removedAt: map[int]time.Time{},
@@ -562,7 +570,7 @@ func csStateRecord(c csCamera, path string, mode sharedMode, node int) string {
 }
 
 func TestCreateCameraShares_OneNodePerSharedCameraLabelledWithItsName(t *testing.T) {
-	h := newCSHarness(t, csBrio(), csH264Cam())
+	h := newCSHarness(t, csBrio(), csFormatlessCam())
 	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 
 	if got, want := h.loop.shareCalls(), []auxCall{{255, "Brio 101"}}; !reflect.DeepEqual(got, want) {
@@ -578,14 +586,14 @@ func TestCreateCameraShares_OneNodePerSharedCameraLabelledWithItsName(t *testing
 	if n := h.logged("camera share: cv-a shares Brio 101 (/dev/video0) through /dev/video255 at 1280x720 YUYV, 30 fps"); n != 1 {
 		t.Errorf("shares line logged %d times, want 1; logs: %v", n, h.logs.All())
 	}
-	if n := h.logged("camera share: cv-a gets the real camera Logi H264 (/dev/video2): the camera produces H.264 itself; sharing it comes in a later release"); n != 1 {
-		t.Errorf("H.264 line logged %d times, want 1; logs: %v", n, h.logs.All())
+	if n := h.logged("camera share: cv-a gets the real camera Blank Cam (/dev/video2): the camera's formats could not be read"); n != 1 {
+		t.Errorf("the unshared camera's line logged %d times, want 1; logs: %v", n, h.logs.All())
 	}
 	if _, apps, ok := h.s.sharedModeOf("/dev/video0"); !ok || !reflect.DeepEqual(apps, []string{"cv-a"}) {
 		t.Errorf("sharedModeOf(/dev/video0) = %v, %v; want [cv-a]", apps, ok)
 	}
 	if _, _, ok := h.s.sharedModeOf("/dev/video2"); ok {
-		t.Error("the H.264 camera is shared")
+		t.Error("the camera without formats is shared")
 	}
 
 	state := h.stateFile()
@@ -1663,13 +1671,13 @@ func TestCreateCameraShares_ADecisionAtTheDeadlineMakesNothing(t *testing.T) {
 // Fix round 1, M3: a camera the policy refuses is logged with the policy's
 // reason, even when its identity cannot be read.
 func TestCreateCameraShares_PolicyReasonComesBeforeTheIdentity(t *testing.T) {
-	h := newCSHarness(t, csBrio(), csH264Cam())
+	h := newCSHarness(t, csBrio(), csFormatlessCam())
 	h.s.cameraIdentity = func(string) (camera.Identity, error) { return camera.Identity{}, errors.New("no device link") }
 	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
-	if n := h.logged("camera share: cv-a gets the real camera Logi H264 (/dev/video2): the camera produces H.264 itself; sharing it comes in a later release"); n != 1 {
+	if n := h.logged("camera share: cv-a gets the real camera Blank Cam (/dev/video2): the camera's formats could not be read"); n != 1 {
 		t.Errorf("policy line logged %d times; logs: %v", n, h.logs.All())
 	}
-	if n := h.logged("Logi H264 (/dev/video2): its sysfs identity could not be read"); n != 0 {
+	if n := h.logged("Blank Cam (/dev/video2): its sysfs identity could not be read"); n != 0 {
 		t.Errorf("the refused camera got an identity warning; logs: %v", h.logs.All())
 	}
 	if n := h.logged("camera share: cv-a gets the real camera Brio 101 (/dev/video0): its sysfs identity could not be read: no device link"); n != 1 {

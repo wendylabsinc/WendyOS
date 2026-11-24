@@ -137,9 +137,9 @@ func (m sharedMode) admits(req *agentpb.StreamVideoRequest) bool {
 }
 
 // shareDecision says whether a camera is shared and, when it is, at what mode;
-// otherwise Reason says why not. AskedFormat is set when the camera is shared
-// as pictures because it cannot be declared in the format the app asked for,
-// and AskedWhyNot says why it cannot.
+// otherwise Reason says why not. AskedFormat is set when the node serves
+// another format than the app asked for, because the camera cannot be declared
+// in that one, and AskedWhyNot says why it cannot.
 type shareDecision struct {
 	Shared                   bool
 	Mode                     sharedMode
@@ -161,37 +161,57 @@ var isDepthOrInfraredNode = isRealSenseDepthNode
 // shareDecisionFor decides whether the camera dev is served to an app that
 // asks for format through an agent-fed node, and at which mode. An app gets a
 // node for every camera that can have one: a camera that cannot be declared in
-// the format asked for is served as pictures when it can be shared at all.
-// The first failing rule gives the Reason.
+// the format asked for is served in the first format it can be declared in
+// (appconfig.CameraFormatsServedFor). A camera with no mode at all gives the
+// reason it has no pictures.
 func (s *VideoService) shareDecisionFor(_ context.Context, dev *agentpb.VideoDevice, format string) shareDecision {
-	pictures := appconfig.CameraFormats[0]
-	if format == pictures {
-		return s.shareDecisionsFor(dev, format)[format]
+	candidates := appconfig.CameraFormatsServedFor(format)
+	decisions := s.shareDecisionsFor(dev, candidates...)
+	for _, served := range candidates {
+		decision := decisions[served]
+		if !decision.Shared {
+			continue
+		}
+		if served != format {
+			decision.AskedFormat, decision.AskedWhyNot = format, decisions[format].Reason
+		}
+		return decision
 	}
-	decisions := s.shareDecisionsFor(dev, format, pictures)
-	asked, instead := decisions[format], decisions[pictures]
-	if asked.Shared {
-		return asked
-	}
-	if instead.Shared {
-		instead.AskedFormat, instead.AskedWhyNot = format, asked.Reason
-	}
-	return instead
+	return decisions[appconfig.CameraFormatPixels]
 }
 
-// shareDecisionsFor decides each format on its own, with no pictures served
-// instead; the rules that do not depend on the format are checked once.
+const (
+	ownFramesNotWhole     = "the camera's own frames are not captured whole: %s"
+	ownFramesNotDescribed = "the camera's own frames cannot be declared before they are captured: %s"
+)
+
+// shareDecisionsFor decides each format on its own, with no other format
+// served instead; the rules that do not depend on the format are checked once.
+// Pictures come from the layer that decodes the camera's own frames when a
+// native source captures it, and from a pipeline's tap otherwise.
 func (s *VideoService) shareDecisionsFor(dev *agentpb.VideoDevice, formats ...string) map[string]shareDecision {
 	decisions := make(map[string]shareDecision, len(formats))
 	gstPath, available, reason := s.shareRefusalFor(dev)
-	for _, format := range formats {
-		switch {
-		case reason != "":
+	if reason != "" {
+		for _, format := range formats {
 			decisions[format] = shareDecision{Reason: reason}
-		case format == appconfig.CameraFormatPixels:
-			decisions[format] = pictureShareDecision(dev, gstPath, available)
+		}
+		return decisions
+	}
+	own, declined, native := s.ownFramesAtDefaults(dev.GetPath())
+	for _, format := range formats {
+		pictures := format == appconfig.CameraFormatPixels
+		switch {
+		case native && declined != "":
+			decisions[format] = shareDecision{Reason: fmt.Sprintf(ownFramesNotDescribed, declined)}
+		case pictures && !native:
+			decisions[format] = tappedPictureDecision(dev, gstPath, available)
+		case pictures:
+			decisions[format] = s.decodedPictureDecision(dev.GetPath(), own)
+		case declined != "":
+			decisions[format] = shareDecision{Reason: fmt.Sprintf(ownFramesNotWhole, declined)}
 		default:
-			decisions[format] = s.compressedShareDecision(dev, format)
+			decisions[format] = compressedShareDecision(own, format)
 		}
 	}
 	return decisions
@@ -225,11 +245,6 @@ func (s *VideoService) shareRefusalFor(dev *agentpb.VideoDevice) (gstPath string
 			formats = got
 		}
 	}
-	for _, f := range formats {
-		if f == v4l2PixFmtH264 {
-			return refuse("the camera produces H.264 itself; sharing it comes in a later release")
-		}
-	}
 	if len(formats) == 0 {
 		return refuse("the camera's formats could not be read")
 	}
@@ -241,7 +256,7 @@ func (s *VideoService) shareRefusalFor(dev *agentpb.VideoDevice) (gstPath string
 	return gstPath, available, ""
 }
 
-func pictureShareDecision(dev *agentpb.VideoDevice, gstPath string, available map[string]bool) shareDecision {
+func tappedPictureDecision(dev *agentpb.VideoDevice, gstPath string, available map[string]bool) shareDecision {
 	refuse := func(reason string) shareDecision { return shareDecision{Reason: reason} }
 
 	plan, err := planGStreamerPipelineShaped(pipelineShape{encode: false}, gstPath, dev.GetPath(),
@@ -253,14 +268,7 @@ func pictureShareDecision(dev *agentpb.VideoDevice, gstPath string, available ma
 		return refuse("no shared mode: " + plan.rawReason())
 	}
 
-	mode := sharedMode{
-		Width:        plan.pixels.GetWidth(),
-		Height:       plan.pixels.GetHeight(),
-		Fourcc:       plan.pixels.GetFourcc(),
-		BytesPerLine: plan.pixels.GetBytesPerLine(),
-		FPS:          defaultSharedFPS,
-		Format:       appconfig.CameraFormatPixels,
-	}
+	mode := pictureMode(plan.pixels, defaultSharedFPS)
 	captureFormat := uint32(v4l2PixFmtMJPEG)
 	if plan.raw != nil {
 		captureFormat = mode.pixelFormat()
@@ -271,6 +279,21 @@ func pictureShareDecision(dev *agentpb.VideoDevice, gstPath string, available ma
 	return shareDecision{Shared: true, Mode: mode}
 }
 
+func pictureMode(pictures *agentpb.RawFormat, fps uint32) sharedMode {
+	return sharedMode{
+		Width: pictures.GetWidth(), Height: pictures.GetHeight(), Fourcc: pictures.GetFourcc(),
+		BytesPerLine: pictures.GetBytesPerLine(), FPS: fps, Format: appconfig.CameraFormatPixels,
+	}
+}
+
+func (s *VideoService) decodedPictureDecision(path string, own ownFrames) shareDecision {
+	layer, whyNot := s.pictureLayerFor(nil, path, own)
+	if layer == nil {
+		return shareDecision{Reason: whyNot}
+	}
+	return shareDecision{Shared: true, Mode: pictureMode(layer.pictures, own.rateOr(defaultSharedFPS))}
+}
+
 // shareFormatCodecs is the codec of the frames a compressed node format
 // carries, for the formats that fix one; a format absent here carries the
 // codec of the camera's own frames.
@@ -278,33 +301,21 @@ var shareFormatCodecs = map[string]agentpb.VideoCodec{
 	appconfig.CameraFormatH264: agentpb.VideoCodec_VIDEO_CODEC_H264,
 }
 
-// ownFramesAtDefaults is the codec, size and rate of the camera's own frames
-// as a capture that names no parameters hands them on whole, or why it hands
-// on none.
-func (s *VideoService) ownFramesAtDefaults(path string) (codec agentpb.VideoCodec, width, height, fps uint32, declined string) {
-	width, height, fps, declined = s.wholeJPEGCapture(path, &agentpb.StreamVideoRequest{})
-	if declined != "" {
-		return 0, 0, 0, 0, declined
-	}
-	return videoCodecMJPEG, width, height, fps, ""
+// ownFramesAtDefaults is the camera's own frames as a capture that names no
+// parameters hands them on whole, or why it hands on none. native says a
+// native source captures the camera either way.
+func (s *VideoService) ownFramesAtDefaults(path string) (own ownFrames, declined string, native bool) {
+	return s.ownFramesFor(path, &agentpb.StreamVideoRequest{})
 }
-
-const ownFramesNotWhole = "the camera's own frames are not captured whole: %s"
 
 // compressedShareDecision declares a compressed node at the size and rate of
 // the camera's own whole frames: the H.264 made from them has that size too.
-func (s *VideoService) compressedShareDecision(dev *agentpb.VideoDevice, format string) shareDecision {
-	codec, width, height, fps, declined := s.ownFramesAtDefaults(dev.GetPath())
-	if declined != "" {
-		return shareDecision{Reason: fmt.Sprintf(ownFramesNotWhole, declined)}
-	}
+func compressedShareDecision(own ownFrames, format string) shareDecision {
+	codec := own.codec
 	if fixed, ok := shareFormatCodecs[format]; ok {
 		codec = fixed
 	}
-	if fps == 0 {
-		fps = defaultSharedFPS
-	}
-	return shareDecision{Shared: true, Mode: compressedMode(codec, format, width, height, fps)}
+	return shareDecision{Shared: true, Mode: compressedMode(codec, format, own.width, own.height, own.rateOr(defaultSharedFPS))}
 }
 
 // nodeNeedsOwnFrames reports whether a node gets frames only while the
@@ -323,7 +334,7 @@ func (s *VideoService) nodeUnservedAt(path string, mode sharedMode, stamp string
 	if !nodeNeedsOwnFrames(mode, stamp) {
 		return ""
 	}
-	_, _, _, _, declined := s.ownFramesAtDefaults(path)
+	_, declined, _ := s.ownFramesAtDefaults(path)
 	switch {
 	case declined == "":
 		return ""

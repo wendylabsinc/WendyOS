@@ -85,6 +85,22 @@ func TestCameraShareNotice_AnAgentThatDoesNotKnowTheFormatServesPixels(t *testin
 	}
 }
 
+// A camera that produces H.264 on a device that cannot decode it has no
+// pictures: an app that asks for them, or for nothing, gets the camera's own
+// frames and is told why.
+func TestCameraShareNotice_ACameraWithoutPicturesServesItsOwnFramesAndSaysWhy(t *testing.T) {
+	const whyNot = "pictures cannot be decoded from its frames on this device: GStreamer lacks a decoder (nvv4l2decoder with nvvidconv, v4l2h264dec, avdec_h264, openh264dec)"
+	row := shareRowAt("Logi H264 (video2)", "/dev/video2", map[string]string{"native": "1280x720 H264, 30 fps", "h264": "1280x720 H264, 30 fps"})
+	row.Properties[camerashare.KeyUnavailableOfFormat("pixels")] = whyNot
+	asksForH264 := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Format: appconfig.CameraFormatH264, Stamp: appconfig.CameraStampFrame}}}
+	got := cameraShareNotice([]*appconfig.AppConfig{shareCfg(""), asksForH264}, []*hwCap{row})
+	want := `Camera: this app shares Logi H264 (video2) at 1280x720 H264, 30 fps, format native, stamp time (asked for pixels; serving native because ` + whyNot +
+		`); Logi H264 (video2) at 1280x720 H264, 30 fps, format h264, stamp frame. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
 func TestCameraShareNotice_ServicesWithDifferentSettingsEachNameTheirs(t *testing.T) {
 	row := shareRowAt("Brio 101 (video0)", "/dev/video0", map[string]string{"pixels": "1280x720 YUYV, 30 fps", "native": "1280x720 MJPG, 30 fps"})
 	native := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Format: appconfig.CameraFormatNative}}}

@@ -41,9 +41,9 @@ func TestCameraShareReport_NamesModeAppsAndStates(t *testing.T) {
 }
 
 func TestCameraShareReport_UnsharedCameraSaysWhy(t *testing.T) {
-	h := newCSHarness(t, csH264Cam())
+	h := newCSHarness(t, csFormatlessCam())
 	got := h.s.CameraShareReport(context.Background())["/dev/video2"]
-	want := map[string]string{"share_unavailable": "the camera produces H.264 itself; sharing it comes in a later release"}
+	want := map[string]string{"share_unavailable": "the camera's formats could not be read"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("report = %#v, want %#v", got, want)
 	}

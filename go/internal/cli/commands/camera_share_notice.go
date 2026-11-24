@@ -47,7 +47,7 @@ func cameraNameOf(description string) string {
 // cameraShareNotice returns the one line telling the developer that the app
 // will share the camera(s) the agent reports a shared mode for, with the mode,
 // format and stamp of the node each config's entitlements give it. A camera
-// the agent cannot declare in the format asked for is served in the default
+// the agent cannot declare in the format asked for is served in another
 // format, and its entry says so with the agent's reason. The line is "" when
 // nothing will be shared: no config asks for sharing, or no camera row carries
 // a share mode (an older agent, or no shareable camera).
@@ -62,17 +62,23 @@ func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*agentpb.ListHardware
 				continue
 			}
 			asked, stamp := appconfig.CameraNodeSettings(cfg.Entitlements, c.GetDevicePath(), cameraNameOf(c.GetDescription()))
-			props, served, instead := c.GetProperties(), asked, ""
-			if defaultFormat := appconfig.CameraFormats[0]; props[sharedCameraModeKey(asked)] == "" && asked != defaultFormat {
+			props, served, mode := c.GetProperties(), "", ""
+			for _, format := range appconfig.CameraFormatsServedFor(asked) {
+				if mode = props[sharedCameraModeKey(format)]; mode != "" {
+					served = format
+					break
+				}
+			}
+			if mode == "" {
+				continue
+			}
+			instead := ""
+			if served != asked {
 				why := props[camerashare.KeyUnavailableOfFormat(asked)]
 				if why == "" {
 					why = "the agent on this device does not offer that format"
 				}
-				served, instead = defaultFormat, fmt.Sprintf(" (asked for %s; serving %s because %s)", asked, defaultFormat, why)
-			}
-			mode := props[sharedCameraModeKey(served)]
-			if mode == "" {
-				continue
+				instead = fmt.Sprintf(" (asked for %s; serving %s because %s)", asked, served, why)
 			}
 			entry := fmt.Sprintf("%s at %s, format %s, stamp %s%s", c.GetDescription(), mode, served, stamp, instead)
 			if !slices.Contains(entries, entry) {

@@ -47,20 +47,20 @@ func branchesOnDemand(demand encodeDemand) pipelineShape {
 // of a pipeline that has no uncompressed frames to hand out.
 var errNoTapOnlyPipeline = errors.New("pipeline has no uncompressed frames to run without an encoder")
 
-// mjpegPixelsStages converts decoded MJPEG frames to YUYV. jpegdec's native
-// output varies (I420 and others); pinning YUY2 makes the bytes match the
-// RawFormat mjpegPixelsFormat reports.
-const mjpegPixelsStages = "videoconvert ! video/x-raw,format=YUY2"
+// yuyvPictureStages converts decoded frames to YUYV. A decoder's own output
+// format varies (I420 and others); pinning YUY2 makes the bytes match the
+// RawFormat yuyvPictureFormat reports.
+const yuyvPictureStages = "videoconvert ! video/x-raw,format=YUY2"
 
-var mjpegTapTail = fmt.Sprintf("%s ! fdsink fd=%d", mjpegPixelsStages, rawTapFD)
+var mjpegTapTail = fmt.Sprintf("%s ! fdsink fd=%d", yuyvPictureStages, rawTapFD)
 
 func mjpegRawWhy(w, h uint32) string {
 	return fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", w, h)
 }
 
-// mjpegPixelsFormat describes the YUYV frames an MJPEG capture tees to the tap,
-// or nil when a frame would exceed the raw frame limit.
-func mjpegPixelsFormat(w, h uint32) *agentpb.RawFormat {
+// yuyvPictureFormat describes the YUYV pictures decoded from a camera's
+// compressed frames, or nil when one would exceed the raw frame limit.
+func yuyvPictureFormat(w, h uint32) *agentpb.RawFormat {
 	if uint64(w)*2*uint64(h) > maxRawFrameBytes {
 		return nil
 	}

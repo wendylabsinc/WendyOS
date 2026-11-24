@@ -637,7 +637,7 @@ func TestNewDerivedLayer_IsUnavailableWithoutEveryElementItNeeds(t *testing.T) {
 	if layer.encoder.element != "x264enc" || layer.framerate != 30 {
 		t.Errorf("encoder=%q framerate=%d, want x264enc at the default 30", layer.encoder.element, layer.framerate)
 	}
-	if want := mjpegPixelsFormat(640, 480); !reflect.DeepEqual(layer.pictures, want) {
+	if want := yuyvPictureFormat(640, 480); !reflect.DeepEqual(layer.pictures, want) {
 		t.Errorf("pictures = %v, want the format today's tap produces, %v", layer.pictures, want)
 	}
 
@@ -659,8 +659,8 @@ func TestNewDerivedLayer_IsUnavailableWithoutEveryElementItNeeds(t *testing.T) {
 	if _, err := build(videoCodecMJPEG, nil); err == nil {
 		t.Error("a layer was built without an element listing")
 	}
-	if _, err := build(agentpb.VideoCodec_VIDEO_CODEC_H264, complete); err == nil {
-		t.Error("a layer was built for a format with no transform")
+	if _, err := build(agentpb.VideoCodec_VIDEO_CODEC_VP8, complete); err == nil || !strings.Contains(err.Error(), "no derived frames are defined") {
+		t.Errorf("a layer for a format with no transform: %v", err)
 	}
 }
 
