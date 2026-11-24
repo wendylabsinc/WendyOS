@@ -482,13 +482,11 @@ func TestConnectedTargetAgentPortUsesEndpointThatAnswered(t *testing.T) {
 		{name: "IPv6 custom port", addr: "[fe80::1%en0]:52002", want: 52002},
 		{name: "cloud default", addr: "", want: uint32(defaultAgentPort + agentMTLSPortOffset)},
 		{name: "missing port", addr: "192.0.2.10", wantErr: true},
-		{name: "malformed mesh selector", addr: "mesh://invalid/device", wantErr: true},
-		{name: "mesh selector without broker", addr: "mesh://11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222", wantErr: true},
 		{name: "out of range", addr: "192.0.2.10:70000", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := connectedTargetAgentPort(context.Background(), &grpcclient.AgentConnection{Addr: tt.addr})
+			got, err := connectedTargetAgentPort(&grpcclient.AgentConnection{Addr: tt.addr})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
 			}

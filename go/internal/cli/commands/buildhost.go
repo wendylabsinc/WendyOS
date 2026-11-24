@@ -19,7 +19,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
-	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -721,7 +720,7 @@ func targetPushTargetBase(ctx context.Context, target *grpcclient.AgentConnectio
 	if err != nil {
 		return nil, err
 	}
-	agentPort, err := connectedTargetAgentPort(ctx, target)
+	agentPort, err := connectedTargetAgentPort(target)
 	if err != nil {
 		return nil, fmt.Errorf("determining the target device's agent port: %w", err)
 	}
@@ -769,30 +768,20 @@ func appRepository(appCfg *appconfig.AppConfig) string {
 }
 
 // connectedTargetAgentPort reports the mTLS endpoint the CLI actually used.
-// Direct connections and their session proxies retain that address in Addr.
-// Mesh connections retain a selector instead; resolve the advertised endpoint
-// through the same session broker. Cloud connections have no network Addr and
-// currently reach the standard provisioned-agent port, so use that default.
-func connectedTargetAgentPort(ctx context.Context, target *grpcclient.AgentConnection) (uint32, error) {
+// Direct and session-proxy connections retain that address in Addr. A cloud
+// connection is a pre-built gRPC channel with no network Addr; cloud tunnelling
+// currently reaches the standard provisioned-agent port, so use that default.
+func connectedTargetAgentPort(target *grpcclient.AgentConnection) (uint32, error) {
 	if target.Addr == "" {
 		return uint32(defaultAgentPort + agentMTLSPortOffset), nil
 	}
-	address := target.Addr
-	if _, matched, err := sessionbroker.ParseMeshSelector(address); err != nil {
-		return 0, err
-	} else if matched {
-		address, err = sessionbroker.ConnectedOperatorAgentAddress(ctx, target)
-		if err != nil {
-			return 0, fmt.Errorf("resolving connected mesh endpoint: %w", err)
-		}
-	}
-	_, portText, err := net.SplitHostPort(address)
+	_, portText, err := net.SplitHostPort(target.Addr)
 	if err != nil {
-		return 0, fmt.Errorf("parsing connected address %q: %w", address, err)
+		return 0, fmt.Errorf("parsing connected address %q: %w", target.Addr, err)
 	}
 	port, err := strconv.ParseUint(portText, 10, 16)
 	if err != nil || port == 0 {
-		return 0, fmt.Errorf("invalid port in connected address %q", address)
+		return 0, fmt.Errorf("invalid port in connected address %q", target.Addr)
 	}
 	return uint32(port), nil
 }
