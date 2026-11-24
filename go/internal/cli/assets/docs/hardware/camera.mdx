@@ -191,14 +191,20 @@ Prefer a `by-id:` stable id: it follows the camera across reboots and
 replugging. A `by-path:` stable id follows the port the camera is plugged into,
 a device path can pass to another camera at a reboot or a replug, and a name is
 shared by every camera of the model. Two cameras of one model without distinct
-serial numbers cannot be told apart by stable id: name them by path, and expect
-a replug to move the settings.
+serial numbers share one `by-id:` name: one is listed with it and the other
+with a `by-path:` id, and which is which can change. Name such cameras by
+device path, and expect a reboot or a replug to move the settings.
 
-`wendy run` prints a line for each allowlist entry that selects no shared
-camera's node, and for each that names a camera that is not shared through a
-node, such as a network camera: such an entry configures nothing. An agent from
-before stable id and `v4l2:` entries matches only the device path or the name,
-and `wendy run` says so.
+When the device's agent reports that it shares cameras, `wendy run` prints a
+line for each allowlist entry that selects no shared camera's node, and for
+each that names a camera that is not shared through a node, such as a network
+camera: such an entry configures nothing. It prints none for a Compose project,
+on a device that lists no camera, or when the agent does not answer within
+three seconds. An agent from before stable id and `v4l2:` entries matches only
+the exact device path or name, and an agent from before `format` and `stamp`
+reads neither of them nor the allowlist and gives every camera pictures stamped
+with the capture time; `wendy run` says so when the app asks for something the
+device's agent does not read.
 
 Two `camera` or `video` entries that claim the same camera must agree on
 `format` and `stamp`. Validation compares allowlist entries as written, and
@@ -263,11 +269,13 @@ properties `share_mode`, `share_unavailable`, `shared_with` and `share_state`,
 with `share_mode_native` and `share_mode_h264` for the mode of a node in those
 formats, or `share_unavailable_native` and `share_unavailable_h264` for why the
 camera has none. A camera that is not shared carries `share_unavailable` with
-the reason. Each camera's row also carries `stable_id`, the stable id
-`wendy device camera list --json` prints for it and the one an allowlist entry
-may hold; it is empty for a camera without one. A network or ROS 2 camera's
-row carries `stable_id` and none of the share properties: an app reads it at
-its own node, not through a share node.
+the reason. The row of each camera `wendy device camera list` lists also
+carries `stable_id`, the stable id that command's `--json` prints for it and
+the one an allowlist entry may hold; it is empty for a camera without one. A
+row for a node that list leaves out, such as a camera's metadata node, has no
+`stable_id`. A network or ROS 2 camera's row carries `stable_id` and none of
+the share properties: an app reads it at its own node, not through a share
+node.
 
 ### Behavior to know about
 
