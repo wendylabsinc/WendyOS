@@ -77,6 +77,46 @@ func (s *VideoService) ownFramesForecast(hubKey string, req *agentpb.StreamVideo
 	return own, declined, native, true
 }
 
+// softwareEncoderOfVideoAt names the software element that makes H.264 from
+// the own frames of the camera a default capture runs at hubKey, or "": for a
+// camera whose video needs no encoder here, one no native source captures, and
+// an encoder not known to be software.
+func (s *VideoService) softwareEncoderOfVideoAt(hubKey string) string {
+	own, declined, native, asked := s.ownFramesForecast(hubKey, &agentpb.StreamVideoRequest{})
+	if !asked || !native || declined != "" {
+		return ""
+	}
+	_, available, err := s.gstElements()
+	if err != nil {
+		return ""
+	}
+	return softwareEncoderOfH264From(own.codec, available)
+}
+
+// DeployWarnings names each selected camera whose video a campaign stores and
+// this device makes with a software encoder.
+func (a *cameraDataAdapter) DeployWarnings(selected []data.Source) []string {
+	var warnings []string
+	for _, source := range selected {
+		devID, ok := cameraDeviceID(source.ID)
+		if !ok {
+			continue
+		}
+		if primary, _ := subscriptionKindsFor(source.Capture); primary != encodedFrames {
+			continue
+		}
+		src, err := a.video.resolveSource(devID)
+		if err != nil || src.kind != sourceV4L2 {
+			continue
+		}
+		if encoder := a.video.softwareEncoderOfVideoAt(src.key); encoder != "" {
+			warnings = append(warnings, fmt.Sprintf("camera %s: its video is encoded in software (%s) on this device while the campaign records or buffers; "+
+				"store: frames keeps the camera's own frames without encoding", source.ID, encoder))
+		}
+	}
+	return warnings
+}
+
 // ownFramesAreKnownToBeVideo is asked of a camera the join may start. One
 // that is running hands on what it hands on and answers at the join.
 func (s *VideoService) ownFramesAreKnownToBeVideo(hubKey string, req *agentpb.StreamVideoRequest) bool {

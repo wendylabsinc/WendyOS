@@ -117,6 +117,13 @@ type dataArmingAdapter interface {
 	Disarm(campaignKey string)
 }
 
+// dataDeployAdvisingAdapter is the optional part of the capture-adapter
+// contract for an adapter that knows something of this device a campaign's
+// author should hear when the campaign is deployed.
+type dataDeployAdvisingAdapter interface {
+	DeployWarnings(selected []data.Source) []string
+}
+
 type runningDataCapture interface {
 	Stop(context.Context) ([]data.CaptureResult, error)
 }
@@ -283,6 +290,44 @@ func (s *DataService) cameraSourcesFor(campaign data.Campaign) []data.Source {
 		out = append(out, source)
 	}
 	return out
+}
+
+// deviceDeployWarnings is what the capture adapters say of the campaign's
+// cameras that are present. A selector that resolves to no camera now is
+// passed over, and costs the other selectors nothing.
+func (s *DataService) deviceDeployWarnings(campaign data.Campaign) []string {
+	cameras, err := s.manager.ResolveCampaignCameraSources(campaign)
+	if err != nil {
+		cameras = nil
+		for _, source := range campaign.Sources {
+			alone := campaign
+			alone.Sources = []data.CampaignSource{source}
+			if present, err := s.manager.ResolveCampaignCameraSources(alone); err == nil {
+				cameras = append(cameras, present...)
+			}
+		}
+	}
+	// A camera listed twice is recorded with its last capture block.
+	lastOf := make(map[string]int, len(cameras))
+	for i, source := range cameras {
+		lastOf[source.ID] = i
+	}
+	var applied []data.Source
+	for i, source := range cameras {
+		if lastOf[source.ID] == i {
+			applied = append(applied, source)
+		}
+	}
+	if len(applied) == 0 {
+		return nil
+	}
+	var warnings []string
+	for _, adapter := range s.adapterSnapshot() {
+		if advising, ok := adapter.(dataDeployAdvisingAdapter); ok {
+			warnings = append(warnings, advising.DeployWarnings(applied)...)
+		}
+	}
+	return warnings
 }
 
 func (s *DataService) Sources(ctx context.Context, _ *agentpbv2.DataSourcesRequest) (*agentpbv2.DataSourcesResponse, error) {
@@ -519,6 +564,9 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	// Said to this deploy only, not stored with the plan: it holds for the
+	// cameras plugged in now.
+	campaign.Warnings = append(campaign.Warnings, s.deviceDeployWarnings(campaign)...)
 	message, err := s.campaignMessage(campaign)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
