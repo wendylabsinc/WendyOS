@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"time"
 
@@ -146,6 +147,17 @@ var oidDeviceTrustTier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 65441, 2}
 // The two exceptions below are temporary and each is deleted in one place.
 func clientLeafAllowed(leaf *x509.Certificate, legacyTrust bool) bool {
 	return isMLDSACert(leaf) || isLiteBoard(leaf) || legacyTrust || tierABFallbackException(leaf)
+}
+
+var errClientLeafRefused = errors.New("this device accepts only post-quantum client certificates; sign in again with 'wendy auth login'")
+
+// CheckClientLeaf runs clientLeafAllowed for a verifier trusting anchors, for
+// client paths that verify their chain outside this package (mesh operators).
+func CheckClientLeaf(leaf *x509.Certificate, anchors []*x509.Certificate) error {
+	if clientLeafAllowed(leaf, legacyCloudException(anchors)) {
+		return nil
+	}
+	return errClientLeafRefused
 }
 
 // isLiteBoard reports a Tier-C device leaf. pki-core sets the tier from the
@@ -375,9 +387,8 @@ func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.C
 			return certs.CertificateWindow{}, fmt.Errorf("peer certificate requires explicit clientAuth usage")
 		}
 		if !clientLeafAllowed(leaf, legacyTrust) {
-			err := fmt.Errorf("this device accepts only post-quantum client certificates; sign in again with 'wendy auth login'")
-			logCertRejection(logger, leaf, err, realNow, realNow, remote)
-			return certs.CertificateWindow{}, err
+			logCertRejection(logger, leaf, errClientLeafRefused, realNow, realNow, remote)
+			return certs.CertificateWindow{}, errClientLeafRefused
 		}
 		baseNow, effectiveNow := clockTimes(realNow, leaf.NotBefore)
 		// These checks also run when the cryptographic path is reused. A clock

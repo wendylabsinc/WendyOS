@@ -52,11 +52,31 @@ func (c *Credentials) VerifyPrimaryOperator(chain [][]byte, now time.Time) (mesh
 	if c == nil {
 		return meshoperator.VerifiedOperator{}, errors.New("missing enrolled credentials")
 	}
-	if c.timePolicy == nil {
-		return meshoperator.VerifyPrimary(c.knownIssuerCandidates(chain, now), c.primaryRoots, c.Device.Tenant(), now)
-	}
 	now = certificateWallTime(c.timePolicy, now)
-	return meshoperator.VerifyPrimaryWithPolicy(c.knownIssuerCandidates(chain, now), c.primaryRoots, c.Device.Tenant(), now, *c.timePolicy)
+	return verifyOperator(c.knownIssuerCandidates(chain, now), c.primaryRoots, c.Device.Tenant(), now, c.timePolicy)
+}
+
+// verifyOperator is the agent's primary operator admission: the operator chain
+// and scope, then the same client-leaf rule as every other agent listener.
+func verifyOperator(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tenant, now time.Time, policy *certs.CertificateTimePolicy) (meshoperator.VerifiedOperator, error) {
+	var verified meshoperator.VerifiedOperator
+	var err error
+	if policy == nil {
+		verified, err = meshoperator.VerifyPrimary(chain, roots, tenant, now)
+	} else {
+		verified, err = meshoperator.VerifyPrimaryWithPolicy(chain, roots, tenant, now, *policy)
+	}
+	if err != nil {
+		return meshoperator.VerifiedOperator{}, err
+	}
+	leaf, err := x509.ParseCertificate(verified.LeafDER())
+	if err != nil {
+		return meshoperator.VerifiedOperator{}, err
+	}
+	if err := mtls.CheckClientLeaf(leaf, roots); err != nil {
+		return meshoperator.VerifiedOperator{}, err
+	}
+	return verified, nil
 }
 
 func (c *Credentials) CertificateTimePolicy() certs.CertificateTimePolicy {
@@ -187,13 +207,7 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		}
 		var window certs.CertificateWindow
 		if device.IsOperator() {
-			var verified meshoperator.VerifiedOperator
-			var err error
-			if policy == nil {
-				verified, err = meshoperator.VerifyPrimary(chain, primaryRoots, self.Tenant(), now)
-			} else {
-				verified, err = meshoperator.VerifyPrimaryWithPolicy(chain, primaryRoots, self.Tenant(), now, clockPolicy)
-			}
+			verified, err := verifyOperator(chain, primaryRoots, self.Tenant(), now, policy)
 			if err != nil {
 				return Identity{}, err
 			}
