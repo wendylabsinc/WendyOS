@@ -872,29 +872,13 @@ func (m *Manager) resolveCampaignSources(campaign Campaign, degradeROS2 bool) ([
 				selected[id] = true
 			}
 		case requested.Camera != "":
-			if strings.TrimSpace(requested.Camera) == "*" {
-				matched := false
-				for _, source := range all {
-					if source.Kind == "camera" && source.Healthy {
-						matched = true
-						selected[source.ID] = true
-						if requested.Capture != nil {
-							captures[source.ID] = requested.Capture
-						}
-					}
-				}
-				if !matched {
-					return nil, nil, nil, nil, errors.New("no healthy cameras are available for camera: *")
-				}
-				continue
-			}
-			id, err := resolveCameraSelector(all, requested.Camera)
+			cameras, err := camerasNamedBy(all, requested.Camera)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
-			selected[id] = true
-			if requested.Capture != nil {
-				captures[id] = requested.Capture
+			for _, id := range cameras {
+				selected[id] = true
+				recordWith(captures, id, requested.Capture)
 			}
 		case requested.Audio != "":
 			id, err := resolveKindSelector(all, "audio", requested.Audio)
@@ -939,26 +923,84 @@ func (m *Manager) ResolveCampaignCameraSources(campaign Campaign) ([]Source, err
 		if !loaded {
 			all, loaded = m.Sources(context.Background()), true
 		}
-		if strings.TrimSpace(requested.Camera) == "*" {
-			matched := false
-			for _, source := range all {
-				if source.Kind == "camera" && source.Healthy {
-					matched = true
-					cameras = append(cameras, Source{ID: source.ID, Kind: "camera", Capture: requested.Capture})
-				}
-			}
-			if !matched {
-				return nil, errors.New("no healthy cameras are available for camera: *")
-			}
-			continue
-		}
-		id, err := resolveCameraSelector(all, requested.Camera)
+		named, err := camerasNamedBy(all, requested.Camera)
 		if err != nil {
 			return nil, err
 		}
-		cameras = append(cameras, Source{ID: id, Kind: "camera", Capture: requested.Capture})
+		cameras = append(cameras, listingsOf(named, requested.Capture)...)
 	}
 	return cameras, nil
+}
+
+// camerasNamedBy resolves one camera selector against the device's sources:
+// every healthy camera for "*", else the one camera the selector names.
+func camerasNamedBy(all []Source, selector string) ([]string, error) {
+	if strings.TrimSpace(selector) != "*" {
+		id, err := resolveCameraSelector(all, selector)
+		if err != nil {
+			return nil, err
+		}
+		return []string{id}, nil
+	}
+	var cameras []string
+	for _, source := range all {
+		if source.Kind == "camera" && source.Healthy {
+			cameras = append(cameras, source.ID)
+		}
+	}
+	if len(cameras) == 0 {
+		return nil, errors.New("no healthy cameras are available for camera: *")
+	}
+	return cameras, nil
+}
+
+// recordWith is the rule for a camera a plan lists more than once: a trigger
+// records it with the capture block of the last listing that has one.
+func recordWith(captures map[string]*SourceCapture, camera string, capture *SourceCapture) {
+	if capture != nil {
+		captures[camera] = capture
+	}
+}
+
+// listingsOf is the rule for arming: it is handed every listing of a camera,
+// each with the capture block of that listing, in the plan's order.
+func listingsOf(cameras []string, capture *SourceCapture) []Source {
+	listings := make([]Source, 0, len(cameras))
+	for _, id := range cameras {
+		listings = append(listings, Source{ID: id, Kind: "camera", Capture: capture})
+	}
+	return listings
+}
+
+// CamerasAmong resolves the campaign's camera selectors against sources, by
+// the rules a trigger and arming resolve them with, and discovers nothing
+// itself. recorded holds each camera once, sorted by ID, with the capture block
+// a trigger records it with; listed holds what arming is handed. A selector
+// that names no camera among sources is passed over.
+func (c Campaign) CamerasAmong(sources []Source) (recorded, listed []Source) {
+	sources = append([]Source(nil), sources...)
+	sort.SliceStable(sources, func(i, j int) bool { return sources[i].ID < sources[j].ID })
+	captures := map[string]*SourceCapture{}
+	selected := map[string]bool{}
+	for _, requested := range c.Sources {
+		if requested.Camera == "" {
+			continue
+		}
+		named, err := camerasNamedBy(sources, requested.Camera)
+		if err != nil {
+			continue
+		}
+		for _, id := range named {
+			selected[id] = true
+			recordWith(captures, id, requested.Capture)
+		}
+		listed = append(listed, listingsOf(named, requested.Capture)...)
+	}
+	for id := range selected {
+		recorded = append(recorded, Source{ID: id, Kind: "camera", Capture: captures[id]})
+	}
+	sort.Slice(recorded, func(i, j int) bool { return recorded[i].ID < recorded[j].ID })
+	return recorded, listed
 }
 
 // resolveROS2Selector maps a campaign `ros2:` selector onto discovered source
