@@ -570,7 +570,7 @@ func TestEnrollmentNameTakenDefaultSuggestsFree(t *testing.T) {
 func TestEnrollmentNameTakenDefaultNoTerminal(t *testing.T) {
 	setInteractive(t, false)
 	_, err := enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf("wendyos-orin-nano-bk"), "Wendy Labs, Inc.")
-	want := "Another device in Wendy Labs, Inc. already uses wendyos-orin-nano-bk. Pass a different --name."
+	want := "Another device in Wendy Labs, Inc. already uses wendyos-orin-nano-bk. Pass a different --name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device wendyos-orin-nano-bk"
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v; want %q", err, want)
 	}

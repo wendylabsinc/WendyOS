@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -119,5 +120,19 @@ func TestTextPromptModel_Cancellation(t *testing.T) {
 	m = updateTextPrompt(m, tkey("ctrl+c"))
 	if !m.Cancelled() {
 		t.Fatal("expected Cancelled() after ctrl+c")
+	}
+}
+
+type hintedErr struct{ msg, hint string }
+
+func (e hintedErr) Error() string { return e.msg }
+func (e hintedErr) Hint() string  { return e.hint }
+
+// A validation error may carry a hint, shown under the error while the person edits.
+func TestTextPromptModel_ValidationErrorHint(t *testing.T) {
+	m := NewTextPrompt("Device name", "", "", func(string) error { return hintedErr{"lab-pi is taken.", "remove the old entry first"} })
+	m = updateTextPrompt(m, tkey("enter"))
+	if v := m.View(); !strings.Contains(v, "Error: lab-pi is taken.") || !strings.Contains(v, "remove the old entry first") {
+		t.Fatalf("view %q; want the error and its hint", v)
 	}
 }

@@ -856,9 +856,9 @@ func enrollmentName(host, name string, taken func(string) bool, org string) (str
 		defaultName := defaultEnrollmentName(host)
 		if defaultName != "" && taken(defaultName) {
 			if !isInteractiveTerminal() {
-				return "", nameTakenError(takenNameMessage(defaultName, org) + " " + noTTYHintEnroll)
+				return "", takenNameRefusal(defaultName, org, noTTYHintEnroll)
 			}
-			fmt.Println(tui.ErrorMessage(takenNameMessage(defaultName, org)))
+			printTakenName(os.Stdout, defaultName, org)
 			defaultName = suggestFreeName(defaultName, maxHostnameLen, taken)
 		}
 		if !isInteractiveTerminal() {

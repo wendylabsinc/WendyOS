@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -40,6 +41,30 @@ func takenNameMessage(name, org string) string {
 	}
 	return "Another device in " + org + " already uses " + name + "."
 }
+
+// takenNameHint points at the likely holder after a reflash: the board's own
+// old Cloud entry.
+func takenNameHint(name string) string {
+	return "If that is this device's old entry, remove it with: wendy cloud device unenroll --device " + shellQuoteArg(name)
+}
+
+// takenNameRefusal is the taken message plus what to do, for output without a terminal.
+func takenNameRefusal(name, org, next string) nameTakenError {
+	return nameTakenError(takenNameMessage(name, org) + " " + next + "\n  " + takenNameHint(name))
+}
+
+// printTakenName reports a taken name on the terminal, with the old-entry hint.
+func printTakenName(w io.Writer, name, org string) {
+	fmt.Fprintln(w, tui.ErrorMessage(takenNameMessage(name, org)))
+	fmt.Fprintln(w, "  "+tui.Dim(takenNameHint(name)))
+}
+
+// takenNameValidationError refuses a typed name inside the prompt; the hint
+// shows under the error.
+type takenNameValidationError struct{ msg, hint string }
+
+func (e takenNameValidationError) Error() string { return e.msg }
+func (e takenNameValidationError) Hint() string  { return e.hint }
 
 // takenInOrgError names the organization that refused a name, for a call that
 // learns it only while making the request.
@@ -127,10 +152,10 @@ func retryTakenDeviceName(name *string, r nameRetry, enroll func(string) error) 
 			org = named.org
 		}
 		if !r.interactive {
-			return nameTakenError(takenNameMessage(*name, org) + " " + r.noTTYHint)
+			return takenNameRefusal(*name, org, r.noTTYHint)
 		}
 		refused[strings.ToLower(*name)] = true
-		fmt.Fprintln(os.Stdout, tui.ErrorMessage(takenNameMessage(*name, org)))
+		printTakenName(os.Stdout, *name, org)
 		suggestion := suggestFreeName(base, r.maxLen, func(n string) bool { return refused[strings.ToLower(n)] })
 		next, perr := promptDeviceNameDefault("Device name", "(Ctrl+C to stop)", suggestion, r.validate)
 		if perr != nil {

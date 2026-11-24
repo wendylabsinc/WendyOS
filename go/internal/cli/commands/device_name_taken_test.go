@@ -119,7 +119,7 @@ func TestRetryTakenDeviceNameNoTerminal(t *testing.T) {
 	name := "brave-dolphin"
 	err := retryTakenDeviceName(&name, nameRetry{noTTYHint: noTTYHintInstall, validate: validateDeviceName, maxLen: maxDeviceNameLen},
 		func(n string) error { return takenErr(n) })
-	want := "Another device in your organization already uses brave-dolphin. Pass a different --device-name."
+	want := "Another device in your organization already uses brave-dolphin. Pass a different --device-name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device brave-dolphin"
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v; want %q", err, want)
 	}
@@ -148,8 +148,9 @@ func TestRetryTakenDeviceNameSuggestsAndRetries(t *testing.T) {
 	if err != nil || name != "brave-dolphin-2" || strings.Join(tried, ",") != "brave-dolphin,brave-dolphin-2" {
 		t.Fatalf("err %v, name %q, tried %v", err, name, tried)
 	}
-	if !strings.Contains(out, "Another device in your organization already uses brave-dolphin.") {
-		t.Fatalf("output %q; want the taken message", out)
+	if !strings.Contains(out, "Another device in your organization already uses brave-dolphin.") ||
+		!strings.Contains(out, "If that is this device's old entry, remove it with: wendy cloud device unenroll --device brave-dolphin") {
+		t.Fatalf("output %q; want the taken message and the old-entry hint", out)
 	}
 }
 
@@ -170,7 +171,7 @@ func TestRetryTakenDeviceNameNamesTheOrganization(t *testing.T) {
 	name := "brave-dolphin"
 	err := retryTakenDeviceName(&name, nameRetry{noTTYHint: noTTYHintInstall, validate: validateDeviceName, maxLen: maxDeviceNameLen, org: "Wendy Labs, Inc."},
 		func(n string) error { return takenErr(n) })
-	want := "Another device in Wendy Labs, Inc. already uses brave-dolphin. Pass a different --device-name."
+	want := "Another device in Wendy Labs, Inc. already uses brave-dolphin. Pass a different --device-name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device brave-dolphin"
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v; want %q", err, want)
 	}
@@ -181,7 +182,7 @@ func TestRetryTakenDeviceNameUsesTheRefusingOrganization(t *testing.T) {
 	name := "living-room"
 	err := retryTakenDeviceName(&name, nameRetry{noTTYHint: noTTYHintEnroll, validate: validateHostnameArg, maxLen: maxHostnameLen},
 		func(n string) error { return &takenInOrgError{org: "Benjamin Lab", err: takenErr(n)} })
-	want := "Another device in Benjamin Lab already uses living-room. Pass a different --name."
+	want := "Another device in Benjamin Lab already uses living-room. Pass a different --name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device living-room"
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v; want %q", err, want)
 	}
@@ -193,6 +194,12 @@ func TestTakenNameMessageStripsControlFromOrganization(t *testing.T) {
 		t.Fatalf("got %q; want control characters removed", got)
 	}
 	if got, want := takenNameMessage("brave-dolphin", "\x1b\n"), "Another device in your organization already uses brave-dolphin."; got != want {
+		t.Fatalf("got %q; want %q", got, want)
+	}
+}
+
+func TestTakenNameHint(t *testing.T) {
+	if got, want := takenNameHint("lab-pi"), "If that is this device's old entry, remove it with: wendy cloud device unenroll --device lab-pi"; got != want {
 		t.Fatalf("got %q; want %q", got, want)
 	}
 }

@@ -311,7 +311,7 @@ func TestResolveRenameNameFromArg(t *testing.T) {
 	}
 }
 
-const renameTakenNoTerminal = "Another device in Benjamin Lab already uses living-room. Nothing was changed.\n  Choose another name:  wendy device rename <new-name>"
+const renameTakenNoTerminal = "Another device in Benjamin Lab already uses living-room. Nothing was changed.\n  Choose another name:  wendy device rename <new-name>\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device living-room"
 
 func TestDeviceRenameTakenNameAsksAgain(t *testing.T) {
 	log := &renameLog{}

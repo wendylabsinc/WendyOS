@@ -596,7 +596,7 @@ func TestPreEnrollTakenNameWithoutTerminal(t *testing.T) {
 	takenFirst(t, "hackathon-display")
 	name := "hackathon-display"
 	_, err := mintProvisioningJSON(context.Background(), &acmePreEnrollPlan{auth: &config.AuthConfig{}}, &name)
-	want := "Another device in your organization already uses hackathon-display. Pass a different --device-name."
+	want := "Another device in your organization already uses hackathon-display. Pass a different --device-name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device hackathon-display"
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v", err)
 	}
@@ -651,6 +651,10 @@ func TestInstallNamePromptRejectsTakenName(t *testing.T) {
 		if want := "Another device in your organization already uses brave-dolphin. Try another name."; err == nil || err.Error() != want {
 			t.Fatalf("validate(taken) = %v; want %q", err, want)
 		}
+		var hinted interface{ Hint() string }
+		if !errors.As(err, &hinted) || hinted.Hint() != takenNameHint("brave-dolphin") {
+			t.Fatalf("validate(taken) = %v; want the old-entry hint under the error", err)
+		}
 		if err := validate("otter-one"); err != nil {
 			t.Fatalf("validate(free) = %v", err)
 		}
@@ -670,7 +674,7 @@ func TestInstallTakenFlagNameFailsWithoutTerminal(t *testing.T) {
 	setInteractive(t, false)
 	name := "brave-dolphin"
 	_, err := resolveProvisioningJSON(context.Background(), preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, &name)
-	want := "Another device in Wendy Labs, Inc. already uses brave-dolphin. Pass a different --device-name."
+	want := "Another device in Wendy Labs, Inc. already uses brave-dolphin. Pass a different --device-name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device brave-dolphin"
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v; want %q", err, want)
 	}

@@ -2881,9 +2881,9 @@ func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config
 			return flagName, nil
 		}
 		if !interactive {
-			return "", nameTakenError(takenNameMessage(flagName, org) + " " + noTTYHintInstall)
+			return "", takenNameRefusal(flagName, org, noTTYHintInstall)
 		}
-		fmt.Println(tui.ErrorMessage(takenNameMessage(flagName, org)))
+		printTakenName(alsoOnPromptTerminal(os.Stdout), flagName, org)
 		suggestion = suggestFreeName(flagName, maxDeviceNameLen, taken)
 	} else if !interactive {
 		if required {
@@ -2903,7 +2903,7 @@ func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config
 			return err
 		}
 		if n = strings.TrimSpace(n); n != "" && taken(n) {
-			return nameTakenError(takenNameMessage(n, org) + " Try another name.")
+			return takenNameValidationError{msg: takenNameMessage(n, org) + " Try another name.", hint: takenNameHint(n)}
 		}
 		return nil
 	}
