@@ -1038,7 +1038,6 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// a bmap failure falls back and its reason is printed then; suppress the TUI error render
 		writeProg = writeProg.WithoutErrorView()
 	}
-	wp := tui.NewProgressProgram(writeProg)
 	writeStart := time.Now()
 
 	// Track how far the fast path got and which path ran, so a failure can
@@ -1055,7 +1054,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		writeTotal, fastPathLabel = fit.sequentialTotal(stream.uncompressedSize), "image write"
 	}
 
-	go func() {
+	primaryErr, uiErr := runProgress("Writing to "+targetDrive.DevicePath, writeProg, func(send func(tui.ProgressUpdateMsg)) error {
 		progress := func(written int64) {
 			lastWritten.Store(written)
 			if seekableZst != "" {
@@ -1063,41 +1062,36 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 				if seekableTotal > 0 {
 					pct = float64(written) / float64(seekableTotal)
 				}
-				wp.Send(tui.ProgressUpdateMsg{
+				send(tui.ProgressUpdateMsg{
 					Percent: pct,
 					Written: written,
 					Total:   seekableTotal,
 				})
 			} else if bmapPath == "" && writeTotal < stream.uncompressedSize {
 				// The sequential write stops at the drive's end.
-				wp.Send(tui.ProgressUpdateMsg{
+				send(tui.ProgressUpdateMsg{
 					Percent: float64(written) / float64(writeTotal),
 					Written: written,
 					Total:   writeTotal,
 				})
 			} else if msg, ok := stream.writeProgressMsg(written); ok {
-				wp.Send(msg)
+				send(msg)
 			}
 		}
-		var writeErr error
 		switch {
 		case seekableZst != "":
-			writeErr = writeImageWithBmapSeekable(seekableZst, seekableBmap, targetDrive, fit, progress)
+			return writeImageWithBmapSeekable(seekableZst, seekableBmap, targetDrive, fit, progress)
 		case bmapPath != "":
-			writeErr = writeImageWithBmap(stream, stream.uncompressedSize, targetDrive, bmapPath, fit, progress)
+			return writeImageWithBmap(stream, stream.uncompressedSize, targetDrive, bmapPath, fit, progress)
 		default:
-			writeErr = writeImageToDisk(stream, stream.uncompressedSize, targetDrive, fit, progress)
+			return writeImageToDisk(stream, stream.uncompressedSize, targetDrive, fit, progress)
 		}
-		wp.Send(tui.ProgressDoneMsg{Err: writeErr})
-	}()
-
-	writeFinal, err := tui.RunProgram(wp)
-	if err != nil {
-		return fmt.Errorf("progress TUI: %w", err)
+	})
+	if uiErr != nil {
+		return uiErr
 	}
 
-	writeModel := writeFinal.(tui.ProgressModel)
-	if primaryErr := writeModel.Err(); primaryErr != nil {
+	if primaryErr != nil {
 		// User cancellation is not a write failure: don't classify it, and
 		// don't start a full-image fallback write on a flash the user just
 		// cancelled (same handling as the measure step above).
@@ -1161,26 +1155,24 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		fallbackTotal := fallbackFit.sequentialTotal(fallbackSize)
 		writeTotal = fallbackTotal
 		fallbackProg := tui.NewProgress("Writing to " + targetDrive.DevicePath).Transient()
-		fp := tui.NewProgressProgram(fallbackProg)
-		go func() {
-			fp.Send(tui.ProgressDoneMsg{Err: writeImageToDisk(fallbackReader, fallbackSize, targetDrive, fallbackFit, func(written int64) {
+		fallbackErr, uiErr := runProgress("Writing to "+targetDrive.DevicePath, fallbackProg, func(send func(tui.ProgressUpdateMsg)) error {
+			return writeImageToDisk(fallbackReader, fallbackSize, targetDrive, fallbackFit, func(written int64) {
 				if fallbackTotal > 0 {
-					fp.Send(tui.ProgressUpdateMsg{
+					send(tui.ProgressUpdateMsg{
 						Percent: float64(written) / float64(fallbackTotal),
 						Written: written,
 						Total:   fallbackTotal,
 					})
 				}
-			})})
-		}()
-		fallbackFinal, ferr := tui.RunProgram(fp)
-		if ferr != nil {
-			return fmt.Errorf("progress TUI: %w", ferr)
+			})
+		})
+		if uiErr != nil {
+			return uiErr
 		}
-		if fm := fallbackFinal.(tui.ProgressModel); fm.Err() != nil {
+		if fallbackErr != nil {
 			// Both writes failed: surface the primary (real) error AND the
 			// fallback's, clearly labeled, so we never again debug the wrong one.
-			return combineFlashFailure(primary, fm.Err())
+			return combineFlashFailure(primary, fallbackErr)
 		}
 	}
 
@@ -2095,19 +2087,25 @@ func measureGzipImage(path string, progress func(read, total int64)) (int64, err
 // progress bar tracking compressed bytes read. Returns context.Canceled when
 // the user quits the bar.
 func measureImageWithProgress(stream *imageStream) error {
-	prog := tui.NewProgress("Determining image size (one-time per image)...")
-	p := tui.NewProgressProgram(prog)
-	sendProgress := throttledProgress(p, 33*time.Millisecond)
-
-	go func() {
-		p.Send(tui.ProgressDoneMsg{Err: stream.measureUncompressedSize(sendProgress)})
-	}()
-
-	final, err := tui.RunProgram(p)
-	if err != nil {
-		return fmt.Errorf("progress TUI: %w", err)
+	const title = "Determining image size (one-time per image)"
+	measureErr, uiErr := runProgress(title, tui.NewProgress(title+"..."), func(send func(tui.ProgressUpdateMsg)) error {
+		last := time.Time{}
+		return stream.measureUncompressedSize(func(read, total int64) {
+			if time.Since(last) < 33*time.Millisecond && read < total {
+				return
+			}
+			last = time.Now()
+			var pct float64
+			if total > 0 {
+				pct = float64(read) / float64(total)
+			}
+			send(tui.ProgressUpdateMsg{Percent: pct, Written: read, Total: total})
+		})
+	})
+	if uiErr != nil {
+		return uiErr
 	}
-	return final.(tui.ProgressModel).Err()
+	return measureErr
 }
 
 // imageSizeSidecar caches a measured decompressed size next to the compressed

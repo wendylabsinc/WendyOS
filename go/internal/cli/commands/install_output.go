@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -71,6 +72,24 @@ func installDone(w io.Writer, text string, detail ...string) {
 
 func installResult(w io.Writer, text string) {
 	fmt.Fprintln(w, installResultStyle.Render("✓ "+text))
+}
+
+// runProgress runs work behind prog's bar, or directly when no terminal can
+// draw one (JSON, CI, services), noting title for the log instead.
+func runProgress(title string, prog tui.ProgressModel, work func(send func(tui.ProgressUpdateMsg)) error) (workErr, uiErr error) {
+	if jsonOutput || !isInteractiveTerminal() {
+		installNote(os.Stdout, "%s...", title)
+		return work(func(tui.ProgressUpdateMsg) {}), nil
+	}
+	p := tui.NewProgressProgram(prog)
+	go func() {
+		p.Send(tui.ProgressDoneMsg{Err: work(func(m tui.ProgressUpdateMsg) { p.Send(m) })})
+	}()
+	final, err := tui.RunProgram(p)
+	if err != nil {
+		return nil, fmt.Errorf("progress TUI: %w", err)
+	}
+	return final.(tui.ProgressModel).Err(), nil
 }
 
 // writtenDetail is the "Image written" detail; an unknown size is left out.

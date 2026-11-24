@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 )
 
 func TestInstallOutputPlainWithoutTerminal(t *testing.T) {
@@ -111,5 +113,37 @@ func TestWrittenDetail(t *testing.T) {
 	}
 	if got, want := writtenDetail(0, 45*time.Second), "· in 45s"; got != want {
 		t.Errorf("got %q; want %q without a size when it is unknown", got, want)
+	}
+}
+
+// Without a terminal (CI, services, a container without -t) there is no bar to
+// draw: the work runs directly and the log gets one line saying what it is.
+func TestRunProgressWithoutTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		json, interactive bool
+	}{{"no terminal", false, false}, {"json with a terminal", true, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			setInteractive(t, tc.interactive)
+			oldJSON := jsonOutput
+			t.Cleanup(func() { jsonOutput = oldJSON })
+			jsonOutput = tc.json
+			ran := false
+			var workErr, uiErr error
+			out := captureStdout(t, func() {
+				workErr, uiErr = runProgress("Writing to /dev/sdz", tui.NewProgress("Writing to /dev/sdz").Transient(),
+					func(send func(tui.ProgressUpdateMsg)) error {
+						ran = true
+						send(tui.ProgressUpdateMsg{Percent: 0.5, Written: 1, Total: 2})
+						return errors.New("device gone")
+					})
+			})
+			if !ran || uiErr != nil || workErr == nil || workErr.Error() != "device gone" {
+				t.Fatalf("ran %v, work error %v, ui error %v; want the work's own error and no UI", ran, workErr, uiErr)
+			}
+			if !strings.Contains(out, "Writing to /dev/sdz...") {
+				t.Fatalf("output %q; want one line naming the work for the log", out)
+			}
+		})
 	}
 }
