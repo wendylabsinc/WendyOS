@@ -119,10 +119,15 @@ type dataArmingAdapter interface {
 
 // dataDeployAdvisingAdapter is the optional part of the capture-adapter
 // contract for an adapter that knows something of this device a campaign's
-// author should hear when the campaign is deployed.
+// author should hear when the campaign is deployed. The adapter finds its own
+// sources, and only when the plan gives it something to say.
 type dataDeployAdvisingAdapter interface {
-	DeployWarnings(selected []data.Source) []string
+	DeployWarnings(ctx context.Context, campaign data.Campaign) []string
 }
+
+// campaignDeployWarningBudget is how long a deploy waits for what the adapters
+// say of it.
+var campaignDeployWarningBudget = 2 * time.Second
 
 type runningDataCapture interface {
 	Stop(context.Context) ([]data.CaptureResult, error)
@@ -292,41 +297,29 @@ func (s *DataService) cameraSourcesFor(campaign data.Campaign) []data.Source {
 	return out
 }
 
-// deviceDeployWarnings is what the capture adapters say of the campaign's
-// cameras that are present. A selector that resolves to no camera now is
-// passed over, and costs the other selectors nothing.
-func (s *DataService) deviceDeployWarnings(campaign data.Campaign) []string {
-	cameras, err := s.manager.ResolveCampaignCameraSources(campaign)
-	if err != nil {
-		cameras = nil
-		for _, source := range campaign.Sources {
-			alone := campaign
-			alone.Sources = []data.CampaignSource{source}
-			if present, err := s.manager.ResolveCampaignCameraSources(alone); err == nil {
-				cameras = append(cameras, present...)
-			}
+// deviceDeployWarnings is what the capture adapters say of the campaign on
+// this device, or nothing when they do not answer within
+// campaignDeployWarningBudget: a camera listing or a GStreamer element listing
+// that hangs costs the deploy its warnings and no more.
+func (s *DataService) deviceDeployWarnings(ctx context.Context, campaign data.Campaign) []string {
+	var advising []dataDeployAdvisingAdapter
+	for _, adapter := range s.adapterSnapshot() {
+		if adapter, ok := adapter.(dataDeployAdvisingAdapter); ok {
+			advising = append(advising, adapter)
 		}
 	}
-	// A camera listed twice is recorded with its last capture block.
-	lastOf := make(map[string]int, len(cameras))
-	for i, source := range cameras {
-		lastOf[source.ID] = i
-	}
-	var applied []data.Source
-	for i, source := range cameras {
-		if lastOf[source.ID] == i {
-			applied = append(applied, source)
-		}
-	}
-	if len(applied) == 0 {
+	if len(advising) == 0 {
 		return nil
 	}
-	var warnings []string
-	for _, adapter := range s.adapterSnapshot() {
-		if advising, ok := adapter.(dataDeployAdvisingAdapter); ok {
-			warnings = append(warnings, advising.DeployWarnings(applied)...)
+	ctx, cancel := context.WithTimeout(ctx, campaignDeployWarningBudget)
+	defer cancel()
+	warnings, _ := withinBudget(ctx, func() []string {
+		var warnings []string
+		for _, adapter := range advising {
+			warnings = append(warnings, adapter.DeployWarnings(ctx, campaign)...)
 		}
-	}
+		return warnings
+	})
 	return warnings
 }
 
@@ -545,32 +538,46 @@ func campaignMessage(campaign data.Campaign) (*agentpbv2.DataCampaign, error) {
 	return &agentpbv2.DataCampaign{Name: campaign.Name, Fleet: campaign.Fleet, State: campaign.State, Revision: campaign.Revision, DeployedUnixNanos: campaign.DeployedUnixNanos, PlanJson: append(b, '\n'), Warnings: campaign.Warnings}, nil
 }
 
-func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampaignDeployRequest) (*agentpbv2.DataCampaign, error) {
+func (s *DataService) CampaignDeploy(ctx context.Context, req *agentpbv2.DataCampaignDeployRequest) (*agentpbv2.DataCampaign, error) {
+	campaign, reported, err := s.storeAndArmCampaign(req)
+	if err != nil {
+		return nil, err
+	}
+	// Asked once the plan is stored and its arming started, and without the
+	// deploy lock, so a device that is slow to answer holds up neither. Said to
+	// this deploy only, not stored with the plan: it holds for the cameras
+	// plugged in now.
+	reported.Warnings = append(reported.Warnings, s.deviceDeployWarnings(ctx, campaign)...)
+	message, err := campaignMessage(reported)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return message, nil
+}
+
+// storeAndArmCampaign stores the plan and starts what an armed campaign runs.
+// reported is the stored campaign as the deploy answers with it, with the
+// inference status it had before the deploy woke the inference.
+func (s *DataService) storeAndArmCampaign(req *agentpbv2.DataCampaignDeployRequest) (campaign, reported data.Campaign, err error) {
 	s.deploymentMu.Lock()
 	defer s.deploymentMu.Unlock()
 	parsed, parseErr := data.ParseCampaign(req.GetCampaignYaml())
 	if parseErr != nil {
-		return nil, status.Error(codes.InvalidArgument, parseErr.Error())
+		return data.Campaign{}, data.Campaign{}, status.Error(codes.InvalidArgument, parseErr.Error())
 	}
 	if parsed.Inference.IsEnabled() && (s.inference == nil || s.video == nil) {
-		return nil, status.Error(codes.FailedPrecondition, "agent campaign inference runtime is unavailable")
+		return data.Campaign{}, data.Campaign{}, status.Error(codes.FailedPrecondition, "agent campaign inference runtime is unavailable")
 	}
 
 	if parsed.Notify != nil && parsed.Notify.On == data.NotifyOnEvent && s.inference == nil {
-		return nil, status.Error(codes.FailedPrecondition, "agent campaign notification runtime is unavailable")
+		return data.Campaign{}, data.Campaign{}, status.Error(codes.FailedPrecondition, "agent campaign notification runtime is unavailable")
 	}
 
-	campaign, err := s.manager.DeployCampaign(req.GetCampaignYaml())
+	campaign, err = s.manager.DeployCampaign(req.GetCampaignYaml())
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return data.Campaign{}, data.Campaign{}, status.Error(codes.InvalidArgument, err.Error())
 	}
-	// Said to this deploy only, not stored with the plan: it holds for the
-	// cameras plugged in now.
-	campaign.Warnings = append(campaign.Warnings, s.deviceDeployWarnings(campaign)...)
-	message, err := s.campaignMessage(campaign)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
+	reported = s.withInferenceStatus(campaign)
 	// Arm the campaign's camera sources for pre-roll so the very first trigger
 	// opens BEFORE the trigger instant. Arming subscribes to camera hubs, so it
 	// runs off the request path.
@@ -581,7 +588,7 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 		default:
 		}
 	}
-	return message, nil
+	return campaign, reported, nil
 }
 
 func (s *DataService) Campaigns(context.Context, *agentpbv2.DataCampaignsRequest) (*agentpbv2.DataCampaignsResponse, error) {

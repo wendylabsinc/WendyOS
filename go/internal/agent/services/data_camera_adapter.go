@@ -199,7 +199,7 @@ func (a *cameraDataAdapter) Arm(campaignKey string, buffer time.Duration, select
 		if !ok {
 			continue
 		}
-		if source.Capture != nil && source.Capture.EffectiveMode() == captureModeSnapshot {
+		if !armsStandbyRing(source) {
 			continue
 		}
 		src, err := a.video.resolveSource(devID)

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -77,42 +78,110 @@ func (s *VideoService) ownFramesForecast(hubKey string, req *agentpb.StreamVideo
 	return own, declined, native, true
 }
 
-// softwareEncoderOfVideoAt names the software element that makes H.264 from
-// the own frames of the camera a default capture runs at hubKey, or "": for a
-// camera whose video needs no encoder here, one no native source captures, and
-// an encoder not known to be software.
-func (s *VideoService) softwareEncoderOfVideoAt(hubKey string) string {
-	own, declined, native, asked := s.ownFramesForecast(hubKey, &agentpb.StreamVideoRequest{})
-	if !asked || !native || declined != "" {
-		return ""
+// softwareEncoderOfVideoAt names the software element that encodes the video
+// of the camera a default capture runs at hubKey, and says whether that
+// capture also hands on the camera's own frames. A native source derives the
+// video from those frames; every other local camera is encoded by the
+// GStreamer pipeline, which hands on none. The element is "" for a camera
+// whose video needs no encoder here, for one whose capture is known only once
+// it runs (a SensorLink camera, a native source that cannot describe its
+// frames), and for an encoder not known to be software.
+func (s *VideoService) softwareEncoderOfVideoAt(hubKey string) (encoder string, ownFrames bool) {
+	if !strings.HasPrefix(hubKey, "/dev/video") || (s.sensorFrames != nil && isSensorLinkCameraPath(hubKey)) {
+		return "", false
 	}
 	_, available, err := s.gstElements()
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return softwareEncoderOfH264From(own.codec, available)
+	own, declined, native, asked := s.ownFramesForecast(hubKey, &agentpb.StreamVideoRequest{})
+	switch {
+	case asked && native && declined == "":
+		return softwareEncoderOfH264From(own.codec, available), true
+	case asked && native:
+		return "", false
+	}
+	chosen, err := findGStreamerEncoderFromSet(available)
+	if err != nil || chosen.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || !encodesH264InSoftware(chosen.element) {
+		return "", false
+	}
+	return chosen.element, false
 }
 
-// DeployWarnings names each selected camera whose video a campaign stores and
-// this device makes with a software encoder.
-func (a *cameraDataAdapter) DeployWarnings(selected []data.Source) []string {
+// asksForEncodedVideo reports whether a recording or a pre-roll ring of a
+// camera source with this capture block subscribes to its encoded video.
+func asksForEncodedVideo(capture *data.SourceCapture) bool {
+	primary, _ := subscriptionKindsFor(capture)
+	return primary == encodedFrames
+}
+
+// armsStandbyRing reports whether Arm keeps a pre-roll ring for the listing.
+func armsStandbyRing(source data.Source) bool {
+	return source.Capture == nil || source.Capture.EffectiveMode() != captureModeSnapshot
+}
+
+// planAsksForEncodedVideo decides from the plan alone whether any camera can
+// be read as encoded video: by the campaign's inference, which reads every
+// camera source so, or by a listing whose own capture block asks for it. A
+// camera's recording and its ring each follow one listing's block, so a plan
+// with no such listing asks no camera for encoded video.
+func planAsksForEncodedVideo(campaign data.Campaign) bool {
+	for _, source := range campaign.Sources {
+		if source.Camera != "" && (campaign.Inference.IsEnabled() || asksForEncodedVideo(source.Capture)) {
+			return true
+		}
+	}
+	return false
+}
+
+// DeployWarnings names each camera of the campaign present now whose video
+// the campaign reads and this device encodes in software. It lists the
+// cameras only for a plan that asks one for video, and resolves the plan's
+// selectors as a trigger and arming do (data.Campaign.CamerasAmong). A source
+// that asks for the camera's own frames is not warned of, also where a camera
+// without frames of its own is recorded as video instead: the episode's
+// manifest says that.
+func (a *cameraDataAdapter) DeployWarnings(ctx context.Context, campaign data.Campaign) []string {
+	if !planAsksForEncodedVideo(campaign) {
+		return nil
+	}
+	recorded, listed := campaign.CamerasAmong(a.Discover(ctx))
+	buffered := map[string]bool{}
+	if campaign.BufferDuration() > 0 {
+		for _, listing := range listed {
+			if armsStandbyRing(listing) {
+				buffered[listing.ID] = asksForEncodedVideo(listing.Capture)
+			}
+		}
+	}
+	inference := campaign.Inference.IsEnabled()
 	var warnings []string
-	for _, source := range selected {
-		devID, ok := cameraDeviceID(source.ID)
-		if !ok {
+	for _, source := range recorded {
+		if !inference && !asksForEncodedVideo(source.Capture) && !buffered[source.ID] {
 			continue
 		}
-		if primary, _ := subscriptionKindsFor(source.Capture); primary != encodedFrames {
+		devID, ok := cameraDeviceID(source.ID)
+		if !ok {
 			continue
 		}
 		src, err := a.video.resolveSource(devID)
 		if err != nil || src.kind != sourceV4L2 {
 			continue
 		}
-		if encoder := a.video.softwareEncoderOfVideoAt(src.key); encoder != "" {
-			warnings = append(warnings, fmt.Sprintf("camera %s: its video is encoded in software (%s) on this device while the campaign records or buffers; "+
-				"store: frames keeps the camera's own frames without encoding", source.ID, encoder))
+		encoder, ownFrames := a.video.softwareEncoderOfVideoAt(src.key)
+		if encoder == "" {
+			continue
 		}
+		warning := fmt.Sprintf("camera %s: its video is encoded in software (%s) on this device while ", source.ID, encoder)
+		switch {
+		case inference:
+			warning += "the campaign's inference runs"
+		case ownFrames:
+			warning += "the campaign records or buffers; store: frames keeps the camera's own frames without encoding"
+		default:
+			warning += "the campaign records or buffers"
+		}
+		warnings = append(warnings, warning)
 	}
 	return warnings
 }
