@@ -36,7 +36,7 @@ import (
 var errGadgetUnreachable = errors.New("thor flashing gadget did not appear over USB")
 
 // thorEraseWarning is shown before the question that starts a Thor flash.
-const thorEraseWarning = "This erases QSPI and all data on the Thor's internal NVMe, including /data. This cannot be undone."
+const thorEraseWarning = "Flashing overwrites QSPI and resets the WendyOS installation, including /data. This cannot be undone. Sanitizing the internal NVMe requires a separate secure erase."
 
 // thorDevice identifies a selected Jetson in recovery mode, platform-neutrally.
 // PathKey is the stable physical-location key used to re-find the device across
