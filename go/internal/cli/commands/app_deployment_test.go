@@ -247,3 +247,31 @@ func TestLaterChangesKeepTheStoredKeepTryingTime(t *testing.T) {
 		t.Fatalf("rotate signed %d days, past the ceiling", days())
 	}
 }
+
+// Deploy and update run the device's own configuration check before the
+// review, naming the setting and the rule; --remove-config drops a setting.
+func TestConfigIsCheckedLikeTheDevice(t *testing.T) {
+	op, fake, releaseID := stepsFixture(t)
+	ctx := context.Background()
+	a := allFlags(releaseID)
+	a.config = []string{"my-var=1"}
+	if err := runDeploy(ctx, op, a, io.Discard, false); err == nil || !strings.Contains(err.Error(), `"my-var"`) || !strings.Contains(err.Error(), "letters, digits") || len(fake.deploys) != 0 {
+		t.Fatalf("an invalid name: %v", err)
+	}
+	op, fake, _, depID := deployedFixture(t)
+	n := len(fake.assigned)
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{config: []string{"OTEL_SERVICE_NAME=x"}, yes: true}, io.Discard, false); err == nil || !strings.Contains(err.Error(), `"OTEL_SERVICE_NAME" is set by the agent`) || len(fake.assigned) != n {
+		t.Fatalf("an agent-set name: %v", err)
+	}
+	// A setting a device refuses, signed before this check: update removes it.
+	fake.deploys[depID].ConfigJson = `{"LOG_LEVEL":"info","UPLOAD_INTERVAL_SECONDS":"30","my-var":"1"}`
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{config: []string{"LOG_LEVEL=debug"}, yes: true}, io.Discard, false); err == nil || !strings.Contains(err.Error(), "--remove-config") {
+		t.Fatalf("a refused setting kept: %v", err)
+	}
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{removeConfig: []string{"my-var"}, yes: true}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if last := fake.assigned[len(fake.assigned)-1]; strings.Contains(last.GetConfigJson(), "my-var") || len(fake.assigned) != n+1 {
+		t.Fatalf("signed %s", last.GetConfigJson())
+	}
+}

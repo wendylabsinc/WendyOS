@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -25,11 +26,12 @@ import (
 // signed only from what the operator confirmed.
 
 type changeFlags struct {
-	release, configFile, keepTrying, note, cloudGRPC       string
-	to                                                     int32
-	config, addDevices, removeDevices, addTags, removeTags []string
-	addSites, removeSites                                  []string
-	start, stop, move, yes                                 bool
+	release, configFile, keepTrying, note, cloudGRPC string
+	to                                               int32
+	config, removeConfig, addDevices, removeDevices  []string
+	addTags, removeTags                              []string
+	addSites, removeSites                            []string
+	start, stop, move, yes                           bool
 }
 
 type changeRun func(ctx context.Context, op *registryOp, appID, name string, c changeFlags, out io.Writer, interactive bool) error
@@ -81,6 +83,7 @@ func deploymentChangeCmds() []*cobra.Command {
 			f.StringVar(&c.release, "release", "", "New release: its version (or id)")
 			f.StringArrayVar(&c.config, "config", nil, "Set a value: NAME=VALUE (repeatable)")
 			f.StringVar(&c.configFile, "config-file", "", "Set values from a JSON object of named values")
+			f.StringArrayVar(&c.removeConfig, "remove-config", nil, "Remove a setting by name (repeatable)")
 			f.BoolVar(&c.start, "start", false, "Run the app")
 			f.BoolVar(&c.stop, "stop", false, "Stop the app")
 			f.StringArrayVar(&c.addDevices, "add-device", nil, "Add a device by name or id (repeatable)")
@@ -153,8 +156,8 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 			review = append(review, fmt.Sprintf("Release: %s → %s", releaseName(rels, d.GetAppReleaseId()), newRel.GetName()))
 		}
 	}
-	if len(c.config) > 0 || c.configFile != "" {
-		text, changed, err := deployConfig(d.GetConfigJson(), deployAnswers{config: c.config, configFile: c.configFile}, false, nil)
+	if len(c.config) > 0 || c.configFile != "" || len(c.removeConfig) > 0 {
+		text, changed, err := deployConfig(d.GetConfigJson(), deployAnswers{config: c.config, configFile: c.configFile, remove: c.removeConfig}, false, nil)
 		if err != nil {
 			return err
 		}
@@ -266,8 +269,11 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 	if err := checkRequired(orDefault(req.ConfigJson, d.GetConfigJson()), releaseRequired(release)); err != nil {
 		return err
 	}
+	if err := appconfig.CheckDeploymentConfig(orDefault(req.ConfigJson, d.GetConfigJson())); err != nil {
+		return usageErrorf("Devices refuse this configuration: %v. Remove that setting with --remove-config NAME, or change it with --config NAME=VALUE.", err)
+	}
 	if len(review) == 0 && req.Validity == nil {
-		return usageErrorf("Nothing to change. Add --release, --config, --start, --stop, --add-device, --remove-device, --add-tag, --remove-tag, --add-site, --remove-site or --keep-trying.")
+		return usageErrorf("Nothing to change. Add --release, --config, --remove-config, --start, --stop, --add-device, --remove-device, --add-tag, --remove-tag, --add-site, --remove-site or --keep-trying.")
 	}
 	content := req.AppReleaseId != nil || req.ConfigJson != nil || req.DesiredState != nil
 	get := next

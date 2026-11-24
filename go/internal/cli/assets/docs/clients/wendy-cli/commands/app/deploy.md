@@ -15,7 +15,7 @@ wendy app deploy --app <id> --release <version> --tag <tag> --site <site> --devi
   --name <deployment> --config NAME=VALUE --run --yes
 wendy app deployment show <app>/<deployment>
 wendy app deployment update <app>/<deployment> --release <version> --config NAME=VALUE \
-  --start|--stop --add-device <name> --remove-device <name> --add-tag <tag> --remove-tag <tag> \
+  --remove-config NAME --start|--stop --add-device <name> --remove-device <name> --add-tag <tag> --remove-tag <tag> \
   --add-site <site> --remove-site <site>
 wendy app deployment rollback <app>/<deployment> --to <revision>
 wendy app deployment remove <app>/<deployment>
@@ -37,7 +37,12 @@ wendy app rotate --deployment <deployment-id> --device <device-uuid> [--device .
 - **deployment show** shows a deployment and each device's state.
 - **deployment update** changes the release, configuration, run state or
   devices as one new revision. It shows what changes and asks before it
-  sends anything (`--yes` skips the question).
+  sends anything (`--yes` skips the question). `--remove-config NAME` drops
+  a setting.
+- deploy and update check the configuration as a device does (names are
+  environment variable names, values are text, numbers or true/false, and
+  names the agent sets itself are refused) and name the setting before
+  anything is sent.
 - **deployment rollback** restores an earlier revision's release,
   configuration, run state and devices as a new revision. It shows the
   release and configuration it restores before you confirm.

@@ -2,20 +2,17 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"math"
 	"slices"
-	"strings"
 	"time"
-	"unicode"
 
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -30,8 +27,6 @@ const (
 	// removalMarkKeep is how long a removal mark is kept: past the platform
 	// cap (1 year), so no statement it guards can still be valid.
 	removalMarkKeep = 400 * 24 * time.Hour
-	// maxConfigSize caps DeviceAssignment.config_json.
-	maxConfigSize = 64 << 10
 )
 
 // postboxMark is, per deployment, the highest revision this device accepted
@@ -71,89 +66,6 @@ func notForThisDevice(reason, format string, args ...any) error {
 	return &contractRefusal{outcome: cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_TARGET, reason: reason, err: fmt.Errorf(format, args...)}
 }
 
-// checkConfig is the device's check of a signed configuration: non-empty,
-// exactly one JSON object, at most 64 KiB.
-func checkConfig(config string) error {
-	if config == "" {
-		return errors.New("the configuration is empty")
-	}
-	if len(config) > maxConfigSize {
-		return fmt.Errorf("the configuration is %d bytes, over the %d byte limit", len(config), maxConfigSize)
-	}
-	dec := json.NewDecoder(strings.NewReader(config))
-	dec.UseNumber() // a number's text is kept: 1e400 is valid JSON
-	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
-		return errors.New("the configuration is not a JSON object")
-	}
-	if err := checkJSONObject(dec); err != nil {
-		return fmt.Errorf("the configuration is not valid JSON: %w", err)
-	}
-	if _, err := dec.Token(); err != io.EOF {
-		return errors.New("the configuration is more than one JSON object")
-	}
-	// Named values only: host access comes from the release, never from a
-	// deployment (sem, 2026-11-12).
-	_, err := configEnv(config)
-	return err
-}
-
-// checkJSONObject reads the rest of an object whose '{' was read, refusing a
-// key that appears twice in it or in any object nested inside it: which of
-// two values counts would depend on the parser. Keys equal ignoring case
-// count as the same key, because Go's JSON decoder (the start step's) matches
-// field names without regard to case, so the last of them would win.
-func checkJSONObject(dec *json.Decoder) error {
-	seen := map[string]bool{}
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
-			return err
-		}
-		key, _ := tok.(string)
-		folded := foldKey(key)
-		if seen[folded] {
-			return fmt.Errorf("key %q appears twice", key)
-		}
-		seen[folded] = true
-		if err := checkJSONValue(dec); err != nil {
-			return err
-		}
-	}
-	_, err := dec.Token() // '}'
-	return err
-}
-
-// foldKey maps every rune to the smallest rune of its case-fold orbit, so
-// foldKey(a) == foldKey(b) exactly when strings.EqualFold(a, b).
-func foldKey(s string) string {
-	return strings.Map(func(r rune) rune {
-		least := r
-		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
-			least = min(least, f)
-		}
-		return least
-	}, s)
-}
-
-func checkJSONValue(dec *json.Decoder) error {
-	tok, err := dec.Token()
-	if err != nil {
-		return err
-	}
-	switch tok {
-	case json.Delim('{'):
-		return checkJSONObject(dec)
-	case json.Delim('['):
-		for dec.More() {
-			if err := checkJSONValue(dec); err != nil {
-				return err
-			}
-		}
-		_, err = dec.Token() // ']'
-	}
-	return err
-}
-
 // assignOrder applies the ordering rules to an assignment against what the
 // device holds. repeat is an assignment at the revision already accepted
 // with identical content (a key rotation): it replaces the held statement
@@ -179,7 +91,7 @@ func assignOrder(st *postboxState, a *cloudpbv2.DeviceAssignment) (repeat bool, 
 			return true, nil
 		}
 	}
-	if err := checkConfig(a.GetConfigJson()); err != nil {
+	if err := appconfig.CheckDeploymentConfig(a.GetConfigJson()); err != nil {
 		return false, &contractRefusal{outcome: cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, reason: "config", err: err}
 	}
 	from, fromRev := a.GetReplacesDeploymentId(), a.GetReplacesRevision()

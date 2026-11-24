@@ -68,49 +68,6 @@ type ReleaseStart struct {
 	Run              bool     // false: install only, left stopped
 }
 
-// configEnv turns a configuration (checked by checkConfig) into environment
-// entries, sorted by name.
-func configEnv(config string) ([]string, error) {
-	dec := json.NewDecoder(strings.NewReader(config))
-	dec.UseNumber()
-	var values map[string]any
-	if err := dec.Decode(&values); err != nil {
-		return nil, err
-	}
-	env := make([]string, 0, len(values))
-	for name, v := range values {
-		// Checked here as well: ValidateEnvEntries reads a name only up to its
-		// first "=", so "A=B" would pass there as A.
-		if !appconfig.IsEnvVarName(name) {
-			return nil, fmt.Errorf("configuration name %q is not a valid environment variable name", name)
-		}
-		var text string
-		switch v := v.(type) {
-		case string:
-			text = v
-		case json.Number:
-			text = v.String()
-		case bool:
-			text = fmt.Sprint(v)
-		default:
-			return nil, fmt.Errorf("the configuration may hold only named values (text, numbers, true or false); %q holds more", name)
-		}
-		if appconfig.IsAgentEnvName(name) {
-			return nil, fmt.Errorf("configuration name %q is set by the agent itself", name)
-		}
-		env = append(env, name+"="+text)
-	}
-	slices.Sort(env)
-	// At least as strict as the runtime, so a statement is refused when it
-	// arrives rather than failing at start: no reserved names (the agent's
-	// own or the linkers'), no NUL, CR or LF, entries of at most
-	// 32 KiB, at most 512 of them.
-	if err := appconfig.ValidateEnvEntries(env); err != nil {
-		return nil, fmt.Errorf("the configuration cannot be applied: %w", err)
-	}
-	return env, nil
-}
-
 // releaseStart builds the start of statement a: the app definition from its
 // release image (refused when missing, naming another app, or declaring
 // several services) and the configuration as environment.
@@ -122,7 +79,7 @@ func (p *Postbox) releaseStart(ctx context.Context, a *cloudpbv2.DeviceAssignmen
 	if err := checkAppDefinition(def, a.GetAppId()); err != nil {
 		return ReleaseStart{}, err
 	}
-	env, err := configEnv(a.GetConfigJson())
+	env, err := appconfig.DeploymentConfigEnv(a.GetConfigJson())
 	if err != nil {
 		return ReleaseStart{}, pullFailed("config", err)
 	}
@@ -231,7 +188,7 @@ func (p *Postbox) expiredResume(ctx context.Context, a *cloudpbv2.DeviceAssignme
 // removed). The rest of the environment (image and agent variables) is not
 // the configuration's.
 func (p *Postbox) runsStatement(st AppContainerState, a *cloudpbv2.DeviceAssignment) bool {
-	env, err := configEnv(a.GetConfigJson())
+	env, err := appconfig.DeploymentConfigEnv(a.GetConfigJson())
 	if err != nil || !st.Present || st.Image != ReleaseImageName(a.GetAppId(), a.GetAppReleaseId()) ||
 		st.Running != (a.GetDesiredState() == cloudpbv2.Running_RUNNING) {
 		return false
@@ -242,7 +199,7 @@ func (p *Postbox) runsStatement(st AppContainerState, a *cloudpbv2.DeviceAssignm
 		}
 	}
 	if prev := p.previous(a); prev != nil {
-		old, err := configEnv(prev.GetConfigJson())
+		old, err := appconfig.DeploymentConfigEnv(prev.GetConfigJson())
 		if err != nil {
 			return false
 		}

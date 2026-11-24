@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -27,7 +28,7 @@ import (
 
 type deployAnswers struct {
 	app, release, digest, name, configFile, keepTrying, note, cloudGRPC string
-	devices, tags, sites, config                                        []string
+	devices, tags, sites, config, remove                                []string
 	required                                                            []string // settings the release requires; filled from the release
 	run, installOnly, move, yes, wait                                   bool
 	waitTimeout                                                         time.Duration
@@ -288,6 +289,9 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 	if err := checkRequired(config, a.required); err != nil {
 		return err
 	}
+	if err := appconfig.CheckDeploymentConfig(config); err != nil {
+		return usageErrorf("Devices refuse this configuration: %v. Change that setting with --config NAME=VALUE, or leave it out.", err)
+	}
 	plan.config = config
 
 	// 5  Should it run now?
@@ -398,6 +402,12 @@ func deployConfig(defaults string, a deployAnswers, interactive bool, say func(s
 		}
 		values[name], _ = json.Marshal(value)
 	}
+	for _, name := range a.remove {
+		if _, ok := values[name]; !ok {
+			return "", 0, usageErrorf("There is no setting %s to remove. The settings are: %s.", name, strings.Join(slices.Sorted(maps.Keys(values)), ", "))
+		}
+		delete(values, name)
+	}
 	if interactive && len(a.config) == 0 && a.configFile == "" && len(base) > 0 {
 		say("4/7  What configuration should it use?")
 		say("     The release comes with defaults. Change only what this deployment needs.")
@@ -422,7 +432,7 @@ func deployConfig(defaults string, a deployAnswers, interactive bool, say func(s
 			}
 		}
 	}
-	changed := 0
+	changed := len(a.remove)
 	for name, v := range values {
 		if string(base[name]) != string(v) {
 			changed++
