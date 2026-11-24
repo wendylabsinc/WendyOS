@@ -53,6 +53,13 @@ const (
 	// shareNodeBuffers is how many OUTPUT buffers the writer round-robins.
 	shareNodeBuffers = 2
 
+	// v4l2BufTypeVideoOutput is V4L2_BUF_TYPE_VIDEO_OUTPUT.
+	v4l2BufTypeVideoOutput = 2
+	// v4l2BufFlagTimestampCopy is V4L2_BUF_FLAG_TIMESTAMP_COPY: the buffer's
+	// timestamp is the writer's, which is how a reader tells it from the
+	// module's own clock.
+	v4l2BufFlagTimestampCopy = 0x00004000
+
 	// v4l2EventCountOffset and v4l2EventPendingOffset locate the client count
 	// (first word of the event union, which starts at 8 on 64-bit) and the
 	// number of events still queued behind this one in struct v4l2_event.
@@ -84,6 +91,12 @@ var (
 	_ [136 - unsafe.Sizeof(v4l2Event{})]byte
 	_ [unsafe.Sizeof(v4l2Event{}) - 136]byte
 )
+
+// The length (offset 72), bytesused (8) and field (16) members of struct
+// v4l2_buffer.
+func v4l2BufLength(b *v4l2Buf) uint32          { return *(*uint32)(unsafe.Pointer(&b[72])) }
+func v4l2BufSetBytesUsed(b *v4l2Buf, n uint32) { *(*uint32)(unsafe.Pointer(&b[8])) = n }
+func v4l2BufSetField(b *v4l2Buf, field uint32) { *(*uint32)(unsafe.Pointer(&b[16])) = field }
 
 func (e *v4l2Event) count() uint32   { return *(*uint32)(unsafe.Pointer(&e[v4l2EventCountOffset])) }
 func (e *v4l2Event) pending() uint32 { return *(*uint32)(unsafe.Pointer(&e[v4l2EventPendingOffset])) }

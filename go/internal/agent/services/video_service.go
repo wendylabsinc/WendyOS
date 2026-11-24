@@ -408,9 +408,7 @@ func (b *v4l2Buf) timestampNanos() int64 {
 //
 // The microsecond field truncates: struct timeval has no finer resolution. The
 // truncation is exact rather than lossy-and-rounded, because 1e9 is divisible
-// by 1000, so sec*1e6 + usec == nanos/1000 for any non-negative nanos. That
-// identity is what lets a consumer derive the expected buffer value from
-// FrameIdentity.boottime_nanos without a second field on the wire.
+// by 1000, so sec*1e6 + usec == nanos/1000 for any non-negative nanos.
 func (b *v4l2Buf) setTimestampNanos(nanos int64) {
 	*(*int64)(unsafe.Pointer(&b[24])) = nanos / int64(time.Second)
 	*(*int64)(unsafe.Pointer(&b[32])) = (nanos % int64(time.Second)) / int64(time.Microsecond)
@@ -626,8 +624,8 @@ type deviceHub struct {
 	width, height, framerate uint32
 	// subExplicit records, per subscriber id, the label of the consumer kind
 	// that joined with EXPLICITLY asserted stream parameters; subscribers that
-	// asserted none (a model app on the sensor socket, the two-plane loopback
-	// pump) have no entry. This is the bit the parameter-priority rules pivot
+	// asserted none (a camera share's pump, a default viewer) have no entry.
+	// This is the bit the parameter-priority rules pivot
 	// on, tracked as hub state at subscribe time rather than inferred later
 	// from the parameter values: the hub's parameters count as explicitly held
 	// only while at least one such subscriber remains, so a camera whose
@@ -895,15 +893,15 @@ func frameTooLarge(frame *videoFrame) bool {
 //
 // Minting belongs to the arrival of a frame, not to a delivery of it. The hub
 // can deliver one physical frame on more than one plane — encoded video to
-// viewers, to the sensor subscribers a model app reads, and to episode capture;
-// and, where the producer tees it, the uncompressed capture frame to analytic
-// subscribers — and each plane is a separate broadcast call. Minting inside
-// broadcast made a single camera frame consume one identifier per plane, so the
-// encoded stream's identifiers came out [2 4 6] with no drops recorded. That
-// breaks two contracts at once: hub_loopback_binding reads a jump in sample_id
-// on a dense loopback sequence as a producer-side drop, so every frame read as
-// a drop; and the model-input ledger's sample_id is supposed to name the
-// episode index entry for the same frame, so the join returned nothing at all.
+// viewers, to the camera nodes apps read, and to episode capture; and, where
+// the producer tees it, the uncompressed capture frame to analytic subscribers
+// — and each plane is a separate broadcast call. Minting inside broadcast made
+// a single camera frame consume one identifier per plane, so the encoded
+// stream's identifiers came out [2 4 6] with no drops recorded. That breaks two
+// contracts at once: a jump in sample_id reads as a lost frame (sampleGap), so
+// every frame read as a loss; and the sample_id an app reads off its camera
+// node is supposed to name the episode index entry for the same frame, so the
+// join returned nothing at all.
 //
 // An oversized frame is dropped here without consuming an identifier, so a gap
 // in sample_id always means a sample that existed and was lost, never one that
@@ -1152,17 +1150,15 @@ type cameraLoopback interface {
 	RemoveCamera(camID uint32)
 	EnsureNode(ctx context.Context, id uint32, label string) error
 	Shutdown()
-	// Auxiliary nodes back the two-plane camera data path: v4l2loopback nodes
-	// fed from the producer hub rather than from a registered network camera.
-	// See video_service_two_plane.go.
-	AllocateAuxNodeNumber() (int, error)
-	EnsureAuxNode(ctx context.Context, nr int, label string) error
-	RemoveAuxNode(nr int)
-	// EnsureShareNode makes an app's camera share node (camera_share.go): an
-	// auxiliary node that announces CAPTURE even while no writer streams.
+	// Auxiliary nodes are v4l2loopback nodes fed from the producer hub rather
+	// than from a registered network camera: the camera share nodes
+	// (camera_share.go). EnsureShareNode makes one that announces CAPTURE even
+	// while no writer streams.
 	EnsureShareNode(ctx context.Context, nr int, label string) error
-	// AllocateAuxNodeNumberSkipping also passes over the numbers skip
-	// reports: share records hold numbers whose nodes a reboot removed.
+	RemoveAuxNode(nr int)
+	// AllocateAuxNodeNumberSkipping returns a free node number, passing over
+	// the numbers skip reports: share records hold numbers whose nodes a
+	// reboot removed.
 	AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error)
 }
 
@@ -1197,9 +1193,6 @@ type VideoService struct {
 	// in tests and builds without sensor pairing, which read the node as before.
 	sensorFrames           *SensorFrameFeed
 	sensorCameraIdentities func() map[uint32]string
-
-	// twoPlaneState holds the two-plane camera data path's nodes and pumps.
-	twoPlaneState
 
 	// runGStreamer is the injection seam for the network capture subprocess.
 	runGStreamer func(ctx context.Context, args []string, onFrame func([]byte)) error
@@ -1519,13 +1512,8 @@ func (s *VideoService) Loopback() interface {
 }
 
 func (s *VideoService) Shutdown() {
-	// Two-plane pumps go first, and are waited for, because each one holds a hub
-	// subscription and an open v4l2loopback node. Cancelling s.ctx alone would
-	// stop them eventually but would not wait, so a pump could still be
-	// releasing its node after Shutdown returned.
-	s.stopAllTwoPlane()
-	// Share pumps hold hub subscriptions too. Their nodes and records stay
-	// for the next agent to adopt.
+	// Share pumps hold hub subscriptions. Their nodes and records stay for the
+	// next agent to adopt.
 	s.stopCameraSharePumps()
 	if s.ros2Cameras != nil {
 		s.ros2Cameras.Shutdown()
@@ -1541,7 +1529,7 @@ func (s *VideoService) Shutdown() {
 
 // listCameras enumerates every camera the device can offer: local V4L2 nodes
 // first, then paired network cameras. It is the listing apps, the data service
-// and the two-plane path see.
+// and camera sharing see.
 func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice, error) {
 	return s.listCamerasWithUnpaired(ctx, false)
 }

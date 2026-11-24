@@ -21,6 +21,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	sharedenv "github.com/wendylabsinc/wendy/go/internal/shared/env"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -28,9 +29,11 @@ import (
 )
 
 // The source is generated H264, not a physical camera. The producer seam feeds
-// the production hub; both real capture and the OUTPUT pump consume that hub.
-// Kernel QBUF/DQBUF, example decoding/inference/socket framing, recording and
-// payload lookup are actual paths. This does not invent application deliveries
+// the production hub; both real capture and a camera share node's pump consume
+// that hub. The node is the one an app gets for a camera that produces H.264
+// with {"type": "camera", "format": "native", "stamp": "frame"}. Kernel
+// QBUF/DQBUF, example decoding/inference/socket framing, recording and payload
+// lookup are actual paths. This does not invent application deliveries
 // in model_inputs.jsonl or claim OCI grants/physical firmware/model accuracy.
 func TestV4L2ExamplePredictionJoinsRecordedCameraPayload(t *testing.T) {
 	if os.Getenv("WENDY_V4L2_SAMPLE_LEDGER") != "1" {
@@ -91,7 +94,7 @@ func TestV4L2ExamplePredictionJoinsRecordedCameraPayload(t *testing.T) {
 	// The outer guardian owns failure/watchdog cleanup; leave evidence under its
 	// owned directory, including partial episodes, until group drain is proven.
 	loop := ipcam.NewLoopback(ctx, zap.NewNop(), nil, nil, nil)
-	if err := loop.EnsureAuxNode(ctx, 96, os.Getenv("WENDY_V4L2_LEDGER_LABEL")); err != nil {
+	if err := loop.EnsureShareNode(ctx, 96, os.Getenv("WENDY_V4L2_LEDGER_LABEL")); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
@@ -101,11 +104,12 @@ func TestV4L2ExamplePredictionJoinsRecordedCameraPayload(t *testing.T) {
 			t.Errorf("owned V4L2 node remains: %v", err)
 		}
 	}()
-	writer, err := openLoopbackFrameWriterPlatform(node)
+	mode := compressedMode(agentpb.VideoCodec_VIDEO_CODEC_H264, appconfig.CameraFormatNative, 64, 48, 25)
+	shareNode, err := openShareNode(zap.NewNop(), node, mode)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writer.Close()
+	defer shareNode.Close()
 	video := campaignRuntimeVideo(func() ([]string, error) { return []string{"/dev/video1890"}, nil }, func(string) (string, error) { return "Generated sample ledger source", nil })
 	sequence := new(atomic.Uint64)
 	sequence.Store((1 << 63) + 1234567)
@@ -139,7 +143,7 @@ func TestV4L2ExamplePredictionJoinsRecordedCameraPayload(t *testing.T) {
 						payload = blue
 					}
 					index++
-					h.produce(&videoFrame{data: payload, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, auAligned: true, tsNs: uint64(time.Now().UnixNano()), nativeClock: "GENERATED_SCENE"})
+					h.produce(&videoFrame{data: payload, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, auAligned: true, native: true, tsNs: uint64(time.Now().UnixNano()), nativeClock: "GENERATED_SCENE"})
 				}
 			}
 		}()
@@ -163,24 +167,25 @@ func TestV4L2ExamplePredictionJoinsRecordedCameraPayload(t *testing.T) {
 			_, _ = service.Stop(context.Background(), &agentpbv2.DataStopRequest{})
 		}
 	}()
-	hub, subID, frames, err := video.joinHub(ctx, "/dev/video1890", &agentpb.StreamVideoRequest{DeviceId: 1890})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pump := newHubLoopbackPump(zap.NewNop(), source, node)
+	// The pump joins the hub when the reader below starts streaming.
+	pump := newSharePump(zap.NewNop(), "sh.wendy.sample-ledger", "Generated sample ledger source", shareNode, shareNode.Mode(), appconfig.CameraStampFrame,
+		func(ctx context.Context) (shareSubscription, error) {
+			return video.joinHubForShare(ctx, "/dev/video1890", 1890, mode)
+		})
 	pumpCtx, stopPump := context.WithCancel(ctx)
-	pumpDone := make(chan error, 1)
-	go func() { pumpDone <- pump.pump(pumpCtx, hub, subID, frames, writer) }()
+	pumpDone := make(chan struct{})
+	go func() {
+		defer close(pumpDone)
+		pump.Run(pumpCtx)
+	}()
 	defer func() {
 		stopPump()
 		select {
 		case <-pumpDone:
 		case <-time.After(3 * time.Second):
-			t.Error("sample pump did not join")
+			t.Error("share pump did not stop")
 		}
-		hub.unsubscribe(subID)
 	}()
-	waitForBindings(t, pump, 2)
 	socketCtx, stopSocket := context.WithCancel(ctx)
 	defer stopSocket()
 	socketRoot, err := os.MkdirTemp("/tmp", "vsl-")

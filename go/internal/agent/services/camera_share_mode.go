@@ -30,10 +30,9 @@ import (
 // cameraShares holds the share records of every container that shares a
 // camera. Its zero value shares nothing; its maps are made on first use.
 //
-// Lock order: ops or the service's twoPlaneStartMu (never both: node
-// allocation and removal hold twoPlaneStartMu, removal, adoption and shutdown
-// of shares hold ops), then fileMu, then mu. mu is never held with the
-// service's mu, and never across I/O or a wait.
+// Lock order: ops or nodeMu (never both: node allocation and removal hold
+// nodeMu, removal, adoption and shutdown of shares hold ops), then fileMu, then
+// mu. mu is never held with the service's mu, and never across I/O or a wait.
 type cameraShares struct {
 	mu         sync.Mutex
 	containers map[string]*shareContainer // by container ID
@@ -65,6 +64,10 @@ type cameraShares struct {
 	coverWG sync.WaitGroup
 	nsWG    sync.WaitGroup
 
+	// nodeMu serialises making and removing share nodes. The loopback module's
+	// search for a free node number cannot see a number picked and not yet
+	// made, so two allocations at once would be handed the same one.
+	nodeMu sync.Mutex
 	// ops serialises removal, adoption and shutdown (camera_share.go), so a
 	// record is never stopped twice or adopted while it is being removed. A
 	// start's cover never takes it, because it must not wait: it claims a

@@ -1470,7 +1470,7 @@ func TestLoopback_LogsNodeNotReadyOnceThenStaysQuiet(t *testing.T) {
 // TestAllocateAuxNodeNumber_TopDownAndSkipsTaken pins the auxiliary node
 // allocator's collision avoidance.
 //
-// Auxiliary nodes (the two-plane camera data path) and registered network
+// Auxiliary nodes (camera share nodes) and registered network
 // cameras share one reserved band, because the kernel's VIDEO_NUM_DEVICES of 256
 // leaves no room for a second one. They must never be handed the same number: an
 // auxiliary node reusing a camera's number would point an app at the wrong
@@ -1483,9 +1483,9 @@ func TestAllocateAuxNodeNumber_TopDownAndSkipsTaken(t *testing.T) {
 	l, reg := newTestLoopback(t, h)
 
 	// A fresh device allocates from the top of the band.
-	nr, err := l.AllocateAuxNodeNumber()
+	nr, err := l.AllocateAuxNodeNumberSkipping(nil)
 	if err != nil {
-		t.Fatalf("AllocateAuxNodeNumber: %v", err)
+		t.Fatalf("AllocateAuxNodeNumberSkipping: %v", err)
 	}
 	if nr != IDBandEnd {
 		t.Errorf("first allocation = %d, want %d (top of the band)", nr, IDBandEnd)
@@ -1507,9 +1507,9 @@ func TestAllocateAuxNodeNumber_TopDownAndSkipsTaken(t *testing.T) {
 	reg.mu.Unlock()
 	_ = cam
 
-	nr, err = l.AllocateAuxNodeNumber()
+	nr, err = l.AllocateAuxNodeNumberSkipping(nil)
 	if err != nil {
-		t.Fatalf("AllocateAuxNodeNumber: %v", err)
+		t.Fatalf("AllocateAuxNodeNumberSkipping: %v", err)
 	}
 	if nr == IDBandEnd {
 		t.Error("allocator reused a number whose node already exists")
@@ -1532,14 +1532,13 @@ func TestAllocateAuxNodeNumber_BandExhausted(t *testing.T) {
 	for nr := IDBandStart; nr <= IDBandEnd; nr++ {
 		h.setNodeExists(nr, true)
 	}
-	if _, err := l.AllocateAuxNodeNumber(); !errors.Is(err, ErrBandExhausted) {
-		t.Errorf("AllocateAuxNodeNumber() error = %v, want ErrBandExhausted", err)
+	if _, err := l.AllocateAuxNodeNumberSkipping(nil); !errors.Is(err, ErrBandExhausted) {
+		t.Errorf("AllocateAuxNodeNumberSkipping(nil) error = %v, want ErrBandExhausted", err)
 	}
 }
 
 // A number the caller holds without a node (a camera share's record across a
-// reboot) is passed over like a taken one; with nothing to skip the allocator
-// is AllocateAuxNodeNumber.
+// reboot) is passed over like a taken one.
 func TestAllocateAuxNodeNumberSkipping_PassesOverHeldNumbers(t *testing.T) {
 	h := newLoopbackHarness()
 	h.controlExists = true

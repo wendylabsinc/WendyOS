@@ -46,17 +46,15 @@ type fakeLoopback struct {
 	removed            []uint32
 	shutdownCalled     bool
 
-	// Auxiliary-node state backs the two-plane camera data path and camera
-	// share nodes. aux holds the nodes that exist, by number, with their label:
-	// allocation hands out the highest free number in 200-255, as the real
-	// module does, so a removed number is reused. auxErr forces the
-	// band-exhausted path; shareErr fails EnsureShareNode. auxCreated,
-	// shareMade, auxRemoved and allocated record the calls; onRemove, when set,
-	// runs inside RemoveAuxNode.
+	// Auxiliary-node state backs camera share nodes. aux holds the nodes that
+	// exist, by number, with their label: allocation hands out the highest
+	// free number in 200-255, as the real module does, so a removed number is
+	// reused. auxErr forces the band-exhausted path; shareErr fails
+	// EnsureShareNode. shareMade, auxRemoved and allocated record the calls;
+	// onRemove, when set, runs inside RemoveAuxNode.
 	aux        map[int]string
 	auxErr     error
 	shareErr   error
-	auxCreated []int
 	shareMade  []auxCall
 	auxRemoved []int
 	allocated  []int
@@ -84,10 +82,6 @@ func newFakeLoopback() *fakeLoopback {
 		releaseCount: make(map[uint32]int),
 		aux:          make(map[int]string),
 	}
-}
-
-func (f *fakeLoopback) AllocateAuxNodeNumber() (int, error) {
-	return f.AllocateAuxNodeNumberSkipping(nil)
 }
 
 func (f *fakeLoopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error) {
@@ -118,16 +112,6 @@ func (f *fakeLoopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (in
 		return nr, nil
 	}
 	return 0, ipcam.ErrBandExhausted
-}
-
-func (f *fakeLoopback) EnsureAuxNode(_ context.Context, nr int, label string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.auxCreated = append(f.auxCreated, nr)
-	if _, ok := f.aux[nr]; !ok {
-		f.aux[nr] = label
-	}
-	return nil
 }
 
 func (f *fakeLoopback) EnsureShareNode(_ context.Context, nr int, label string) error {
@@ -402,8 +386,8 @@ func pairTestCamera(t *testing.T, s *VideoService, cam ipcam.Camera) {
 
 // A network camera nobody has stored a login for may be a neighbour's camera on
 // a shared network (a Tapo C200 on a home LAN was the report). It is left out of
-// every listing an app, the Companion app, MCP or the data and two-plane camera
-// paths see. Only a pairing flow sees it: ListVideoDevices with include_unpaired,
+// every listing an app, the Companion app, MCP, the data service or camera
+// sharing sees. Only a pairing flow sees it: ListVideoDevices with include_unpaired,
 // or RefreshCameras (TestRefreshCamerasListsUnpairedCamerasForPairing).
 func TestListHidesUnpairedIPCameras(t *testing.T) {
 	s := newIPTestService(t)

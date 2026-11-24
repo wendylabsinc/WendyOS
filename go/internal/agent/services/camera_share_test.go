@@ -576,9 +576,6 @@ func TestCreateCameraShares_OneNodePerSharedCameraLabelledWithItsName(t *testing
 	if got, want := h.loop.shareCalls(), []auxCall{{255, "Brio 101"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("EnsureShareNode calls = %+v, want %+v", got, want)
 	}
-	if got := h.loop.auxCreatedCount(); got != 0 {
-		t.Errorf("EnsureAuxNode called %d times; share nodes come from EnsureShareNode", got)
-	}
 	nodes := h.openedNodes()
 	if len(nodes) != 1 || nodes[0].path != "/dev/video255" || nodes[0].mode != (sharedMode{1280, 720, "YUYV", 2560, 30, "pixels", 0}) {
 		t.Fatalf("opened = %+v, want one /dev/video255 at 1280x720 YUYV 2560 30", nodes)
@@ -894,9 +891,9 @@ func TestSyncCameraShares_AdoptsNodesAfterAgentRestart(t *testing.T) {
 	if len(nodes) != 1 || nodes[0].path != "/dev/video254" || nodes[0].mode != stored {
 		t.Fatalf("opened %+v, want /dev/video254 at the stored mode %v", nodes, stored)
 	}
-	if len(h.loop.shareCalls()) != 0 || h.loop.auxCreatedCount() != 0 || len(h.loop.removedAux()) != 0 || len(h.loop.allocations()) != 0 {
-		t.Errorf("adoption made or removed nodes: share %v, aux %d, removed %v, allocated %v",
-			h.loop.shareCalls(), h.loop.auxCreatedCount(), h.loop.removedAux(), h.loop.allocations())
+	if len(h.loop.shareCalls()) != 0 || len(h.loop.removedAux()) != 0 || len(h.loop.allocations()) != 0 {
+		t.Errorf("adoption made or removed nodes: share %v, removed %v, allocated %v",
+			h.loop.shareCalls(), h.loop.removedAux(), h.loop.allocations())
 	}
 	// Idle adoption publishes no placeholder frame. A second count is a
 	// barrier: the pump finished handling the first before accepting it.
@@ -1096,7 +1093,6 @@ func TestListCameras_NeverProbesShareNodes(t *testing.T) {
 		t.Errorf("listCameras = %v, want /dev/video0 only", devices)
 	}
 	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b", nil)
-	h.s.ensureTwoPlaneForLocalCameras(context.Background())
 
 	h.mu.Lock()
 	probed := append([]string(nil), h.probed...)
@@ -1732,7 +1728,7 @@ func TestRemoveShareNode_AStaleEntryNeverRemovesANewNode(t *testing.T) {
 
 	t.Run("another kind of node took the number", func(t *testing.T) {
 		h := setup(t)
-		h.loop.addLiveAux(255, "Wendy sensor 0") // as the two-plane path could
+		h.loop.addLiveAux(255, "Wendy IP camera 255") // as a network camera could
 		h.s.SyncCameraShares(context.Background(), nil)
 		h.drainRemovals()
 		if got := h.loop.removedAux(); len(got) != 0 {
@@ -2261,7 +2257,7 @@ func TestCoverCameraShares_RetainedNodeRequiresVerifiedFreshStart(t *testing.T) 
 					t.Errorf("unverified retained node covered the real camera: %+v", got)
 				}
 			}
-			if len(h.loop.shareCalls()) != 0 || h.loop.auxCreatedCount() != 0 || len(h.loop.removedAux()) != 0 || len(h.loop.allocations()) != 0 {
+			if len(h.loop.shareCalls()) != 0 || len(h.loop.removedAux()) != 0 || len(h.loop.allocations()) != 0 {
 				t.Error("checking a retained node created, removed, or allocated nodes")
 			}
 		})
@@ -2417,9 +2413,6 @@ func TestCoverCameraShares_RecreatesNodesLostInAReboot(t *testing.T) {
 		if got, want := h.loop.shareCalls(), []auxCall{{254, "Brio 101"}}; !reflect.DeepEqual(got, want) {
 			t.Errorf("EnsureShareNode calls = %+v, want %+v", got, want)
 		}
-		if n := h.loop.auxCreatedCount(); n != 0 {
-			t.Errorf("EnsureAuxNode called %d times; share nodes come from EnsureShareNode", n)
-		}
 		nodes := h.openedNodes()
 		if len(nodes) != 1 || nodes[0].path != "/dev/video254" || nodes[0].mode != stored {
 			t.Fatalf("opened %+v, want /dev/video254 at the stored mode", nodes)
@@ -2451,7 +2444,7 @@ func TestCoverCameraShares_RecreatesNodesLostInAReboot(t *testing.T) {
 
 	t.Run("a node of another kind has its number", func(t *testing.T) {
 		h := rebooted(t, "", "")
-		h.loop.addLiveAux(254, "Wendy sensor 0") // as the two-plane path could
+		h.loop.addLiveAux(254, "Wendy IP camera 254") // as a network camera could
 		if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
 			t.Fatalf("errors: %v", errs)
 		}
@@ -2468,7 +2461,7 @@ func TestCoverCameraShares_RecreatesNodesLostInAReboot(t *testing.T) {
 		if node := h.stateShares("cv-a")[0]["node"]; node != float64(255) {
 			t.Errorf("state file node = %v, want 255", node)
 		}
-		if label, _ := h.loop.auxLabel(254); label != "Wendy sensor 0" || len(h.loop.removedAux()) != 0 || h.opensOf("/dev/video254") != 0 {
+		if label, _ := h.loop.auxLabel(254); label != "Wendy IP camera 254" || len(h.loop.removedAux()) != 0 || h.opensOf("/dev/video254") != 0 {
 			t.Errorf("the other node was touched: label %q, removed %v, opened %d times", label, h.loop.removedAux(), h.opensOf("/dev/video254"))
 		}
 		if n := h.logged("camera share: made /dev/video255 again for cv-a's share of Brio 101 (its number 254 is taken)"); n != 1 {
@@ -2964,14 +2957,14 @@ func TestCoverCameraShares_ClosesTheEarlierNamespaceOffTheStartPath(t *testing.T
 	}
 }
 
-// csTakenNumber is a reboot after which two-plane took the number of cv-a's
-// share: node 254 is now "Wendy sensor 0", another device's stream.
+// csTakenNumber is a reboot after which a network camera took the number of
+// cv-a's share: node 254 is now "Wendy IP camera 254", another device's stream.
 func csTakenNumber(t *testing.T) *csHarness {
 	t.Helper()
 	h := newCSHarness(t, csBrio())
 	h.writeState(`{"version":1,"containers":{"cv-a":{"app":"sh.wendy.cv-a","shares":[` +
 		csStateRecord(csBrio(), "/dev/video0", testSharedMode, 254) + `]}}}`)
-	h.loop.addLiveAux(254, "Wendy sensor 0")
+	h.loop.addLiveAux(254, "Wendy IP camera 254")
 	h.s.loadCameraShares()
 	return h
 }
@@ -3142,9 +3135,9 @@ func TestCoverCameraShares_ARemakeChecksAgainAfterWaitingForTheNodeLock(t *testi
 
 	t.Run("the start's budget ran out", func(t *testing.T) {
 		h := rebooted(t)
-		h.s.twoPlaneStartMu.Lock()
+		h.s.shares.nodeMu.Lock()
 		errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11)
-		h.s.twoPlaneStartMu.Unlock()
+		h.s.shares.nodeMu.Unlock()
 		if len(errs) != 1 || !errors.Is(errs[0], devcover.ErrTimeout) {
 			t.Fatalf("errors = %v, want the timeout", errs)
 		}
@@ -3163,15 +3156,15 @@ func TestCoverCameraShares_ARemakeChecksAgainAfterWaitingForTheNodeLock(t *testi
 
 	t.Run("the share was removed", func(t *testing.T) {
 		h := rebooted(t)
-		h.s.twoPlaneStartMu.Lock()
+		h.s.shares.nodeMu.Lock()
 		returned := make(chan []error, 1)
 		go func() { returned <- h.s.CoverCameraShares(context.Background(), "cv-a", 11) }()
 		if !csWaitFor(time.Second, func() bool { v := h.view("cv-a"); return len(v) == 1 && v[0].opening }) {
-			h.s.twoPlaneStartMu.Unlock()
+			h.s.shares.nodeMu.Unlock()
 			t.Fatal("the start never reached the node lock")
 		}
 		h.s.RemoveCameraShares("cv-a")
-		h.s.twoPlaneStartMu.Unlock()
+		h.s.shares.nodeMu.Unlock()
 		<-returned
 		h.drainCovers()
 		h.drainRemovals()

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -616,8 +617,8 @@ func testCaptureLoop(emit func([]byte, frameTimestamp) bool) func(buffer []byte,
 // The consumers' side of the defect. A camera sends SPS and PPS once, then bare
 // IDRs. Everyone who joins the running hub afterwards (a viewer, an episode
 // recording, a sensor subscription behind its random-access gate, a pre-roll
-// ring, the loopback pump after a rejoin) must be able to start on the next
-// IDR, and all of them must still name that frame identically.
+// ring, an app's camera node) must be able to start on the next IDR, and all of
+// them must still name that frame identically.
 func TestLateJoinersStartOnAnIDRTheCameraSentWithoutParameterSets(t *testing.T) {
 	svc := &VideoService{logger: zap.NewNop()}
 	seq := new(atomic.Uint64)
@@ -756,20 +757,17 @@ func TestLateJoinersStartOnAnIDRTheCameraSentWithoutParameterSets(t *testing.T) 
 		}
 	})
 
-	t.Run("loopback pump", func(t *testing.T) {
-		writer := newFakeLoopbackWriter(100)
-		pump := newHubLoopbackPump(zap.NewNop(), "v4l2:/dev/video0", "/dev/video200")
-		close(pumpFrames)
-		if _, err := pump.pumpFrom(context.Background(), hub, pumpID, pumpFrames, writer, true, 0); err != nil {
-			t.Fatalf("pumpFrom: %v", err)
+	t.Run("camera share node", func(t *testing.T) {
+		joiner := newSpJoiner(func() (shareSubscription, error) {
+			return &hubShareSubscription{hub: hub, id: pumpID, ch: pumpFrames}, nil
+		})
+		h := startSharePump(t, joiner, sfPumpAs(hcNativeMode, appconfig.CameraStampFrame))
+		h.node.send(t, 1)
+		if e := h.node.next(t); e.stamp != stampWithSampleID(keyframeSample) || e.size != len(keyframe) {
+			t.Fatalf("the node's first frame = %+v; want the completed IDR, %d bytes, stamped %d", e, len(keyframe), keyframeSample)
 		}
-		if len(writer.writes) != 2 || !bytes.Equal(writer.writes[0], keyframe) || writer.stamps[0] != keyframeSample {
-			t.Fatalf("node was written %d frames, first %x stamped %v; want the completed IDR stamped %d, then the inter frame",
-				len(writer.writes), writer.writes, writer.stamps, keyframeSample)
-		}
-		binding, ok := pump.Bindings().Lookup(100)
-		if !ok || binding.SampleID != keyframeSample || binding.HubDropsBefore != 1 {
-			t.Fatalf("binding = %+v, found %v; want sample %d with the one gated frame reported", binding, ok, keyframeSample)
+		if e := h.node.next(t); e.stamp != stampWithSampleID(keyframeSample+1) || e.size != len(inter) {
+			t.Fatalf("the node's second frame = %+v; want the inter frame stamped %d", e, keyframeSample+1)
 		}
 	})
 }

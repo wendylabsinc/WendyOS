@@ -48,15 +48,15 @@ import json
 from pathlib import Path
 import sys
 out=Path(sys.argv[1])
-source=Path('go/internal/agent/services/hub_loopback_pump.go').resolve()
+source=Path('go/internal/agent/services/camera_share_pump.go').resolve()
 original=source.read_text()
-before='writer.WriteFrame(frame.data, frame.sampleID)'
-if original.count(before)!=1: raise SystemExit('historical timestamp control site changed')
-# b42fdde4c parent wrote canonical nanoseconds into a microsecond timeval.
-# The current writer encodes its argument directly, so restore the old wire
-# value (receipt/1000) while retaining the actual OUTPUT ioctl implementation.
+before='return stampWithSampleID(f.sampleID)'
+if original.count(before)!=1: raise SystemExit('frame stamp control site changed')
+# Negative control: a node stamped "frame" must hold the hub sample ID, not a
+# clock. Put the agent's receipt time, in microseconds, in its place, through
+# the same node writer and OUTPUT ioctl.
 mutant=out/'receipt-time.go'
-mutant.write_text(original.replace(before,'writer.WriteFrame(frame.data, uint64(frame.receiptBootNanos / 1000))'))
+mutant.write_text(original.replace(before,'return stampWithSampleID(uint64(f.receiptBootNanos / 1000))'))
 (out/'receipt-time.json').write_text(json.dumps({'Replace':{str(source):str(mutant)}}))
 PY
 tags=regression_campaign_runtime,regression_sample_ledger

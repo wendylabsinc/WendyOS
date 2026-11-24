@@ -136,7 +136,7 @@ type shareRemoval struct {
 	// (mknod) after a removal did not take, or zero. The kernel never removes
 	// such an entry itself, so the next attempt checks it is still the node's
 	// (settleRestoredEntry). Only attemptShareNodeRemoval touches it, under
-	// twoPlaneStartMu, one attempt at a time.
+	// nodeMu, one attempt at a time.
 	restored uint64
 }
 
@@ -355,7 +355,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 }
 
 // makeShareNode allocates a node number and creates the node, labelled with
-// the camera's name. It holds twoPlaneStartMu across both steps: allocation
+// the camera's name. It holds nodeMu across both steps: allocation
 // does not reserve a number, so two allocators could otherwise be handed the
 // same one. On success the number is pending until storeShare or
 // unmakeShareNode, and made is when the node was made. A non-empty reason
@@ -373,8 +373,8 @@ func (s *VideoService) makeShareNode(ctx context.Context, label string) (nr int,
 // owner is not nil: owner's own number is used again when it is free
 // (reusableShareNumber), and another is allocated when it is not.
 func (s *VideoService) makeShareNodeFor(ctx context.Context, label string, owner *shareRecord) (nr int, made time.Time, reason string) {
-	s.twoPlaneStartMu.Lock()
-	defer s.twoPlaneStartMu.Unlock()
+	s.shares.nodeMu.Lock()
+	defer s.shares.nodeMu.Unlock()
 	if owner != nil {
 		// The lock can be held by a node removal's /proc scan: what a start
 		// saw before it may no longer hold.
@@ -431,7 +431,7 @@ func (s *VideoService) makeShareNodeFor(ctx context.Context, label string, owner
 // entry), and the allocator, asked about that number alone, would hand it out
 // (it is in the band, no registered camera has it, and no /dev entry is there
 // now). heldShareNumbers counts owner's own number, so it is no
-// use here. A nil owner has no number. Callers hold twoPlaneStartMu.
+// use here. A nil owner has no number. Callers hold nodeMu.
 func (s *VideoService) reusableShareNumber(owner *shareRecord) (int, bool) {
 	if owner == nil {
 		return 0, false
@@ -574,12 +574,12 @@ func (s *VideoService) waitShareNodeSettled(ctx context.Context, rm *shareRemova
 // already gone, a node that is now another node (its sysfs name is not the
 // camera's), or a number a share's record holds just leaves the queue.
 //
-// It holds twoPlaneStartMu throughout, as node allocation does, so no node can
+// It holds nodeMu throughout, as node allocation does, so no node can
 // be made at this number between its checks and the removal: one that was
 // would be removed by mistake, possibly while udev or the agent opens it.
 func (s *VideoService) attemptShareNodeRemoval(rm *shareRemoval) {
-	s.twoPlaneStartMu.Lock()
-	defer s.twoPlaneStartMu.Unlock()
+	s.shares.nodeMu.Lock()
+	defer s.shares.nodeMu.Unlock()
 	path := shareNodePath(rm.nr)
 	keep := func(warn bool, msg string) {
 		s.shares.mu.Lock()
@@ -693,7 +693,7 @@ func (s *VideoService) giveShareNodeAccess(path string) {
 
 // removeShareNode deletes share node rm.nr and reports whether the kernel no
 // longer has it. It is called only by attemptShareNodeRemoval, under
-// twoPlaneStartMu, after the node has settled and nothing else holds it, so a
+// nodeMu, after the node has settled and nothing else holds it, so a
 // change to how a node is removed has one place to land.
 //
 // The node's /dev entry is unlinked first. v4l2loopback 0.15.4's CTL_REMOVE
@@ -2541,7 +2541,7 @@ func (s *VideoService) reportStartCover(ctx context.Context, run *startCoverRun)
 // it, or no start is making r's node and the node there is still the share
 // node made for r (nodeIsShareFor) with fresh_start verified. After a reboot
 // the number may hold another
-// node, a two-plane node say, whose stream must never stand in for the app's
+// node, a network camera's say, whose stream must never stand in for the app's
 // camera; while a node is being made, the number may not be its yet
 // (errShareNodeMaking).
 func (s *VideoService) shareNodeToCover(r *shareRecord) (string, error) {
