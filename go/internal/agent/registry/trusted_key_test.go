@@ -4,9 +4,11 @@ import (
 	"crypto/mldsa"
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,5 +60,31 @@ func TestTrustedKeyMiddleware(t *testing.T) {
 	}
 	if got := push(nil); got != http.StatusAccepted {
 		t.Errorf("plain HTTP push with the keyless set on = %d", got)
+	}
+}
+
+// A Closed device caps manifest bodies like an Open one, keyless or not.
+func TestTrustedKeyMiddlewareCapsManifestBodies(t *testing.T) {
+	keys, err := trustedkeys.Open(filepath.Join(t.TempDir(), trustedkeys.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, _ := mldsa.GenerateKey(mldsa.MLDSA65())
+	der, _ := x509.MarshalPKIXPublicKey(k.Public())
+	owner, err := keys.Close(der, "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keys.SetKeylessApps(true, owner.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	var read int64
+	h := trustedKeyMiddleware(keys)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		read, _ = io.Copy(io.Discard, r.Body)
+	}))
+	body := strings.NewReader(strings.Repeat("x", 2*maxManifestBody))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPut, "/v2/app/manifests/latest", body))
+	if read > maxManifestBody {
+		t.Fatalf("read %d manifest bytes, cap is %d", read, maxManifestBody)
 	}
 }
