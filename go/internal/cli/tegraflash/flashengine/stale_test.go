@@ -602,3 +602,17 @@ func TestStaleExtentsFollowTheDisk(t *testing.T) {
 		})
 	}
 }
+
+func TestStaleExtentsDoNotExtendFixedFinalPartition(t *testing.T) {
+	const mib = 1 << 20
+	target := staleTarget{
+		layout: gptLayout{sectorSize: 512, backupBytes: 33 * 512, partitions: []gptPartition{
+			{"config", 65 * mib, 129 * mib},
+			{"data", 1 * mib, 65 * mib},
+		}},
+		written: []t234.Extent{{Start: mib, End: 129 * mib}},
+	}
+	if got := target.extents(1024 * mib); len(got) != 0 {
+		t.Fatalf("fully imaged layout should not need clearing; got:%s", extentsString(got))
+	}
+}

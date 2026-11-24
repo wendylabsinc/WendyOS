@@ -139,20 +139,20 @@ func (t staleTarget) extents(diskSize int64) []t234.Extent {
 		limit = diskSize/sector*sector - t.layout.backupBytes
 	}
 	var parts []t234.Extent
-	var last t234.Extent
+	var last gptPartition
 	for _, p := range t.layout.partitions {
 		x := t234.Extent{Start: p.start, End: min(p.end, limit)}
 		if x.End <= x.Start {
 			continue
 		}
 		parts = append(parts, x)
-		if x.End > last.End {
-			last = x
+		if p.end > last.end {
+			last = p
 		}
 	}
-	// The last partition as first boot leaves it: grown to the backup GPT.
-	if diskSize > 0 && last.End > 0 && last.End < limit {
-		parts = append(parts, t234.Extent{Start: last.Start, End: limit})
+	// First boot grows the final data partition to the backup GPT.
+	if diskSize > 0 && last.name == "data" && last.end < limit {
+		parts = append(parts, t234.Extent{Start: last.start, End: limit})
 	}
 	var out []t234.Extent
 	for _, x := range t234.StaleExtents(parts, t.written) {
@@ -183,7 +183,7 @@ func (e *engine) clearStaleOn(t staleTarget) error {
 		return err
 	}
 	if size == 0 {
-		e.logf("a dry run does not know the size of %s; a flash also clears the end of the disk", t.device)
+		e.logf("a dry run does not know the size of %s; a flash can also clear the grown data partition's tail", t.device)
 	} else {
 		fmt.Fprintf(e.out, "  %s is %d bytes\n", t.device, size)
 	}
