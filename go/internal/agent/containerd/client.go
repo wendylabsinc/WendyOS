@@ -3130,10 +3130,12 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 // StartContainer and only changes the task's stdin stream.
 func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan services.ContainerOutput, error) {
 	// Attach restarts the app with the caller's stdin. A lookup failure is
-	// left to startContainer to report.
-	if ctr, err := c.runningContainerForApp(c.withNamespace(ctx), appName); err == nil {
-		if err := roleMayDrive(c.withNamespace(ctx), ctr); err != nil {
-			return nil, err
+	// left to startContainer to report; Open and Enrolled devices skip it.
+	if _, closed := trustedkeys.CallerRole(ctx); closed {
+		if ctr, err := c.runningContainerForApp(c.withNamespace(ctx), appName); err == nil {
+			if err := roleMayDrive(c.withNamespace(ctx), ctr); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return c.startContainer(ctx, appName, stdin, postStartAgentCommand, restartPolicy)

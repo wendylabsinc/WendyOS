@@ -1542,8 +1542,8 @@ func main() {
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 			grpc.ChainUnaryInterceptor(authz.Unary()),
 			grpc.ChainStreamInterceptor(authz.Stream()),
-			grpc.InitialWindowSize(8*1024*1024),
-			grpc.InitialConnWindowSize(16*1024*1024),
+			grpc.InitialWindowSize(8 * 1024 * 1024),
+			grpc.InitialConnWindowSize(16 * 1024 * 1024),
 		}, remoteSeenOptions()...)...)
 		registerAuthenticatedServices(srv)
 		logUnmappedMethods(logger, srv)
