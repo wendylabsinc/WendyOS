@@ -192,6 +192,28 @@ func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
 	return fmt.Sprintf("Camera: this app shares %s. For the real device (its own formats, sizes and controls), set \"mode\": \"direct\" on the camera entitlement.", strings.Join(entries, "; "))
 }
 
+// cameraSoftwareEncoderNotices returns one line for each camera whose node
+// for one of the configs is H.264 that the device's agent says it makes with a
+// software encoder. An agent that does not say so gets none.
+func cameraSoftwareEncoderNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow) []string {
+	generation := agentGenerationOf(cams)
+	var lines []string
+	for _, c := range cams {
+		encoder, software := camerashare.SoftwareEncoderOf(c.GetProperties()[camerashare.KeyH264Encoder])
+		if !software {
+			continue
+		}
+		for _, cfg := range sharingConfigs(cfgs) {
+			asked, _, _ := nodeSettingsOf(cfg.Entitlements, c, generation)
+			if served, _ := servedNodeOf(c, asked); served == appconfig.CameraFormatH264 {
+				lines = appendOnce(lines, fmt.Sprintf("Camera: %s: its H.264 is encoded in software (%s) on this device for as long as this app reads its node. "+
+					"\"format\": \"native\" or \"pixels\" need no encoder.", c.GetDescription(), encoder))
+			}
+		}
+	}
+	return lines
+}
+
 // cameraSettingsConflictNotices returns one line for each shared camera whose
 // entries differ on a setting as the device's agent matches them, in the
 // resolver's sentences. An agent built with this resolver logs the same ones
@@ -283,8 +305,8 @@ func agentWithoutNodeSettingsNotice(cfgs []*appconfig.AppConfig, cams []*cameraR
 }
 
 // printCameraShareNotice prints the notice when the agent says the app's
-// camera will be shared, then what its entries disagree on and which allowlist
-// entries configure nothing. Any failure or delay prints nothing, and so does
+// camera will be shared, then which of its nodes a software encoder feeds,
+// what its entries disagree on and which allowlist entries configure nothing. Any failure or delay prints nothing, and so does
 // an agent whose rows say nothing of sharing.
 func printCameraShareNotice(ctx context.Context, conn *grpcclient.AgentConnection, cfgs ...*appconfig.AppConfig) {
 	if !anyCameraShared(cfgs) || conn == nil || conn.AgentService == nil {
@@ -301,6 +323,7 @@ func printCameraShareNotice(ctx context.Context, conn *grpcclient.AgentConnectio
 	if line := cameraShareNotice(cfgs, resp.GetCapabilities()); line != "" {
 		lines = append(lines, line)
 	}
+	lines = append(lines, cameraSoftwareEncoderNotices(cfgs, resp.GetCapabilities())...)
 	if line := agentWithoutNodeSettingsNotice(cfgs, resp.GetCapabilities()); line != "" {
 		lines = append(lines, line)
 	}

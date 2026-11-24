@@ -408,3 +408,78 @@ func TestPrintCameraShareNotice_WithNoCameraToShareAnEntryThatConfiguresNothingI
 		t.Fatalf("a device without camera rows printed %q", lines)
 	}
 }
+
+const (
+	c920SharedH264      = `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 1280x720 H264, 30 fps, format h264, stamp time. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+	c920EncodedSoftware = `Camera: HD Pro Webcam C920: HD Pro Webc (video0): its H.264 is encoded in software (x264enc) on this device for as long as this app reads its node. "format": "native" or "pixels" need no encoder.`
+)
+
+// c920RowEncodedInSoftware is the camera's row from an agent on a device that
+// makes the camera's H.264 with a software encoder.
+func c920RowEncodedInSoftware() *hwCap {
+	row := c920Row()
+	row.Properties[camerashare.KeyH264Encoder] = "x264enc (software)"
+	return row
+}
+
+// An app whose node on a camera is H.264 that the device makes in software is
+// told so on one line under the share line, however many of its services read
+// that node.
+func TestPrintCameraShareNotice_AnH264NodeEncodedInSoftwareIsSaidUnderTheShareLine(t *testing.T) {
+	rows := []*hwCap{c920RowEncodedInSoftware()}
+	want := []string{c920SharedH264, c920EncodedSoftware}
+	if got := printedCameraNotice(t, rows, cameraCfg(appconfig.CameraFormatH264, "")); !slices.Equal(got, want) {
+		t.Errorf("printed %q\nwant    %q", got, want)
+	}
+	if got := printedCameraNotice(t, rows, cameraCfg(appconfig.CameraFormatH264, ""), cameraCfg(appconfig.CameraFormatH264, "", c920StableID)); !slices.Equal(got, want) {
+		t.Errorf("two services with the same node printed %q\nwant %q", got, want)
+	}
+}
+
+func TestCameraSoftwareEncoderNotices_NothingIsSaidWhereNoSoftwareEncoderFeedsTheAppsNode(t *testing.T) {
+	withoutH264Node := c920RowEncodedInSoftware()
+	delete(withoutH264Node.Properties, camerashare.KeyModeOfFormat(appconfig.CameraFormatH264))
+	withoutH264Node.Properties[camerashare.KeyUnavailableOfFormat(appconfig.CameraFormatH264)] = "the camera's own frames are not captured whole"
+	notSoftware := c920Row()
+	notSoftware.Properties[camerashare.KeyH264Encoder] = "nvv4l2h264enc (hardware)"
+	h264 := cameraCfg(appconfig.CameraFormatH264, "")
+	for name, tc := range map[string]struct {
+		row *hwCap
+		cfg *appconfig.AppConfig
+	}{
+		"an agent that does not send the property":   {c920Row(), h264},
+		"an agent from before stable ids":            {c920RowFromAnAgentBeforeStableIDs(), h264},
+		"the app reads the camera's own frames":      {c920RowEncodedInSoftware(), cameraCfg(appconfig.CameraFormatNative, "")},
+		"the app reads pictures":                     {c920RowEncodedInSoftware(), cameraCfg("", "")},
+		"the app asked for h264 and is served other": {withoutH264Node, h264},
+		"the property names no software encoder":     {notSoftware, h264},
+		"the app takes the real device":              {c920RowEncodedInSoftware(), shareCfg("direct")},
+	} {
+		if got := cameraSoftwareEncoderNotices([]*appconfig.AppConfig{tc.cfg}, []*hwCap{tc.row}); len(got) != 0 {
+			t.Errorf("%s: %q", name, got)
+		}
+		for _, line := range printedCameraNotice(t, []*hwCap{tc.row}, tc.cfg) {
+			if strings.Contains(line, "encode") {
+				t.Errorf("%s: printed %q", name, line)
+			}
+		}
+	}
+}
+
+// Of two cameras in one app, only the one whose node the software encoder
+// feeds gets the line.
+func TestCameraSoftwareEncoderNotices_OneLineForEachCameraWhoseH264NodeIsEncodedInSoftware(t *testing.T) {
+	logi := shareRowAt("Logi H264 (video2)", "/dev/video2", map[string]string{"pixels": "1280x720 YUYV, 30 fps", "native": "1280x720 H264, 30 fps", "h264": "1280x720 H264, 30 fps"})
+	logi.Properties[camerashare.KeyStableID] = ""
+	brio := shareRowAt("Brio 101 (video4)", "/dev/video4", c920Modes)
+	brio.Properties[camerashare.KeyStableID] = ""
+	brio.Properties[camerashare.KeyH264Encoder] = "openh264enc (software)"
+	got := cameraSoftwareEncoderNotices([]*appconfig.AppConfig{cameraCfg(appconfig.CameraFormatH264, "")}, []*hwCap{c920RowEncodedInSoftware(), logi, brio})
+	want := []string{
+		c920EncodedSoftware,
+		`Camera: Brio 101 (video4): its H.264 is encoded in software (openh264enc) on this device for as long as this app reads its node. "format": "native" or "pixels" need no encoder.`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
