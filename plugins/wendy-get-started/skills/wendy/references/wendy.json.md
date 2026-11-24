@@ -112,20 +112,20 @@ Camera / V4L2 device access.
 
 ```json
 { "type": "camera" }
-{ "type": "camera", "allowlist": ["/dev/video0"] }
+{ "type": "camera", "allowlist": ["by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"], "format": "native" }
 { "type": "camera", "format": "pixels", "stamp": "time" }
 { "type": "camera", "user": "admin", "password": "secret" }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `allowlist` | Names the cameras, by device path or camera name, that this entry's `format` and `stamp` apply to. Omit to apply them to every camera. |
+| `allowlist` | Names the cameras that this entry's `format` and `stamp` apply to, each by its `stable_id` (preferred), device path or camera name as `wendy device camera list --json` prints them. Omit to apply them to every camera. |
 | `format` | What the app's camera node carries. `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example Motion JPEG (MJPEG) or H.264. `"h264"`: H.264, one whole frame per buffer. |
 | `stamp` | What each frame's timestamp field holds on the node. `"time"` (default): the capture time. `"frame"`: the agent's frame number, the frame's `sample_id` in a Wendy Data episode. |
 | `user` | Username for a registered IP camera. Ignored for local cameras. |
 | `password` | Password for a registered IP camera. Ignored for local cameras. |
 
-An app gets one node per camera, at the camera's own device path. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to, by device path or camera name; an entry without one applies to every camera. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`, and neither key can be used when any of the app's camera entries has `"mode": "direct"`.
+An app gets one node per camera, at the camera's own device path. An entry's `allowlist` selects which cameras its `format` and `stamp` apply to; an entry without one applies to every camera. An allowlist entry names a camera by any identifier `wendy device camera list --json` prints for it: its `stable_id` (`by-id:usb-046d_HD_Pro_Webcam_C920-video-index0`, with or without the `by-id:` prefix), its `path` (`/dev/video0`, or `v4l2:/dev/video0` as a campaign file writes it) or its `name`. Prefer the `stable_id`: it follows the camera across reboots and replugging, while a path can pass to another camera and a name is shared by every camera of the model. `wendy run` prints a line for each allowlist entry that names no camera on the device. Two `camera` or `video` entries that claim the same camera must agree on `format` and `stamp`. Validation compares allowlist entries as written, so entries that name one camera by different identifiers are only found on the device: there the stable id decides before the path, the path before the name and the name before an entry without an allowlist, a setting on which equally specific entries disagree falls back to its default, and the agent's log and the camera's status say which setting and why. Neither key can be used when any of the app's camera entries has `"mode": "direct"`.
 
 > **Security:** `user`/`password` set here are stored in **plaintext** in `wendy.json` and deployed as-is. Prefer the interactive `wendy device camera login` command, which keeps credentials out of the app config.
 
