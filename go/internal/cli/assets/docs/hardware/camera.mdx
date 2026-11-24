@@ -274,8 +274,9 @@ formats, or `share_unavailable_native` and `share_unavailable_h264` for why the
 camera has none. The row of a camera this device shares with an h264 mode and
 encodes in software carries `h264_encoder`, for example `x264enc (software)`.
 A camera that is not shared carries `share_unavailable` with the reason. The
-row of each camera `wendy device camera list` lists also carries `stable_id`, the stable id that command's `--json` prints for it and
-the one an allowlist entry may hold; it is empty for a camera without one. A
+row of each camera `wendy device camera list` lists also carries `stable_id`,
+the stable id that command's `--json` prints for it and the one an allowlist
+entry may hold; it is empty for a camera without one. A
 row for a node that list leaves out, such as a camera's metadata node, has no
 `stable_id`. A network or ROS 2 camera's row carries `stable_id` and none of
 the share properties: an app reads it at its own node, not through a share

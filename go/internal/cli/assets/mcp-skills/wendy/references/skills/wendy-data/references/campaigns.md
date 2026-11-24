@@ -83,11 +83,13 @@ device deployment; it does not fan deployment out to every fleet member.
   `playable.mp4` comes from the video only, so a `frames` source whose frames
   are JPEG has none, and neither has a snapshot source whose stills are JPEG.
   A camera whose own frames are already H.264 has one stream, stored once as
-  video for every `store` value. Where the device encodes a camera's video in
-  software, `wendy data campaign deploy` warns of it: the encoder runs while
-  the campaign records or buffers, and for as long as the campaign's inference
-  runs when it has `inference`. Without inference, `store: frames` keeps the
-  own frames of a webcam captured as JPEG without encoding.
+  video for every `store` value. `wendy data campaign deploy` warns when a
+  camera's video would be encoded as H.264 in software and the device's
+  GStreamer elements could be listed: the encoder runs while the campaign
+  records or buffers, and for as long as the campaign's inference runs when it
+  has `inference`. Without inference, `store: frames` keeps the own frames of a
+  webcam captured as JPEG without encoding; a camera that hands on no frames
+  of its own is recorded as video whatever `store` says.
 - Audio supports `continuous` and `threshold`, such as
   `trigger: "level_db > -20"` and `fragment: 30s`. ROS 2 and telemetry support
   `continuous`. Other mode/kind combinations validate, warn, and record
