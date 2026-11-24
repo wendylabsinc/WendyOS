@@ -300,9 +300,9 @@ func TestDeviceKeysListEscapesLabels(t *testing.T) {
 
 // The default label fits the agent's limit, cut on a character boundary.
 func TestLocalKeyLabelFitsTheAgentLimit(t *testing.T) {
-	long := strings.Repeat("é", maxKeyLabelLen) // 2 bytes each
+	long := strings.Repeat("é", trustedkeys.MaxLabelLen) // 2 bytes each
 	got := capKeyLabel("host\x07/" + long)
-	if len(got) > maxKeyLabelLen || !utf8.ValidString(got) || strings.ContainsRune(got, '\x07') {
-		t.Fatalf("capKeyLabel = %q (%d bytes), want valid UTF-8 within %d bytes, no control characters", got, len(got), maxKeyLabelLen)
+	if len(got) > trustedkeys.MaxLabelLen || !utf8.ValidString(got) || strings.ContainsRune(got, '\x07') {
+		t.Fatalf("capKeyLabel = %q (%d bytes), want valid UTF-8 within %d bytes, no control characters", got, len(got), trustedkeys.MaxLabelLen)
 	}
 }

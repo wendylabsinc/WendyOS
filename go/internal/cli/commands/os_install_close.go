@@ -126,22 +126,18 @@ func closedAccessState(ctx context.Context, host string) (seen string, ok bool, 
 	return "", true, nil
 }
 
-// maxKeyLabelLen is the agent's limit on a key label in bytes
-// (trustedkeys.MaxLabelLen); a longer one is refused.
-const maxKeyLabelLen = 128
-
 // localKeyLabel is "<hostname>/<user>", so an owner can tell whose key it is,
 // within the agent's label limit.
 func localKeyLabel() string {
 	return capKeyLabel(hostUserLabel())
 }
 
-// capKeyLabel drops control characters and cuts s to maxKeyLabelLen bytes on
+// capKeyLabel drops control characters and cuts s to trustedkeys.MaxLabelLen bytes on
 // a character boundary.
 func capKeyLabel(s string) string {
 	s = tui.StripControl(s)
-	if len(s) > maxKeyLabelLen {
-		s = strings.ToValidUTF8(s[:maxKeyLabelLen], "")
+	if len(s) > trustedkeys.MaxLabelLen {
+		s = strings.ToValidUTF8(s[:trustedkeys.MaxLabelLen], "")
 	}
 	return s
 }
