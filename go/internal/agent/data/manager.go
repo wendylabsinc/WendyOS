@@ -2198,6 +2198,8 @@ func payloadFormat(path string) (string, string) {
 		return "h264", "video/h264"
 	case ".h265", ".hevc":
 		return "h265", "video/h265"
+	case ".mjpeg":
+		return "mjpeg", "video/x-motion-jpeg"
 	case ".mp4":
 		return "mp4", "video/mp4"
 	case ".wav":

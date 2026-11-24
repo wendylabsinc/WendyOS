@@ -38,11 +38,14 @@ var ErrInvalidCampaignName = errors.New("invalid campaign name")
 //
 // Snapshot stills and the continuous-mode rate cap additionally require a
 // camera transport that delivers whole encoded access units, which today
-// means a local V4L2 camera with native H.264 output. IP cameras and
-// GStreamer-encoded pipelines (CSI sensors, USB cameras without native H.264)
-// deliver byte-stream chunks that cannot be cut into standalone files without
-// corruption, so those sources record continuously at the stream rate and the
-// episode manifest's source detail records that the policy was not applied.
+// means a local V4L2 camera the agent captures natively: one with H.264
+// output, or a webcam that offers JPEG, whose H.264 is made one access unit
+// per JPEG frame. IP cameras and GStreamer-encoded pipelines (CSI sensors, USB
+// cameras with neither) deliver byte-stream chunks that cannot be cut into
+// standalone files without corruption, so those sources record continuously
+// at the stream rate and the episode manifest's source detail records that
+// the policy was not applied. Store (frames, both) likewise needs a camera
+// with whole frames of its own; one without records video and says so.
 // Which case applies is only knowable once the stream is running, so this is
 // reported per episode rather than warned at deployment.
 type SourceCapture struct {

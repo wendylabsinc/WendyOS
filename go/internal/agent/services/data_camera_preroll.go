@@ -13,13 +13,14 @@ import (
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
-// preRollCameraLimitBytes bounds one armed camera ring's retained encoded
-// payload. The ring keeps the smaller of `buffer` seconds and this many bytes,
-// so a high-bitrate stream cannot let a long buffer exhaust device memory; when
-// the byte bound bites first, the achieved pre-roll is honestly shorter than
-// the requested buffer and the manifest says so. It is the camera analogue of
-// the application ring's fixed byte ceiling in the data manager (preRollLimit),
-// counted per armed source against the device's memory.
+// preRollCameraLimitBytes bounds the payload one armed camera source retains,
+// in total across its rings (see shareRingBytes). A ring keeps the smaller of
+// `buffer` seconds and its share of this many bytes, so a high-bitrate stream
+// cannot let a long buffer exhaust device memory; when the byte bound bites
+// first, the achieved pre-roll is honestly shorter than the requested buffer
+// and the manifest says so. It is the camera analogue of the application
+// ring's fixed byte ceiling in the data manager (preRollLimit), counted per
+// armed source against the device's memory.
 const preRollCameraLimitBytes = 64 << 20
 
 // preRollGOPWindowFactor bounds how far past the requested buffer one
@@ -29,11 +30,11 @@ const preRollCameraLimitBytes = 64 << 20
 // bound left is to start over.
 const preRollGOPWindowFactor = 8
 
-// bufferedCameraFrame is one encoded frame held in an armed campaign's standby
-// ring. The frame pointer is retained, not copied: hub frames are immutable
-// from the moment they are broadcast (identity, receipt, and payload never
-// change once a subscriber can see them), so the ring shares them exactly the
-// way the sensor path shares frame.data with a model subscriber.
+// bufferedCameraFrame is one frame held in an armed campaign's standby ring.
+// The frame pointer is retained, not copied: hub frames are immutable from the
+// moment they are broadcast (identity, receipt, and payload never change once
+// a subscriber can see them), so the ring shares them exactly the way the
+// sensor path shares frame.data with a model subscriber.
 type bufferedCameraFrame struct {
 	frame        *videoFrame
 	randomAccess bool
@@ -46,12 +47,14 @@ type bufferedCameraFrame struct {
 }
 
 // cameraPreRollRing is a keyframe-aligned, byte- and window-bounded ring of
-// encoded frames. It is the camera analogue of the data manager's application
-// pre-roll ring (manager.preRoll / evictPreRoll): the same eviction discipline
-// of dropping the oldest until the ring is within its time window and its byte
-// cap, specialised in two ways the application ring does not need. It only ever
-// begins on a random-access unit, and it only evicts whole groups of pictures,
-// because a flushed clip that does not start on a keyframe will not decode.
+// the frames of one subscription. It is the camera analogue of the data
+// manager's application pre-roll ring (manager.preRoll / evictPreRoll): the
+// same eviction discipline of dropping the oldest until the ring is within its
+// time window and its byte cap, specialised in two ways the application ring
+// does not need. It only ever begins on a random-access unit, and it only
+// evicts whole groups of pictures, because a flushed clip that does not start
+// on a keyframe will not decode. A frame that decodes alone, as each of a
+// camera's own JPEG frames does, is its own group of pictures.
 //
 // The ring is not internally synchronised: it is owned by the fill goroutine
 // while arming and read only after that goroutine has stopped (activate waits
@@ -199,6 +202,40 @@ func (r *cameraPreRollRing) flush(triggerBoot int64) (frames []bufferedCameraFra
 	return frames, earliest - triggerBoot, earliest <= windowStart
 }
 
+// flushRings flushes every ring this source filled into one pre-roll, ordered
+// by receipt. The achieved offset is the latest of the rings' openings, so it
+// names the window every stored form covers, and the pre-roll falls short when
+// any ring does.
+func (a *armedCameraSource) flushRings(triggerBoot int64) (frames []bufferedCameraFrame, achievedOffset int64, shortfall bool) {
+	frames, achievedOffset, reachedFull := a.ring.flush(triggerBoot)
+	shortfall = !reachedFull && len(frames) > 0
+	if a.ownFrameRing == nil {
+		return frames, achievedOffset, shortfall
+	}
+	own, ownOffset, ownReachedFull := a.ownFrameRing.flush(triggerBoot)
+	if len(own) == 0 {
+		return frames, achievedOffset, shortfall
+	}
+	if len(frames) == 0 || ownOffset > achievedOffset {
+		achievedOffset = ownOffset
+	}
+	return mergeByReceipt(frames, own), achievedOffset, shortfall || !ownReachedFull
+}
+
+// mergeByReceipt interleaves two rings' frames by receipt. Each ring's own
+// order is kept, because coded video must be replayed in the order it arrived.
+func mergeByReceipt(a, b []bufferedCameraFrame) []bufferedCameraFrame {
+	merged := make([]bufferedCameraFrame, 0, len(a)+len(b))
+	for len(a) > 0 && len(b) > 0 {
+		if b[0].frame.receiptBootNanos < a[0].frame.receiptBootNanos {
+			merged, b = append(merged, b[0]), b[1:]
+		} else {
+			merged, a = append(merged, a[0]), a[1:]
+		}
+	}
+	return append(append(merged, a...), b...)
+}
+
 // preRollFlushDrainLimitBytes bounds the side buffer that holds live frames
 // arriving while the pre-roll is written. It is a quarter of the ring's own
 // cap: the flush is bounded work, so the buffer only has to cover a burst
@@ -210,7 +247,7 @@ const preRollFlushDrainLimitBytes = preRollCameraLimitBytes / 4
 // frameDrain is what a drain goroutine collected while a slow operation held
 // the capture goroutine.
 type frameDrain struct {
-	frames []*videoFrame
+	frames []drainedFrame
 	bytes  int
 	// dropped counts frames the side buffer refused because it was full. They
 	// are charged to the capture's drop total, exactly like a hub-side drop:
@@ -222,8 +259,15 @@ type frameDrain struct {
 	closed bool
 }
 
-// drainDuring runs fn while a helper goroutine keeps consuming c.frames into a
-// bounded side buffer, and returns what it collected.
+type drainedFrame struct {
+	frame *videoFrame
+	// nativeBeside marks a frame from the native subscription held beside an
+	// encoded primary, which is replayed through its own handler.
+	nativeBeside bool
+}
+
+// drainDuring runs fn while a helper goroutine keeps consuming the capture's
+// subscriptions into a bounded side buffer, and returns what it collected.
 //
 // This exists because of what the pre-roll flush is: activate hands the LIVE
 // hub subscription straight to the capture, and run then spends the flush
@@ -236,29 +280,41 @@ type frameDrain struct {
 // afterwards, in order, so they are written exactly as if the flush had been
 // instantaneous.
 //
-// The goroutine owns c.frames for the duration and is joined before this
-// returns, so the caller resumes as its sole reader with no data race.
+// The goroutine owns the subscription channels for the duration and is joined
+// before this returns, so the caller resumes as their sole reader with no data
+// race. A native subscription that closes is left for the live loop, which
+// reads the close again and handles it.
 func (c *cameraCapture) drainDuring(fn func() error) (*frameDrain, error) {
 	d := &frameDrain{}
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	primary, nativeBeside := c.frames, c.nativeFrames
+	keep := func(frame *videoFrame, fromNativeBeside bool) {
+		if d.bytes+len(frame.data) > preRollFlushDrainLimitBytes {
+			d.dropped++
+			return
+		}
+		d.frames = append(d.frames, drainedFrame{frame: frame, nativeBeside: fromNativeBeside})
+		d.bytes += len(frame.data)
+	}
 	go func() {
 		defer close(done)
 		for {
 			select {
 			case <-stop:
 				return
-			case frame, ok := <-c.frames:
+			case frame, ok := <-primary:
 				if !ok {
 					d.closed = true
 					return
 				}
-				if d.bytes+len(frame.data) > preRollFlushDrainLimitBytes {
-					d.dropped++
+				keep(frame, false)
+			case frame, ok := <-nativeBeside:
+				if !ok {
+					nativeBeside = nil
 					continue
 				}
-				d.frames = append(d.frames, frame)
-				d.bytes += len(frame.data)
+				keep(frame, true)
 			}
 		}
 	}()
@@ -320,6 +376,20 @@ type armedCameraSource struct {
 	subID  int
 	frames chan *videoFrame
 	ring   *cameraPreRollRing
+	// primaryKind is the kind of frames the subscription above delivers.
+	// nativeSubID, nativeFrames and ownFrameRing are a second, native
+	// subscription and its ring, held only while a campaign that stores both
+	// video and frames has an encoded primary; they are owned as the primary is.
+	primaryKind       frameKind
+	wantsNativeBeside bool
+	nativeSubID       int
+	nativeFrames      chan *videoFrame
+	ownFrameRing      *cameraPreRollRing
+	ownFramesAreVideo bool
+	ownFramesCodec    agentpb.VideoCodec
+	// storeNotes says why the camera's own frames are not being buffered, for
+	// the episode's manifest.
+	storeNotes []string
 	// carriedDrops accumulates the hub drop counters of subscriptions this
 	// armed source has already left, so a mid-arm producer restart does not
 	// lose the count. activate hands the total to the capture, which reports
@@ -351,6 +421,13 @@ func (a *armedCameraSource) fill(ctx context.Context) {
 			return
 		case frame, ok := <-a.frames:
 			if !ok {
+				if refusal := a.hub.subscriberErr(a.subID); a.primaryKind == nativeFrames && isNativeRefusal(refusal) {
+					if err := a.bufferVideoInstead(refusal); err != nil {
+						a.alive = false
+						return
+					}
+					continue
+				}
 				if err := a.hub.terminalErr(); err != nil {
 					a.alive = false
 					return
@@ -365,23 +442,123 @@ func (a *armedCameraSource) fill(ctx context.Context) {
 				a.alive = false
 				return
 			}
+			if a.primaryKind == nativeFrames && encodedFrames.receives(frame) {
+				a.ownFramesAreVideo, a.ownFramesCodec = true, frame.codec
+			}
 			a.ring.add(frame)
+		case frame, ok := <-a.nativeFrames:
+			switch {
+			case !ok:
+				a.nativeBesideEnded()
+			case encodedFrames.receives(frame):
+				a.ownFramesAreVideo, a.ownFramesCodec = true, frame.codec
+				a.leaveNativeBeside()
+				a.ownFrameRing = nil
+				a.shareRingBytes()
+			default:
+				a.ownFrameRing.add(frame)
+			}
 		}
 	}
 }
 
-func (a *armedCameraSource) reattach(ctx context.Context) error {
-	carried := a.carriedDrops + a.hub.unsubscribe(a.subID)
-	hub, subID, frames, err := a.video.joinHub(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: a.devID})
+// join subscribes the armed source for what its campaign stores, asserting no
+// stream parameters.
+func (a *armedCameraSource) join(ctx context.Context) error {
+	hub, subID, frames, kind, refusal, err := joinWithVideoFallback(a.primaryKind, func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
+		return a.video.joinHubKind(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: a.devID}, kind)
+	})
 	if err != nil {
-		// The count still belongs to this armed source even when the rejoin
-		// failed: activate reports it whether or not a live tail follows.
-		a.carriedDrops = carried
 		return err
 	}
-	a.hub, a.subID, a.frames = hub, subID, frames
-	a.carriedDrops = carried
+	a.hub, a.subID, a.frames, a.primaryKind = hub, subID, frames, kind
+	if refusal != nil {
+		a.noteOwnFramesUnavailable(refusal)
+	}
+	if a.wantsNativeBeside && !a.ownFramesAreVideo && a.primaryKind == encodedFrames {
+		if id, ch, err := a.hub.subscribeKind(nativeFrames); err != nil {
+			a.noteOwnFramesUnavailable(err)
+		} else {
+			a.nativeSubID, a.nativeFrames = id, ch
+			if a.ownFrameRing == nil {
+				a.ownFrameRing = &cameraPreRollRing{buffer: a.buffer}
+			}
+		}
+	}
+	a.shareRingBytes()
+	return nil
+}
+
+// shareRingBytes divides preRollCameraLimitBytes among the rings this source
+// fills, so what it buffers in total stays within the bound.
+func (a *armedCameraSource) shareRingBytes() {
+	if a.ownFrameRing == nil {
+		a.ring.limitBytes = preRollCameraLimitBytes
+		return
+	}
+	a.ring.limitBytes = preRollCameraLimitBytes / 2
+	a.ownFrameRing.limitBytes = preRollCameraLimitBytes - a.ring.limitBytes
+	a.ring.evict()
+	a.ownFrameRing.evict()
+}
+
+func (a *armedCameraSource) leaveNativeBeside() {
+	if a.nativeFrames == nil {
+		return
+	}
+	a.nativeFrames = nil
+	a.carriedDrops += a.hub.unsubscribe(a.nativeSubID)
+}
+
+// nativeBesideEnded handles the native subscription's channel closing. A
+// producer that turned it away has no frames of its own, so their ring is
+// given up; a producer that ended is rejoined by the primary's handling.
+func (a *armedCameraSource) nativeBesideEnded() {
+	refusal := a.hub.subscriberErr(a.nativeSubID)
+	a.leaveNativeBeside()
+	if refusal != nil {
+		a.noteOwnFramesUnavailable(refusal)
+		a.ownFrameRing = nil
+		a.shareRingBytes()
+	}
+}
+
+// bufferVideoInstead swaps a native primary the producer turned away for an
+// encoded one on the same hub, and starts the ring over for it.
+func (a *armedCameraSource) bufferVideoInstead(refusal error) error {
+	id, ch, drops, err := a.hub.resubscribeAs(a.subID, encodedFrames)
+	if err != nil {
+		return err
+	}
+	a.carriedDrops += drops
+	a.subID, a.frames, a.primaryKind = id, ch, encodedFrames
+	a.ring = &cameraPreRollRing{buffer: a.buffer, limitBytes: preRollCameraLimitBytes}
+	a.noteOwnFramesUnavailable(refusal)
+	return nil
+}
+
+func (a *armedCameraSource) noteOwnFramesUnavailable(cause error) {
+	note := ownFramesUnavailableNote(a.source.Capture, cause, 0)
+	for _, existing := range a.storeNotes {
+		if existing == note {
+			return
+		}
+	}
+	a.storeNotes = append(a.storeNotes, note)
+}
+
+func (a *armedCameraSource) reattach(ctx context.Context) error {
+	// The counts still belong to this armed source even when the rejoin
+	// fails: activate reports them whether or not a live tail follows.
+	a.leaveNativeBeside()
+	a.carriedDrops += a.hub.unsubscribe(a.subID)
+	if err := a.join(ctx); err != nil {
+		return err
+	}
 	a.ring.markStreamReset()
+	if a.ownFrameRing != nil {
+		a.ownFrameRing.markStreamReset()
+	}
 	return nil
 }
 
@@ -406,8 +583,7 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	a.consumed = true
 	a.mu.Unlock()
 
-	preRoll, achievedOffset, reachedFull := a.ring.flush(session.RequestBootNanos)
-	shortfall := !reachedFull && len(preRoll) > 0
+	preRoll, achievedOffset, shortfall := a.flushRings(session.RequestBootNanos)
 
 	dir := filepath.Join(session.Directory, "cameras", safeCaptureName(a.source.ID))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -426,13 +602,9 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	// retained ring still opens the episode, but the live tail needs a fresh
 	// subscription rather than the dead channel.
 	if !a.alive || a.hub == nil {
-		hub, subID, frames, joinErr := a.video.joinHub(context.Background(), a.key, &agentpb.StreamVideoRequest{DeviceId: a.devID})
-		if joinErr != nil {
-			if len(preRoll) == 0 {
-				return nil, false, errors.Join(joinErr, index.Close(), mappings.Close())
-			}
-		} else {
-			a.hub, a.subID, a.frames = hub, subID, frames
+		a.nativeFrames = nil
+		if joinErr := a.join(context.Background()); joinErr != nil && len(preRoll) == 0 {
+			return nil, false, errors.Join(joinErr, index.Close(), mappings.Close())
 		}
 	}
 
@@ -440,12 +612,12 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	if a.source.Capture != nil && a.source.Capture.Rate > 0 {
 		rateCap = a.source.Capture.Rate
 	}
-	notes := a.preRollNotes(preRoll, achievedOffset, shortfall)
+	notes := append(a.preRollNotes(preRoll, achievedOffset, shortfall), a.storeNotes...)
 
 	captureCtx, cancel := context.WithCancel(context.Background())
 	devID := a.devID
-	rejoin := func(ctx context.Context) (*deviceHub, int, chan *videoFrame, error) {
-		return a.video.joinHub(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: devID})
+	rejoin := func(ctx context.Context, kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
+		return a.video.joinHubKind(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: devID}, kind)
 	}
 	// Everything the hub dropped for this subscription up to now happened
 	// during the ARMED period. The capture subtracts it from its own total and
@@ -459,10 +631,15 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	var baseline uint64
 	if a.hub != nil {
 		baseline = a.hub.drops(a.subID)
+		if a.nativeFrames != nil {
+			baseline += a.hub.drops(a.nativeSubID)
+		}
 	}
 	armedDrops := a.carriedDrops + baseline
 	c := &cameraCapture{
 		source: a.source, session: session, dir: dir, hub: a.hub, subID: a.subID, frames: a.frames,
+		primaryKind: a.primaryKind, wantsNativeBeside: a.wantsNativeBeside, nativeSubID: a.nativeSubID, nativeFrames: a.nativeFrames,
+		ownFramesAreVideo: a.ownFramesAreVideo, ownFramesCodec: a.ownFramesCodec,
 		rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel,
 		done: make(chan struct{}), ready: make(chan error, 1), mode: "continuous", rateCap: rateCap,
 		notes: notes, lastSnapshotIdx: -1, preRoll: preRoll, armed: true,
@@ -497,7 +674,7 @@ func (a *armedCameraSource) preRollNotes(preRoll []bufferedCameraFrame, achieved
 		if shortfall {
 			note += "; armed less than the buffer before the trigger, so achieved pre-roll is shorter than requested"
 		}
-		if a.ring.droppedForBytes {
+		if a.ring.droppedForBytes || (a.ownFrameRing != nil && a.ownFrameRing.droppedForBytes) {
 			note += fmt.Sprintf("; the %d MiB pre-roll ring cap bounded the retained window below the requested buffer", preRollCameraLimitBytes>>20)
 		}
 		notes = append(notes, note)
@@ -523,6 +700,7 @@ func (a *armedCameraSource) disarm() {
 	a.cancel()
 	<-a.done
 	if a.hub != nil {
+		a.leaveNativeBeside()
 		a.hub.unsubscribe(a.subID)
 	}
 }

@@ -35,7 +35,7 @@ func newModelIO() ModelIO {
 		// inherit. The manifest's reference counters are a per-episode range
 		// check and cannot catch that; the ledger's app_id can.
 		JoinKeys:       []string{"app_id", "source_id", "sample_id"},
-		PayloadLocator: "a ledger entry's payload bytes are the ones this episode's own capture wrote for the same (source_id, sample_id); for camera sources that is the cameras/<source>/index.jsonl entry with the matching sample_id, which names its segment file and byte offset. The index entry's byte_size is authoritative for how many bytes to read and may be smaller than the ledger entry's payload_bytes: a frame that opens a segment has any bytes before its first parameter set trimmed. A ledger entry with no matching index entry means the capture policy did not keep that sample's payload.",
+		PayloadLocator: "a ledger entry's payload bytes are the ones this episode's own capture wrote for the same (source_id, sample_id); for camera sources that is the cameras/<source>/index.jsonl entry with the matching sample_id, which names its segment file and byte offset. A camera stored as both video and frames has two entries per sample_id, one per stored form, told apart by codec and segment; codec names the form of the bytes an entry addresses, which for a camera stored as frames is the camera's own frame format rather than the encoded video a model may have been given. The index entry's byte_size is authoritative for how many bytes to read and may be smaller than the ledger entry's payload_bytes: a frame that opens a segment has any bytes before its first parameter set trimmed. A ledger entry with no matching index entry means the capture policy did not keep that sample's payload.",
 	}
 }
 

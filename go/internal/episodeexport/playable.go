@@ -61,6 +61,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -120,6 +121,12 @@ type ClipResult struct {
 	// Unparsed counts index lines that were not valid records, which is the
 	// expected shape of a partial tail left by an interrupted episode.
 	Unparsed int
+	// OtherFormats counts valid index records whose segment is not an H.264
+	// elementary stream: a camera's own JPEG frames, stored beside the video
+	// or in its place, or a WebM recording. The clip is not made from them.
+	// OtherCodecs names their codecs, in the order first seen.
+	OtherFormats int
+	OtherCodecs  []string
 	// Segments counts distinct segment files the frames came from.
 	Segments int
 	// Span is the index's last-minus-first canonical timestamp.
@@ -227,6 +234,10 @@ func convertSource(episodeDir, sourceDir, indexPath, out string) (ClipResult, er
 	if err != nil {
 		return result, err
 	}
+	if len(frames) == 0 && result.OtherFormats > 0 {
+		return result, fmt.Errorf("the source stored no H.264 video: its %d indexed frame(s) are %s, and the clip is made from H.264 only",
+			result.OtherFormats, strings.Join(result.OtherCodecs, ", "))
+	}
 	if len(frames) == 0 {
 		return result, fmt.Errorf("index names no usable H.264 frames (%d unparsed lines)", result.Unparsed)
 	}
@@ -273,7 +284,8 @@ type cameraIndexLine struct {
 // readCameraIndex reads the frame index and returns its H.264 frames in the
 // order the index records them, which is capture order. Lines that are not
 // valid records, which is what the tail of an interrupted episode's index
-// looks like, are counted and skipped rather than guessed at.
+// looks like, are counted and skipped rather than guessed at. Valid records
+// stored in another form are counted apart from those (see OtherFormats).
 //
 // The order is deliberately left alone. Sorting by canonical timestamp would
 // reorder coded H.264 frames whenever two timestamps invert, and an inter
@@ -300,8 +312,15 @@ func readCameraIndex(path string) ([]cameraIndexLine, ClipResult, error) {
 			result.Unparsed++
 			continue
 		}
-		if rec.Segment == "" || rec.ByteSize <= 0 || !strings.HasSuffix(strings.ToLower(rec.Segment), ".h264") {
+		if rec.Segment == "" || rec.ByteSize <= 0 {
 			result.Unparsed++
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(rec.Segment), ".h264") {
+			result.OtherFormats++
+			if !slices.Contains(result.OtherCodecs, rec.Codec) {
+				result.OtherCodecs = append(result.OtherCodecs, rec.Codec)
+			}
 			continue
 		}
 		frames = append(frames, rec)
