@@ -96,6 +96,26 @@ func Run(ctx context.Context, t Transport, opts Options) error {
 	if err != nil {
 		return err
 	}
+	// Check every image before the reset and sum its size for Progress.
+	// A/B partitions push their image once each.
+	var total int64
+	for _, p := range parts {
+		path := filepath.Join(opts.FlashImagesDir, p.FileName)
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("%w: checking image %q before any device writes: %w", ErrOldDataNotCleared, p.FileName, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%w: image %q is not a regular file", ErrOldDataNotCleared, p.FileName)
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("%w: opening image %q before any device writes: %w", ErrOldDataNotCleared, p.FileName, err)
+		}
+		f.Close()
+		total += info.Size()
+	}
+
 	// Where the previous installation's data must be cleared is decided from
 	// the package alone, so a package that cannot say stops the flash here,
 	// before the device is touched.
@@ -104,15 +124,6 @@ func Run(ctx context.Context, t Transport, opts Options) error {
 		return err
 	}
 	fmt.Fprintf(out, "Flashing %d partitions (dry-run=%v)\n", len(parts), opts.DryRun)
-
-	// Estimated bytes to transfer, for Progress: the plan's image files summed
-	// per entry (A/B partitions push their image once each).
-	var total int64
-	for _, p := range parts {
-		if fi, err := os.Stat(filepath.Join(opts.FlashImagesDir, filepath.Base(p.FileName))); err == nil {
-			total += fi.Size()
-		}
-	}
 
 	e := &engine{ctx: ctx, t: t, opts: opts, out: out, progressTotal: total}
 	defer e.removeTempFiles()
