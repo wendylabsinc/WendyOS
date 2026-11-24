@@ -2176,18 +2176,24 @@ func TestCreateCameraShares_AContainerCreatedAgainWithEntriesThatAgreeNoLongerTe
 	}
 }
 
-func TestCreateCameraShares_ADisagreementThatHasNotChangedIsNotWarnedOfAgain(t *testing.T) {
+// A deploy removes a container's shares and creates them again, so each deploy
+// of a manifest whose entries disagree warns once. A create that finds its
+// record again with the same note, as within one deploy, adds no warning.
+func TestCreateCameraShares_ADisagreementIsWarnedOfOncePerDeploy(t *testing.T) {
 	h := newCSHarness(t, csBrio())
 	sfCanDeriveFrames(h.s)
 	disagreeing := []appconfig.Entitlement{
 		sfCameraEntitlement(appconfig.CameraFormatNative, "", "/dev/video0"),
 		sfCameraEntitlement(appconfig.CameraFormatH264, "", "v4l2:/dev/video0"),
 	}
-	for range 3 {
+	for deploy := 1; deploy <= 3; deploy++ {
+		h.s.RemoveCameraShares("cv-a")
+		h.drainRemovals()
 		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", disagreeing)
-	}
-	if n := h.logged("the entries deciding"); n != 1 {
-		t.Errorf("3 creates with one disagreement warned %d times, want once; logs: %v", n, h.logs.All())
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", disagreeing)
+		if n := h.logged("the entries deciding"); n != deploy {
+			t.Fatalf("after deploy %d the disagreement was warned of %d times, want once per deploy; logs: %v", deploy, n, h.logs.All())
+		}
 	}
 	if _, told := h.stateShares("cv-a")[0]["settingsNote"]; !told {
 		t.Errorf("the disagreement left the state file: %v", h.stateShares("cv-a"))
@@ -2196,7 +2202,7 @@ func TestCreateCameraShares_ADisagreementThatHasNotChangedIsNotWarnedOfAgain(t *
 	disagreeing[1].Stamp = appconfig.CameraStampFrame
 	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", disagreeing)
 	if n := h.logged("stamp falls back to time"); n != 1 {
-		t.Errorf("a disagreement that changed warned %d times, want once; logs: %v", n, h.logs.All())
+		t.Errorf("a disagreement that changed without a remove warned %d times, want once; logs: %v", n, h.logs.All())
 	}
 }
 
@@ -2252,5 +2258,70 @@ func TestCameraShareReport_ANetworkCamerasRowGivesItsStableIDAndNoShareMode(t *t
 	want := map[string]string{"stable_id": "ip-mac:aa:00:00:00:00:01"}
 	if got := h.reportOf("/dev/video200"); !reflect.DeepEqual(got, want) {
 		t.Errorf("the network camera's row = %v, want %v", got, want)
+	}
+}
+
+// The note follows the manifest of the last create for every camera that
+// create resolved settings for, also one it then could not share.
+func TestCreateCameraShares_ACameraACreateSeesButCannotShareStillTakesItsEntriesDisagreement(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	sfCanDeriveFrames(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement("", "", "/dev/video0")})
+	kept := h.records("cv-a")[0]
+
+	unreadable := csBrio()
+	unreadable.formats = nil
+	h.mu.Lock()
+	h.cams["video0"] = unreadable
+	h.mu.Unlock()
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
+		sfCameraEntitlement(appconfig.CameraFormatNative, "", "/dev/video0"),
+		sfCameraEntitlement(appconfig.CameraFormatH264, "", "v4l2:/dev/video0"),
+	})
+
+	if records := h.records("cv-a"); len(records) != 1 || records[0] != kept {
+		t.Fatalf("records = %+v, want the record made while the camera could be shared; logs: %v", records, h.logs.All())
+	}
+	const said = `format falls back to pixels: the entries deciding for this camera disagree (allowlist entry "/dev/video0" asks for native, allowlist entry "v4l2:/dev/video0" asks for h264)`
+	if note := h.stateShares("cv-a")[0]["settingsNote"]; note != said {
+		t.Errorf("state file settingsNote = %q, want %q", note, said)
+	}
+	if n := sfWarnings(h, "camera share: cv-a: Brio 101 (/dev/video0): "+said); n != 1 {
+		t.Errorf("warned %d times of the disagreement, want once; logs: %v", n, h.logs.All())
+	}
+}
+
+// A create that cannot get as far as the cameras has still replaced the
+// manifest, so what the earlier one's entries disagreed on is no longer said.
+func TestCreateCameraShares_ACreateThatStopsBeforeTheCamerasDropsTheEarlierManifestsDisagreement(t *testing.T) {
+	for name, stop := range map[string]func(*csHarness){
+		"no loopback module": func(h *csHarness) { h.loop.availableErr = errors.New("no module") },
+		"listing cameras fails": func(h *csHarness) {
+			h.s.globDevices = func() ([]string, error) { return nil, errors.New("glob failed") }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCSHarness(t, csBrio())
+			sfCanDeriveFrames(h.s)
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{
+				sfCameraEntitlement(appconfig.CameraFormatNative, "", "/dev/video0"),
+				sfCameraEntitlement(appconfig.CameraFormatH264, "", "v4l2:/dev/video0"),
+			})
+			if _, told := h.stateShares("cv-a")[0]["settingsNote"]; !told {
+				t.Fatalf("the disagreement is not in the state file: %v", h.stateShares("cv-a"))
+			}
+
+			stop(h)
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement("", "", "/dev/video0")})
+			if h.logged("cv-a gets the real cameras") != 1 {
+				t.Fatalf("the second create did not stop before the cameras; logs: %v", h.logs.All())
+			}
+			if records := h.records("cv-a"); len(records) != 1 || records[0].settingsNote != "" {
+				t.Errorf("the record still tells of the disagreement: %+v", records)
+			}
+			if note, told := h.stateShares("cv-a")[0]["settingsNote"]; told {
+				t.Errorf("the state file still tells of the disagreement: %q", note)
+			}
+		})
 	}
 }

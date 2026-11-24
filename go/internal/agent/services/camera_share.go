@@ -165,6 +165,10 @@ func (s *VideoService) CreateCameraShares(ctx context.Context, containerID, appI
 		return
 	}
 	defer s.endShareCreation(containerID, creation)
+	// The entitlements are the container's from here on, whether or not this
+	// call gets as far as the cameras.
+	creation.notesBefore = s.takeSettingsNotes(containerID)
+	defer s.persistChangedSettingsNotes(creation.notesBefore)
 	// Available can load the module on its first call, so it is timed too.
 	unavailable, ok := withinBudget(ctx, func() bool { return s.loopback == nil || s.loopback.Available() != nil })
 	switch {
@@ -201,8 +205,6 @@ func (s *VideoService) CreateCameraShares(ctx context.Context, containerID, appI
 		}
 		cams = append(cams, dev)
 	}
-	creation.notesBefore = s.takeSettingsNotes(containerID)
-	defer s.persistChangedSettingsNotes(creation.notesBefore)
 	for i, dev := range cams {
 		if err := ctx.Err(); err != nil {
 			for _, rest := range cams[i:] {
@@ -224,9 +226,9 @@ type shareCreation struct {
 }
 
 // takeSettingsNotes clears the settings note of every record of a container
-// and returns what each held. A create resolves the settings of the cameras it
-// sees, so a record whose camera it does not see must not keep the word of
-// entitlements that may have changed.
+// and returns what each held. A create brings the container's entitlements and
+// notes again the cameras it resolves settings for, so a record whose camera
+// it does not get to must not keep the word of entitlements it replaced.
 func (s *VideoService) takeSettingsNotes(containerID string) map[*shareRecord]string {
 	s.shares.mu.Lock()
 	defer s.shares.mu.Unlock()
@@ -314,6 +316,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 	format, stamp, conflicts := appconfig.CameraNodeSettings(entitlements,
 		appconfig.CameraIdentity{Path: dev.GetPath(), StableID: dev.GetStableId(), Name: dev.GetName()})
 	settingsNote := strings.Join(conflicts, "; ")
+	noted := s.noteSettingsOnRecord(containerID, dev, settingsNote, creation)
 	// The policy goes first, so a camera it refuses (CSI, thermal, depth) is
 	// logged with that reason. shareDecisionFor can block well past the
 	// budget (its GStreamer element listing is not context-aware), so it runs
@@ -337,16 +340,8 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		s.logRealCamera(true, containerID, dev, "its sysfs identity could not be read: "+err.Error())
 		return
 	}
-	noteBefore := ""
 	if existing := s.shareOfCamera(containerID, id); existing != nil {
-		noteBefore = creation.notesBefore[existing]
 		if existing.mode.asksWhat(decision.Mode) && existing.stamp == stamp && existing.askedFormat == decision.AskedFormat {
-			s.shares.mu.Lock()
-			existing.settingsNote = settingsNote
-			s.shares.mu.Unlock()
-			if settingsNote != noteBefore {
-				s.warnOfSettingsNote(containerID, dev, settingsNote)
-			}
 			return
 		}
 		// A record left from an earlier container of this name: this
@@ -398,9 +393,34 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		s.shareLogger().Warn(fmt.Sprintf("camera share: %s: %s (%s): %s", containerID, dev.GetName(), dev.GetPath(),
 			describeServedInstead(decision.AskedFormat, decision.Mode.Format, decision.AskedWhyNot)))
 	}
-	if settingsNote != noteBefore {
+	if !noted {
 		s.warnOfSettingsNote(containerID, dev, settingsNote)
 	}
+}
+
+// noteSettingsOnRecord gives the container's record of a camera, when it has
+// one, the note of the entitlements this create brought, before anything
+// decides whether the camera is shared now. It warns when the note is not the
+// one the record held, and reports whether a record took the note. A deploy
+// removes a container's shares before it creates them, so each deploy of a
+// manifest whose entries disagree warns once; a create that finds its record
+// again with the same note does not warn a second time.
+func (s *VideoService) noteSettingsOnRecord(containerID string, dev *agentpb.VideoDevice, settingsNote string, creation *shareCreation) bool {
+	id, err := s.identityOf(filepath.Base(dev.GetPath()))
+	if err != nil {
+		return false
+	}
+	existing := s.shareOfCamera(containerID, id)
+	if existing == nil {
+		return false
+	}
+	s.shares.mu.Lock()
+	existing.settingsNote = settingsNote
+	s.shares.mu.Unlock()
+	if settingsNote != creation.notesBefore[existing] {
+		s.warnOfSettingsNote(containerID, dev, settingsNote)
+	}
+	return true
 }
 
 func (s *VideoService) warnOfSettingsNote(containerID string, dev *agentpb.VideoDevice, settingsNote string) {
