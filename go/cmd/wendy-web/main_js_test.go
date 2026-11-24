@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 )
 
 func TestRejectsUICertificateConnections(t *testing.T) {
@@ -32,7 +34,7 @@ func TestValidUntil(t *testing.T) {
 		``:                             60 * 24 * time.Hour,
 		`{}`:                           60 * 24 * time.Hour,
 		`{"validForSeconds":3600}`:     time.Hour,
-		`{"validForSeconds":31536000}`: 365 * 24 * time.Hour,
+		`{"validForSeconds":31536000}`: cloudrequest.MaxSigned,
 	} {
 		before := time.Now()
 		value, err := b.handle(request{Method: "valid-until", Params: json.RawMessage(params)})
