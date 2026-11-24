@@ -77,7 +77,12 @@ func (s *VideoService) ownFramesForecast(hubKey string, req *agentpb.StreamVideo
 	return own, declined, native, true
 }
 
+// ownFramesAreKnownToBeVideo is asked of a camera the join may start. One
+// that is running hands on what it hands on and answers at the join.
 func (s *VideoService) ownFramesAreKnownToBeVideo(hubKey string, req *agentpb.StreamVideoRequest) bool {
+	if s.joinsCameraAsItRuns(hubKey, req) {
+		return false
+	}
 	own, declined, native, asked := s.ownFramesForecast(hubKey, req)
 	return asked && native && (declined != "" || encodedFrames.receives(&videoFrame{codec: own.codec}))
 }

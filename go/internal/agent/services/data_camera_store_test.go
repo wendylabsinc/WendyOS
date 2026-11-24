@@ -1364,8 +1364,8 @@ func TestSnapshotOnAJPEGCameraWritesTheCamerasOwnFramesAsStills(t *testing.T) {
 	}
 }
 
-// A camera whose own frames are H.264 is subscribed to for video, as it was
-// before stills could be a camera's own frames.
+// The camera is running, so it answers for itself: the capture subscribes for
+// its own frames, which are H.264, and each still is a key frame.
 func TestSnapshotOnAnH264CameraWritesKeyFramesWithTheirParameterSets(t *testing.T) {
 	cam := newH264Camera(t)
 	keyFrameBehindOtherBytes := nativeH264At(5, 1800*time.Millisecond, append([]byte{9, 9}, testRAUFrame...))
@@ -1378,7 +1378,7 @@ func TestSnapshotOnAnH264CameraWritesKeyFramesWithTheirParameterSets(t *testing.
 		nativeH264At(6, 3600*time.Millisecond, testRAUFrame),
 	}
 	r := cam.record(t, snapshotEvery(time.Second), 2, func() {
-		cam.waitForCaptureSubscriptions(t, 1, 0)
+		cam.waitForCaptureSubscriptions(t, 0, 1)
 		for _, frame := range frames {
 			cam.deliver(t, frame)
 		}
@@ -1395,6 +1395,65 @@ func TestSnapshotOnAnH264CameraWritesKeyFramesWithTheirParameterSets(t *testing.
 	}
 	if r.result.SourceDetail != snapshotEverySecond {
 		t.Errorf("detail = %q, want %q", r.result.SourceDetail, snapshotEverySecond)
+	}
+}
+
+// A camera can list H.264 and hand on JPEG all the same, when its H.264
+// capture gave way. What the sources would say of a fresh start does not
+// decide for a camera that is running: it hands on JPEG, and the stills are
+// those frames.
+func TestSnapshotOnARunningCameraIsAnsweredByTheCameraItself(t *testing.T) {
+	cam := newKernelClockCamera(t)
+	camerasHandOn(t, agentpb.VideoCodec_VIDEO_CODEC_H264)
+	var stills []*videoFrame
+	r := cam.record(t, snapshotEvery(time.Second), 2, func() {
+		cam.waitForCaptureSubscriptions(t, 0, 1)
+		for i, receivedAt := range []time.Duration{600 * time.Millisecond, 1700 * time.Millisecond} {
+			jpeg := jpegAt(uint64(i+1), receivedAt, testJPEG(byte(0x60+i), 40+i))
+			cam.deliver(t, jpeg)
+			cam.derive(t, jpeg, testRAUFrame)
+			stills = append(stills, jpeg)
+		}
+		cam.waitForCaptureSubscriptions(t, 0, 1)
+	}, 2)
+
+	assertFileNames(t, r, "snapshot-000001.jpg", "snapshot-000002.jpg")
+	assertRecordsAddress(t, r, indexedAsJPEG, stills)
+	if r.result.SourceDetail != snapshotEverySecond {
+		t.Errorf("detail = %q, want %q", r.result.SourceDetail, snapshotEverySecond)
+	}
+}
+
+// A capture that starts a camera whose own frames are H.264 subscribes for
+// video, as it did before stills could be a camera's own frames.
+func TestSnapshotThatStartsAnH264CameraSubscribesForVideo(t *testing.T) {
+	camerasHandOn(t, agentpb.VideoCodec_VIDEO_CODEC_H264)
+	video := NewVideoService(context.Background(), zap.NewNop(), nil)
+	producers := installScriptedProducers(video, func(ctx context.Context, hub *deviceHub) {
+		every(ctx, func() {
+			hub.produce(&videoFrame{data: testRAUFrame, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, nativeClock: "CLOCK_REALTIME_AGENT_CAPTURE", auAligned: true, native: true})
+		})
+	})
+	adapter := &cameraDataAdapter{video: video}
+	session := startedNow(t, "")
+	source := data.Source{ID: storeTestSource, Kind: "camera", Detail: "Test Cam", Capture: snapshotEvery(10 * time.Millisecond)}
+
+	capture, err := adapter.startOne(context.Background(), session, source, 0)
+	if err != nil {
+		t.Fatalf("startOne: %v", err)
+	}
+	hub := producers.started()[0]
+	if !hub.wantEncoded() || hub.wantNative() {
+		t.Errorf("the capture asks for encoded video %v and for the camera's own frames %v, want video only", hub.wantEncoded(), hub.wantNative())
+	}
+	r := stopRecording(t, capture, filepath.Join(session.Directory, "cameras", safeCaptureName(source.ID)), 2)
+	for _, record := range r.index(t) {
+		if record.Codec != indexedAsH264 || !strings.HasSuffix(record.Segment, ".h264") {
+			t.Errorf("record %+v is not a key frame still", record)
+		}
+	}
+	if strings.Contains(r.result.SourceDetail, "own frames") {
+		t.Errorf("detail %q speaks of the camera's own frames", r.result.SourceDetail)
 	}
 }
 
