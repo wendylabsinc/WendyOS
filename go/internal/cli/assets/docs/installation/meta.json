@@ -6,6 +6,7 @@
     "wendyos-nvidia-jetson-agx-thor",
     "wendyos-qualcomm-dragonwing",
     "wendyos-raspberry-pi-5",
+    "wendyos-orange-pi-5-pro",
     "linux",
     "wendy-agent-macos",
     "wendy-lite-esp32",

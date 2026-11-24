@@ -7,7 +7,7 @@ Installs WendyOS onto an NVMe or SD card, fully recovers supported Jetsons over 
 The command presents a device picker with Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, then use the arrow keys and Enter to select a device. Linux includes WendyOS targets and Linux Desktop, Mac offers Headless Mac, and Microcontrollers lists ESP32 targets with published firmware. Empty categories are hidden. When a Jetson in USB recovery mode, a Qualcomm board in EDL mode, or an ESP32-S31 in ROM download mode is connected, a Detected USB tab appears first; see [`wendy install`](../install.md). Select the device type to take the appropriate path:
 
 - **Jetson Orin Nano / AGX Orin** -> download a recovery flashpack -> verify the module/carrier -> update QSPI and NVMe/eMMC together
-- **Raspberry Pi targets** -> download OS image -> write to SD/NVMe -> write config partition
+- **Raspberry Pi and Orange Pi targets** -> download OS image -> write to SD/NVMe -> write config partition
 - **Jetson AGX Thor** -> download flashpack -> boot over USB recovery -> flash QSPI and internal NVMe
 - **ESP32 targets** → detect USB serial port → download firmware `.bin` → flash over serial
 
@@ -111,7 +111,7 @@ To provision WiFi after first boot, use `wendy device wifi connect`.
 
 ## Linux (WendyOS) path
 
-For Raspberry Pi devices—and Orin with `--rootfs-only`, the interactive flash-mode choice "OS image only", or a version that predates recovery flashpacks—the install path writes a disk image to a selected SD card, NVMe drive, or USB-attached enclosure:
+For Raspberry Pi and Orange Pi devices—and Orin with `--rootfs-only`, the interactive flash-mode choice "OS image only", or a version that predates recovery flashpacks—the install path writes a disk image to a selected SD card, NVMe drive, or USB-attached enclosure:
 
 1. **Resolve version** — `--version` if provided, otherwise latest (or nightly with `--nightly`).
 2. **Resolve drive** — `--drive` if provided, otherwise an interactive picker of external drives. Without a terminal, `--drive` is required. Internal drives require `--yes-overwrite-internal` in non-interactive mode; in interactive mode the user must type the device path to confirm.
@@ -317,7 +317,7 @@ wendy install plan --device-type unitree-g1
 wendy install verify --address <expected-device> --expected-os-version <version> --expected-device-type <board>
 ```
 
-Planning supports Pi 3/4/5, Orin/Thor developer kits, G1 PC2 and Linux agent installs.
+Planning supports Pi 3/4/5, Orange Pi 5 Pro, Orin/Thor developer kits, G1 PC2 and Linux agent installs.
 Jetson planning requires `--carrier developer-kit`; custom carriers need their
 vendor guide. Raw-media plans require a drive from `wendy os list-drives --all --json`
 before returning a write command. `--rootfs-only` leaves Orin QSPI unchanged.
