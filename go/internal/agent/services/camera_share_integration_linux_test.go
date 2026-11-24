@@ -241,19 +241,23 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 		svc.CreateCameraShares(ctx, app.id, "sh.wendy."+app.id, app.entitlements)
 		r, ok := shareRecordOf(svc, app.id)
 		if !ok {
-			t.Fatalf("%s: camera was not shared: %s", app.id, shareRefusalReason(fx.logs, app.id))
+			t.Fatalf("%s: camera was not shared: %s\nentitlements passed: %+v\nagent log: %q",
+				app.id, shareRefusalReason(fx.logs, app.id), app.entitlements, shareLogLines(fx.logs, app.id))
 		}
 		fx.made = append(fx.made, r.node)
+		resolvedFormat, resolvedStamp := appconfig.CameraNodeSettings(app.entitlements, r.cameraPath, r.cameraName)
+		diagnosis := fmt.Sprintf("entitlements passed: %+v\nsettings they resolve to for %q at %s: %s\nshare record: %+v\nagent log: %q",
+			app.entitlements, r.cameraName, r.cameraPath, describeShareSettings(resolvedFormat, resolvedStamp), r, shareLogLines(fx.logs, app.id))
 		if r.askedFormat == app.format {
 			if os.Getenv("WENDY_GSTREAMER_REQUIRED") == "1" {
-				t.Fatalf("required: a %s node: %s", app.format, r.askedWhyNot)
+				t.Fatalf("required: a %s node: %s\n%s", app.format, r.askedWhyNot, diagnosis)
 			}
 			t.Skipf("this device serves pixels for %s: %s", app.format, r.askedWhyNot)
 		}
 		if r.mode.Format != app.format || r.stamp != app.stamp || r.mode.pixelFormat() != app.pixelFormat ||
 			r.mode.Width != pixelsFixtureWidth || r.mode.Height != pixelsFixtureHeight {
-			t.Fatalf("%s shares at %s, want %dx%d %s as %s", app.id, describeShareNode(r.mode, r.stamp),
-				pixelsFixtureWidth, pixelsFixtureHeight, fourccName(app.pixelFormat), describeShareSettings(app.format, app.stamp))
+			t.Fatalf("%s shares at %s, want %dx%d %s as %s\n%s", app.id, describeShareNode(r.mode, r.stamp),
+				pixelsFixtureWidth, pixelsFixtureHeight, fourccName(app.pixelFormat), describeShareSettings(app.format, app.stamp), diagnosis)
 		}
 		node := shareNodePath(r.node)
 		probe := openShareTestReader(t, node)
@@ -265,8 +269,8 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 		probe.close()
 		if got.Width != pixelsFixtureWidth || got.Height != pixelsFixtureHeight || got.PixelFormat != app.pixelFormat ||
 			got.SizeImage == 0 || got.SizeImage != uint32(r.mode.bufferBytes()) {
-			t.Fatalf("G_FMT(CAPTURE) on %s = %dx%d %s, image of %d bytes; want %s with the %d bytes the share holds as its largest frame", node,
-				got.Width, got.Height, fourccName(got.PixelFormat), got.SizeImage, r.mode, r.mode.bufferBytes())
+			t.Fatalf("G_FMT(CAPTURE) on %s = %dx%d %s, image of %d bytes; want %s with the %d bytes the share holds as its largest frame\n%s", node,
+				got.Width, got.Height, fourccName(got.PixelFormat), got.SizeImage, r.mode, r.mode.bufferBytes(), diagnosis)
 		}
 		t.Logf("%s shares %s through %s at %s", app.id, path, node, describeShareNode(r.mode, r.stamp))
 		readers[app.id] = openShareAppReader(t, node)
@@ -284,8 +288,9 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 		for len(frames) < wantFrames {
 			frame, stamp, err := readers[id].next(ctx, 15*time.Second)
 			if err != nil {
-				t.Fatalf("%s: frame %d: %v; share state: %s; feed: %v", id, len(frames), err,
-					svc.CameraShareReport(ctx)[path][camerashare.KeyState], fx.feed.err())
+				record, _ := shareRecordOf(svc, id)
+				t.Fatalf("%s: frame %d: %v; share state: %s; feed: %v\nshare record: %+v\nagent log: %q", id, len(frames), err,
+					svc.CameraShareReport(ctx)[path][camerashare.KeyState], fx.feed.err(), record, shareLogLines(fx.logs, id))
 			}
 			frames, stamps = append(frames, frame), append(stamps, stamp)
 		}
@@ -537,15 +542,39 @@ func requireShareCaptureFixture(t *testing.T) {
 }
 
 // shareRecordOf returns the one share record a container holds.
-func shareRecordOf(svc *VideoService, containerID string) (shareRecord, bool) {
+func shareRecordOf(svc *VideoService, containerID string) (shareRecordCopy, bool) {
 	svc.shares.mu.Lock()
 	defer svc.shares.mu.Unlock()
 	c := svc.shares.containers[containerID]
 	if c == nil || len(c.shares) != 1 {
-		return shareRecord{}, false
+		return shareRecordCopy{}, false
 	}
 	r := c.shares[0]
-	return shareRecord{cameraName: r.cameraName, cameraPath: r.cameraPath, mode: r.mode, node: r.node}, true
+	return shareRecordCopy{cameraName: r.cameraName, cameraPath: r.cameraPath, mode: r.mode, stamp: r.stamp,
+		askedFormat: r.askedFormat, askedWhyNot: r.askedWhyNot, node: r.node}, true
+}
+
+// shareRecordCopy is what shareRecordOf copies out of a share record under its
+// lock. It is a type of its own so that a field not copied cannot be read as
+// an empty one.
+type shareRecordCopy struct {
+	cameraName, cameraPath   string
+	mode                     sharedMode
+	stamp                    string
+	askedFormat, askedWhyNot string
+	node                     int
+}
+
+// shareLogLines is every camera share line the agent logged that names the
+// container.
+func shareLogLines(logs *observer.ObservedLogs, containerID string) []string {
+	var lines []string
+	for _, entry := range logs.All() {
+		if strings.HasPrefix(entry.Message, "camera share: ") && strings.Contains(entry.Message, containerID) {
+			lines = append(lines, entry.Message)
+		}
+	}
+	return lines
 }
 
 // shareRefusalReason is the reason CreateCameraShares logged for giving a
