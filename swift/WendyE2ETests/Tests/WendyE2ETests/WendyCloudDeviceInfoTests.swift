@@ -191,7 +191,8 @@ struct `'wendy cloud device info'` {
     /**
      An unauthenticated Cloud command cannot use a saved LAN default. Explicit
      UUIDs, whitespace, and absent selectors all require Cloud login first, with
-     no device tunnel, LAN connection or copied live credentials.
+     no device tunnel, LAN connection or copied live credentials. A legacy default
+     emits its migration notice only when no explicit selector is supplied.
      */
     @Test
     func `requires Cloud credentials even with a saved LAN default`() async throws {
@@ -218,7 +219,9 @@ struct `'wendy cloud device info'` {
                     result,
                     code: "auth_required",
                     exit: 3,
-                    message: "not logged in"
+                    message: "not logged in",
+                    precedingLines: selector.isEmpty
+                        ? [LocalCLIAssertions.legacyDefaultDeviceNotice] : []
                 )
                 #expect(result.readableStderr.contains("wendy auth login"))
                 try await LocalCLIAssertions.unchanged(cli)
