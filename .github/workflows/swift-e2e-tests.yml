@@ -55,10 +55,11 @@ jobs:
     permissions:
       contents: read
       actions: read
-    name: 'Local: macOS 26'
+    name: 'Local: macOS 27'
     # Re-enable once Joannis sets up self-hosted Mac runners.
     if: false
-    runs-on: macos-26
+    # The xcode-27 image reports macOS 27; there is no macos-27 hosted label.
+    runs-on: xcode-27
     concurrency:
       group: device-local-macos-hosted
       cancel-in-progress: false
@@ -97,7 +98,7 @@ jobs:
         with:
           tests: ${{ inputs.tests || '' }}
           target_id: local-macos
-          runner_id: macos-26
+          runner_id: xcode-27
           cli_os: macOS
           device_address: 127.0.0.1:50051
           agent_os: macOS
@@ -174,7 +175,11 @@ jobs:
           echo "::error title=Workflow audit failed::See the 'Audit workflow trust boundaries' step. This run's E2E results are unaffected."
           exit 1
 
-  # Physical/future route ledger.
+  # Physical/future route ledger: intended OS targets are Ubuntu 26.04 LTS,
+  # macOS 27 and Windows 11 26H2. These are not provisioning claims.
+  # Local Ubuntu stays on 24.04; the 26.04 setup migration is deferred.
+  # TODO(CI): provision/verify those OS versions before enabling routes; keep
+  # registered self-hosted selectors, device variables and resource locks until then.
   # Keep disabled routes close to the hosted local jobs so re-enabling a route is
   # a small uncomment-and-add-to-analysis-needs change while runner labels stay explicit.
   # Physical routes are gated by target agent OS: Linux/WendyOS targets depend on
@@ -185,7 +190,7 @@ jobs:
   # // (`no route to host`). Re-enable after WDY-1519 adds IPv4 fallback
   # // preflight hardening.
   # swift-e2e-physical-macos-ubuntu:
-  #   name: macOS 26 → Ubuntu 24
+  #   name: macOS 27 → Ubuntu 26.04 LTS
   #   needs: swift-e2e-local-ubuntu
   #   if: ${{ inputs.target_group == '' || inputs.target_group == 'all' }}
   #   runs-on: [self-hosted, macOS, ARM64, wendy-macos-26]
@@ -199,7 +204,7 @@ jobs:
   #     - uses: ./.github/actions/swift-e2e-run
   #       with:
   #         tests: ${{ inputs.tests || '' }}
-  #         target_id: macos-ubuntu-24
+  #         target_id: macos-ubuntu-26-04
   #         runner_id: wendy-macos-26
   #         cli_os: macOS
   #         device_address: ${{ vars.SWIFT_E2E_UBUNTU_24_DEVICE_ADDRESS }}
@@ -211,7 +216,7 @@ jobs:
   # // DISABLED: WDY-1559 Jetson preflight is timing out; restore after investigation.
   # // https://linear.app/wendylabsinc/issue/WDY-1559/investigate-jetson-orin-nano-swift-e2e-preflight-timeout
   # swift-e2e-physical-macos-jetson:
-  #   name: macOS 26 → Jetson Orin Nano
+  #   name: macOS 27 → Jetson Orin Nano
   #   needs: swift-e2e-local-ubuntu
   #   if: ${{ inputs.target_group == '' || inputs.target_group == 'all' }}
   #   runs-on: [self-hosted, macOS, ARM64, wendy-macos-26]
@@ -236,7 +241,7 @@ jobs:
 
   # // DISABLED: no CI hardware set up yet for this job.
   # swift-e2e-physical-windows-ubuntu:
-  #   name: Windows 11 → Ubuntu 24
+  #   name: Windows 11 → Ubuntu 26.04 LTS
   #   needs: swift-e2e-local-ubuntu
   #   if: ${{ inputs.target_group == '' || inputs.target_group == 'all' }}
   #   runs-on: [self-hosted, windows-11]
@@ -250,7 +255,7 @@ jobs:
   #     - uses: ./.github/actions/swift-e2e-run
   #       with:
   #         tests: ${{ inputs.tests || '' }}
-  #         target_id: windows-ubuntu-24
+  #         target_id: windows-ubuntu-26-04
   #         runner_id: windows-11
   #         cli_os: windows
   #         device_address: wendy-SER9.local
@@ -261,7 +266,7 @@ jobs:
   #
   # // DISABLED: no CI hardware set up yet for this job.
   # swift-e2e-physical-ubuntu-ubuntu:
-  #   name: Ubuntu 24 → Ubuntu 24
+  #   name: Ubuntu 26.04 LTS → Ubuntu 26.04 LTS
   #   needs: swift-e2e-local-ubuntu
   #   if: ${{ inputs.target_group == '' || inputs.target_group == 'all' }}
   #   runs-on: [self-hosted, ubuntu-24]
@@ -275,7 +280,7 @@ jobs:
   #     - uses: ./.github/actions/swift-e2e-run
   #       with:
   #         tests: ${{ inputs.tests || '' }}
-  #         target_id: ubuntu-ubuntu-24
+  #         target_id: ubuntu-ubuntu-26-04
   #         runner_id: ubuntu-24-04
   #         cli_os: linux
   #         device_address: wendy-SER9.local
@@ -286,7 +291,7 @@ jobs:
   #
   # // DISABLED: no CI hardware set up yet for this job.
   # swift-e2e-physical-ubuntu-raspberry-pi:
-  #   name: Ubuntu 24 → Raspberry Pi 5
+  #   name: Ubuntu 26.04 LTS → Raspberry Pi 5
   #   needs: swift-e2e-local-ubuntu
   #   if: ${{ inputs.target_group == '' || inputs.target_group == 'all' }}
   #   runs-on: [self-hosted, ubuntu-24]
@@ -336,7 +341,7 @@ jobs:
   #
   # // DISABLED: no CI hardware set up yet for this job.
   # swift-e2e-physical-ubuntu-jetson:
-  #   name: Ubuntu 24 → Jetson Orin Nano
+  #   name: Ubuntu 26.04 LTS → Jetson Orin Nano
   #   needs: swift-e2e-local-ubuntu
   #   if: ${{ inputs.target_group == '' || inputs.target_group == 'all' }}
   #   runs-on: [self-hosted, ubuntu-24]
@@ -386,7 +391,7 @@ jobs:
   #
   # // DISABLED: no CI hardware set up yet for this job.
   # swift-e2e-physical-macos-mac-mini:
-  #   name: macOS 26 → Mac mini
+  #   name: macOS 27 → Mac mini
   #   needs: swift-e2e-local-macos
   #   if: ${{ inputs.target_group == '' || inputs.target_group == 'all' }}
   #   runs-on: [self-hosted, macOS, ARM64, wendy-macos-26]
@@ -436,7 +441,7 @@ jobs:
   #
   # // DISABLED: no CI hardware set up yet for this job.
   # swift-e2e-physical-macos-raspberry-pi:
-  #   name: macOS 26 → Raspberry Pi 5
+  #   name: macOS 27 → Raspberry Pi 5
   #   needs: swift-e2e-local-ubuntu
   #   if: ${{ inputs.target_group == '' || inputs.target_group == 'all' }}
   #   runs-on: [self-hosted, macOS, ARM64, wendy-macos-26]
@@ -461,7 +466,7 @@ jobs:
   #
   # // DISABLED: no CI hardware set up yet for this job.
   # swift-e2e-physical-ubuntu-mac-mini:
-  #   name: Ubuntu 24 → Mac mini
+  #   name: Ubuntu 26.04 LTS → Mac mini
   #   needs: swift-e2e-local-macos
   #   if: ${{ inputs.target_group == '' || inputs.target_group == 'all' }}
   #   runs-on: [self-hosted, ubuntu-24]
