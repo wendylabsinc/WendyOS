@@ -1249,7 +1249,11 @@ type VideoService struct {
 	// stored control even when the write fails -- must be testable without one.
 	controlDefaultsFor func(path string, names []string) (map[string]int32, error)
 
-	derivedFailures derivedLayerFailures
+	// derivedFailures holds, by camera path, why the derived layer gave its
+	// frames up; sourceRefusals, by camera and native source, why a capture
+	// from that source handed nothing on.
+	derivedFailures captureFailures
+	sourceRefusals  captureFailures
 
 	// captureV4L2 replaces captureV4L2Native, so the choice between capture
 	// paths is testable without a /dev/video node.

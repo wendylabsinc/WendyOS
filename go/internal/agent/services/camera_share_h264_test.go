@@ -5,11 +5,15 @@ package services
 // picture can be made the node serves the camera's H.264 and says so.
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -67,15 +71,17 @@ func TestShareDecision_H264CameraWithADecoderIsDeclaredInEveryFormat(t *testing.
 		if d != (shareDecision{Shared: true, Mode: want}) {
 			t.Errorf("%s: decision = %+v, want %+v as asked", format, d, want)
 		}
-		if d.Mode.pixelFormat() == 0 || d.Mode.bufferBytes() <= 0 {
-			t.Errorf("%s: no node can declare %+v", format, d.Mode)
+		wantPixelFormat, wantBufferBytes := uint32(v4l2PixFmtH264), maxFrameBytes
+		if format == appconfig.CameraFormatPixels {
+			wantPixelFormat, wantBufferBytes = v4l2PixFmtYUYV, 1280*2*720
+		}
+		if d.Mode.pixelFormat() != wantPixelFormat || d.Mode.bufferBytes() != wantBufferBytes {
+			t.Errorf("%s: the decided mode declares %#x with %d-byte buffers, want %#x with %d", format,
+				d.Mode.pixelFormat(), d.Mode.bufferBytes(), wantPixelFormat, wantBufferBytes)
 		}
 	}
 	if want := (rateQuery{v4l2PixFmtH264, 1280, 720}); latestRateQuery() != want {
 		t.Errorf("rate query = %+v, want the H.264 capture's size, %+v", latestRateQuery(), want)
-	}
-	if hcNativeMode.pixelFormat() != v4l2PixFmtH264 || hcNativeMode.bufferBytes() != maxFrameBytes {
-		t.Errorf("the native node declares %#x with %d-byte buffers", hcNativeMode.pixelFormat(), hcNativeMode.bufferBytes())
 	}
 }
 
@@ -108,9 +114,9 @@ func TestShareDecision_H264CameraWithoutPicturesServesItsOwnFramesAndSaysWhy(t *
 		"decoding failed recently": {
 			func(t *testing.T) *VideoService {
 				s := hcService(t, "avdec_h264")
-				s.derivedFailures.remember(usbCam().GetPath(), "the decoder gave no picture")
+				s.derivedFailures.remember(usbCam().GetPath(), "the decoder gave no picture", false)
 				return s
-			}, hcNativeMode, "decoding this camera's frames failed recently: the decoder gave no picture",
+			}, hcNativeMode, "decoding this camera's frames failed: the decoder gave no picture",
 		},
 	}
 	for name, tc := range cases {
@@ -306,25 +312,193 @@ func TestSharePump_AnH264CamerasOwnFramesStartOnARandomAccessFrameWithEitherStam
 }
 
 func TestShareNodeWriter_AnH264CamerasNodeDeclaresH264AtItsCaptureSize(t *testing.T) {
-	for _, mode := range []sharedMode{hcNativeMode, hcH264Mode} {
-		w, queued := sfWriter(mode)
+	s := hcService(t, "avdec_h264")
+	stopAtBuffers := errors.New("stop before the buffers")
+	for _, format := range []string{appconfig.CameraFormatNative, appconfig.CameraFormatH264} {
+		decision := s.shareDecisionFor(context.Background(), usbCam(), format)
+		var asked v4l2Format
+		var queued []v4l2Buf
+		w := &shareNodeWriter{mode: decision.Mode, path: "/dev/video255", fd: -1, wakeR: -1, wakeW: -1, done: closedChan()}
+		w.ioctlFn = func(req uintptr, arg unsafe.Pointer) error {
+			switch req {
+			case vidiocSFmt:
+				asked = *(*v4l2Format)(arg)
+			case vidiocReqbufs:
+				return stopAtBuffers
+			case vidiocQbuf:
+				queued = append(queued, *(*v4l2Buf)(arg))
+			}
+			return nil
+		}
+		if err := w.configure(); !errors.Is(err, stopAtBuffers) {
+			t.Fatalf("%s: the node refused the decided mode: %v", format, err)
+		}
+		if asked.Type != v4l2BufTypeVideoOutput || asked.PixelFormat != v4l2PixFmtH264 || asked.Width != 1280 || asked.Height != 720 || asked.SizeImage != maxFrameBytes {
+			t.Errorf("%s: the node was asked for %dx%d %s with an image of %d bytes, want 1280x720 H264 with %d",
+				format, asked.Width, asked.Height, fourccName(asked.PixelFormat), asked.SizeImage, maxFrameBytes)
+		}
+
+		w.buffers = [][]byte{make([]byte, maxFrameBytes), make([]byte, maxFrameBytes)}
 		unit := hcOwnFrame(9, true, 1)
 		for i, stamp := range []shareFrameStamp{stampWithCaptureTime(12_000_000_000), stampWithSampleID(9)} {
 			if err := w.WriteFrame(unit.data, stamp); err != nil {
-				t.Fatalf("%s: %v", mode.Format, err)
+				t.Fatalf("%s: %v", format, err)
 			}
-			if got := (*queued)[i].bytesUsed(); int(got) != len(unit.data) {
-				t.Errorf("%s: buffer holds %d bytes, want the access unit's %d", mode.Format, got, len(unit.data))
+			if got := queued[i].bytesUsed(); int(got) != len(unit.data) || !bytes.Equal(w.buffers[i][:got], unit.data) {
+				t.Errorf("%s: buffer %d holds %d bytes, want the whole %d-byte access unit", format, i, got, len(unit.data))
 			}
 		}
-		if sec, usec := sfBufferTimeval(&(*queued)[0]); sec != 12 || usec != 0 {
-			t.Errorf("%s: capture time stamped as %d s %d µs", mode.Format, sec, usec)
+		if sec, usec := sfBufferTimeval(&queued[0]); sec != 12 || usec != 0 {
+			t.Errorf("%s: capture time stamped as %d s %d µs", format, sec, usec)
 		}
-		if sec, usec := sfBufferTimeval(&(*queued)[1]); sec != 0 || usec != 9 {
-			t.Errorf("%s: sample ID stamped as %d s %d µs", mode.Format, sec, usec)
+		if sec, usec := sfBufferTimeval(&queued[1]); sec != 0 || usec != 9 {
+			t.Errorf("%s: sample ID stamped as %d s %d µs", format, sec, usec)
 		}
-		if mode.pixelFormat() != v4l2PixFmtH264 || !strings.Contains(mode.String(), "1280x720 H264, 30 fps") {
-			t.Errorf("%s: node declares %s as %#x", mode.Format, mode, mode.pixelFormat())
-		}
+	}
+}
+
+// A node keeps the mode it was made with. When the pictures of a camera stop
+// at run time, its picture node holds "cannot serve" with what to do about it,
+// the camera is not started again for it, and the next container created gets
+// the camera's own frames with the reason.
+func TestCameraShares_PicturesGivenUpAtRunTimeHoldCannotServeAndTheNextCreateServesNative(t *testing.T) {
+	for name, tc := range map[string]struct {
+		gaveUp       derivedLayerGaveUp
+		afterAWindow sharedMode
+	}{
+		// The stream is the camera's: asking again later meets it again.
+		"a stream the decoder reorders":   {derivedLayerGaveUp{msg: errDerivedFramesReordered.Error(), lasting: true}, hcNativeMode},
+		"a decoder that produced nothing": {derivedLayerGaveUp{msg: "the pipeline took frames and produced no usable one for 10s"}, hcPixelsMode},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sfRecheckEvery(t, 5*time.Millisecond)
+			h := newCSHarness(t, csH264Cam())
+			hcCanDecode(h.s, "avdec_h264")
+			now := time.Unix(1_700_000_000, 0)
+			h.s.derivedFailures.now = func() time.Time { return now }
+			fp := installFakeProducers(h.s)
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
+			records := h.records("cv-a")
+			if len(records) != 1 || records[0].mode != hcPixelsMode {
+				t.Fatalf("records = %+v, want a picture node; logs: %v", records, h.logs.All())
+			}
+			node := records[0].io.(*csNode)
+			node.send(t, 1)
+			if !csWaitFor(2*time.Second, func() bool { return fp.count() == 1 }) {
+				t.Fatalf("the camera did not start; logs: %v", h.logs.All())
+			}
+			hub := fp.hub(0)
+			hub.broadcast(sfDerivedPicture(1, 1_000_000_000))
+			node.next(t)
+
+			// What captureDeriving does when the camera's picture layer gives up.
+			h.s.derivedFailures.remember("/dev/video2", tc.gaveUp.msg, tc.gaveUp.lasting)
+			hub.rawNotOffered(fixedReason("pictures cannot be decoded from this camera's frames: " + tc.gaveUp.msg))
+
+			whyNoPictures := "decoding this camera's frames failed: " + tc.gaveUp.msg
+			want := "cv-a [format pixels, stamp time] (cannot serve: " + fmt.Sprintf(picturesNotMade, whyNoPictures) + ")"
+			if !csWaitFor(2*time.Second, func() bool { return h.reportOf("/dev/video2")["share_state"] == want }) {
+				t.Fatalf("share_state = %q\nwant         %q", h.reportOf("/dev/video2")["share_state"], want)
+			}
+			time.Sleep(60 * time.Millisecond) // a dozen rechecks
+			if got := h.reportOf("/dev/video2")["share_state"]; got != want || fp.count() != 1 {
+				t.Fatalf("after the rechecks: share_state = %q, the camera started %d times; want the same state and one start", got, fp.count())
+			}
+			if n := h.logged("camera share: cv-a: Logi H264 cannot serve its node"); n != 1 {
+				t.Errorf("cannot-serve line logged %d times, want 1; logs: %v", n, h.logs.All())
+			}
+			node.noWriteWithin(t, 20*time.Millisecond)
+
+			h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b", nil)
+			next := h.records("cv-b")
+			if len(next) != 1 || next[0].mode != hcNativeMode || next[0].askedFormat != appconfig.CameraFormatPixels || next[0].askedWhyNot != whyNoPictures {
+				t.Fatalf("the next container's record = %+v, want the camera's H.264 served for pixels because %q", next, whyNoPictures)
+			}
+			said := "asked for pixels; serving native because " + whyNoPictures
+			if state := h.reportOf("/dev/video2")["share_state"]; !strings.Contains(state, "cv-b [format native, stamp time] (idle; "+said+")") {
+				t.Errorf("share_state = %q, want cv-b's node to say %q", state, said)
+			}
+
+			now = now.Add(captureFailureRetryAfter + time.Second)
+			h.s.CreateCameraShares(context.Background(), "cv-c", "sh.wendy.cv-c", nil)
+			if later := h.records("cv-c"); len(later) != 1 || later[0].mode != tc.afterAWindow {
+				t.Fatalf("after %s the next container's record = %+v, want %+v", captureFailureRetryAfter, later, tc.afterAWindow)
+			}
+		})
+	}
+}
+
+func (n *csNode) noWriteWithin(t *testing.T, d time.Duration) {
+	t.Helper()
+	select {
+	case e := <-n.events:
+		t.Fatalf("a frame was written to the node: %+v", e)
+	case <-time.After(d):
+	}
+}
+
+// The camera's listing says H.264, the capture finds out it delivers none and
+// goes on to the next source. The policy and the nodes go by what the capture
+// found, not by the listing.
+func TestCameraShares_ASourceTheCameraRefusedAtCaptureIsNotDeclaredAgain(t *testing.T) {
+	sfRecheckEvery(t, 5*time.Millisecond)
+	h := newCSHarness(t, csH264Cam())
+	h.s.gstMemo.available = map[string]bool{"gdpdepay": true, "gdppay": true, "h264parse": true, "avdec_h264": true, "jpegdec": true, "x264enc": true}
+	fp := installFakeProducers(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, "")})
+	h.s.CreateCameraShares(context.Background(), "cv-p", "sh.wendy.cv-p", nil)
+	listed, pictures := h.records("cv-a"), h.records("cv-p")
+	if len(listed) != 1 || listed[0].mode != hcNativeMode || len(pictures) != 1 || pictures[0].mode != hcPixelsMode {
+		t.Fatalf("records = %+v and %+v, want an H.264 node and a picture node from the listing", listed, pictures)
+	}
+
+	// What captureNatively does when the H.264 source gives way.
+	const refusal = "VIDIOC_S_FMT H264 rejected: invalid argument"
+	h.s.sourceRefusals.remember(sourceRefusalKey("/dev/video2", "H.264"), refusal, false)
+
+	if own, declined, native := h.s.ownFramesAtDefaults("/dev/video2"); declined != "" || !native || own.codec != videoCodecMJPEG {
+		t.Fatalf("own frames = %+v (declined %q, native %v), want the JPEG source's", own, declined, native)
+	}
+	listed[0].io.(*csNode).send(t, 1)
+	want := "cv-a [format native, stamp time] (cannot serve: " + fmt.Sprintf(nodeModeNotDelivered, "JPEG", "1280x720 H264, 30 fps") + ")"
+	if !csWaitFor(2*time.Second, func() bool { return strings.Contains(h.reportOf("/dev/video2")["share_state"], want) }) {
+		t.Fatalf("share_state = %q\nwant it to hold %q", h.reportOf("/dev/video2")["share_state"], want)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if fp.count() != 0 {
+		t.Fatalf("the camera was started %d times for a node it cannot serve", fp.count())
+	}
+	// Pictures are pictures whichever source they are decoded from.
+	if reason := h.s.shareUnserved(pictures[0]); reason != "" {
+		t.Errorf("the picture node is unserved: %s", reason)
+	}
+
+	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, "")})
+	if next := h.records("cv-b"); len(next) != 1 || next[0].mode != sfNativeMode || next[0].askedFormat != "" {
+		t.Fatalf("the next container's record = %+v, want the JPEG frames the camera delivers", next)
+	}
+}
+
+func TestCameraShareState_NamesTheDecoderOfAPictureNodesPictures(t *testing.T) {
+	h := newCSHarness(t, csH264Cam())
+	hcCanDecode(h.s, "avdec_h264")
+	fp := installFakeProducers(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
+	h.s.CreateCameraShares(context.Background(), "cv-n", "sh.wendy.cv-n", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, "")})
+	for _, id := range []string{"cv-a", "cv-n"} {
+		h.records(id)[0].io.(*csNode).send(t, 1)
+	}
+	if !csWaitFor(2*time.Second, func() bool { return fp.count() == 1 && hubSubscriberCount(fp.hub(0)) == 2 }) {
+		t.Fatalf("the camera did not start for both nodes; logs: %v", h.logs.All())
+	}
+	layer, whyNot := h.s.pictureLayerFor(fp.hub(0), "/dev/video2", ownFrames{codec: agentpb.VideoCodec_VIDEO_CODEC_H264, width: 1280, height: 720, framerate: 30})
+	if layer == nil {
+		t.Fatal(whyNot)
+	}
+	defer fp.hub(0).feedDerivedLayer(layer)()
+
+	want := "cv-a [format pixels, stamp time] (reading; pictures decoded by avdec_h264), cv-n [format native, stamp time] (reading)"
+	if !csWaitFor(2*time.Second, func() bool { return h.reportOf("/dev/video2")["share_state"] == want }) {
+		t.Fatalf("share_state = %q\nwant         %q", h.reportOf("/dev/video2")["share_state"], want)
 	}
 }

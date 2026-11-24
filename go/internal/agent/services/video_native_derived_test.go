@@ -309,8 +309,8 @@ func TestCaptureLocalCamera_ALayerThatGivesUpFallsBackToGStreamerAndIsRemembered
 	if straight := launched[len(launched)-1]; !strings.Contains(straight, "v4l2src device=/dev/video4") {
 		t.Fatalf("a later hub paid for the layer's failure again: %q", straight)
 	}
-	if asked := later.v4l2.formatsAsked(); !reflect.DeepEqual(asked, []uint32{v4l2PixFmtH264}) {
-		t.Errorf("a later hub asked the camera for %v, want H.264 alone: JPEG capture must not be tried again yet", asked)
+	if asked := later.v4l2.formatsAsked(); len(asked) != 0 {
+		t.Errorf("a later hub asked the camera for %v, want nothing: the sources that handed nothing on are not tried again yet", asked)
 	}
 }
 
@@ -337,24 +337,24 @@ func TestNativeJPEGSource_ALayerThatGaveUpAfterPublishingEndsTheCaptureInstead(t
 
 func TestDerivedLayerFailures_AreForgottenAfterABoundedTime(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	failures := derivedLayerFailures{now: func() time.Time { return now }}
+	failures := captureFailures{now: func() time.Time { return now }}
 	if _, failed := failures.recent("/dev/video4"); failed {
 		t.Fatal("a camera with no failure is remembered as failed")
 	}
-	failures.remember("/dev/video4", "encoder produced nothing")
+	failures.remember("/dev/video4", "encoder produced nothing", false)
 	if why, failed := failures.recent("/dev/video4"); !failed || why != "encoder produced nothing" {
 		t.Fatalf("recent = %q, %v, want the remembered reason", why, failed)
 	}
 	if _, failed := failures.recent("/dev/video6"); failed {
 		t.Fatal("one camera's failure was charged to another")
 	}
-	now = now.Add(derivedLayerRetryAfter - time.Second)
+	now = now.Add(captureFailureRetryAfter - time.Second)
 	if _, failed := failures.recent("/dev/video4"); !failed {
 		t.Fatal("the failure was forgotten before its time")
 	}
 	now = now.Add(time.Second)
 	if _, failed := failures.recent("/dev/video4"); failed {
-		t.Fatalf("the failure is still remembered after %v", derivedLayerRetryAfter)
+		t.Fatalf("the failure is still remembered after %v", captureFailureRetryAfter)
 	}
 }
 
@@ -394,6 +394,81 @@ func TestCaptureNatively_TriesSourcesInOrderAndSaysWhyNoneDelivered(t *testing.T
 	why, err = (&VideoService{}).captureNatively(context.Background(), localCamera{})
 	if want := "first: no frame came; second: not for this camera"; why != want || err != nil {
 		t.Fatalf("captureNatively = %q, %v; want %q", why, err, want)
+	}
+}
+
+// A camera can list a format and refuse it at capture. What the capture found
+// is what the next capture and the share policy go by, for a bounded time.
+func TestCaptureNatively_ASourceThatHandedNothingOnIsNotAskedAgainForAWhile(t *testing.T) {
+	prev := nativeCaptureSources
+	t.Cleanup(func() { nativeCaptureSources = prev })
+	captures := map[string]int{}
+	source := func(format string, codec agentpb.VideoCodec, handsOn bool) nativeCaptureSource {
+		return nativeCaptureSource{format: format,
+			frames: func(*VideoService, string, *agentpb.StreamVideoRequest) (ownFrames, string, bool) {
+				return ownFrames{codec: codec, width: 640, height: 480, framerate: 30}, "", false
+			},
+			accept: func(*VideoService, localCamera) (func(context.Context) error, string) {
+				return func(context.Context) error {
+					captures[format]++
+					return nil
+				}, ""
+			},
+			gaveWay: func(*VideoService, localCamera, error) (string, bool) {
+				return "the camera refused it at capture", !handsOn
+			},
+		}
+	}
+	nativeCaptureSources = []nativeCaptureSource{
+		source("listed", agentpb.VideoCodec_VIDEO_CODEC_H264, false), source("delivered", videoCodecMJPEG, true),
+	}
+	now := time.Unix(1_700_000_000, 0)
+	svc := &VideoService{}
+	svc.sourceRefusals.now = func() time.Time { return now }
+	ownCodec := func(path string) agentpb.VideoCodec {
+		t.Helper()
+		own, declined, native := svc.ownFramesFor(path, &agentpb.StreamVideoRequest{})
+		if declined != "" || !native {
+			t.Fatalf("%s: own frames declined (%q), native %v", path, declined, native)
+		}
+		return own.codec
+	}
+
+	if codec := ownCodec("/dev/video4"); codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
+		t.Fatalf("before any capture the policy is told %v, want what the camera lists", codec)
+	}
+	for range 2 {
+		if why, err := svc.captureNatively(context.Background(), localCamera{path: "/dev/video4"}); why != "" || err != nil {
+			t.Fatalf("captureNatively = %q, %v, want the second source's capture", why, err)
+		}
+	}
+	if captures["listed"] != 1 || captures["delivered"] != 2 {
+		t.Fatalf("captures = %v, want the refusing source tried once and the other twice", captures)
+	}
+	if codec := ownCodec("/dev/video4"); codec != videoCodecMJPEG {
+		t.Errorf("after the refusal the policy is told %v, want what the capture delivers", codec)
+	}
+	if codec := ownCodec("/dev/video6"); codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
+		t.Errorf("another camera inherited the refusal: %v", codec)
+	}
+
+	now = now.Add(captureFailureRetryAfter + time.Second)
+	if codec := ownCodec("/dev/video4"); codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
+		t.Errorf("after %s the policy is told %v, want the listing again", captureFailureRetryAfter, codec)
+	}
+	if _, err := svc.captureNatively(context.Background(), localCamera{path: "/dev/video4"}); err != nil || captures["listed"] != 2 {
+		t.Errorf("after %s the refusing source was tried %d times in all, want 2 (%v)", captureFailureRetryAfter, captures["listed"], err)
+	}
+}
+
+func TestCaptureFailures_ALastingFailureOutlivesTheBoundedTime(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	failures := captureFailures{now: func() time.Time { return now }}
+	failures.remember("/dev/video4", "the stream has B frames", true)
+	failures.remember("/dev/video4", "a later decode failure", false)
+	now = now.Add(100 * captureFailureRetryAfter)
+	if why, failed := failures.recent("/dev/video4"); !failed || why != "the stream has B frames" {
+		t.Fatalf("recent = %q, %v, want the lasting failure kept", why, failed)
 	}
 }
 

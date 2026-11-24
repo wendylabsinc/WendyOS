@@ -228,7 +228,7 @@ func TestShareDecision_AFormatTheCameraCannotProvideIsServedAsPictures(t *testin
 			func(t *testing.T) *VideoService {
 				s := jpegCamera(t)
 				sfCanDeriveFrames(s)
-				s.derivedFailures.remember(usbCam().GetPath(), "the encoder gave no frame")
+				s.derivedFailures.remember(usbCam().GetPath(), "the encoder gave no frame", false)
 				return s
 			},
 			sfPixelsMode,
@@ -997,12 +997,12 @@ func TestSharePump_ACaptureThatCannotServeTheNodeIsLeftAndSaysWhy(t *testing.T) 
 		"VP8 on an h264 node": {
 			sfH264Mode, appconfig.CameraStampTime,
 			func(sub *spFakeSub) { sub.frames <- vp8 },
-			"camera frames are VP8, the node declares 1280x720 H264, 30 fps", sfH264Frame(9, true), shareFrameStamp{},
+			fmt.Sprintf(nodeModeNotDelivered, "VP8", "1280x720 H264, 30 fps"), sfH264Frame(9, true), shareFrameStamp{},
 		},
 		"the camera's own H.264 on a JPEG node": {
 			sfNativeMode, appconfig.CameraStampFrame,
 			func(sub *spFakeSub) { sub.frames <- ownH264 },
-			"camera frames are H.264, the node declares 1280x720 MJPG, 30 fps", sfJPEGFrame(9, 1), stampWithSampleID(9),
+			fmt.Sprintf(nodeModeNotDelivered, "H.264", "1280x720 MJPG, 30 fps"), sfJPEGFrame(9, 1), stampWithSampleID(9),
 		},
 		"the producer turns native subscribers away": {
 			sfNativeMode, appconfig.CameraStampFrame,

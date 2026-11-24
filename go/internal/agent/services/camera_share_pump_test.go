@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 	"sync"
@@ -342,37 +343,11 @@ func TestSharePump_SessionEndDoesNotPublishSyntheticFrames(t *testing.T) {
 	}
 }
 
-func TestSharePump_DropsFramesOfAnotherSize(t *testing.T) {
-	sub := newSpFakeSub()
-	j := newSpJoiner(spSubResult(sub))
-	h := startSharePump(t, j)
-
-	h.node.send(t, 1)
-	j.waitJoin(t)
-	for i := 0; i < 3; i++ {
-		sub.frames <- spFrame(1920, 1080, 3840, 1)
-	}
-	// A frame of the node's size marks the point where the others were seen.
-	sub.frames <- spModeFrame(uint64(time.Now().UnixNano()))
-	if e := h.node.next(t); e.kind != "frame" || e.size != spMode.frameBytes() {
-		t.Fatalf("first write = %+v, want the one matching frame", e)
-	}
-	h.stop()
-	if got := len(h.node.all()); got != 1 {
-		t.Fatalf("writes = %d, want 1 (the 1920x1080 frames dropped)", got)
-	}
-	if n := h.logged("camera frames are 1920x1080"); n != 1 {
-		t.Fatalf("mismatch log lines = %d, want 1", n)
-	}
-	if n := h.logged("the node declares 1280x720 YUYV, 30 fps; not writing them"); n != 1 {
-		t.Fatalf("mismatch line does not name the node mode (%d)", n)
-	}
-}
-
-// While every hub frame is dropped for being another mode, the app gets
-// nothing, and the state says so with both formats; a matching frame puts it
-// back to reading.
-func TestSharePump_DroppedFramesShowAsNoFrames(t *testing.T) {
+// A capture that delivers pictures of another layout than the node declares
+// cannot serve it: the pump leaves the capture and holds the reason, instead
+// of staying joined and dropping every frame.
+func TestSharePump_PicturesOfAnotherSizeAreAStableCannotServe(t *testing.T) {
+	sfRecheckEvery(t, time.Hour)
 	sub := newSpFakeSub()
 	j := newSpJoiner(spSubResult(sub))
 	h := startSharePump(t, j)
@@ -381,20 +356,16 @@ func TestSharePump_DroppedFramesShowAsNoFrames(t *testing.T) {
 	j.waitJoin(t)
 	h.waitState(t, shareReading)
 	sub.frames <- spFrame(640, 480, 1280, 1)
-	got := h.waitState(t, shareNoFrames)
-	if want := "camera frames are 640x480 YUYV (1280 bytes/line, 614400 bytes/frame), the node declares 1280x720 YUYV, 30 fps"; got.Detail != want {
-		t.Fatalf("state detail = %q, want %q", got.Detail, want)
+	want := shareState{Phase: shareCannotServe, Detail: fmt.Sprintf(nodeModeNotDelivered,
+		"640x480 YUYV (1280 bytes/line, 614400 bytes/frame)", "1280x720 YUYV, 30 fps")}
+	h.expectState(t, want)
+	spWithin(t, sub.left, spWait, "leaving a capture that cannot serve the node")
+	h.noWriteWithin(t, 50*time.Millisecond)
+	if n := j.count(); n != 1 {
+		t.Fatalf("the pump joined %d times, want once: a mismatch is not retried on the backoff", n)
 	}
-	sub.frames <- spFrame(640, 480, 1280, 2)
-	sub.frames <- spModeFrame(uint64(time.Now().UnixNano()))
-	if e := h.node.next(t); e.kind != "frame" {
-		t.Fatalf("first write = %+v, want the matching frame", e)
-	}
-	h.waitState(t, shareReading)
-	sub.frames <- spFrame(640, 480, 1280, 3)
-	h.waitState(t, shareNoFrames)
-	if n := h.logged("not writing them"); n != 1 {
-		t.Fatalf("mismatch lines = %d, want 1 per subscription", n)
+	if n := h.logged("cannot serve its node"); n != 1 {
+		t.Fatalf("cannot-serve log lines = %d, want 1", n)
 	}
 }
 
@@ -463,7 +434,8 @@ func TestSharePump_RetryStatesByError(t *testing.T) {
 		// A held camera that the agent read through PipeWire instead: the
 		// refusal's own wording blames PipeWire, but the cause is the holder.
 		{"held, read through PipeWire", pixelRefusal(fixedReason(pipeWireRawWhy), true), shareNoFrames, shareCameraHeldDetail},
-		{"no tap for another reason", pixelRefusal(fixedReason("camera streams H.264 natively; raw frames are not offered"), false), shareNoFrames,
+		// A camera with no pictures at all is not a failure that passes.
+		{"no pictures", pixelRefusal(fixedReason("camera streams H.264 natively; raw frames are not offered"), false), shareCannotServe,
 			"camera offers no uncompressed frames: camera streams H.264 natively; raw frames are not offered"},
 		{"other", errors.New("boom"), shareNoFrames, "boom"},
 	}

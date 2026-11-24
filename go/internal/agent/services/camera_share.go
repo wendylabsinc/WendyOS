@@ -902,9 +902,15 @@ func (s *VideoService) attachSharePumpLocked(containerID string, r *shareRecord,
 	}
 }
 
-// A camera that is not plugged in gives "": the join says that.
+// shareUnserved is why the record's camera has no frames for its node, or "".
+// A camera that is not plugged in gives "": the join says that. The record is
+// resolved only before a refusal, which may be about a path its camera has
+// left; a join resolves it anyway.
 func (s *VideoService) shareUnserved(r *shareRecord) string {
-	if !nodeNeedsOwnFrames(r.mode, r.stamp) {
+	s.shares.mu.Lock()
+	path, absent := r.cameraPath, r.cameraAbsent
+	s.shares.mu.Unlock()
+	if absent || s.nodeUnservedAt(path, r.mode, r.stamp) == "" {
 		return ""
 	}
 	path, ok := s.currentSharePath(r)
@@ -3333,6 +3339,22 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 	return report
 }
 
+// pictureDecoderAt names the element that decodes the pictures of the camera
+// at path while its capture runs with a picture layer, so a picture paired
+// with the wrong frame on some hardware can be traced to its decoder.
+func (s *VideoService) pictureDecoderAt(path string) string {
+	s.mu.Lock()
+	hub := s.hubs[path]
+	s.mu.Unlock()
+	if hub == nil {
+		return ""
+	}
+	if layer := hub.derived.Load(); layer != nil && layer.pictures != nil {
+		return layer.decoder.element
+	}
+	return ""
+}
+
 // shareStatesOf returns the sorted IDs of the containers sharing the camera at
 // path and, in the same order,
 // "<id> [format <format>, stamp <stamp>] (<phase>[: <detail>][; <note>]...)"
@@ -3376,6 +3398,9 @@ func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
 			text = string(st.Phase)
 			if st.Detail != "" {
 				text += ": " + st.Detail
+			}
+			if decoder := s.pictureDecoderAt(path); decoder != "" && st.Phase == shareReading && formatCarriesPictures(sn.format) {
+				text += "; pictures decoded by " + decoder
 			}
 		}
 		if sn.modeNote != "" {

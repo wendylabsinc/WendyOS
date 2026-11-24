@@ -33,13 +33,6 @@ type ownFrames struct {
 	width, height, framerate uint32
 }
 
-func (f ownFrames) rateOr(fallback uint32) uint32 {
-	if f.framerate == 0 {
-		return fallback
-	}
-	return f.framerate
-}
-
 // nativeCaptureSource is one way to hand on a camera's own frames whole. A
 // camera type with a new native format is one more entry in
 // nativeCaptureSources, and a derivedTransform if its format has none.
@@ -63,6 +56,10 @@ var nativeCaptureSources = []nativeCaptureSource{nativeH264Source, nativeJPEGSou
 func (s *VideoService) captureNatively(ctx context.Context, cam localCamera) (whyNotNative string, err error) {
 	var reasons []string
 	for _, source := range nativeCaptureSources {
+		if why, refused := s.sourceRefusals.recent(sourceRefusalKey(cam.path, source.format)); refused {
+			reasons = append(reasons, source.format+": "+why)
+			continue
+		}
 		capture, declined := source.accept(s, cam)
 		if capture == nil {
 			reasons = append(reasons, source.format+": "+declined)
@@ -73,6 +70,9 @@ func (s *VideoService) captureNatively(ctx context.Context, cam localCamera) (wh
 		if !gaveWay {
 			return "", err
 		}
+		// What the camera lists is not what it delivers: the next capture and
+		// the share policy go by what happened here.
+		s.sourceRefusals.remember(sourceRefusalKey(cam.path, source.format), why, false)
 		reasons = append(reasons, source.format+": "+why)
 	}
 	return strings.Join(reasons, "; "), nil
@@ -84,6 +84,10 @@ func (s *VideoService) captureNatively(ctx context.Context, cam localCamera) (wh
 func (s *VideoService) ownFramesFor(path string, req *agentpb.StreamVideoRequest) (frames ownFrames, declined string, native bool) {
 	var reasons []string
 	for _, source := range nativeCaptureSources {
+		if why, refused := s.sourceRefusals.recent(sourceRefusalKey(path, source.format)); refused {
+			reasons = append(reasons, source.format+": "+why)
+			continue
+		}
 		frames, declined, passes := source.frames(s, path, req)
 		if declined == "" {
 			return frames, "", true
@@ -193,9 +197,9 @@ var nativeJPEGSource = nativeCaptureSource{
 		if !errors.As(err, &gaveUp) {
 			return "", false
 		}
-		s.derivedFailures.remember(cam.path, gaveUp.msg)
+		s.derivedFailures.remember(cam.path, gaveUp.msg, false)
 		s.logger.Error("derived frame pipeline is unusable for this camera; GStreamer captures it instead",
-			zap.String("device", cam.path), zap.Duration("retried_after", derivedLayerRetryAfter), zap.String("reason", gaveUp.msg))
+			zap.String("device", cam.path), zap.Duration("retried_after", captureFailureRetryAfter), zap.String("reason", gaveUp.msg))
 		// A capture that already published whole access units ends here instead:
 		// consumers read a stream's alignment off its first frame, and GStreamer's
 		// chunks may not follow whole units in one stream. The next hub starts on
@@ -204,48 +208,57 @@ var nativeJPEGSource = nativeCaptureSource{
 	},
 }
 
-const derivedLayerRetryAfter = 10 * time.Minute
+const captureFailureRetryAfter = 10 * time.Minute
 
-type derivedLayerFailures struct {
+// captureFailures remembers what failed for a camera, so the capture and the
+// share policy ask the same thing of it next time: for a bounded time, or
+// until the agent restarts when the cause is the camera's own stream.
+type captureFailures struct {
 	mu     sync.Mutex
-	failed map[string]derivedLayerFailure
+	failed map[string]captureFailure
 	now    func() time.Time
 }
 
-type derivedLayerFailure struct {
-	why   string
-	until time.Time
+type captureFailure struct {
+	why     string
+	until   time.Time
+	lasting bool
 }
 
-func (f *derivedLayerFailures) clock() time.Time {
+func (f *captureFailures) clock() time.Time {
 	if f.now != nil {
 		return f.now()
 	}
 	return time.Now()
 }
 
-func (f *derivedLayerFailures) remember(device, why string) {
+func (f *captureFailures) remember(key, why string, lasting bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failed == nil {
-		f.failed = make(map[string]derivedLayerFailure)
+		f.failed = make(map[string]captureFailure)
 	}
-	f.failed[device] = derivedLayerFailure{why: why, until: f.clock().Add(derivedLayerRetryAfter)}
+	if f.failed[key].lasting {
+		return
+	}
+	f.failed[key] = captureFailure{why: why, until: f.clock().Add(captureFailureRetryAfter), lasting: lasting}
 }
 
-func (f *derivedLayerFailures) recent(device string) (why string, failed bool) {
+func (f *captureFailures) recent(key string) (why string, failed bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	failure, known := f.failed[device]
+	failure, known := f.failed[key]
 	if !known {
 		return "", false
 	}
-	if !f.clock().Before(failure.until) {
-		delete(f.failed, device)
+	if !failure.lasting && !f.clock().Before(failure.until) {
+		delete(f.failed, key)
 		return "", false
 	}
 	return failure.why, true
 }
+
+func sourceRefusalKey(path, format string) string { return path + "\x00" + format }
 
 // derivedLayerFor builds the layer that derives from a camera's frames for hub.
 // Without a hub it only answers whether such a layer can be built here.
@@ -269,7 +282,7 @@ func (s *VideoService) derivedLayerFor(hub derivingHub, format agentpb.VideoCode
 // pictures.
 func (s *VideoService) pictureLayerFor(hub derivingHub, path string, frames ownFrames) (layer *derivedLayer, whyNot string) {
 	if why, failed := s.derivedFailures.recent(path); failed {
-		return nil, "decoding this camera's frames failed recently: " + why
+		return nil, "decoding this camera's frames failed: " + why
 	}
 	layer, err := s.derivedLayerFor(hub, frames.codec, path, frames.width, frames.height, frames.framerate)
 	if err != nil {
@@ -302,10 +315,12 @@ func (s *VideoService) captureDeriving(ctx context.Context, hub derivingHub, lay
 			layerGaveUp.Store(true)
 			stopCapture()
 		default:
-			s.derivedFailures.remember(layer.device, err.Error())
+			var gaveUp derivedLayerGaveUp
+			errors.As(err, &gaveUp)
+			s.derivedFailures.remember(layer.device, err.Error(), gaveUp.lasting)
 			hub.rawNotOffered(fixedReason("pictures cannot be decoded from this camera's frames: " + err.Error()))
 			s.logger.Error("pictures cannot be decoded from this camera's frames; its own frames are still handed on",
-				zap.String("device", layer.device), zap.Duration("retried_after", derivedLayerRetryAfter), zap.Error(err))
+				zap.String("device", layer.device), zap.Duration("retried_after", captureFailureRetryAfter), zap.Error(err))
 		}
 		layerEnded <- err
 	}()
