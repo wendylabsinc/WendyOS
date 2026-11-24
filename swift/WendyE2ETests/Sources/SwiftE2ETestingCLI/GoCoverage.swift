@@ -513,7 +513,15 @@ struct GoCoverage {
                     record["error"] as? String ?? "Incomplete collection: \(record["test"] ?? "")"
                 )
             }
-            guard let directory = record["directory"] as? String else { continue }
+            guard let directory = record["directory"] as? String else {
+                let error = "Missing collected test directory: \(record["test"] ?? "")"
+                errors.append(error)
+                record["status"] = "incomplete"
+                record["error"] = error
+                record["nativeValidated"] = false
+                records[index] = record
+                continue
+            }
             let test = try CoverageIO.evidence(directory, in: run)
             let native = test.appendingPathComponent("coverage/go")
             try CoverageIO.remove(test.appendingPathComponent("coverage/coverage.out"))
@@ -584,13 +592,12 @@ struct GoCoverage {
         result["status"] = !errors.isEmpty ? "incomplete" : statements > 0 ? "collected" : "no-data"
         result["errors"] = errors
         if !errors.isEmpty { try CoverageIO.remove(coverage.appendingPathComponent("index.html")) }
-        try CoverageIO.write(records, to: coverage.appendingPathComponent("tests.json"))
+        // tests.json is capture evidence; derived statuses belong in the summary.
         try CoverageIO.write(result, to: coverage.appendingPathComponent("summary.json"))
         let attempt = run.appendingPathComponent("attempt.json")
         if CoverageIO.exists(attempt) {
             var metadata = try CoverageIO.read(attempt)
             metadata["coverage"] = result.filter { $0.key != "tests" }
-            if !errors.isEmpty && metadata["exitStatus"] as? Int == 0 { metadata["exitStatus"] = 1 }
             try CoverageIO.write(metadata, to: attempt)
         }
         for error in errors {

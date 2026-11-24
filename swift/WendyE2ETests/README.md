@@ -153,8 +153,11 @@ swift run swift-e2e-testing report --run-dir /path/to/runs/swift-e2e-tests.RUN
 source totals, and computes one consolidated native
 source union with standard Go covdata `-pcombine`; it never averages percentages.
 It verifies source identities, immutable revisions and linked file/package scopes
-before combining attempts. Incompatible evidence is incomplete, not a smaller
-successful denominator. The run's `coverage/summary.json` saves totals and scope;
+before combining attempts. Capture records and execution exit status remain
+unchanged by derivation, so restoring matching source/evidence permits a clean
+retry. Derived participant states are saved in summaries and test coverage
+metadata. Incompatible evidence is incomplete, not a smaller successful
+denominator. The run's `coverage/summary.json` saves totals and scope;
 `coverage/coverage.out` is its one overall profile. Generated Go files and test-only
 hooks are excluded by file from derived handwritten-source totals. Native data
 remains lossless. Non-Go and unlinked source are outside the overall build scope.
@@ -213,9 +216,10 @@ repository’s `go/internal/testfixture/` test helpers, generated files (header 
 hooks are excluded. Production `go/` paths such as simulator code remain eligible.
 Changed eligible files absent from the measured build are explicitly incomplete;
 no eligible blocks means **Not applicable**, never 100%. Wrong revisions or an
-unresolvable range produce an unavailable comparison, without thresholds or test
-selection changes. This intentional approximation replaces the old token-based
-metric; results need not equal that metric.
+unresolvable range produce an unavailable comparison and a stderr warning,
+without failing otherwise valid aggregation or changing test outcomes. This
+intentional approximation replaces the old token-based metric; results need not
+equal that metric.
 
 The existing reference parser compares suite/test identities and bounded
 attribute/declaration content. Aggregate saves **Added**, **Changed**, and

@@ -112,9 +112,7 @@ struct AggregateCoverageAttempt {
             _ = try GoCoverage(repo: repo, run: workspace).deriveAttempt()
             source = provenance
             result = try CoverageIO.read(workspace.appendingPathComponent("coverage/summary.json"))
-            let derived = try CoverageIO.records(
-                workspace.appendingPathComponent("coverage/tests.json")
-            )
+            let derived = result["tests"] as! [[String: Any]]
             var natives: [URL] = []
             for record in derived {
                 guard let directory = record["directory"] as? String else { continue }
@@ -133,7 +131,7 @@ struct AggregateCoverageAttempt {
                 }
             }
             self.natives = natives
-            for name in ["coverage/tests.json", "coverage/summary.json", "attempt.json"] {
+            for name in ["coverage/summary.json", "attempt.json"] {
                 try CoverageIO.write(
                     try JSONSerialization.jsonObject(
                         with: Data(contentsOf: workspace.appendingPathComponent(name))
@@ -284,6 +282,14 @@ func aggregateGoCoverage(
             result["diff"] = [
                 "status": "unavailable", "reason": String(describing: error), "percent": NSNull(),
             ]
+        }
+        if let detail = result["diff"] as? [String: Any],
+            detail["status"] as? String == "unavailable"
+        {
+            let reason = detail["reason"] as? String ?? "No comparison result"
+            FileHandle.standardError.write(
+                Data("WARNING: E2E aggregate comparison unavailable: \(reason)\n".utf8)
+            )
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

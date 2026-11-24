@@ -279,10 +279,11 @@ struct `native Go coverage` {
         process.waitUntilExit()
         #expect(throws: (any Error).self) { try GoCoverage.checkCLICounters(native) }
         try f.records([f.record("test", directory: "observations/suite/test")])
+        // Derivation failure is separate from the captured execution outcome.
         #expect(try GoCoverage(repo: f.repo, run: f.run).deriveAttempt() == 1)
         #expect(
             try CoverageIO.read(f.run.appendingPathComponent("attempt.json"))["exitStatus"] as? Int
-                == 1
+                == 0
         )
         let before = try CoverageIO.sourceID(repo: f.repo)
         try f.write("deleted.go", "package fixture\n")
