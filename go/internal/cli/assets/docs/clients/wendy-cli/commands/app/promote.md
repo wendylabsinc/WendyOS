@@ -26,5 +26,5 @@ keep the running container yet.
 | `--tag` | Release tag: the version you give this release, for example `1.0.0`. Asked when missing in a terminal |
 | `--untagged` | Name the release `<git branch>@<manifest digest>` instead of a tag |
 | `--platform` | Platform of the run's image (default `linux/arm64`) |
-| `--name`, `--move`, `--config`, `--config-file`, `--run`, `--install-only`, `--keep-trying`, `--note`, `--yes`, `--wait` | The remaining deploy questions, as in [`wendy app deploy`](./deploy.md) |
+| `--name`, `--move`, `--config`, `--config-file`, `--run`, `--install-only`, `--keep-trying`, `--note`, `--yes`, `--wait`, `--wait-timeout` | The remaining deploy questions, as in [`wendy app deploy`](./deploy.md) |
 | `--cloud-grpc` | Cloud gRPC endpoint of the session to use |
