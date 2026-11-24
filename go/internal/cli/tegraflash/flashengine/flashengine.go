@@ -97,9 +97,12 @@ func Run(ctx context.Context, t Transport, opts Options) error {
 	if err != nil {
 		return err
 	}
-	// Check every image before the reset and sum its size for Progress.
+	e := &engine{ctx: ctx, t: t, opts: opts, out: out}
+	defer e.removeTempFiles()
+
+	// Prepare the exact files the flash will use before resetting the board.
 	// A/B partitions push their image once each.
-	var total int64
+	prepared := make([]preparedPartition, 0, len(parts))
 	for _, p := range parts {
 		path := filepath.Join(opts.FlashImagesDir, p.FileName)
 		info, err := os.Stat(path)
@@ -114,7 +117,19 @@ func Run(ctx context.Context, t Transport, opts Options) error {
 			return fmt.Errorf("%w: opening image %q before any device writes: %w", ErrOldDataNotCleared, p.FileName, err)
 		}
 		f.Close()
-		total += info.Size()
+		localFile, md5, err := e.transform(p, path)
+		if err != nil {
+			return fmt.Errorf("%w: preparing image %q for partition %s: %w", ErrOldDataNotCleared, p.FileName, p.Name, err)
+		}
+		staged, err := os.Stat(localFile)
+		if err != nil {
+			return fmt.Errorf("%w: checking prepared image %q for partition %s: %w", ErrOldDataNotCleared, p.FileName, p.Name, err)
+		}
+		if staged.Size() > p.Size {
+			return fmt.Errorf("%w: file %s (%d) larger than partition %s (%d)", ErrOldDataNotCleared, p.FileName, staged.Size(), p.Name, p.Size)
+		}
+		prepared = append(prepared, preparedPartition{partition: p, localFile: localFile, size: staged.Size(), md5: md5, sourceSize: info.Size()})
+		e.progressTotal += staged.Size()
 	}
 
 	// Where the previous installation's data must be cleared is decided from
@@ -125,9 +140,6 @@ func Run(ctx context.Context, t Transport, opts Options) error {
 		return err
 	}
 	fmt.Fprintf(out, "Flashing %d partitions (dry-run=%v)\n", len(parts), opts.DryRun)
-
-	e := &engine{ctx: ctx, t: t, opts: opts, out: out, progressTotal: total}
-	defer e.removeTempFiles()
 
 	// Device setup: push nvdd and make it executable.
 	if err := e.setup(); err != nil {
@@ -147,9 +159,9 @@ func Run(ctx context.Context, t Transport, opts Options) error {
 	}
 
 	// Flash each partition in order.
-	for _, p := range parts {
-		if err := e.flashPartition(p); err != nil {
-			return fmt.Errorf("partition %s: %w", p.Name, err)
+	for _, image := range prepared {
+		if err := e.flashPartition(image); err != nil {
+			return fmt.Errorf("partition %s: %w", image.Name, err)
 		}
 	}
 	fmt.Fprintln(out, "All partitions written.")
@@ -237,29 +249,19 @@ func (e *engine) eraseQSPI(parts []partition) error {
 	return nil
 }
 
-// flashPartition applies any transform then writes+verifies one partition.
-func (e *engine) flashPartition(p partition) error {
-	localFile := filepath.Join(e.opts.FlashImagesDir, p.FileName)
-	info, err := os.Stat(localFile)
-	if err != nil {
-		return fmt.Errorf("image %s: %w", p.FileName, err)
-	}
-	fmt.Fprintf(e.out, "[%s] %s -> %s @ %d (%s)\n", p.Name, p.FileName, p.Device, p.Start, humanBytes(info.Size()))
+type preparedPartition struct {
+	partition
+	localFile  string
+	size       int64
+	md5        string
+	sourceSize int64
+}
 
-	// Host-side transforms produce a possibly-different local file + md5.
-	localFile, md5, err := e.transform(p, localFile)
-	if err != nil {
-		return err
-	}
-	info, err = os.Stat(localFile)
-	if err != nil {
-		return err
-	}
-	fileSize := info.Size()
-
-	if fileSize > p.Size {
-		return fmt.Errorf("file %s (%d) larger than partition %s (%d)", p.FileName, fileSize, p.Name, p.Size)
-	}
+// flashPartition writes and verifies one prepared partition image.
+func (e *engine) flashPartition(image preparedPartition) error {
+	p := image.partition
+	localFile, fileSize, md5 := image.localFile, image.size, image.md5
+	fmt.Fprintf(e.out, "[%s] %s -> %s @ %d (%s)\n", p.Name, p.FileName, p.Device, p.Start, humanBytes(image.sourceSize))
 
 	switch {
 	case isSparse(localFile):
