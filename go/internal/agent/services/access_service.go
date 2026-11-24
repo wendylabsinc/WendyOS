@@ -143,6 +143,9 @@ func (s *AccessService) RemoveTrustedKey(ctx context.Context, req *agentpbv2.Rem
 		return nil, keyError(err)
 	}
 	s.audit("key removed", actor, removed.Fingerprint())
+	// The role table runs when a call or stream opens; the restart ends the
+	// removed key's open shells, execs, attaches and log streams.
+	s.restart()
 	return &agentpbv2.RemoveTrustedKeyResponse{}, nil
 }
 

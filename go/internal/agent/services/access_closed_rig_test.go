@@ -104,3 +104,21 @@ func TestClosedTrustedKeyPassesHandlerIdentityChecks(t *testing.T) {
 	_, err := viewer.QueryChunks(ctx, &agentpb.QueryChunksRequest{})
 	wantCode(t, "viewer QueryChunks", err, codes.PermissionDenied)
 }
+
+// Removing a key restarts the agent, which ends that key's open streams: the
+// role table only runs when a call or stream opens.
+func TestRemovingAKeyEndsItsOpenStreams(t *testing.T) {
+	r := newClosedRig(t)
+	restarts := 0
+	agentpbv2.RegisterWendyAccessServiceServer(r.srv, NewAccessService(zap.NewNop(), r.keys, func() bool { return false }, func() { restarts++ }))
+	r.start()
+	r.trust(t, trustedkeys.RoleOperator)
+	victim := r.keys.List()[1].Fingerprint()
+	owner := agentpbv2.NewWendyAccessServiceClient(r.conn(t, r.owner))
+	if _, err := owner.RemoveTrustedKey(context.Background(), &agentpbv2.RemoveTrustedKeyRequest{Fingerprint: victim}); err != nil {
+		t.Fatal(err)
+	}
+	if restarts != 1 {
+		t.Fatalf("restarts = %d after removing a key, want 1", restarts)
+	}
+}
