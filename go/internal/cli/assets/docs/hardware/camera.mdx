@@ -160,7 +160,8 @@ the camera's own H.264, one whole frame per buffer. `"pixels"` on such a
 camera are pictures decoded from it. Where the device encodes the `"h264"` of
 a camera that produces JPEG in software, the encoder runs for as long as the
 app reads its node, and the deploy notice, the agent's log and the camera's
-status say so; `"native"` and `"pixels"` run no encoder.
+status say so; `"native"` and `"pixels"` run no encoder. The agent runs x264,
+the software encoder it uses where it has one, at x264's fastest preset.
 
 ```json
 { "type": "camera", "format": "pixels", "stamp": "time" }

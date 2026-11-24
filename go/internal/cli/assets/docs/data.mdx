@@ -203,7 +203,9 @@ the device's GStreamer elements could be listed: the encoder runs while the
 campaign records or buffers, and for as long as the campaign's inference runs
 when it has `inference`. Without inference, `store: frames` keeps the own
 frames of a webcam captured as JPEG without encoding; a camera that hands on
-no frames of its own is recorded as video whatever `store` says.
+no frames of its own is recorded as video whatever `store` says. The agent
+runs x264, the software encoder it uses where it has one, at x264's fastest
+preset.
 
 See the [campaign YAML reference](/docs/advanced/clients/wendy-cli/commands/data#campaign-yaml-reference)
 for selectors, capture policies, and all fields.

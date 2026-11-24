@@ -89,7 +89,8 @@ device deployment; it does not fan deployment out to every fleet member.
   records or buffers, and for as long as the campaign's inference runs when it
   has `inference`. Without inference, `store: frames` keeps the own frames of a
   webcam captured as JPEG without encoding; a camera that hands on no frames
-  of its own is recorded as video whatever `store` says.
+  of its own is recorded as video whatever `store` says. The agent runs x264,
+  the software encoder it uses where it has one, at x264's fastest preset.
 - Audio supports `continuous` and `threshold`, such as
   `trigger: "level_db > -20"` and `fragment: 30s`. ROS 2 and telemetry support
   `continuous`. Other mode/kind combinations validate, warn, and record

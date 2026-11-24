@@ -413,7 +413,8 @@ elements could be listed: the encoder runs while the campaign records or
 buffers, and for as long as the campaign's inference runs when it has
 `inference`. Without inference, `store: frames` keeps the own frames of a
 webcam captured as JPEG without encoding; a camera that hands on no frames of
-its own is recorded as video whatever `store` says.
+its own is recorded as video whatever `store` says. The agent runs x264, the
+software encoder it uses where it has one, at x264's fastest preset.
 
 What each adapter honors today: cameras implement `continuous` and `snapshot`,
 audio implements `continuous` and `threshold`, and the ROS 2 and telemetry
