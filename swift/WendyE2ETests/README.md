@@ -121,8 +121,8 @@ tar -xzf coverage/go-native.tar.gz
 sha256sum -c coverage/native.sha256
 ```
 
-Standard Go coverage tools work on the unpacked directories. The attempt's
-`coverage/coverage.out` combines test evidence by source with Go's
+Standard Go coverage tools work on the unpacked directories. Aggregation's
+run-level `coverage/coverage.out` combines test evidence by source with Go's
 `covdata merge -pcombine`, so shared CLI/Agent packages have one denominator.
 Percentages use covered statements divided by statements, including zero-hit
 packages linked into the measured binaries. They are never averages of tests.
@@ -171,10 +171,10 @@ tar -xzf coverage/go-native.tar.gz
 
 Reaggregation reads an existing native archive in scratch space, so it requires
 no new test execution or permanent unpack. Supply all raw attempts for a run
-when reaggregating coverage; use a fresh output directory for a subset. The embedded run report and AI inputs
-retain logs, recordings, test results and derived metadata without duplicating
-native archives or profiles. Standard Go tools can derive additional profiles or
-an optional source HTML view; HTML is not produced during collection:
+when reaggregating coverage; use a fresh output directory for a subset. The
+embedded run report and AI inputs retain logs, recordings, test results and
+derived metadata without duplicating native archives or profiles. Standard Go
+tools can derive additional profiles or an optional source HTML view; HTML is not produced during collection:
 
 ```bash
 go tool cover -html=/path/to/run/coverage/coverage.out -o=/path/to/coverage.html
@@ -207,9 +207,9 @@ ranges intersecting Go coverage block spans. Each block's statements count once;
 a block is covered when its counter is positive. **This is a block/line overlap
 approximation:** comment or formatting edits inside a block may count, and whole
 blocks (including several blocks on one physical line) contribute. No semantic
-Go lexer or AST filter is used. Removed lines, `_test.go`, `testdata`, the repository’s `go/internal/testfixture/`
-test helpers, generated
-files (header or `linguist-generated` attribute), nonproduction paths and test-only
+Go lexer or AST filter is used. Removed lines, `_test.go`, `testdata`, the
+repository’s `go/internal/testfixture/` test helpers, generated files (header or
+`linguist-generated` attribute), nonproduction paths and test-only
 hooks are excluded. Production `go/` paths such as simulator code remain eligible.
 Changed eligible files absent from the measured build are explicitly incomplete;
 no eligible blocks means **Not applicable**, never 100%. Wrong revisions or an
@@ -234,12 +234,6 @@ base and the tested head. Omit `tests` for the full isolated Ubuntu suite. Pause
 Mac, remote and Windows routes remain paused; never run the full suite on a
 shared Mac. Framework checks use real instrumented Go fixtures in the Swift
 `native Go coverage` and aggregate comparison suites, separate from product specs.
-
-The report automatically reads a single attempt's comparison. Standalone HTML
-reference generation accepts `swift-e2e-testing reference --format html
---comparison /path/to/attempt/coverage/diff.json ...`. Rendering rejects a source
-snapshot that differs from the comparison. Several attempts retain the existing
-separate-attempt semantics rather than averaging coverage percentages.
 
 Active Ubuntu CI captures the comparison before rendering its artifact. An
 explicit workflow `diff_base_ref` overrides the default PR base, push's previous

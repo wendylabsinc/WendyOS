@@ -57,9 +57,16 @@ extension GoCoverage {
             }
             let list = staging.appendingPathComponent("paths")
             try Data((names.joined(separator: "\0") + "\0").utf8).write(to: list)
-            _ = try CoverageIO.command([
-                "tar", "-czf", temporary.path, "-C", contents.path, "--null", "-T", list.path,
-            ])
+            var environment = ProcessInfo.processInfo.environment
+            // Native Go data has no resource forks. macOS tar otherwise adds
+            // AppleDouble ._ entries that are not in the native manifest.
+            environment["COPYFILE_DISABLE"] = "1"
+            _ = try CoverageIO.command(
+                [
+                    "tar", "-czf", temporary.path, "-C", contents.path, "--null", "-T", list.path,
+                ],
+                environment: environment
+            )
             _ = try CoverageIO.command(["tar", "-xzf", temporary.path, "-C", recovered.path])
             guard
                 try CoverageIO.hashes(names.map { recovered.appendingPathComponent($0) }) == digests

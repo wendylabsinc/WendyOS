@@ -59,9 +59,13 @@ enum CoverageIO {
         )
     }
 
-    static func command(_ arguments: [String], cwd: URL? = nil, input: Data? = nil) throws -> String
-    {
-        let output = try execute(arguments, cwd: cwd, input: input)
+    static func command(
+        _ arguments: [String],
+        cwd: URL? = nil,
+        input: Data? = nil,
+        environment: [String: String]? = nil
+    ) throws -> String {
+        let output = try execute(arguments, cwd: cwd, input: input, environment: environment)
         guard output.status == 0 else {
             throw ValidationError(
                 "\(arguments.joined(separator: " ")) exited \(output.status): \(output.error)"

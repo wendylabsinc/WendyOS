@@ -113,3 +113,37 @@ struct `aggregate wrapper arguments` {
         #expect(values.prefix(3) == ["run", "swift-e2e-testing", "aggregate"])
     }
 }
+
+@Suite
+struct `native archive member paths` {
+    @Test func `Mac file metadata cannot add unmanifested archive members`() throws {
+        let root = try CoverageIO.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let native = root.appendingPathComponent("observations/suite/test/coverage/go")
+        try FileManager.default.createDirectory(at: native, withIntermediateDirectories: true)
+        let names = ["covmeta.fixture", "covcounters.fixture.1.0", "invocation.1.0"]
+        for name in names {
+            try Data("native bytes".utf8).write(to: native.appendingPathComponent(name))
+        }
+        #if os(macOS)
+            _ = try CoverageIO.command([
+                "xattr", "-w", "com.wendylabs.coverage-fixture", "file metadata",
+                native.appendingPathComponent(names[0]).path,
+            ])
+        #endif
+        try GoCoverage.pack(run: root)
+        let archive = root.appendingPathComponent("coverage/go-native.tar.gz")
+        let actual = Set(CoverageIO.lines(try CoverageIO.command(["tar", "-tzf", archive.path])))
+        let expected = Set(names.map { "observations/suite/test/coverage/go/" + $0 })
+        #expect(actual == expected)
+        let recovered = root.appendingPathComponent("recovered")
+        try FileManager.default.createDirectory(at: recovered, withIntermediateDirectories: true)
+        _ = try CoverageIO.command(["tar", "-xzf", archive.path, "-C", recovered.path])
+        for name in expected {
+            #expect(
+                try Data(contentsOf: recovered.appendingPathComponent(name))
+                    == Data("native bytes".utf8)
+            )
+        }
+    }
+}
