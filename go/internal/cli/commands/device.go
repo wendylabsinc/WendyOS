@@ -1074,7 +1074,7 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 // requireClosedDeviceOwner is cloudenroll.RequireClosedDeviceOwner on this
 // connection.
 func requireClosedDeviceOwner(ctx context.Context, conn *grpcclient.AgentConnection) error {
-	if conn == nil {
+	if conn == nil || conn.Conn == nil {
 		return nil
 	}
 	return cloudenroll.RequireClosedDeviceOwner(ctx, conn.Conn)
