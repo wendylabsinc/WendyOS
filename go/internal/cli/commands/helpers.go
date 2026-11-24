@@ -2977,7 +2977,11 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	if localRefusal != nil && !errors.Is(localRefusal, context.Canceled) && !errors.Is(localRefusal, context.DeadlineExceeded) {
 		return nil, walk.lastMTLSErr, localRefusal
 	}
-	if len(allCerts) > 0 && len(candidates) > 0 {
+	// A device that proved itself Closed on the key port explains the cloud
+	// certificate's failure: it is not enrolled, so the local rung's verdict
+	// (ask an owner, the keyless set) wins over clock and login advice.
+	closedSeen := local.keyRefused != "" || local.verifiedProbeErr != nil
+	if len(allCerts) > 0 && len(candidates) > 0 && !closedSeen {
 		if walk.primaryRejectedOurCert() {
 			// A genuine cross-org mismatch (device's org is one we hold no cert
 			// for) gets a clear, actionable message. A same-org failure (observed

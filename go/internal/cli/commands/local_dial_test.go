@@ -184,6 +184,21 @@ func TestLadderRefusesWhenLocalKeyNotTrusted(t *testing.T) {
 	}
 }
 
+// A logged-in user whose key a Closed device does not trust gets the
+// ask-an-owner refusal, not the cloud certificate's clock advice.
+func TestLadderRefusesUntrustedLocalKeyWithCloudCertStored(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	setPinCache(t)
+	other, _ := localkey.LoadOrCreate(filepath.Join(t.TempDir(), localkey.FileName))
+	addr := startLocalOnlyAgent(t, other)
+	useLocalKey(t)
+
+	_, _, err := dialAgentLadderWithCerts(ladderCtx(t), newDialTarget("box", addr), []config.CertificateInfo{selfSignedCLICert(t, 7)})
+	if !errors.Is(err, errProvisionedAgentUnauthorized) || !strings.Contains(err.Error(), "wendy device keys add") {
+		t.Fatalf("err = %v, want the ask-an-owner refusal", err)
+	}
+}
+
 // A Closed device whose owner opened the keyless apps set: a computer whose
 // key it does not trust gets the plaintext connection, and only that set.
 func TestLadderUsesKeylessSetWhenKeyNotTrusted(t *testing.T) {
