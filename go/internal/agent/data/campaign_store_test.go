@@ -88,9 +88,25 @@ func TestCaptureStoreRejectedOnNonCameraSources(t *testing.T) {
 	}
 }
 
+func TestCaptureStoreRejectedInSnapshotMode(t *testing.T) {
+	for _, store := range []string{CaptureStoreVideo, CaptureStoreFrames, CaptureStoreBoth} {
+		_, err := ParseCampaign(cameraStoreCampaign("mode: snapshot, interval: 2s, store: " + store))
+		if err == nil {
+			t.Errorf("store: %s was accepted in snapshot mode", store)
+			continue
+		}
+		if want := "sources[0].capture: store applies only to continuous capture; snapshot mode always stores single frames"; err.Error() != want {
+			t.Errorf("store: %s: error %q, want %q", store, err, want)
+		}
+	}
+	if _, err := ParseCampaign(cameraStoreCampaign("mode: snapshot, interval: 2s")); err != nil {
+		t.Fatalf("snapshot mode without store was rejected: %v", err)
+	}
+}
+
 // A camera mode the adapter does not implement yet deploys with the existing
 // not-implemented warning and records continuously, so store is accepted with
-// every valid mode rather than rejected for the pending ones.
+// those modes rather than rejected.
 func TestCaptureStoreFollowsTheCaptureModeDeploymentRule(t *testing.T) {
 	manager, err := NewManager(t.TempDir())
 	if err != nil {
@@ -113,7 +129,6 @@ func TestCaptureStoreFollowsTheCaptureModeDeploymentRule(t *testing.T) {
 	for _, capture := range []string{
 		"store: frames",
 		"mode: continuous, rate: 5, store: both",
-		"mode: snapshot, interval: 2s, store: frames",
 	} {
 		if warnings := pendingModeWarnings(capture); len(warnings) != 0 {
 			t.Errorf("capture {%s} warned although the camera adapter implements its mode: %v", capture, warnings)
@@ -159,7 +174,7 @@ func TestCaptureStoreSurvivesDeployAndResolution(t *testing.T) {
 	manager.SetSourceProvider(func(context.Context) []Source {
 		return []Source{{ID: "v4l2:/dev/video2", Kind: "camera", ClockDomain: "V4L2", Healthy: true, Detail: "Logitech Brio"}}
 	})
-	deployed, err := manager.DeployCampaign(cameraStoreCampaign("mode: snapshot, interval: 2s, store: both"))
+	deployed, err := manager.DeployCampaign(cameraStoreCampaign("max_resolution: 1280x720, store: both"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,9 +258,10 @@ func TestCaptureStoreChangesTheRevisionOnlyWhenDeclared(t *testing.T) {
 	if got := revision(capture); got != captureBlockDigestPinRevision {
 		t.Fatalf("a plan without store now hashes to %s, want the pinned %s", got, captureBlockDigestPinRevision)
 	}
-	frames, both := revision(capture+", store: frames"), revision(capture+", store: both")
-	if frames == captureBlockDigestPinRevision || both == captureBlockDigestPinRevision || frames == both {
-		t.Fatalf("store did not reach the revision: frames=%s both=%s", frames, both)
+	const continuous = "max_resolution: 1280x720"
+	unset, frames, both := revision(continuous), revision(continuous+", store: frames"), revision(continuous+", store: both")
+	if frames == unset || both == unset || frames == both {
+		t.Fatalf("store did not reach the revision: unset=%s frames=%s both=%s", unset, frames, both)
 	}
 }
 

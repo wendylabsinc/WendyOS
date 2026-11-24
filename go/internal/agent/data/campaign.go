@@ -63,8 +63,8 @@ type SourceCapture struct {
 	Fragment string `json:"fragment,omitempty" yaml:"fragment,omitempty"`
 	// MaxResolution caps camera capture as WxH, for example 1280x720 (camera sources only).
 	MaxResolution string `json:"max_resolution,omitempty" yaml:"max_resolution,omitempty"`
-	// Store is what the episode keeps for a camera: video (default), frames, or
-	// both (camera sources only).
+	// Store is what the episode keeps of a camera's continuous recording: video
+	// (default), frames, or both (camera sources only, not snapshot mode).
 	Store string `json:"store,omitempty" yaml:"store,omitempty"`
 }
 
@@ -663,9 +663,8 @@ func preRollParameterConflicts(c Campaign) []string {
 	return conflicts
 }
 
-// repeatedCameraSelectors names the camera selectors a campaign lists more than
-// once. Resolution keys capture policies by source, so only the last capture
-// block of a repeated camera takes effect.
+// Resolution keys capture policies by source, so only the last capture block
+// of a repeated camera takes effect.
 func repeatedCameraSelectors(c Campaign) []string {
 	listed := map[string]int{}
 	var repeated []string
@@ -1440,6 +1439,9 @@ func validateSourceCapture(source CampaignSource) error {
 	if capture.Store != "" {
 		if source.Camera == "" {
 			return errors.New("store applies only to camera sources")
+		}
+		if mode == "snapshot" {
+			return errors.New("store applies only to continuous capture; snapshot mode always stores single frames")
 		}
 		if !slices.Contains(validCaptureStores, capture.Store) {
 			return fmt.Errorf("store must be one of %s", strings.Join(validCaptureStores, ", "))

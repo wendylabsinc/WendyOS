@@ -56,10 +56,11 @@ device deployment; it does not fan deployment out to every fleet member.
   reports these requests as unachieved. For an exact resolution/rate request,
   use `buffer: 0s` and inspect the achieved parameters. Unsupported modes or
   conflicts with an existing parameter-specific consumer remain visible.
-- Camera `store` chooses what the episode stores for that camera: `video`
-  (default), `frames` (single frames, each with its frame number and capture
-  time), or `both`. Other values, and `store` on a non-camera source, are
-  rejected. Use `store: both` rather than listing a camera twice; a repeated
+- Camera `store` chooses what the episode stores of that camera's continuous
+  recording: `video` (default), `frames` (single frames, each with its frame
+  number and capture time), or `both`. Other values, `store` on a non-camera
+  source, and `store` with `mode: snapshot` (which always stores single
+  frames) are rejected. Use `store: both` rather than listing a camera twice; a repeated
   camera selector warns at deployment and only its last capture block applies.
   An agent older than the release that added `store` rejects a campaign that
   uses the key as an unknown field, so omit it there to get `video`.

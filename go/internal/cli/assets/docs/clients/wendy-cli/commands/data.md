@@ -391,10 +391,11 @@ Fields belonging to a different mode than the declared one are rejected.
 | `trigger` | `threshold` | Required expression `<field> <op> <number>`, for example `model.uncertainty > 0.9` or `level_db > -20`. Only `model.uncertainty` is bounded to 0 through 1; other fields carry their own units. |
 | `fragment` | `threshold` | Optional captured duration per threshold crossing. |
 | `max_resolution` | any | Camera sources only: `WxH` cap such as `1280x720`. |
-| `store` | any | Camera sources only: what the episode stores for the camera. `video` (default) stores video, `frames` stores single frames, each with its frame number and capture time, and `both` stores video and frames. |
+| `store` | not `snapshot` | Camera sources only: what the episode stores of the camera's continuous recording. `video` (default) stores video, `frames` stores single frames, each with its frame number and capture time, and `both` stores video and frames. |
 
-Any other `store` value, or `store` on a source that is not a camera, is
-rejected. Use `store: both` instead of listing a camera twice: a camera is
+Any other `store` value, `store` on a source that is not a camera, or `store`
+with `mode: snapshot` is rejected; snapshot mode always stores single frames.
+Use `store: both` instead of listing a camera twice: a camera is
 recorded once per episode, only its last `capture` block applies, and
 deployment warns when the same camera selector is listed more than once. An
 agent older than the release that added `store` rejects a campaign that uses
