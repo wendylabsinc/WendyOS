@@ -286,9 +286,69 @@ func releaseApps(ctrs []containers.Container, app string, keep []string) []strin
 }
 
 // DeleteReleaseImages deletes the removable release images and collects
-// their content before returning, so no decrypted layer stays on disk.
+// their content and their layer snapshots before returning, so no decrypted
+// layer stays on disk. c.mu keeps a create from reusing a layer between its
+// root's release and the collection (ponytail: a create waits out the GC
+// pass; release only around the label update if that stall shows).
 func (c *Client) DeleteReleaseImages(ctx context.Context, app string, keep []string) error {
-	return deleteReleaseImages(c.withNamespace(ctx), c.client.ImageService(), c.logger, app, keep)
+	ctx = c.withNamespace(ctx)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	is := c.client.ImageService()
+	if err := c.releaseLayerRoots(ctx, is, app, keep); err != nil {
+		return err // the images stay, so the retry finds their layers again
+	}
+	return deleteReleaseImages(ctx, is, c.logger, app, keep)
+}
+
+// releaseLayerRoots drops the gc.root label UnpackImage puts on a layer
+// snapshot from the layers of the removable releases that no other image
+// uses, so the image delete's collection takes them. A container on one keeps
+// it through containerd's parent reference. An image whose layers cannot be
+// read keeps every layer: nothing is released.
+func (c *Client) releaseLayerRoots(ctx context.Context, is images.Store, app string, keep []string) error {
+	imgs, err := is.List(ctx)
+	if err != nil {
+		return fmt.Errorf("listing images: %w", err)
+	}
+	removed, kept := map[string]bool{}, map[string]bool{}
+	for _, img := range imgs {
+		diffIDs, err := containerd.NewImage(c.client, img).RootFS(ctx)
+		if removableRelease(img.Name, app, keep) {
+			if err != nil {
+				continue // not unpacked, or its content is gone: no layer of its own to release
+			}
+			for _, id := range layerChainIDs(diffIDs) {
+				removed[id] = true
+			}
+			continue
+		}
+		if err != nil {
+			c.logger.Warn("Keeping removed releases' layers: another image's layers are unreadable", zap.String("image", img.Name), zap.Error(err))
+			return nil
+		}
+		for _, id := range layerChainIDs(diffIDs) {
+			kept[id] = true
+		}
+	}
+	sn := c.client.SnapshotService(c.snapshotter)
+	for id := range removed {
+		if kept[id] {
+			continue
+		}
+		info, err := sn.Stat(ctx, id)
+		if errdefs.IsNotFound(err) || (err == nil && info.Labels[labelKeyGCRoot] == "") {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("reading layer snapshot %s: %w", id, err)
+		}
+		info.Labels = labelsWithout(info.Labels, labelKeyGCRoot)
+		if _, err := sn.Update(ctx, info, "labels"); err != nil {
+			return fmt.Errorf("releasing layer snapshot %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 func deleteReleaseImages(ctx context.Context, is images.Store, logger *zap.Logger, app string, keep []string) error {
