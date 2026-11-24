@@ -455,9 +455,10 @@ func (a *armedCameraSource) fill(ctx context.Context) {
 }
 
 func (a *armedCameraSource) join(ctx context.Context) error {
-	hub, subID, frames, kind, refusal, err := joinWithVideoFallback(a.primaryKind, func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
-		return a.video.joinHubKind(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: a.devID}, kind)
-	})
+	atDefaults := &agentpb.StreamVideoRequest{DeviceId: a.devID}
+	hub, subID, frames, kind, refusal, err := joinWithVideoFallback(a.primaryKind, a.video.refusingOwnFramesKnownAbsent(a.key, atDefaults, func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
+		return a.video.joinHubKind(ctx, a.key, atDefaults, kind)
+	}))
 	if err != nil {
 		return err
 	}
@@ -600,7 +601,10 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	captureCtx, cancel := context.WithCancel(context.Background())
 	devID := a.devID
 	rejoin := func(ctx context.Context, kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
-		return a.video.joinHubKind(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: devID}, kind)
+		atDefaults := &agentpb.StreamVideoRequest{DeviceId: devID}
+		return a.video.refusingOwnFramesKnownAbsent(a.key, atDefaults, func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
+			return a.video.joinHubKind(ctx, a.key, atDefaults, kind)
+		})(kind)
 	}
 	// Everything the hub dropped for this subscription up to now happened
 	// during the ARMED period. The capture subtracts it from its own total and

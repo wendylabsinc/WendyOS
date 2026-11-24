@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -31,8 +34,36 @@ func scriptedMonotonicMapping() (data.MonotonicMappingSample, error) {
 	return data.MonotonicMappingSample{OffsetLowerNanos: offset - scriptedMappingHalfWidth, OffsetUpperNanos: offset + scriptedMappingHalfWidth}, nil
 }
 
+// camerasHandOn makes the native capture sources answer, for every camera and
+// without capturing, that they hand on its own frames in the given codec.
+func camerasHandOn(t *testing.T, codec agentpb.VideoCodec) {
+	t.Helper()
+	answerOfTheNativeSources(t, func(*VideoService, string, *agentpb.StreamVideoRequest) (ownFrames, string, bool) {
+		return ownFrames{codec: codec, width: 640, height: 480, framerate: 30}, "", false
+	})
+}
+
+// camerasHandOnNoFrames makes them answer that no native source captures the
+// camera, which leaves it to a pipeline.
+func camerasHandOnNoFrames(t *testing.T, why string) {
+	t.Helper()
+	answerOfTheNativeSources(t, func(*VideoService, string, *agentpb.StreamVideoRequest) (ownFrames, string, bool) {
+		return ownFrames{}, why, true
+	})
+}
+
+func answerOfTheNativeSources(t *testing.T, frames func(*VideoService, string, *agentpb.StreamVideoRequest) (ownFrames, string, bool)) {
+	t.Helper()
+	previous := nativeCaptureSources
+	t.Cleanup(func() { nativeCaptureSources = previous })
+	nativeCaptureSources = []nativeCaptureSource{{format: "JPEG", frames: frames}}
+}
+
+// newKernelClockCamera is a webcam captured natively as JPEG unless the test
+// says otherwise.
 func newKernelClockCamera(t *testing.T) *storeTestCamera {
 	t.Helper()
+	camerasHandOn(t, videoCodecMJPEG)
 	cam := newStoreTestCamera(t)
 	cam.adapter.monotonicMapping = scriptedMonotonicMapping
 	return cam
@@ -117,6 +148,14 @@ func (cam *storeTestCamera) playJPEGCamera(t *testing.T) *jpegCameraEpisode {
 	derive(j5, testInterFrame)
 	derive(j6, testInterFrame)
 	return episode
+}
+
+// newH264Camera is a camera whose own frames are H.264.
+func newH264Camera(t *testing.T) *storeTestCamera {
+	t.Helper()
+	cam := newKernelClockCamera(t)
+	camerasHandOn(t, agentpb.VideoCodec_VIDEO_CODEC_H264)
+	return cam
 }
 
 func h264CameraScript() []*videoFrame {
@@ -235,6 +274,22 @@ func TestStoreFramesOnAJPEGCameraWritesTheCamerasOwnFrames(t *testing.T) {
 	}
 }
 
+// A capture that names no parameters joins the camera as it runs, and a
+// running camera answers for itself: what the native sources would hand on
+// for a fresh start does not decide.
+func TestStoreFramesOnARunningCameraIsAnsweredByTheCameraItself(t *testing.T) {
+	cam := newKernelClockCamera(t)
+	camerasHandOnNoFrames(t, "the camera offers no JPEG at 1920x1080")
+	var episode *jpegCameraEpisode
+	r := cam.record(t, &data.SourceCapture{Store: data.CaptureStoreFrames}, 2, func() { episode = cam.playJPEGCamera(t) }, 6)
+
+	assertFileNames(t, r, "segment-000001.mjpeg")
+	assertRecordsAddress(t, r, indexedAsJPEG, episode.jpegs)
+	if strings.Contains(r.result.SourceDetail, "store:") {
+		t.Errorf("detail %q carries a store note although the running camera handed on its frames", r.result.SourceDetail)
+	}
+}
+
 func TestStoreBothOnAJPEGCameraWritesVideoAndFramesSideBySide(t *testing.T) {
 	cam := newKernelClockCamera(t)
 	var episode *jpegCameraEpisode
@@ -279,7 +334,7 @@ func TestStoreVideoOnAJPEGCameraStoresOnlyTheVideo(t *testing.T) {
 // the files store: video writes, and the detail says so for the two values
 // that asked for frames.
 func TestStoreOnAnH264CameraWritesTheVideoFilesForEveryValue(t *testing.T) {
-	video := newKernelClockCamera(t).recordFrames(t, &data.SourceCapture{Store: data.CaptureStoreVideo}, 2, h264CameraScript(), 3)
+	video := newH264Camera(t).recordFrames(t, &data.SourceCapture{Store: data.CaptureStoreVideo}, 2, h264CameraScript(), 3)
 	assertFileNames(t, video, "segment-000001.h264")
 	assertRecordsAddress(t, video, indexedAsH264, h264CameraScript())
 	assertKernelCaptureTimes(t, video, indexedAsH264)
@@ -295,7 +350,7 @@ func TestStoreOnAnH264CameraWritesTheVideoFilesForEveryValue(t *testing.T) {
 		data.CaptureStoreBoth:   {3, "store: both: this camera's own frames are its encoded video (VIDEO_CODEC_H264), so there is one stream and it is stored once"},
 	} {
 		t.Run(store, func(t *testing.T) {
-			r := newKernelClockCamera(t).recordFrames(t, &data.SourceCapture{Store: store}, tc.subscribers, h264CameraScript(), 3)
+			r := newH264Camera(t).recordFrames(t, &data.SourceCapture{Store: store}, tc.subscribers, h264CameraScript(), 3)
 			got, want := r.files(t), video.files(t)
 			if len(got) != len(want) {
 				t.Fatalf("source directory holds %v, want the files store: video writes", r.fileNames(t))
@@ -332,7 +387,7 @@ func TestStoreOnAnH264CameraUnderARateCapKeepsWholeGroupsOfPicturesForEveryValue
 	keptOf := func(script []*videoFrame) []*videoFrame {
 		return []*videoFrame{script[0], script[1], script[4], script[5]}
 	}
-	video := newKernelClockCamera(t).recordFrames(t, &data.SourceCapture{Store: data.CaptureStoreVideo, Rate: 2}, 2, rateCappedH264CameraScript(), 4)
+	video := newH264Camera(t).recordFrames(t, &data.SourceCapture{Store: data.CaptureStoreVideo, Rate: 2}, 2, rateCappedH264CameraScript(), 4)
 	assertFileNames(t, video, "segment-000001.h264")
 	assertRecordsAddress(t, video, indexedAsH264, keptOf(rateCappedH264CameraScript()))
 	assertDetailSays(t, video, capped)
@@ -345,7 +400,7 @@ func TestStoreOnAnH264CameraUnderARateCapKeepsWholeGroupsOfPicturesForEveryValue
 		data.CaptureStoreBoth:   {3, "store: both: this camera's own frames are its encoded video (VIDEO_CODEC_H264), so there is one stream and it is stored once"},
 	} {
 		t.Run(store, func(t *testing.T) {
-			r := newKernelClockCamera(t).recordFrames(t, &data.SourceCapture{Store: store, Rate: 2}, tc.subscribers, rateCappedH264CameraScript(), 4)
+			r := newH264Camera(t).recordFrames(t, &data.SourceCapture{Store: store, Rate: 2}, tc.subscribers, rateCappedH264CameraScript(), 4)
 			got, want := r.files(t), video.files(t)
 			if len(got) != len(want) {
 				t.Fatalf("source directory holds %v, want the files store: video writes under the same cap", r.fileNames(t))
@@ -1195,7 +1250,7 @@ func TestArmedStoreOnAnH264CameraStoresThePreRollOnceAsVideo(t *testing.T) {
 		data.CaptureStoreBoth:   {1, 0, "store: both: this camera's own frames are its encoded video (VIDEO_CODEC_H264), so there is one stream and it is stored once"},
 	} {
 		t.Run(store, func(t *testing.T) {
-			cam := newKernelClockCamera(t)
+			cam := newH264Camera(t)
 			source, _ := armedStoreSource(t, cam, &data.SourceCapture{Store: store}, 5*time.Second)
 
 			var frames []*videoFrame
@@ -1248,6 +1303,7 @@ func assertEachRecordIsOneWholeFile(t *testing.T, r storeRecording, names ...str
 }
 
 const (
+	stillsNeedWholeFrames   = "snapshot stills require a transport that delivers whole access units (native V4L2 H.264); this stream arrives as byte chunks, so the source records continuously instead"
 	snapshotEverySecond     = "Test Cam (snapshot mode: one still per 1s)"
 	snapshotOfUnstampedTime = "Test Cam (pipeline PTS unavailable; canonical time uses bounded agent receipt; snapshot mode: one still per 1s; "
 )
@@ -1300,8 +1356,10 @@ func TestSnapshotOnAJPEGCameraWritesTheCamerasOwnFramesAsStills(t *testing.T) {
 	}
 }
 
+// A camera whose own frames are H.264 is subscribed to for video, as it was
+// before stills could be a camera's own frames.
 func TestSnapshotOnAnH264CameraWritesKeyFramesWithTheirParameterSets(t *testing.T) {
-	cam := newKernelClockCamera(t)
+	cam := newH264Camera(t)
 	keyFrameBehindOtherBytes := nativeH264At(5, 1800*time.Millisecond, append([]byte{9, 9}, testRAUFrame...))
 	frames := []*videoFrame{
 		nativeH264At(1, 600*time.Millisecond, testInterFrame),
@@ -1311,7 +1369,12 @@ func TestSnapshotOnAnH264CameraWritesKeyFramesWithTheirParameterSets(t *testing.
 		keyFrameBehindOtherBytes,
 		nativeH264At(6, 3600*time.Millisecond, testRAUFrame),
 	}
-	r := cam.recordFrames(t, snapshotEvery(time.Second), 2, frames, 3)
+	r := cam.record(t, snapshotEvery(time.Second), 2, func() {
+		cam.waitForCaptureSubscriptions(t, 1, 0)
+		for _, frame := range frames {
+			cam.deliver(t, frame)
+		}
+	}, 3)
 
 	assertFileNames(t, r, "snapshot-000001.h264", "snapshot-000002.h264", "snapshot-000003.h264")
 	assertEachRecordIsOneWholeFile(t, r, "snapshot-000001.h264", "snapshot-000002.h264", "snapshot-000003.h264")
@@ -1345,7 +1408,7 @@ func TestSnapshotOnACameraWithoutFramesOfItsOwnTakesItsVideoAndSaysWhy(t *testin
 
 		assertFileNames(t, r, "segment-000001.h264")
 		assertRecordsAddress(t, r, indexedAsH264, chunks)
-		want := snapshotOfUnstampedTime + refused + "; snapshot stills require a transport that delivers whole access units (native V4L2 H.264); this stream arrives as byte chunks, so the source records continuously instead)"
+		want := snapshotOfUnstampedTime + refused + "; " + stillsNeedWholeFrames + ")"
 		if r.result.SourceDetail != want {
 			t.Errorf("detail = %q, want %q", r.result.SourceDetail, want)
 		}
@@ -1427,5 +1490,250 @@ func TestSnapshotOfJPEGFramesCountsTheIntervalsWithoutAStill(t *testing.T) {
 	}
 	if c.result.Count != 2 || c.result.Drops == nil || *c.result.Drops != 6 || c.result.DropAccounting != "missed_snapshot_intervals" {
 		t.Fatalf("count = %d, drops = %v under %q; want 2 stills and 6 missed intervals", c.result.Count, c.result.Drops, c.result.DropAccounting)
+	}
+}
+
+func TestArmingASnapshotSourceHoldsNoSubscription(t *testing.T) {
+	cam := newKernelClockCamera(t)
+	source := data.Source{ID: storeTestSource, Kind: "camera", Detail: "Test Cam", Capture: snapshotEvery(time.Second)}
+	cam.adapter.Arm("cam", 5*time.Second, []data.Source{source})
+	t.Cleanup(func() { cam.adapter.Disarm("cam") })
+
+	cam.adapter.armedMu.Lock()
+	armed := len(cam.adapter.armed["cam"])
+	cam.adapter.armedMu.Unlock()
+	if armed != 0 {
+		t.Errorf("the campaign armed %d source(s), want none: stills have no pre-roll", armed)
+	}
+	if made := cam.subscriptionsEverMade(); made != 1 || cam.subscribers() != 1 {
+		t.Errorf("the hub has had %d subscription(s) and holds %d, want only the viewer's", made, cam.subscribers())
+	}
+}
+
+// scriptedProducers stands in for the producers a VideoService starts. Each
+// runs the given capture until its hub is left, then does what runProducer
+// does when a capture ends.
+type scriptedProducers struct {
+	mu   sync.Mutex
+	hubs []*deviceHub
+}
+
+func installScriptedProducers(video *VideoService, capture func(ctx context.Context, hub *deviceHub)) *scriptedProducers {
+	producers := &scriptedProducers{}
+	video.startProducer = func(ctx context.Context, hub *deviceHub, path string, _ *agentpb.StreamVideoRequest) {
+		producers.mu.Lock()
+		producers.hubs = append(producers.hubs, hub)
+		producers.mu.Unlock()
+		go func() {
+			capture(ctx, hub)
+			<-ctx.Done()
+			video.mu.Lock()
+			if video.hubs[path] == hub {
+				delete(video.hubs, path)
+			}
+			video.mu.Unlock()
+			endProducer(hub)
+			close(hub.done)
+		}()
+	}
+	return producers
+}
+
+func (p *scriptedProducers) started() []*deviceHub {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]*deviceHub(nil), p.hubs...)
+}
+
+// every calls produce every two milliseconds until ctx ends.
+func every(ctx context.Context, produce func()) {
+	tick := time.NewTicker(2 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			produce()
+		}
+	}
+}
+
+func startedNow(t *testing.T, key string) data.CaptureSession {
+	t.Helper()
+	_, origin, _, err := data.CaptureReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data.CaptureSession{Directory: t.TempDir(), RequestBootNanos: origin, CampaignKey: key}
+}
+
+// With nobody watching, a snapshot source on a webcam is the camera's only
+// subscriber from the moment its campaign is armed until the episode stops,
+// and what it subscribes for is the camera's own frames.
+func TestSnapshotOnAJPEGCameraNobodyWatchesAsksForNoEncodingFromArmToStop(t *testing.T) {
+	camerasHandOn(t, videoCodecMJPEG)
+	video := NewVideoService(context.Background(), zap.NewNop(), nil)
+	var encodingAskedFor, frames int
+	var count sync.Mutex
+	producers := installScriptedProducers(video, func(ctx context.Context, hub *deviceHub) {
+		every(ctx, func() {
+			_, now, _, _ := data.CaptureReceipt()
+			count.Lock()
+			frames++
+			if hub.wantEncoded() {
+				encodingAskedFor++
+			}
+			payload := testJPEG(byte(frames), 30)
+			count.Unlock()
+			hub.produce(&videoFrame{data: payload, codec: videoCodecMJPEG, nativeClock: kernelClock,
+				nativeNs: now - int64(scriptedBootMinusMonotonic), auAligned: true, native: true})
+		})
+	})
+	adapter := &cameraDataAdapter{video: video, monotonicMapping: scriptedMonotonicMapping}
+	source := data.Source{ID: storeTestSource, Kind: "camera", Detail: "Test Cam", Capture: snapshotEvery(10 * time.Millisecond)}
+
+	adapter.Arm("cam", 5*time.Second, []data.Source{source})
+	t.Cleanup(func() { adapter.Disarm("cam") })
+	if started := producers.started(); len(started) != 0 {
+		t.Fatalf("arming started the camera %d time(s), want it left alone until the trigger", len(started))
+	}
+
+	session := startedNow(t, "cam")
+	capture, err := adapter.Start(context.Background(), session, []data.Source{source})
+	if err != nil || capture == nil {
+		t.Fatalf("start: capture %v, err %v", capture, err)
+	}
+	dir := filepath.Join(session.Directory, "cameras", safeCaptureName(source.ID))
+	r := stopRecording(t, capture, dir, 3)
+
+	started := producers.started()
+	if len(started) != 1 {
+		t.Fatalf("the camera was started %d time(s), want once", len(started))
+	}
+	hub := started[0]
+	hub.mu.Lock()
+	subscriptionsEverMade := hub.nextID
+	hub.mu.Unlock()
+	count.Lock()
+	defer count.Unlock()
+	if subscriptionsEverMade != 1 || encodingAskedFor != 0 {
+		t.Errorf("the hub has had %d subscription(s) and the producer saw encoding asked for at %d of %d frame(s); want the capture's one subscription and no encoding asked for",
+			subscriptionsEverMade, encodingAskedFor, frames)
+	}
+	for _, record := range r.index(t) {
+		if record.Codec != indexedAsJPEG || !strings.HasSuffix(record.Segment, ".jpg") {
+			t.Errorf("record %+v is not a JPEG still", record)
+		}
+	}
+	if len(r.index(t)) < 3 {
+		t.Errorf("%d still(s), want at least 3", len(r.index(t)))
+	}
+}
+
+// pipelineLaunches records, for each launch of a camera's pipeline, whether
+// it ran the encoder.
+type pipelineLaunches struct {
+	mu      sync.Mutex
+	encodes []bool
+}
+
+func (l *pipelineLaunches) recorded() []bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]bool(nil), l.encodes...)
+}
+
+// installPipelineCamera makes every camera one that no native source captures.
+// Its producer runs a pipeline in the shape its subscribers call for and, as
+// streamGStreamer does, each launch refuses the camera's own frames once it
+// has started.
+func installPipelineCamera(t *testing.T, video *VideoService, why string) *pipelineLaunches {
+	t.Helper()
+	camerasHandOnNoFrames(t, why)
+	launches := &pipelineLaunches{}
+	installScriptedProducers(video, func(ctx context.Context, hub *deviceHub) {
+		_ = runShapedPipelines(ctx, hub, time.Minute, func(ctx context.Context, shape pipelineShape) error {
+			launches.mu.Lock()
+			launches.encodes = append(launches.encodes, shape.encode)
+			launches.mu.Unlock()
+			hub.nativeNotOffered(fixedReason("JPEG: " + why))
+			every(ctx, func() {
+				if shape.encode {
+					hub.produce(testChunkedH264Frame(testRAUFrame))
+				}
+			})
+			return ctx.Err()
+		})
+	})
+	return launches
+}
+
+// A capture that is the first subscriber of a camera read through a pipeline
+// starts that pipeline once, with the encoder, whatever it asked to store: the
+// native sources say beforehand that the camera's own frames are not handed
+// on, so no launch is spent on finding that out.
+func TestACaptureThatStartsAPipelineCameraLaunchesItOnceWithTheEncoder(t *testing.T) {
+	const why = "the camera offers no JPEG at 3840x2160"
+	for name, tc := range map[string]struct {
+		capture *data.SourceCapture
+		says    string
+	}{
+		"default":      {nil, ""},
+		"snapshot":     {snapshotEvery(time.Second), "snapshot mode stores a camera's own frames as stills, but this camera's own frames cannot be stored: JPEG: " + why + "; its video is used instead for the whole episode"},
+		"store frames": {&data.SourceCapture{Store: data.CaptureStoreFrames}, "store: frames was requested, but this camera's own frames cannot be stored: JPEG: " + why + "; video is recorded instead for the whole episode"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			video := NewVideoService(context.Background(), zap.NewNop(), nil)
+			launches := installPipelineCamera(t, video, why)
+			adapter := &cameraDataAdapter{video: video}
+			session := startedNow(t, "")
+			source := data.Source{ID: storeTestSource, Kind: "camera", Detail: "Test Cam", Capture: tc.capture}
+
+			capture, err := adapter.startOne(context.Background(), session, source, 0)
+			if err != nil {
+				t.Fatalf("startOne: %v", err)
+			}
+			r := stopRecording(t, capture, filepath.Join(session.Directory, "cameras", safeCaptureName(source.ID)), 1)
+
+			if encodes := launches.recorded(); len(encodes) != 1 || !encodes[0] {
+				t.Errorf("pipeline launches, whether each ran the encoder: %v; want one launch with the encoder", encodes)
+			}
+			assertFileNames(t, r, "segment-000001.h264")
+			assertDetailSays(t, r, tc.says)
+			if tc.says == "" && strings.Contains(r.result.SourceDetail, "own frames") {
+				t.Errorf("detail %q speaks of the camera's own frames for a capture that asked for none", r.result.SourceDetail)
+			}
+		})
+	}
+}
+
+// An armed campaign that stores only frames is the same first subscriber.
+func TestArmingAFramesCampaignOnAPipelineCameraLaunchesItOnceWithTheEncoder(t *testing.T) {
+	const why = "the camera offers no JPEG at 3840x2160"
+	video := NewVideoService(context.Background(), zap.NewNop(), nil)
+	launches := installPipelineCamera(t, video, why)
+	adapter := &cameraDataAdapter{video: video}
+	source := data.Source{ID: storeTestSource, Kind: "camera", Detail: "Test Cam", Capture: &data.SourceCapture{Store: data.CaptureStoreFrames}}
+
+	adapter.Arm("cam", 5*time.Second, []data.Source{source})
+	t.Cleanup(func() { adapter.Disarm("cam") })
+	adapter.armedMu.Lock()
+	armed := adapter.armed["cam"][source.ID]
+	adapter.armedMu.Unlock()
+	if armed == nil {
+		t.Fatal("the campaign armed no source")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(launches.recorded()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if encodes := launches.recorded(); len(encodes) != 1 || !encodes[0] {
+		t.Errorf("pipeline launches, whether each ran the encoder: %v; want one launch with the encoder", encodes)
+	}
+	if armed.primaryKind != encodedFrames || len(armed.storeNotes) != 1 || !strings.Contains(armed.storeNotes[0], "JPEG: "+why) {
+		t.Errorf("the armed source buffers kind %d with notes %q, want video with the reason its frames are not stored", armed.primaryKind, armed.storeNotes)
 	}
 }

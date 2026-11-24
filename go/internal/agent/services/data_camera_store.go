@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -56,6 +59,57 @@ func subscriptionKindsFor(capture *data.SourceCapture) (primary frameKind, nativ
 }
 
 type hubJoin func(kind frameKind) (*deviceHub, int, chan *videoFrame, error)
+
+// ownFramesForecast asks the native capture sources what the producer of a
+// camera would hand on for req, without starting it. asked is false for the
+// cameras runProducer and captureNode never give to those sources, whose
+// producer alone answers.
+func (s *VideoService) ownFramesForecast(hubKey string, req *agentpb.StreamVideoRequest) (own ownFrames, declined string, native, asked bool) {
+	if !strings.HasPrefix(hubKey, "/dev/video") || (s.sensorFrames != nil && isSensorLinkCameraPath(hubKey)) {
+		return ownFrames{}, "", false, false
+	}
+	if s.classifyTransport != nil {
+		if transport, _ := s.classifyTransport(filepath.Base(hubKey)); transport == camera.TransportCSI {
+			return ownFrames{}, "", false, false
+		}
+	}
+	own, declined, native = s.ownFramesFor(hubKey, req)
+	return own, declined, native, true
+}
+
+func (s *VideoService) ownFramesAreKnownToBeVideo(hubKey string, req *agentpb.StreamVideoRequest) bool {
+	own, declined, native, asked := s.ownFramesForecast(hubKey, req)
+	return asked && native && (declined != "" || encodedFrames.receives(&videoFrame{codec: own.codec}))
+}
+
+// joinsCameraAsItRuns reports that a join for req starts no producer: the
+// request names no parameters and the camera is running.
+func (s *VideoService) joinsCameraAsItRuns(hubKey string, req *agentpb.StreamVideoRequest) bool {
+	if streamRequestAssertsParams(req) {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hub, running := s.hubs[hubKey]
+	return running && hub.ctx.Err() == nil
+}
+
+// refusingOwnFramesKnownAbsent turns a join for the camera's own frames away
+// before it is made when the join may start the camera and no native source
+// would capture it. Made as the camera's first subscription, that join starts
+// its pipeline without the encoder, is refused once the pipeline runs, and
+// costs a second launch with the encoder. A camera that is running answers
+// for itself at the join.
+func (s *VideoService) refusingOwnFramesKnownAbsent(hubKey string, req *agentpb.StreamVideoRequest, join hubJoin) hubJoin {
+	return func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
+		if kind == nativeFrames && !s.joinsCameraAsItRuns(hubKey, req) {
+			if _, declined, native, asked := s.ownFramesForecast(hubKey, req); asked && !native {
+				return nil, 0, nil, errNativeUnavailable(declined)
+			}
+		}
+		return join(kind)
+	}
+}
 
 func joinWithVideoFallback(kind frameKind, join hubJoin) (hub *deviceHub, id int, ch chan *videoFrame, joined frameKind, refusal, err error) {
 	hub, id, ch, err = join(kind)

@@ -311,12 +311,15 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 		return nil, errors.Join(err, index.Close())
 	}
 	primaryKind, nativeBeside := subscriptionKindsFor(capture)
+	if mode == captureModeSnapshot && a.video.ownFramesAreKnownToBeVideo(src.key, req) {
+		primaryKind = encodedFrames
+	}
 	var achievedW, achievedH, achievedFPS uint32
 	var restarted bool
-	hub, subID, frames, primaryKind, ownFramesRefusal, err := joinWithVideoFallback(primaryKind, func(kind frameKind) (hub *deviceHub, id int, ch chan *videoFrame, err error) {
+	hub, subID, frames, primaryKind, ownFramesRefusal, err := joinWithVideoFallback(primaryKind, a.video.refusingOwnFramesKnownAbsent(src.key, req, func(kind frameKind) (hub *deviceHub, id int, ch chan *videoFrame, err error) {
 		hub, id, ch, achievedW, achievedH, achievedFPS, restarted, err = a.subscribeHub(ctx, src.key, req, kind)
 		return hub, id, ch, err
-	})
+	}))
 	if err != nil {
 		return nil, errors.Join(err, index.Close(), mappings.Close())
 	}
@@ -331,7 +334,10 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 	}
 	captureCtx, cancel := context.WithCancel(context.Background())
 	rejoin := func(ctx context.Context, kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
-		return a.video.joinHubKind(ctx, src.key, &agentpb.StreamVideoRequest{DeviceId: devID}, kind)
+		atDefaults := &agentpb.StreamVideoRequest{DeviceId: devID}
+		return a.video.refusingOwnFramesKnownAbsent(src.key, atDefaults, func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
+			return a.video.joinHubKind(ctx, src.key, atDefaults, kind)
+		})(kind)
 	}
 	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, primaryKind: primaryKind, wantsNativeBeside: nativeBeside, monotonicMapping: a.monotonicMapping, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, lastSnapshotIdx: -1}
 	if ownFramesRefusal != nil {
