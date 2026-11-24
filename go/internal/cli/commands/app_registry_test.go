@@ -94,6 +94,7 @@ type signedCall struct {
 // input: payload types, signed resources, manifest digest, unique blobs,
 // promised digest and size on upload, write-once releases and wrap slots.
 type fakeRegistry struct {
+	report func(*cloudpb.AssetApp) // edits each reported row of ListAppDeviceStates
 	cloudpb.UnimplementedArtifactRegistryServiceServer
 	cloudpb.UnimplementedDeploymentServiceServer
 	cloudpb.UnimplementedKeyDirectoryServiceServer

@@ -344,6 +344,7 @@ type registryOp struct {
 	roots       []*x509.Certificate
 	custodian   []byte
 	custodianID string
+	sent        map[string]int64 // device URI -> postbox entry of the statement this run sent it
 }
 
 // newRegistryOp loads this machine's registry key (registering it when Cloud
@@ -1009,6 +1010,10 @@ func (op *registryOp) signAssign(ctx context.Context, d *cloudpb.Deployment, kd 
 	}, &resp); err != nil {
 		return err
 	}
+	if op.sent == nil {
+		op.sent = map[string]int64{}
+	}
+	op.sent[device] = resp.GetPostboxEntryId()
 	cliLogln("Sent %s deployment %s revision %d (postbox entry %d)", device, d.GetId(), d.GetRevision(), resp.GetPostboxEntryId())
 	return nil
 }

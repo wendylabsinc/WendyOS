@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -29,6 +30,7 @@ type deployAnswers struct {
 	devices, tags, sites, config                                        []string
 	required                                                            []string // settings the release requires; filled from the release
 	run, installOnly, move, yes, wait                                   bool
+	waitTimeout                                                         time.Duration
 }
 
 // deployPoll is how often progress is read; tests shorten it.
@@ -102,6 +104,7 @@ func (a *deployAnswers) bindSteps(cmd *cobra.Command) {
 	f.StringVar(&a.note, "note", "", "6  Note for the history")
 	f.BoolVarP(&a.yes, "yes", "y", false, "6  Deploy without asking for confirmation")
 	f.BoolVar(&a.wait, "wait", false, "7  Stay until every device is done")
+	f.DurationVar(&a.waitTimeout, "wait-timeout", 30*time.Minute, "7  Stop waiting after this long, e.g. 45m or 2h")
 }
 
 func (a *deployAnswers) checkSteps() error {
@@ -110,6 +113,9 @@ func (a *deployAnswers) checkSteps() error {
 	}
 	if _, ok := keepTryingChoices[a.keepTrying]; !ok && a.keepTrying != "" {
 		return usageErrorf("--keep-trying must be 7d, 30d, 60d or 1y.")
+	}
+	if a.waitTimeout <= 0 {
+		return usageErrorf("--wait-timeout must be longer than 0, e.g. 30m.")
 	}
 	return nil
 }
@@ -352,7 +358,11 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 
 	// 7  Progress
 	say("7/7  Progress")
-	if err := op.progress(ctx, d, rel.GetName(), online, interactive || a.wait, say); err != nil {
+	follow := time.Duration(0)
+	if interactive || a.wait {
+		follow = a.waitTimeout
+	}
+	if err := op.progress(ctx, d, rel.GetName(), online, follow, say); err != nil {
 		return err
 	}
 	say("Follow it later with: wendy app deployment show %s/%s", a.app, plan.name)
@@ -452,9 +462,11 @@ func emptyRequired(config string, required []string) (string, error) {
 }
 
 // progress shows each device's state in the dashboard's words; with follow
-// it stays until every device is done, printing changes.
-func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, release string, online map[string]bool, follow bool, say func(string, ...any)) error {
+// above 0 it stays until every device is done, or follow has passed, printing
+// changes. Any failed device, or a device not done in time, is an error.
+func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, release string, online map[string]bool, follow time.Duration, say func(string, ...any)) error {
 	shown := map[string]string{}
+	deadline := time.Now().Add(follow)
 	for {
 		rows, err := op.appDeviceStates(ctx, d.GetAppId(), d.GetId())
 		if err != nil {
@@ -462,7 +474,7 @@ func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, relea
 		}
 		counts, done := map[string]int{}, true
 		for _, r := range rows {
-			state, detail := deviceState(r.GetState(), online[r.GetAssetId()])
+			state, detail := deviceState(r.GetState(), online[r.GetAssetId()], op.sent[certs.DeviceSPIFFEURI(op.org, r.GetAssetId())])
 			counts[state]++
 			done = done && (state == "running" || state == "installed" || state == "failed")
 			if line := fmt.Sprintf("     %-14s %-12s %s", r.GetAssetName(), state, detail); shown[r.GetAssetId()] != line {
@@ -470,7 +482,8 @@ func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, relea
 				say("%s", strings.TrimRight(line, " "))
 			}
 		}
-		if !follow || done {
+		late := follow > 0 && !done && !time.Now().Before(deadline)
+		if follow <= 0 || done || late {
 			var parts []string
 			for _, s := range []string{"running", "installed", "downloading", "waiting", "failed"} {
 				if counts[s] > 0 {
@@ -478,24 +491,38 @@ func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, relea
 				}
 			}
 			say("Deployed %s: %s %s to %s. %s.", d.GetName(), d.GetAppId(), release, plural(len(rows), "device"), strings.Join(parts, ", "))
+			if late {
+				return fmt.Errorf("stopped waiting after %s with devices not done. Check again with wendy app deployment show %s/%s, or wait longer with --wait-timeout", follow, d.GetAppId(), d.GetName())
+			}
+			if counts["failed"] > 0 {
+				return fmt.Errorf("%s failed. The reason is next to each device above; fix it, then update the deployment", plural(counts["failed"], "device"))
+			}
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return nil
-		case <-time.After(deployPoll):
+			return ctx.Err()
+		case <-time.After(min(deployPoll, max(time.Until(deadline), 0))):
 		}
 	}
 }
 
 // deviceState maps a device's report to the dashboard's per-device states
 // (running, installed, downloading, waiting, failed) and the reason with the
-// next step. Ruling 11 (sem via the orchestrator, 2026-11-13).
-func deviceState(s *cloudpb.AssetApp, isOnline bool) (string, string) {
+// next step. Ruling 11 (sem via the orchestrator, 2026-11-13). sent is the
+// postbox entry this run sent the device (0: none): a report of an earlier
+// entry, or "applied" for another release, is not about the statement sent.
+func deviceState(s *cloudpb.AssetApp, isOnline bool, sent int64) (string, string) {
+	if s.GetStatementPending() || s.GetPostboxEntryId() < sent {
+		return waitingState(isOnline)
+	}
 	switch s.GetOutcome() {
 	case cloudpb.ApplyOutcome_APPLY_OUTCOME_APPLIED:
-		if s.GetStatementPending() {
-			break
+		if s.GetReportedReleaseId() != s.GetAppReleaseId() {
+			if !isOnline {
+				return waitingState(false)
+			}
+			return "waiting", "Still runs an earlier release. It installs this one when it picks up its instruction."
 		}
 		if s.GetDesiredState() == cloudpb.Running_STOPPED {
 			return "installed", ""
@@ -516,6 +543,10 @@ func deviceState(s *cloudpb.AssetApp, isOnline bool) (string, string) {
 		cloudpb.ApplyOutcome_APPLY_OUTCOME_REJECTED_UNWRAP:
 		return "failed", "The device refused this deployment. Check the device's log, then deploy again."
 	}
+	return waitingState(isOnline)
+}
+
+func waitingState(isOnline bool) (string, string) {
 	if !isOnline {
 		return "waiting", "Offline. It installs the app when it comes back online."
 	}
@@ -752,5 +783,5 @@ func (op *registryOp) showDeployment(ctx context.Context, appID, name string, ou
 	if err != nil {
 		return err
 	}
-	return op.progress(ctx, d, release, online, false, say)
+	return op.progress(ctx, d, release, online, 0, say)
 }
