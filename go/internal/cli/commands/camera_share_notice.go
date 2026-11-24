@@ -207,7 +207,7 @@ func cameraSoftwareEncoderNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow
 			asked, _, _ := nodeSettingsOf(cfg.Entitlements, c, generation)
 			if served, _ := servedNodeOf(c, asked); served == appconfig.CameraFormatH264 {
 				lines = appendOnce(lines, fmt.Sprintf("Camera: %s: its H.264 is encoded in software (%s) on this device for as long as this app reads its node. "+
-					"\"format\": \"native\" or \"pixels\" need no encoder.", c.GetDescription(), encoder))
+					"\"format\": \"native\" or \"pixels\" run no encoder.", c.GetDescription(), encoder))
 			}
 		}
 	}
@@ -306,8 +306,9 @@ func agentWithoutNodeSettingsNotice(cfgs []*appconfig.AppConfig, cams []*cameraR
 
 // printCameraShareNotice prints the notice when the agent says the app's
 // camera will be shared, then which of its nodes a software encoder feeds,
-// what its entries disagree on and which allowlist entries configure nothing. Any failure or delay prints nothing, and so does
-// an agent whose rows say nothing of sharing.
+// what its entries disagree on and which allowlist entries configure nothing.
+// Any failure or delay prints nothing, and so does an agent whose rows say
+// nothing of sharing.
 func printCameraShareNotice(ctx context.Context, conn *grpcclient.AgentConnection, cfgs ...*appconfig.AppConfig) {
 	if !anyCameraShared(cfgs) || conn == nil || conn.AgentService == nil {
 		return

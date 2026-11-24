@@ -411,7 +411,7 @@ func TestPrintCameraShareNotice_WithNoCameraToShareAnEntryThatConfiguresNothingI
 
 const (
 	c920SharedH264      = `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 1280x720 H264, 30 fps, format h264, stamp time. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
-	c920EncodedSoftware = `Camera: HD Pro Webcam C920: HD Pro Webc (video0): its H.264 is encoded in software (x264enc) on this device for as long as this app reads its node. "format": "native" or "pixels" need no encoder.`
+	c920EncodedSoftware = `Camera: HD Pro Webcam C920: HD Pro Webc (video0): its H.264 is encoded in software (x264enc) on this device for as long as this app reads its node. "format": "native" or "pixels" run no encoder.`
 )
 
 // c920RowEncodedInSoftware is the camera's row from an agent on a device that
@@ -477,7 +477,7 @@ func TestCameraSoftwareEncoderNotices_OneLineForEachCameraWhoseH264NodeIsEncoded
 	got := cameraSoftwareEncoderNotices([]*appconfig.AppConfig{cameraCfg(appconfig.CameraFormatH264, "")}, []*hwCap{c920RowEncodedInSoftware(), logi, brio})
 	want := []string{
 		c920EncodedSoftware,
-		`Camera: Brio 101 (video4): its H.264 is encoded in software (openh264enc) on this device for as long as this app reads its node. "format": "native" or "pixels" need no encoder.`,
+		`Camera: Brio 101 (video4): its H.264 is encoded in software (openh264enc) on this device for as long as this app reads its node. "format": "native" or "pixels" run no encoder.`,
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("got  %q\nwant %q", got, want)
