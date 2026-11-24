@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -267,6 +268,27 @@ func (h *sharePumpHarness) logged(substr string) int {
 		}
 	}
 	return n
+}
+
+// The intervals an agent in the field runs with, which every other test here
+// shortens: the backoff after a failure that passes, whose last step repeats,
+// and the slower look at a camera that cannot serve its node.
+func TestSharePump_BacksOffInFourStepsAndLooksAgainAtACameraItCannotServeEveryMinute(t *testing.T) {
+	if shareCannotServeRecheck != time.Minute {
+		t.Errorf("shareCannotServeRecheck = %s, want one minute", shareCannotServeRecheck)
+	}
+	steps := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
+	if !slices.Equal(shareRetryBackoff, steps) {
+		t.Errorf("shareRetryBackoff = %v, want %v", shareRetryBackoff, steps)
+	}
+	p := newSharePump(nil, "app1", "cam0", newSpFakeNode(), spMode, appconfig.CameraStampTime, nil)
+	var delays []time.Duration
+	for range len(steps) + 2 {
+		delays = append(delays, p.nextDelay())
+	}
+	if want := append(steps, 10*time.Second, 10*time.Second); !slices.Equal(delays, want) {
+		t.Errorf("delays after consecutive failures = %v, want %v", delays, want)
+	}
 }
 
 func TestSharePump_StartsCaptureOnFirstReaderAndStopsOnLast(t *testing.T) {
