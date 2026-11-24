@@ -231,7 +231,7 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 		appconfig.CameraFormatPixels: v4l2PixFmtYUYV,
 	})
 	const wantFrames = 10
-	started, read := readShareCells(t, fx, cells, readers, wantFrames)
+	read := readShareCells(t, fx, cells, readers, wantFrames)
 
 	const frameBytes = pixelsFixtureWidth * pixelsFixtureHeight * 2
 	for _, cell := range cells {
@@ -261,7 +261,7 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 			}
 		}
 	}
-	checkShareCellStamps(t, fx, cells, read, started)
+	checkShareCellStamps(t, fx, cells, read)
 	checkShareCellStates(t, fx, cells)
 	for _, cell := range cells {
 		stamps := read[cell.id].stamps
@@ -335,7 +335,7 @@ func TestCameraShareNodesOfAnH264CameraFollowTheirEntitlements(t *testing.T) {
 		appconfig.CameraFormatPixels: v4l2PixFmtYUYV,
 	})
 	const wantFrames = 20
-	started, read := readShareCells(t, fx, cells, readers, wantFrames)
+	read := readShareCells(t, fx, cells, readers, wantFrames)
 
 	// carried is the shade of the frame the compressed nodes of each stamp
 	// carried under each buffer timestamp.
@@ -394,7 +394,7 @@ func TestCameraShareNodesOfAnH264CameraFollowTheirEntitlements(t *testing.T) {
 		}
 		t.Logf("%s: %d of %d pictures show the frame the compressed nodes carry under their stamp", cell.id, joined, len(read[cell.id].frames))
 	}
-	checkShareCellStamps(t, fx, cells, read, started)
+	checkShareCellStamps(t, fx, cells, read)
 	checkShareCellStates(t, fx, cells)
 	for _, cell := range cells {
 		stamps := read[cell.id].stamps
@@ -499,23 +499,21 @@ type shareCellFrames struct {
 
 // readShareCells starts every reader and reads them together until each has
 // want frames; the readers that got there first read on meanwhile, so all of
-// them hold the capture's last frames. started is CLOCK_MONOTONIC just before
-// the first STREAMON.
+// them hold the capture's last frames.
 //
 // Every reader dequeues from its STREAMON on, as an app does. A node keeps
 // only its newest shareNodeBuffers frames: a reader that streams and then
 // waits is moved on to the newest frame, which on an H.264 node is not one
 // it can start on.
-func readShareCells(t *testing.T, fx *shareCaptureFixture, cells []shareCell, readers map[string]*shareAppReader, want int) (started int64, read map[string]*shareCellFrames) {
+func readShareCells(t *testing.T, fx *shareCaptureFixture, cells []shareCell, readers map[string]*shareAppReader, want int) map[string]*shareCellFrames {
 	t.Helper()
-	started = monotonicNs()
 	for _, cell := range cells {
 		if err := readers[cell.id].start(); err != nil {
 			t.Fatalf("%s: reader STREAMON: %v", cell.id, err)
 		}
 	}
 	var mu sync.Mutex
-	read = map[string]*shareCellFrames{}
+	read := map[string]*shareCellFrames{}
 	for _, cell := range cells {
 		read[cell.id] = &shareCellFrames{}
 	}
@@ -560,20 +558,20 @@ func readShareCells(t *testing.T, fx *shareCaptureFixture, cells []shareCell, re
 				fx.svc.CameraShareReport(fx.ctx)[fx.path][camerashare.KeyState], fx.feed.err(), record, shareLogLines(fx.logs, cell.id))
 		}
 	}
-	return started, read
+	return read
 }
 
 // checkShareCellStamps fails unless every buffer timestamp is what its cell's
 // stamp says. A "frame" timestamp is a sample ID, read back as tv_sec*1e6 +
 // tv_usec, the timestamp in whole microseconds: the IDs of a node increase and
 // none is beyond what the camera's one capture has minted. A "time" timestamp
-// is a capture time: on CLOCK_MONOTONIC between started and now, and later
-// than the frame before it.
+// is a capture time: on CLOCK_MONOTONIC between the moment the fixture began
+// to feed its camera and now, and later than the frame before it.
 //
-// A v4l2loopback node hands a reader that starts streaming the frame it was
-// written last, so the first frame a capture of the fixture's camera takes may
-// have been captured up to one feed period before the capture started.
-func checkShareCellStamps(t *testing.T, fx *shareCaptureFixture, cells []shareCell, read map[string]*shareCellFrames, started int64) {
+// The kernel stamps a frame of the fixture's camera when the feed writes it,
+// so none is older than the feed. A capture can be: a v4l2loopback node hands
+// a reader that starts streaming a frame written before it started.
+func checkShareCellStamps(t *testing.T, fx *shareCaptureFixture, cells []shareCell, read map[string]*shareCellFrames) {
 	t.Helper()
 	if n := hubCount(fx.svc); n != 1 {
 		t.Fatalf("%d hubs run while %d apps read one camera, want 1", n, len(cells))
@@ -581,7 +579,7 @@ func checkShareCellStamps(t *testing.T, fx *shareCaptureFixture, cells []shareCe
 	fx.svc.mu.Lock()
 	minted := fx.svc.sampleSeqs[fx.path].Load()
 	fx.svc.mu.Unlock()
-	earliest, now := (started-int64(time.Second/pixelsFixtureFPS))/1000*1000, monotonicNs()
+	earliest, now := fx.fedFrom/1000*1000, monotonicNs()
 	for _, cell := range cells {
 		stamps := read[cell.id].stamps
 		for i, stamp := range stamps {
@@ -643,6 +641,7 @@ type shareCaptureFixture struct {
 	logs       *observer.ObservedLogs
 	path       string
 	feed       *fixtureFeed
+	fedFrom    int64 // CLOCK_MONOTONIC just before the feed's first write
 	statePath  string
 	svc        *VideoService
 	containers []string
@@ -695,6 +694,7 @@ func startShareFixture(t *testing.T, cam shareFixtureCamera, containers ...strin
 
 	// Step 1: the camera.
 	path := createPixelsFixtureNode(t, ctx, logger)
+	fx.fedFrom = monotonicNs()
 	feed := cam.feed(t, ctx, path)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
