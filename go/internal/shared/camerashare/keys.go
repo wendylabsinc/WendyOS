@@ -23,10 +23,10 @@ const (
 	// such as a camera's metadata node, never has it.
 	KeyStableID = "stable_id"
 	// KeyH264Encoder names the element that makes the camera's H.264 on this
-	// device and what kind it is, e.g. "x264enc (software)". Only a camera
-	// whose H.264 the device encodes in software has it: a camera that
-	// produces H.264 itself, a device with a hardware encoder and an agent
-	// from before the key set none.
+	// device and what kind it is, e.g. "x264enc (software)". A row has it
+	// only for a camera the agent shares with an h264 mode and encodes in
+	// software. A camera that produces H.264 itself, an element that is not
+	// known to be software, and an agent from before the key set none.
 	KeyH264Encoder = "h264_encoder"
 )
 

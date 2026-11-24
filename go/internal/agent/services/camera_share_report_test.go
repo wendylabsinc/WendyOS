@@ -171,7 +171,8 @@ func TestCameraShareReport_NamesTheSoftwareEncoderOfACamerasH264(t *testing.T) {
 		"a webcam's JPEG frames and x264enc":                  {csC920(), []string{"jpegdec", "x264enc"}, "x264enc (software)"},
 		"a webcam's JPEG frames and openh264enc":              {csC920(), []string{"jpegdec", "openh264enc"}, "openh264enc (software)"},
 		"a camera that produces H.264":                        {csH264Cam(), []string{"avdec_h264", "jpegdec", "x264enc"}, ""},
-		"a hardware encoder beside x264enc":                   {csC920(), []string{"jpegdec", "v4l2h264enc", "x264enc"}, ""},
+		"a hardware encoder chosen before x264enc":            {csC920(), []string{"jpegdec", "v4l2h264enc", "x264enc"}, ""},
+		"x264enc chosen before an installed vaapih264enc":     {csC920(), []string{"jpegdec", "x264enc", "vaapih264enc"}, "x264enc (software)"},
 		"an encoder that is hardware or software as it likes": {csC920(), []string{"jpegdec", "vtenc_h264"}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {

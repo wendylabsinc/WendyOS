@@ -951,7 +951,7 @@ func TestRecover_SameModelCamerasThatSwapPathsKeepTheirSettingsNotTheirPathsEntr
 	// What the app now reads at each path is the other path's entry. The h264
 	// node names its encoder as it did before the swap.
 	for path, state := range map[string]string{
-		"/dev/video0": "cv-a [format h264, stamp time] (idle; " + sfSoftwareEncoderNote + ")",
+		"/dev/video0": "cv-a [format h264, stamp time] (idle; " + sfSoftwareEncoderIdle + ")",
 		"/dev/video2": "cv-a [format native, stamp frame] (idle)",
 	} {
 		if got := h.reportOf(path)["share_state"]; got != state {
@@ -2243,107 +2243,6 @@ func TestCreateCameraShares_ACorrectedManifestCreatedWhileTheCameraIsAwayDropsTh
 
 // A network camera is read through its own node, not through a share node, so
 // its row carries the stable id an allowlist entry may hold and no share mode.
-const (
-	sfSoftwareEncoderNote    = "fed by the software encoder x264enc"
-	sfSoftwareEncoderWarning = `camera share: cv-a: C920 (/dev/video4): its h264 node is fed by the software encoder x264enc for as long as the app reads it; "format": "native" or "pixels" need no encoder`
-)
-
-// An h264 node of a webcam is filled by an encoder this device runs. Where
-// that encoder is software the node says so, in its state and in the state
-// file, and its create warns once. The h264 node of a camera that produces
-// H.264 carries the camera's own frames and says nothing, and neither does a
-// node of another format on the webcam.
-func TestCreateCameraShares_AnH264NodeFedByASoftwareEncoderSaysSoAndIsWarnedOfOnce(t *testing.T) {
-	h := newCSHarness(t, csBrio(), csH264Cam(), csC920())
-	hcCanDecode(h.s, "avdec_h264", "jpegdec", "x264enc")
-	entitlements := []appconfig.Entitlement{
-		sfCameraEntitlement(appconfig.CameraFormatNative, "", "Brio 101"),
-		sfCameraEntitlement(appconfig.CameraFormatH264, "", "Logi H264"),
-		sfCameraEntitlement(appconfig.CameraFormatH264, "", "C920"),
-	}
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
-
-	records := h.records("cv-a")
-	if len(records) != 3 {
-		t.Fatalf("records = %d, want a node for each camera; logs: %v", len(records), h.logs.All())
-	}
-	wantNotes := map[string]string{"Brio 101": "", "Logi H264": "", "C920": sfSoftwareEncoderNote}
-	for i, r := range records {
-		if r.encoderNote != wantNotes[r.cameraName] {
-			t.Errorf("%s (%s): record's encoder note = %q, want %q", r.cameraName, describeShareNode(r.mode, r.stamp), r.encoderNote, wantNotes[r.cameraName])
-		}
-		note, told := h.stateShares("cv-a")[i]["encoderNote"]
-		if told != (wantNotes[r.cameraName] != "") || (told && note != wantNotes[r.cameraName]) {
-			t.Errorf("%s: state file share holds encoderNote %v (present %v), want %q", r.cameraName, note, told, wantNotes[r.cameraName])
-		}
-	}
-	for path, state := range map[string]string{
-		"/dev/video0": "cv-a [format native, stamp time] (idle)",
-		"/dev/video2": "cv-a [format h264, stamp time] (idle)",
-		"/dev/video4": "cv-a [format h264, stamp time] (idle; " + sfSoftwareEncoderNote + ")",
-	} {
-		if got := h.reportOf(path)["share_state"]; got != state {
-			t.Errorf("%s: share_state = %q\nwant %q", path, got, state)
-		}
-	}
-	if n := sfWarnings(h, sfSoftwareEncoderWarning); n != 1 {
-		t.Errorf("warned %d times of the software encoder, want once; logs: %v", n, h.logs.All())
-	}
-	if n := h.logged("software encoder"); n != 1 {
-		t.Errorf("%d lines tell of a software encoder, want the one for the webcam's h264 node; logs: %v", n, h.logs.All())
-	}
-
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
-	if n := h.logged("software encoder"); n != 1 {
-		t.Errorf("a create that found its node again warned of the software encoder: %d lines, want 1; logs: %v", n, h.logs.All())
-	}
-	h.s.RemoveCameraShares("cv-a")
-	h.drainRemovals()
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
-	if n := sfWarnings(h, sfSoftwareEncoderWarning); n != 2 {
-		t.Errorf("after a second deploy the software encoder was warned of %d times, want once per deploy; logs: %v", n, h.logs.All())
-	}
-}
-
-func TestCreateCameraShares_AnH264NodeFedByAHardwareEncoderSaysNothingOfIt(t *testing.T) {
-	h := newCSHarness(t, csC920())
-	hcCanDecode(h.s, "jpegdec", "v4l2h264enc", "x264enc")
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatH264, "")})
-	records := h.records("cv-a")
-	if len(records) != 1 || records[0].mode != sfH264Mode || records[0].encoderNote != "" {
-		t.Fatalf("records = %+v, want one h264 node without an encoder note; logs: %v", records, h.logs.All())
-	}
-	if got, want := h.reportOf("/dev/video4")["share_state"], "cv-a [format h264, stamp time] (idle)"; got != want {
-		t.Errorf("share_state = %q, want %q", got, want)
-	}
-	if n := h.logged("encoder"); n != 0 {
-		t.Errorf("%d lines tell of an encoder; logs: %v", n, h.logs.All())
-	}
-}
-
-func TestCreateCameraShares_ASoftwareEncoderNoteSurvivesAnAgentRestartInTheState(t *testing.T) {
-	h := newCSHarness(t, csC920())
-	sfCanDeriveFrames(h.s)
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatH264, "")})
-	state, err := os.ReadFile(cameraSharesPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.s.Shutdown()
-	h = newCSHarness(t, csC920())
-	sfCanDeriveFrames(h.s)
-	h.loop.aux[255] = "C920"
-	h.writeState(string(state))
-	h.s.loadCameraShares()
-	h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a"}})
-	if got, want := h.reportOf("/dev/video4")["share_state"], "cv-a [format h264, stamp time] (idle; "+sfSoftwareEncoderNote+")"; got != want {
-		t.Errorf("share_state = %q\nwant         %q", got, want)
-	}
-	if n := h.logged("software encoder"); n != 0 {
-		t.Errorf("adopting the share warned of its encoder again: %d lines; logs: %v", n, h.logs.All())
-	}
-}
-
 func TestCameraShareReport_ANetworkCamerasRowGivesItsStableIDAndNoShareMode(t *testing.T) {
 	h := newCSHarness(t, csBrio())
 	dir := t.TempDir()
@@ -2428,5 +2327,164 @@ func TestCreateCameraShares_ACreateThatStopsBeforeTheCamerasDropsTheEarlierManif
 				t.Errorf("the state file still tells of the disagreement: %q", note)
 			}
 		})
+	}
+}
+
+const (
+	sfSoftwareEncoderNote    = "fed by the software encoder x264enc"
+	sfSoftwareEncoderIdle    = sfSoftwareEncoderNote + " when the app reads"
+	sfSoftwareEncoderWarning = `camera share: cv-a: C920 (/dev/video4): its h264 node is fed by the software encoder x264enc for as long as the app reads it; "format": "native" or "pixels" run no encoder`
+)
+
+// An h264 node of a webcam is filled by an encoder this device runs. Where
+// that encoder is software the node's state says so, and its create warns
+// once. The h264 node of a camera that produces H.264 carries the camera's own
+// frames and says nothing, and neither does a node of another format on the
+// webcam. The state file holds none of it: what the node says is asked of the
+// device each time.
+func TestCreateCameraShares_AnH264NodeFedByASoftwareEncoderSaysSoAndIsWarnedOfOnce(t *testing.T) {
+	h := newCSHarness(t, csBrio(), csH264Cam(), csC920())
+	hcCanDecode(h.s, "avdec_h264", "jpegdec", "x264enc")
+	entitlements := []appconfig.Entitlement{
+		sfCameraEntitlement(appconfig.CameraFormatNative, "", "Brio 101"),
+		sfCameraEntitlement(appconfig.CameraFormatH264, "", "Logi H264"),
+		sfCameraEntitlement(appconfig.CameraFormatH264, "", "C920"),
+	}
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
+
+	if records := h.records("cv-a"); len(records) != 3 {
+		t.Fatalf("records = %d, want a node for each camera; logs: %v", len(records), h.logs.All())
+	}
+	for path, state := range map[string]string{
+		"/dev/video0": "cv-a [format native, stamp time] (idle)",
+		"/dev/video2": "cv-a [format h264, stamp time] (idle)",
+		"/dev/video4": "cv-a [format h264, stamp time] (idle; " + sfSoftwareEncoderIdle + ")",
+	} {
+		if got := h.reportOf(path)["share_state"]; got != state {
+			t.Errorf("%s: share_state = %q\nwant %q", path, got, state)
+		}
+	}
+	if state, err := os.ReadFile(cameraSharesPath); err != nil || strings.Contains(string(state), "ncoder") {
+		t.Errorf("the state file tells of an encoder (read error %v): %s", err, state)
+	}
+	if n := sfWarnings(h, sfSoftwareEncoderWarning); n != 1 {
+		t.Errorf("warned %d times of the software encoder, want once; logs: %v", n, h.logs.All())
+	}
+	if n := h.logged("software encoder"); n != 1 {
+		t.Errorf("%d lines tell of a software encoder, want the one for the webcam's h264 node; logs: %v", n, h.logs.All())
+	}
+
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
+	if n := h.logged("software encoder"); n != 1 {
+		t.Errorf("a create that found its node again warned of the software encoder: %d lines, want 1; logs: %v", n, h.logs.All())
+	}
+	h.s.RemoveCameraShares("cv-a")
+	h.drainRemovals()
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", entitlements)
+	if n := sfWarnings(h, sfSoftwareEncoderWarning); n != 2 {
+		t.Errorf("after a second deploy the software encoder was warned of %d times, want once per deploy; logs: %v", n, h.logs.All())
+	}
+}
+
+func TestCreateCameraShares_AnH264NodeFedByAHardwareEncoderSaysNothingOfIt(t *testing.T) {
+	h := newCSHarness(t, csC920())
+	hcCanDecode(h.s, "jpegdec", "v4l2h264enc", "x264enc")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatH264, "")})
+	if records := h.records("cv-a"); len(records) != 1 || records[0].mode != sfH264Mode {
+		t.Fatalf("records = %+v, want one h264 node; logs: %v", records, h.logs.All())
+	}
+	if got, want := h.reportOf("/dev/video4")["share_state"], "cv-a [format h264, stamp time] (idle)"; got != want {
+		t.Errorf("share_state = %q, want %q", got, want)
+	}
+	if n := h.logged("encoder"); n != 0 {
+		t.Errorf("%d lines tell of an encoder; logs: %v", n, h.logs.All())
+	}
+}
+
+// What an h264 node says of its encoder is the device's answer when the state
+// is reported, not what held when the node was made: a share adopted from the
+// state file gains the note on a device that encodes in software, whichever
+// agent wrote the file, and has none once a hardware encoder is installed.
+func TestCameraShareReport_AnAdoptedH264NodeSaysOfItsEncoderWhatHoldsNow(t *testing.T) {
+	h := newCSHarness(t, csC920())
+	sfCanDeriveFrames(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatH264, "")})
+	state, err := os.ReadFile(cameraSharesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.s.Shutdown()
+	for name, tc := range map[string]struct {
+		elements []string
+		want     string
+	}{
+		"the device encodes in software":   {[]string{"jpegdec", "x264enc"}, "cv-a [format h264, stamp time] (idle; " + sfSoftwareEncoderIdle + ")"},
+		"a hardware encoder was installed": {[]string{"jpegdec", "v4l2h264enc", "x264enc"}, "cv-a [format h264, stamp time] (idle)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCSHarness(t, csC920())
+			hcCanDecode(h.s, tc.elements...)
+			h.loop.aux[255] = "C920"
+			h.writeState(string(state))
+			h.s.loadCameraShares()
+			h.s.SyncCameraShares(context.Background(), []CameraShareContainer{{ID: "cv-a"}})
+			if got := h.reportOf("/dev/video4")["share_state"]; got != tc.want {
+				t.Errorf("share_state = %q\nwant         %q", got, tc.want)
+			}
+			if n := h.logged("software encoder"); n != 0 {
+				t.Errorf("adopting the share warned of its encoder: %d lines; logs: %v", n, h.logs.All())
+			}
+		})
+	}
+}
+
+// The note is said only where the software encoder feeds the node or will
+// when the app reads: not of an app that holds the real camera, and not while
+// the node gets no frames.
+func TestCameraShareReport_AnH264NodeNamesItsSoftwareEncoderOnlyWhileItIsReadOrIdle(t *testing.T) {
+	h := newCSHarness(t, csC920())
+	sfCanDeriveFrames(h.s)
+	h264 := []appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatH264, "")}
+	states := map[string]func(r *shareRecord){
+		"cv-cannot":  func(r *shareRecord) { r.pump = &sharePump{state: shareState{Phase: shareCannotServe, Detail: "why"}} },
+		"cv-cover":   func(r *shareRecord) { r.coverFailed = "no namespace" },
+		"cv-idle":    func(r *shareRecord) { r.pump = &sharePump{state: shareState{Phase: shareIdle}} },
+		"cv-noframe": func(r *shareRecord) { r.pump = &sharePump{state: shareState{Phase: shareNoFrames, Detail: "why"}} },
+		"cv-reading": func(r *shareRecord) { r.pump = &sharePump{state: shareState{Phase: shareReading}} },
+		"cv-took":    func(r *shareRecord) { r.tookRealCamera = "python3" },
+		"cv-unread":  func(*shareRecord) {},
+		"cv-waiting": func(r *shareRecord) { r.pump = &sharePump{state: shareState{Phase: shareWaiting, Detail: "why"}} },
+	}
+	for id := range states {
+		h.s.CreateCameraShares(context.Background(), id, "sh.wendy."+id, h264)
+	}
+	state, err := os.ReadFile(cameraSharesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.s.Shutdown()
+	h = newCSHarness(t, csC920())
+	sfCanDeriveFrames(h.s)
+	h.writeState(string(state))
+	h.s.loadCameraShares()
+	h.s.shares.mu.Lock()
+	for id, set := range states {
+		set(h.s.shares.containers[id].shares[0])
+	}
+	h.s.shares.mu.Unlock()
+
+	const settings = " [format h264, stamp time] "
+	want := strings.Join([]string{
+		"cv-cannot" + settings + "(cannot serve: why)",
+		"cv-cover" + settings + "(not sharing: its start's cover failed: no namespace)",
+		"cv-idle" + settings + "(idle; " + sfSoftwareEncoderIdle + ")",
+		"cv-noframe" + settings + "(no frames: why)",
+		"cv-reading" + settings + "(reading; " + sfSoftwareEncoderNote + ")",
+		"cv-took" + settings + "(not sharing: took the real camera after a replug)",
+		"cv-unread" + settings + "(idle; " + sfSoftwareEncoderIdle + ")",
+		"cv-waiting" + settings + "(waiting: why)",
+	}, ", ")
+	if got := h.reportOf("/dev/video4")["share_state"]; got != want {
+		t.Errorf("share_state = %q\nwant         %q", got, want)
 	}
 }

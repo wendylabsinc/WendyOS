@@ -78,9 +78,14 @@ func (s *VideoService) framesForNodes(dev *agentpb.VideoDevice) nodeFrames {
 	case !frames.native:
 		frames.pictures, frames.pictureRate, frames.picturesWhyNot = tappedPictures(dev.GetPath(), gstPath, available)
 	case frames.ownDeclined == "":
-		frames.pictures, frames.picturesWhyNot = s.decodedPictures(dev.GetPath(), frames.own)
+		// The layer that decodes the pictures has chosen the encoder too. A
+		// camera with no pictures has no layer to ask.
+		if layer, whyNot := s.pictureLayerFor(nil, dev.GetPath(), frames.own); layer != nil {
+			frames.pictures, frames.softwareEncoder = layer.pictures, layer.softwareEncoder()
+		} else {
+			frames.picturesWhyNot, frames.softwareEncoder = whyNot, softwareEncoderOfH264From(frames.own.codec, available)
+		}
 		frames.pictureRate = frames.own.framerate
-		frames.softwareEncoder = softwareEncoderOfH264From(frames.own.codec, available)
 	}
 	return frames
 }

@@ -375,12 +375,8 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 	}
 
 	decision.Mode = node.Mode()
-	encoderNote := ""
-	if decision.SoftwareEncoder != "" {
-		encoderNote = describeSoftwareEncoder(decision.SoftwareEncoder)
-	}
 	r := &shareRecord{cameraName: dev.GetName(), cameraPath: dev.GetPath(), mode: decision.Mode, stamp: stamp,
-		askedFormat: decision.AskedFormat, askedWhyNot: decision.AskedWhyNot, encoderNote: encoderNote, settingsNote: settingsNote, node: nr, camera: id, nodeMade: made,
+		askedFormat: decision.AskedFormat, askedWhyNot: decision.AskedWhyNot, settingsNote: settingsNote, node: nr, camera: id, nodeMade: made,
 		siblings: sameModelPorts(id, s.presentCameraIdentities())}
 	start, refused := s.storeShare(containerID, appID, r, node, creation)
 	if refused != "" {
@@ -397,9 +393,9 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		s.shareLogger().Warn(fmt.Sprintf("camera share: %s: %s (%s): %s", containerID, dev.GetName(), dev.GetPath(),
 			describeServedInstead(decision.AskedFormat, decision.Mode.Format, decision.AskedWhyNot)))
 	}
-	if encoderNote != "" {
-		s.shareLogger().Warn(fmt.Sprintf(`camera share: %s: %s (%s): its %s node is %s for as long as the app reads it; "format": "native" or "pixels" need no encoder`,
-			containerID, dev.GetName(), dev.GetPath(), decision.Mode.Format, encoderNote))
+	if decision.SoftwareEncoder != "" {
+		s.shareLogger().Warn(fmt.Sprintf(`camera share: %s: %s (%s): its %s node is fed by the software encoder %s for as long as the app reads it; "format": "native" or "pixels" run no encoder`,
+			containerID, dev.GetName(), dev.GetPath(), decision.Mode.Format, decision.SoftwareEncoder))
 	}
 	if !noted {
 		s.warnOfSettingsNote(containerID, dev, settingsNote)
@@ -1942,9 +1938,8 @@ type cameraShareStateShare struct {
 	// know them ignores them, so they are written in either version.
 	AskedFormat string `json:"askedFormat,omitempty"`
 	AskedWhyNot string `json:"askedWhyNot,omitempty"`
-	// SettingsNote and EncoderNote are the record's, written like the two above.
+	// SettingsNote is the record's, written like the two above.
 	SettingsNote string `json:"settingsNote,omitempty"`
-	EncoderNote  string `json:"encoderNote,omitempty"`
 	Node         int    `json:"node"`
 	// SameModelPorts is the record's siblings; omitted when it has none, and
 	// absent from files written before it existed.
@@ -2004,7 +1999,6 @@ func (s *VideoService) persistCameraShares() {
 				AskedFormat:    r.askedFormat,
 				AskedWhyNot:    r.askedWhyNot,
 				SettingsNote:   r.settingsNote,
-				EncoderNote:    r.encoderNote,
 				Node:           r.node,
 				SameModelPorts: append([]string(nil), r.siblings...),
 			})
@@ -2103,7 +2097,6 @@ func (s *VideoService) loadCameraShares() {
 				askedFormat:  sh.AskedFormat,
 				askedWhyNot:  sh.AskedWhyNot,
 				settingsNote: sh.SettingsNote,
-				encoderNote:  sh.EncoderNote,
 				node:         sh.Node,
 				camera:       camera.Identity{Device: sh.Camera.Device, Index: sh.Camera.Index, Name: sh.Camera.Name},
 				siblings:     append([]string(nil), sh.SameModelPorts...),
@@ -3389,12 +3382,7 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 			continue
 		}
 		props := map[string]string{camerashare.KeyStableID: dev.GetStableId()}
-		// Who shares a camera comes from the records, not from a decision, so
-		// a decision that misses the budget costs only the mode or reason.
-		if with, state := s.shareStatesOf(dev.GetPath()); len(with) > 0 {
-			props[camerashare.KeyWith] = strings.Join(with, ", ")
-			props[camerashare.KeyState] = strings.Join(state, ", ")
-		}
+		softwareEncoder := ""
 		if ctx.Err() == nil {
 			if decisions, ok := withinBudget(ctx, func() map[string]shareDecision {
 				return s.shareDecisionsFor(dev, appconfig.CameraFormats...)
@@ -3424,11 +3412,18 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 							props[camerashare.KeyModeOfFormat(format)] = decision.Mode.String()
 						}
 					}
-					if encoder := decisions[appconfig.CameraFormatH264].SoftwareEncoder; encoder != "" {
-						props[camerashare.KeyH264Encoder] = camerashare.SoftwareEncoder(encoder)
+					if softwareEncoder = decisions[appconfig.CameraFormatH264].SoftwareEncoder; softwareEncoder != "" {
+						props[camerashare.KeyH264Encoder] = camerashare.SoftwareEncoder(softwareEncoder)
 					}
 				}
 			}
+		}
+		// Who shares a camera comes from the records, not from a decision, so
+		// a decision that misses the budget costs only the mode or reason, and
+		// what an h264 node says of its encoder.
+		if with, state := s.shareStatesOf(dev.GetPath(), softwareEncoder); len(with) > 0 {
+			props[camerashare.KeyWith] = strings.Join(with, ", ")
+			props[camerashare.KeyState] = strings.Join(state, ", ")
 		}
 		report[dev.GetPath()] = props
 	}
@@ -3455,8 +3450,10 @@ func (s *VideoService) pictureDecoderAt(path string) string {
 // path and, in the same order,
 // "<id> [format <format>, stamp <stamp>] (<phase>[: <detail>][; <note>]...)"
 // for each. A record whose camera was absent at its last resolve is not the
-// camera at path (sharedModeOf).
-func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
+// camera at path (sharedModeOf). softwareEncoder is the element the camera's
+// row names under h264_encoder, or "": an h264 node that is read, or idle,
+// says of it what describeSoftwareEncoder says.
+func (s *VideoService) shareStatesOf(path, softwareEncoder string) (ids, states []string) {
 	type snap struct {
 		id                 string
 		pump               *sharePump
@@ -3464,7 +3461,6 @@ func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
 		modeNote           string
 		format, stamp      string
 		asked, askedWhyNot string
-		encoderNote        string
 		settingsNote       string
 	}
 	var snaps []snap
@@ -3475,7 +3471,7 @@ func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
 		}
 		for _, r := range c.shares {
 			if r != nil && r.cameraPath == path && !r.cameraAbsent {
-				snaps = append(snaps, snap{id, r.pump, r.tookRealCamera, r.coverFailed, r.modeNote, r.mode.Format, r.stamp, r.askedFormat, r.askedWhyNot, r.encoderNote, r.settingsNote})
+				snaps = append(snaps, snap{id, r.pump, r.tookRealCamera, r.coverFailed, r.modeNote, r.mode.Format, r.stamp, r.askedFormat, r.askedWhyNot, r.settingsNote})
 				break
 			}
 		}
@@ -3484,16 +3480,20 @@ func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
 	slices.SortFunc(snaps, func(a, b snap) int { return strings.Compare(a.id, b.id) })
 	for _, sn := range snaps {
 		var text string
+		// phase stays empty for an app that holds the real camera, not its node.
+		var phase sharePhase
 		switch {
 		case sn.tookB != "":
 			text = "not sharing: took the real camera after a replug"
 		case sn.coverFailed != "":
 			text = "not sharing: its start's cover failed: " + sn.coverFailed
 		case sn.pump == nil:
-			text = string(shareIdle)
+			phase = shareIdle
+			text = string(phase)
 		default:
 			st := sn.pump.State()
-			text = string(st.Phase)
+			phase = st.Phase
+			text = string(phase)
 			if st.Detail != "" {
 				text += ": " + st.Detail
 			}
@@ -3501,8 +3501,10 @@ func (s *VideoService) shareStatesOf(path string) (ids, states []string) {
 				text += "; pictures decoded by " + decoder
 			}
 		}
-		if sn.encoderNote != "" {
-			text += "; " + sn.encoderNote
+		if softwareEncoder != "" && sn.format == appconfig.CameraFormatH264 {
+			if note := describeSoftwareEncoder(softwareEncoder, phase); note != "" {
+				text += "; " + note
+			}
 		}
 		if sn.modeNote != "" {
 			text += "; " + sn.modeNote

@@ -153,8 +153,17 @@ type shareDecision struct {
 	SoftwareEncoder          string
 }
 
-func describeSoftwareEncoder(element string) string {
-	return "fed by the software encoder " + element
+// describeSoftwareEncoder is what a node in this phase says of the software
+// element that makes its frames: that it feeds the node while the app reads,
+// and that it will once the app does. In every other phase nothing feeds it.
+func describeSoftwareEncoder(element string, phase sharePhase) string {
+	switch phase {
+	case shareReading:
+		return "fed by the software encoder " + element
+	case shareIdle:
+		return "fed by the software encoder " + element + " when the app reads"
+	}
+	return ""
 }
 
 func describeServedInstead(askedFormat, servedFormat, whyNot string) string {
