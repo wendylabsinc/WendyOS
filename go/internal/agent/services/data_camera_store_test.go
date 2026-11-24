@@ -313,6 +313,61 @@ func TestStoreOnAnH264CameraWritesTheVideoFilesForEveryValue(t *testing.T) {
 	}
 }
 
+func rateCappedH264CameraScript() []*videoFrame {
+	return []*videoFrame{
+		nativeH264At(1, 1000*time.Millisecond, testRAUFrame),
+		nativeH264At(2, 1100*time.Millisecond, testInterFrame),
+		nativeH264At(3, 1250*time.Millisecond, testRAUFrame),
+		nativeH264At(4, 1300*time.Millisecond, testInterFrame),
+		nativeH264At(5, 3000*time.Millisecond, testRAUFrame),
+		nativeH264At(6, 3100*time.Millisecond, testInterFrame),
+	}
+}
+
+// The one stream of an H.264 camera is rate capped as video is, by whole
+// groups of pictures, whatever store asks for: the second group is over a
+// 2 Hz cap and is left out.
+func TestStoreOnAnH264CameraUnderARateCapKeepsWholeGroupsOfPicturesForEveryValue(t *testing.T) {
+	const capped = "rate cap 2 Hz applied at GOP granularity (best effort)"
+	keptOf := func(script []*videoFrame) []*videoFrame {
+		return []*videoFrame{script[0], script[1], script[4], script[5]}
+	}
+	video := newKernelClockCamera(t).recordFrames(t, &data.SourceCapture{Store: data.CaptureStoreVideo, Rate: 2}, 2, rateCappedH264CameraScript(), 4)
+	assertFileNames(t, video, "segment-000001.h264")
+	assertRecordsAddress(t, video, indexedAsH264, keptOf(rateCappedH264CameraScript()))
+	assertDetailSays(t, video, capped)
+
+	for store, tc := range map[string]struct {
+		subscribers int
+		detail      string
+	}{
+		data.CaptureStoreFrames: {2, "store: frames: this camera's own frames are its encoded video (VIDEO_CODEC_H264), stored in the same files and index as store: video"},
+		data.CaptureStoreBoth:   {3, "store: both: this camera's own frames are its encoded video (VIDEO_CODEC_H264), so there is one stream and it is stored once"},
+	} {
+		t.Run(store, func(t *testing.T) {
+			r := newKernelClockCamera(t).recordFrames(t, &data.SourceCapture{Store: store, Rate: 2}, tc.subscribers, rateCappedH264CameraScript(), 4)
+			got, want := r.files(t), video.files(t)
+			if len(got) != len(want) {
+				t.Fatalf("source directory holds %v, want the files store: video writes under the same cap", r.fileNames(t))
+			}
+			for _, name := range []string{"index.jsonl", "segment-000001.h264"} {
+				if !bytes.Equal(got[name], want[name]) {
+					t.Errorf("%s differs from the one store: video writes under the same cap\n got: %s\nwant: %s", name, got[name], want[name])
+				}
+			}
+			if r.result.Count != 4 || r.result.Drops == nil || *r.result.Drops != 0 || r.result.DropAccounting != "driver_sequence_gaps_include_subscriber_drops" {
+				t.Errorf("count = %d, drops = %v under %q; want the 4 frames of the two kept groups and no loss by the driver's sequence", r.result.Count, r.result.Drops, r.result.DropAccounting)
+			}
+			assertDetailSays(t, r, capped, tc.detail)
+			for _, sentence := range []string{"applied per frame to the camera's own frames", "the two streams hold different samples"} {
+				if strings.Contains(r.result.SourceDetail, sentence) {
+					t.Errorf("detail %q says %q although the camera has one stream", r.result.SourceDetail, sentence)
+				}
+			}
+		})
+	}
+}
+
 func TestJPEGSegmentsRotateEveryCameraSegmentDuration(t *testing.T) {
 	cam := newKernelClockCamera(t)
 	var frames []*videoFrame
@@ -988,15 +1043,16 @@ func TestPreRollByteBoundIsATotalAcrossTheRingsOfOneSource(t *testing.T) {
 	}
 }
 
-// produceJPEG sends a JPEG frame through the hub's own entry point, which
-// gives it its sample ID and receipt, stamped by the kernel just before.
-func (cam *storeTestCamera) produceJPEG(t *testing.T, payload []byte) *videoFrame {
+// produceOwnFrame sends one of the camera's own frames through the hub's own
+// entry point, which gives it its sample ID and receipt, stamped by the kernel
+// just before.
+func (cam *storeTestCamera) produceOwnFrame(t *testing.T, codec agentpb.VideoCodec, payload []byte) *videoFrame {
 	t.Helper()
 	_, now, _, err := data.CaptureReceipt()
 	if err != nil {
 		t.Fatal(err)
 	}
-	frame := &videoFrame{data: payload, codec: videoCodecMJPEG, nativeClock: kernelClock, auAligned: true, native: true}
+	frame := &videoFrame{data: payload, codec: codec, nativeClock: kernelClock, auAligned: true, native: true}
 	frame.nativeNs = now - int64(scriptedBootMinusMonotonic)
 	cam.hub.produce(frame)
 	cam.waitUntilTaken(t)
@@ -1004,6 +1060,11 @@ func (cam *storeTestCamera) produceJPEG(t *testing.T, payload []byte) *videoFram
 		t.Fatal("the hub did not stamp the frame")
 	}
 	return frame
+}
+
+func (cam *storeTestCamera) produceJPEG(t *testing.T, payload []byte) *videoFrame {
+	t.Helper()
+	return cam.produceOwnFrame(t, videoCodecMJPEG, payload)
 }
 
 func (cam *storeTestCamera) trigger(t *testing.T, source data.Source) (runningDataCapture, string) {
@@ -1121,4 +1182,41 @@ func TestArmedFramesCampaignBuffersVideoWhenTheCameraHasNoFramesOfItsOwn(t *test
 	assertRecordsAddress(t, r, indexedAsH264, chunks)
 	assertBeforeTheTrigger(t, r, indexedAsH264)
 	assertDetailSays(t, r, "store: frames was requested, but this camera's own frames cannot be stored: "+gstreamerHasNoWholeFrames+"; video is recorded instead for the whole episode")
+}
+
+// An armed H.264 camera buffers its one stream once, whatever store asks for,
+// and the episode opens with it as video.
+func TestArmedStoreOnAnH264CameraStoresThePreRollOnceAsVideo(t *testing.T) {
+	for store, tc := range map[string]struct {
+		armedEncoded, armedNative int
+		detail                    string
+	}{
+		data.CaptureStoreFrames: {0, 1, "store: frames: this camera's own frames are its encoded video (VIDEO_CODEC_H264), stored in the same files and index as store: video"},
+		data.CaptureStoreBoth:   {1, 0, "store: both: this camera's own frames are its encoded video (VIDEO_CODEC_H264), so there is one stream and it is stored once"},
+	} {
+		t.Run(store, func(t *testing.T) {
+			cam := newKernelClockCamera(t)
+			source, _ := armedStoreSource(t, cam, &data.SourceCapture{Store: store}, 5*time.Second)
+
+			var frames []*videoFrame
+			for _, unit := range [][]byte{testRAUFrame, testInterFrame, testRAUFrame, testInterFrame} {
+				frames = append(frames, cam.produceOwnFrame(t, agentpb.VideoCodec_VIDEO_CODEC_H264, unit))
+				time.Sleep(2 * time.Millisecond)
+			}
+			cam.waitForCaptureSubscriptions(t, tc.armedEncoded, tc.armedNative)
+			capture, dir := cam.trigger(t, source)
+			r := stopRecording(t, capture, dir, 4)
+
+			assertFileNames(t, r, "segment-000001.h264")
+			assertRecordsAddress(t, r, indexedAsH264, frames)
+			assertBeforeTheTrigger(t, r, indexedAsH264)
+			if r.result.Count != 4 {
+				t.Errorf("count = %d, want each buffered frame stored once", r.result.Count)
+			}
+			assertDetailSays(t, r, "flushed 4 frame(s)", tc.detail)
+			if strings.Contains(r.result.SourceDetail, "own frame(s) are indexed") {
+				t.Errorf("detail %q counts two streams although the camera has one", r.result.SourceDetail)
+			}
+		})
+	}
 }
