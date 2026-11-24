@@ -376,7 +376,13 @@ func TestCameraShareNodesFollowTheirEntitlements(t *testing.T) {
 			t.Fatalf("%s: sample ID %d is beyond the %d the camera's capture has minted", id, last, minted)
 		}
 	}
-	want := "ci-app-h264 [format h264, stamp frame] (reading), ci-app-native [format native, stamp frame] (reading), ci-app-pixels [format pixels, stamp time] (reading)"
+	// The pixels entry names the decoder of its pictures, which differs by device.
+	decoder := svc.pictureDecoderAt(path)
+	if decoder == "" {
+		t.Fatalf("the capture reports no decoder for the pictures it makes; share state: %q", svc.CameraShareReport(ctx)[path][camerashare.KeyState])
+	}
+	want := "ci-app-h264 [format h264, stamp frame] (reading), ci-app-native [format native, stamp frame] (reading), " +
+		"ci-app-pixels [format pixels, stamp time] (reading; pictures decoded by " + decoder + ")"
 	if state := svc.CameraShareReport(ctx)[path][camerashare.KeyState]; state != want {
 		t.Fatalf("share state = %q\nwant        %q", state, want)
 	}
