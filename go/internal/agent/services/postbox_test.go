@@ -561,7 +561,7 @@ func TestPostboxRefusesNamedAndRunsNothing(t *testing.T) {
 			f.cloud.add(jws, payload, typ)
 		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_SIGNATURE, true},
 		{"valid_until beyond the platform cap", func(f *pbFixture) {
-			f.controlUntil("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, timestamppb.New(f.now.Add(postboxPlatformCap+time.Second)), []*x509.Certificate{f.opLeaf, f.opCA}, nil)
+			f.controlUntil("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, timestamppb.New(f.now.Add(postboxPlatformCap+postboxCapTolerance+time.Second)), []*x509.Certificate{f.opLeaf, f.opCA}, nil)
 		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE, true},
 		{"header alg is not the leaf's", func(f *pbFixture) {
 			f.alg = "ML-DSA-87"
@@ -924,9 +924,9 @@ func TestPostboxValidityEdges(t *testing.T) {
 			t.Fatalf("outcome = %+v", f.outcome("web"))
 		}
 	})
-	t.Run("valid_until at the platform cap passes", func(t *testing.T) {
+	t.Run("valid_until at the platform cap plus the tolerance passes", func(t *testing.T) {
 		f := newPBFixture(t)
-		f.controlUntil("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, timestamppb.New(f.now.Add(postboxPlatformCap)), []*x509.Certificate{f.opLeaf, f.opCA}, nil) // the cap counts from the entry's timestamp
+		f.controlUntil("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, timestamppb.New(f.now.Add(postboxPlatformCap+postboxCapTolerance)), []*x509.Certificate{f.opLeaf, f.opCA}, nil) // the cap counts from the entry's timestamp
 		f.cycle()
 		if f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
 			t.Fatalf("outcome = %+v", f.outcome("web"))
@@ -950,7 +950,7 @@ func TestPostboxValidityEdges(t *testing.T) {
 	}{
 		{"missing", "validity_missing", func(*pbFixture) *timestamppb.Timestamp { return nil }},
 		{"above platform cap", "above_platform_cap", func(f *pbFixture) *timestamppb.Timestamp {
-			return timestamppb.New(f.now.Add(postboxPlatformCap + time.Second))
+			return timestamppb.New(f.now.Add(postboxPlatformCap + postboxCapTolerance + time.Second))
 		}},
 		{"at trusted now", "stale", func(f *pbFixture) *timestamppb.Timestamp { return timestamppb.New(f.now) }},
 	} {

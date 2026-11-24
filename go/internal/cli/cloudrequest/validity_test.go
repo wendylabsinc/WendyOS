@@ -17,7 +17,9 @@ func TestValidUntil(t *testing.T) {
 	}{
 		{0, now.Add(60 * 24 * time.Hour), false},
 		{7 * 24 * time.Hour, now.Add(7 * 24 * time.Hour), false},
-		{365 * 24 * time.Hour, now.Add(365 * 24 * time.Hour), false},
+		{364 * 24 * time.Hour, now.Add(364 * 24 * time.Hour), false},
+		{365 * 24 * time.Hour, now.Add(364 * 24 * time.Hour), false}, // the max is signed a day short
+		{365*24*time.Hour - time.Minute, now.Add(364 * 24 * time.Hour), false},
 		{365*24*time.Hour + time.Second, time.Time{}, true},
 		{-time.Second, time.Time{}, true},
 	} {

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -122,7 +123,7 @@ func TestAppDeleteRemovesByDefault(t *testing.T) {
 	got := calls[len(calls)-1]
 	u := got.payload.(*cloudpb.UnassignDeviceRequest)
 	if len(fake.detached) != 0 || u.GetRevision() != maxRevision || got.resource != "org/"+testOperatorTenant+"/deployment/"+depID+"/device/"+vectorDevice || got.header["x5c"] == nil ||
-		u.GetValidUntil().AsTime().Before(time.Now().Add(364*24*time.Hour)) {
+		time.Until(u.GetValidUntil().AsTime()) > cloudrequest.MaxSigned || time.Until(u.GetValidUntil().AsTime()) < cloudrequest.MaxSigned-time.Hour {
 		t.Fatalf("removal %v resource %s header %v", u, got.resource, got.header)
 	}
 	if len(fake.apps) != 0 || !strings.Contains(out.String(), exampleApp+" is deleted.") {

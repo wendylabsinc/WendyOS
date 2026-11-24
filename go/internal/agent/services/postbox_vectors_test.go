@@ -277,14 +277,25 @@ func TestPostboxEntryVectors(t *testing.T) {
 			}
 			code, err := postboxValidity(req, time.Unix(desc.Iat, 0), now)
 			if err == nil && v.Stage == "accept" {
-				// The tenant cap is cloud's accept check, on top of the
-				// platform cap the device shares.
-				if postboxValidUntil(req).AsTime().Unix()-desc.Iat > v.TenantCap {
+				// Cloud's accept check: the platform cap exactly (the
+				// device's tolerance is not Cloud's), then the tenant cap.
+				switch over := postboxValidUntil(req).AsTime().Unix() - desc.Iat; {
+				case over > int64(postboxPlatformCap/time.Second):
+					code, err = "above_platform_cap", errors.New("above the platform cap")
+				case over > v.TenantCap:
 					code, err = "above_tenant_cap", errors.New("above the tenant cap")
 				}
 			}
-			if got := map[bool]string{true: "valid", false: "invalid"}[err == nil]; got != v.Expect || code != v.Refusal {
-				t.Fatalf("got %s %q (%v), want %s %q", got, code, err, v.Expect, v.Refusal)
+			want, refusal := v.Expect, v.Refusal
+			if v.Name == "above-platform-cap-device-invalid" {
+				// Overridden (orchestrator 2026-11-24, on sem's 14:48
+				// tolerance ruling): cap + 1 s is inside the device's
+				// postboxCapTolerance. Follow-up: service-protos moves this
+				// vector to cap + 5 min + 1 s, and this override goes.
+				want, refusal = "valid", ""
+			}
+			if got := map[bool]string{true: "valid", false: "invalid"}[err == nil]; got != want || code != refusal {
+				t.Fatalf("got %s %q (%v), want %s %q", got, code, err, want, refusal)
 			}
 		})
 	}

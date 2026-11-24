@@ -37,7 +37,7 @@ var keepTryingChoices = map[string]time.Duration{
 	"7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour, "60d": 60 * 24 * time.Hour, "1y": 365 * 24 * time.Hour,
 }
 
-var keepTryingWords = map[string]string{"7d": "7 days", "30d": "30 days", "60d": "60 days", "1y": "1 year"}
+var keepTryingWords = map[string]string{"7d": "7 days", "30d": "30 days", "60d": "60 days", "1y": "364 days"} // 1y is signed a day short (cloudrequest.MaxSigned)
 
 func newAppDeployCmd() *cobra.Command {
 	var a deployAnswers

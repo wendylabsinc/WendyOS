@@ -241,7 +241,8 @@ func (op *registryOp) sendDelete(ctx context.Context, appID string, rows []*clou
 			queue = next
 		}
 		req := &cloudpb.DeleteAppRequest{Id: appID, OrganizationId: op.org}
-		valid := timestamppb.New(time.Now().Add(cloudrequest.MaxValidity)) // removals and detaches: the platform cap
+		until, _ := cloudrequest.ValidUntil(time.Now(), cloudrequest.MaxValidity) // removals and detaches: the platform cap
+		valid := timestamppb.New(until)
 		for _, r := range batch {
 			method := cloudpb.DeploymentService_UnassignDevice_FullMethodName
 			var stmt proto.Message = &cloudpb.UnassignDeviceRequest{OrganizationId: op.org, DeploymentId: r.GetDeploymentId(), Device: r.GetDevice(), Revision: maxRevision, ValidUntil: valid}

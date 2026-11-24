@@ -211,7 +211,12 @@ const (
 	// does at accept. A request's own 30 s expiry and its iat window bind the
 	// call to cloud only and are not checked here (reqsig README, WDY-4015).
 	postboxPlatformCap = 365 * 24 * time.Hour
-	postboxAudience    = "https://cloud.wendy.sh/broker"
+	// postboxCapTolerance is how far over the cap the device still accepts:
+	// valid_until comes from the operator's clock, the signing time from
+	// Cloud's (sem 2026-11-24 14:48, #3054 high 1). Cloud's accept check
+	// has none.
+	postboxCapTolerance = 5 * time.Minute
+	postboxAudience     = "https://cloud.wendy.sh/broker"
 )
 
 // postboxOperations maps each postbox-relayed method (the descriptor's
@@ -644,7 +649,7 @@ func postboxValidity(req proto.Message, signedAt time.Time, now time.Time) (stri
 	switch {
 	case vu == nil:
 		return "validity_missing", errors.New("instruction carries no valid_until")
-	case vu.AsTime().Sub(signedAt) > postboxPlatformCap:
+	case vu.AsTime().Sub(signedAt) > postboxPlatformCap+postboxCapTolerance:
 		return "above_platform_cap", fmt.Errorf("valid_until %s is more than the platform cap after the signing time %s", vu.AsTime(), signedAt)
 	case !now.Before(vu.AsTime()):
 		return "stale", fmt.Errorf("instruction expired at %s (trusted now %s)", vu.AsTime(), now)

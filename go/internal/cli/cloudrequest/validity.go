@@ -17,10 +17,15 @@ import (
 const (
 	DefaultValidity = 60 * 24 * time.Hour
 	MaxValidity     = 365 * 24 * time.Hour
+	// MaxSigned is the most the CLI signs: a day under MaxValidity, because
+	// the device counts the cap from Cloud's clock, not this one (sem
+	// 2026-11-24 14:48, #3054 high 1).
+	MaxSigned = MaxValidity - 24*time.Hour
 )
 
-// ValidUntil is now + validFor, or now + DefaultValidity when validFor is 0.
-// A negative validFor, or one above MaxValidity, is refused.
+// ValidUntil is now + validFor, or now + DefaultValidity when validFor is 0,
+// and never more than now + MaxSigned. A negative validFor, or one above
+// MaxValidity, is refused.
 func ValidUntil(now time.Time, validFor time.Duration) (time.Time, error) {
 	if validFor == 0 {
 		validFor = DefaultValidity
@@ -28,7 +33,7 @@ func ValidUntil(now time.Time, validFor time.Duration) (time.Time, error) {
 	if validFor < 0 || validFor > MaxValidity {
 		return time.Time{}, fmt.Errorf("instruction validity %s is outside 0 to %s (365 days)", validFor, MaxValidity)
 	}
-	return now.Add(validFor), nil
+	return now.Add(min(validFor, MaxSigned)), nil
 }
 
 // stampValidity gives a postbox-relayed request without a validity the
