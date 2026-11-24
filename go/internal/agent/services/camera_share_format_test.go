@@ -831,12 +831,13 @@ func TestCameraShares_AppsWithDifferentFormatsOnOneCameraAllGetFrames(t *testing
 		{"cv-a", appconfig.CameraFormatPixels, appconfig.CameraStampTime},
 		{"cv-b", appconfig.CameraFormatNative, appconfig.CameraStampFrame},
 		{"cv-c", appconfig.CameraFormatH264, appconfig.CameraStampFrame},
+		{"cv-d", appconfig.CameraFormatPixels, appconfig.CameraStampFrame},
 	}
 	nodes := map[string]*csNode{}
 	for _, app := range apps {
 		h.s.CreateCameraShares(context.Background(), app.id, "sh.wendy."+app.id, []appconfig.Entitlement{sfCameraEntitlement(app.format, app.stamp)})
 		records := h.records(app.id)
-		if len(records) != 1 || records[0].mode.Format != app.format {
+		if len(records) != 1 || records[0].mode.Format != app.format || records[0].stamp != app.stamp {
 			t.Fatalf("%s: records = %+v; logs: %v", app.id, records, h.logs.All())
 		}
 		nodes[app.id] = records[0].io.(*csNode)
@@ -872,11 +873,20 @@ func TestCameraShares_AppsWithDifferentFormatsOnOneCameraAllGetFrames(t *testing
 	if e := nodes["cv-c"].next(t); e.size != len(accessUnit.data) || e.stamp != stampWithSampleID(7) {
 		t.Errorf("h264 node got %+v, want the %d-byte access unit stamped with sample ID 7", e, len(accessUnit.data))
 	}
+	// The same picture as cv-a's, which differs from this node in its stamp alone.
+	if e := nodes["cv-d"].next(t); e.size != len(picture.data) || e.stamp != stampWithSampleID(7) {
+		t.Errorf("pixels node with a frame stamp got %+v, want the %d-byte picture stamped with sample ID 7", e, len(picture.data))
+	}
+	for id, node := range nodes {
+		if all := node.all(); len(all) != 1 {
+			t.Errorf("%s: node writes = %+v, want the one frame of its own format", id, all)
+		}
+	}
 
 	// The camera's one shared mode, for viewers and recordings, is its size
 	// and rate whatever each app's format.
 	mode, sharers, ok := h.s.sharedModeOf("/dev/video0")
-	if !ok || !reflect.DeepEqual(sharers, []string{"cv-a", "cv-b", "cv-c"}) {
+	if !ok || !reflect.DeepEqual(sharers, []string{"cv-a", "cv-b", "cv-c", "cv-d"}) {
 		t.Fatalf("sharedModeOf = %v, %v", sharers, ok)
 	}
 	if _, err := h.s.applySharedMode("/dev/video0", &agentpb.StreamVideoRequest{Width: mode.Width, Height: mode.Height, Framerate: mode.FPS}); err != nil {
@@ -885,7 +895,8 @@ func TestCameraShares_AppsWithDifferentFormatsOnOneCameraAllGetFrames(t *testing
 	if _, err := h.s.applySharedMode("/dev/video0", &agentpb.StreamVideoRequest{Width: 1920, Height: 1080}); err == nil {
 		t.Error("a viewer asking another size was admitted")
 	}
-	want := "cv-a [format pixels, stamp time] (reading), cv-b [format native, stamp frame] (reading), cv-c [format h264, stamp frame] (reading)"
+	want := "cv-a [format pixels, stamp time] (reading), cv-b [format native, stamp frame] (reading), cv-c [format h264, stamp frame] (reading), " +
+		"cv-d [format pixels, stamp frame] (reading)"
 	if got := h.reportOf("/dev/video0")["share_state"]; got != want {
 		t.Errorf("share_state = %q\nwant         %q", got, want)
 	}
