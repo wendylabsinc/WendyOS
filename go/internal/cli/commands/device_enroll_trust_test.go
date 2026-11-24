@@ -88,10 +88,7 @@ func TestEnrollmentTrustAcceptUsesCapturedCandidates(t *testing.T) {
 	confirmed := false
 	confirmEnrollmentTrustFn = func() (bool, error) {
 		confirmed = true
-		return true, config.Update(func(cfg *config.Config) (bool, error) {
-			cfg.DefaultDevice = "other.local"
-			return true, nil
-		})
+		return true, nil
 	}
 	failed, failedProbe, failedClose := enrollmentTrustConnection(errors.New("connection refused"))
 	live, liveProbe, liveClose := enrollmentTrustConnection(nil)

@@ -219,7 +219,7 @@ func TestDoctorOnlyUsesReadOnlyProbesAndTargetPrecedence(t *testing.T) {
 	}
 	slices.Sort(endpoints)
 	if !reflect.DeepEqual(endpoints, []string{"explicit-private.local:50051", "explicit-private.local:50052"}) {
-		t.Fatalf("explicit device must override env/saved: %v", endpoints)
+		t.Fatalf("explicit device must override env: %v", endpoints)
 	}
 	if strings.Contains(output, "private.local") {
 		t.Fatal("target leaked")
@@ -233,12 +233,12 @@ func TestDoctorOnlyUsesReadOnlyProbesAndTargetPrecedence(t *testing.T) {
 	if !reflect.DeepEqual(endpoints, []string{"environment-private.local:50051", "environment-private.local:50052"}) {
 		t.Fatalf("env target not used: %v", endpoints)
 	}
+	// A defaultDevice left in config.json by an older CLI is not a target.
 	endpoints = nil
 	d.getenv = func(string) string { return "" }
 	doctorExecute(t, d)
-	slices.Sort(endpoints)
-	if !reflect.DeepEqual(endpoints, []string{"saved-private.local:50051", "saved-private.local:50052"}) {
-		t.Fatalf("saved target not used: %v", endpoints)
+	if len(endpoints) != 0 {
+		t.Fatalf("saved default device was probed: %v", endpoints)
 	}
 }
 

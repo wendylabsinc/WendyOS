@@ -548,6 +548,26 @@ func TestDiscoverStream_SupersededRowIsDropped(t *testing.T) {
 	}
 }
 
+func TestDiscoverStream_KeepsHighlightOnSupersedingLANIdentity(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	minted := models.LANDevice{ID: "old-id", DisplayName: "Alpha", Hostname: "alpha.local"}
+	other := models.LANDevice{ID: "other-id", DisplayName: "Bravo", Hostname: "bravo.local"}
+	m.collection.LANDevices = []models.LANDevice{minted, other}
+	m.refreshTable()
+	m.table.SetCursor(0)
+
+	replacement := minted
+	replacement.ID = "new-id"
+	replacement.DisplayName = "Zebra"
+	updated, _ := m.Update(lanEventMsg{ev: discovery.LANEvent{
+		Kind: discovery.LANUpdated, Device: replacement, Probed: true, Supersedes: probeKey(minted),
+	}})
+	m = updated.(discoverModel)
+	if cursor := m.table.Cursor(); cursor != 1 || m.tableItems[cursor].lanKey != probeKey(replacement) {
+		t.Fatalf("cursor = %d, want the superseding LAN identity at row 1", cursor)
+	}
+}
+
 // TestLANRowState pins the single mapping both LAN surfaces (device picker
 // and discover TUI) render events through, including the two states the row
 // can only reach through a probe outcome: ProbeFailed (seen on the network,

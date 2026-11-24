@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,7 +46,7 @@ func (s *firstBootWiFiProbe) ConnectToWiFi(_ context.Context, req *agentpb.Conne
 }
 
 func TestWiFiFirstBootSetup(t *testing.T) {
-	for _, selection := range []string{"explicit", "default", "picker"} {
+	for _, selection := range []string{"explicit", "env", "picker"} {
 		for _, state := range []string{"unprovisioned", "enrolled", "unknown", "error", "saved identity", "legacy pin"} {
 			t.Run(selection+"/"+state, func(t *testing.T) {
 				restoreDeviceGlobals(t)
@@ -77,8 +76,9 @@ func TestWiFiFirstBootSetup(t *testing.T) {
 				if state == "legacy pin" {
 					cfg.SetDevicePin(key, 2, "cloud.test:443", "", "")
 				}
-				if selection == "default" {
-					cfg.DefaultDevice = listener.Addr().String()
+				if selection == "env" {
+					t.Setenv(deviceEnvVar, listener.Addr().String())
+					applyDeviceEnv()
 				}
 				setTempConfig(t, cfg)
 				setPinCache(t)
@@ -203,11 +203,10 @@ func closedLoopbackAddr(t *testing.T) string {
 // Every other outcome keeps the ordinary resolver's typed errors and fallbacks.
 func TestWiFiSetupKeepsOrdinaryResolution(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		loggedIn  bool
-		state     string // "" means nothing listens
-		isDefault bool
-		check     func(*testing.T, *SelectedDevice, error)
+		name     string
+		loggedIn bool
+		state    string // "" means nothing listens
+		check    func(*testing.T, *SelectedDevice, error)
 	}{
 		{name: "logged in, unreachable", loggedIn: true, check: func(t *testing.T, _ *SelectedDevice, err error) {
 			if err == nil || errors.Is(err, certs.ErrExpectedDeviceIdentity) {
@@ -229,11 +228,6 @@ func TestWiFiSetupKeepsOrdinaryResolution(t *testing.T) {
 				t.Fatalf("logged-out Wi-Fi left the ordinary plaintext path: target=%+v err=%v", target, err)
 			}
 		}},
-		{name: "logged out, offline default", isDefault: true, check: func(t *testing.T, _ *SelectedDevice, err error) {
-			if err == nil || !strings.Contains(err.Error(), "is set but could not be reached") {
-				t.Fatalf("offline default lost its default-device error: %v", err)
-			}
-		}},
 		{name: "logged in, unprovisioned", loggedIn: true, state: "unprovisioned", check: func(t *testing.T, target *SelectedDevice, err error) {
 			if err != nil || target == nil || !target.unverifiedSetup {
 				t.Fatalf("setup connection was not marked unverified: target=%+v err=%v", target, err)
@@ -251,17 +245,12 @@ func TestWiFiSetupKeepsOrdinaryResolution(t *testing.T) {
 			if tc.loggedIn {
 				cfg.Auth = []config.AuthConfig{{Certificates: []config.CertificateInfo{selfSignedCLICert(t, 2)}}}
 			}
-			if tc.isDefault {
-				cfg.DefaultDevice = addr
-			}
 			setTempConfig(t, cfg)
 			setPinCache(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			target, err := resolveWifiTarget(ctx, func(c *resolveConfig) {
-				if !tc.isDefault {
-					c.device = addr
-				}
+				c.device = addr
 				c.disableSessionBroker, c.suppressUpdateCheck, c.nonInteractive = true, true, true
 			})
 			if target != nil {

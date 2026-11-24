@@ -28,11 +28,11 @@ func TestCloudDefaultIdentityMustMatchSavedPin(t *testing.T) {
 		{"same name in another org", &otherOrg, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := verifyCloudDefaultIdentity("wendy-voice-agent", tc.expected, legacy)
+			err := verifyCloudPinnedIdentity("wendy-voice-agent", tc.expected, legacy)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("identity check = %v, want error %t", err, tc.wantErr)
 			}
-			if tc.wantErr && (!errors.Is(err, errDeviceIdentityRefused) || !strings.Contains(err.Error(), "saved for the default device")) {
+			if tc.wantErr && (!errors.Is(err, errDeviceIdentityRefused) || !strings.Contains(err.Error(), "wendy device unpin")) {
 				t.Fatalf("identity mismatch = %v, want actionable identity refusal", err)
 			}
 		})
@@ -49,7 +49,7 @@ func TestCloudDefaultIdentityUsesV2DevicePrincipal(t *testing.T) {
 		t.Fatalf("Cloud identity = %q, want %q", actual.Principal, want)
 	}
 	expected := certs.WendyIdentity{Principal: want}
-	if err := verifyCloudDefaultIdentity("wendy-voice-agent", &expected, actual); err != nil {
+	if err := verifyCloudPinnedIdentity("wendy-voice-agent", &expected, actual); err != nil {
 		t.Fatalf("matching V2 pin refused: %v", err)
 	}
 }
@@ -65,22 +65,22 @@ func TestCloudDefaultIdentityUsesPKIBindingInsteadOfAssetID(t *testing.T) {
 	if actual.Principal != want || actual.EntityID != deviceName {
 		t.Fatalf("Cloud identity = %+v, want bound device %s", actual, want)
 	}
-	if err := verifyCloudDefaultIdentity("simsim", &certs.WendyIdentity{Principal: want}, actual); err != nil {
+	if err := verifyCloudPinnedIdentity("simsim", &certs.WendyIdentity{Principal: want}, actual); err != nil {
 		t.Fatalf("bound device refused: %v", err)
 	}
 	wrong := certs.WendyIdentity{Principal: certs.DeviceSPIFFEURI(tenant, assetID)}
-	if err := verifyCloudDefaultIdentity("simsim", &wrong, actual); !errors.Is(err, errDeviceIdentityRefused) {
+	if err := verifyCloudPinnedIdentity("simsim", &wrong, actual); !errors.Is(err, errDeviceIdentityRefused) {
 		t.Fatalf("database ID accepted as device identity: %v", err)
 	}
 }
 
-func TestCloudDefaultSelectorUsesSavedAssetID(t *testing.T) {
+func TestCloudNameSelectorUsesSavedAssetID(t *testing.T) {
 	defaultName := "wendyos-voice-agent.local"
 	legacy := certs.WendyIdentity{OrgID: 64, EntityType: certs.EntityAsset, EntityID: "486"}
-	if got := cloudDefaultSelector(defaultName, &legacy); got != "486" {
+	if got := cloudNameSelector(defaultName, &legacy); got != "486" {
 		t.Fatalf("pinned Cloud selector = %q, want asset ID 486", got)
 	}
-	if got := cloudDefaultSelector(defaultName, nil); got != defaultName {
+	if got := cloudNameSelector(defaultName, nil); got != defaultName {
 		t.Fatalf("unpinned Cloud selector = %q, want saved name", got)
 	}
 }

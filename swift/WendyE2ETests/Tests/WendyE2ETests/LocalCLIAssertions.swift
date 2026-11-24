@@ -200,37 +200,30 @@ enum LocalCLIAssertions {
         #expect(!result.stderr.contains("\u{1B}"))
     }
 
-    static func defaultSelection(
+    static func removedDeviceDefaults(
         _ cli: WendyE2ESession,
-        command: [String],
-        selectors: [[String]]
+        parent: [String]
     ) async throws {
-        try await prepare(cli, config: nil)
-        // A fresh HOME, unrelated saved settings, and a saved default must all
-        // reject the same missing/blank selection without creating or editing state.
-        for state in [
-            nil, config,
-            config.replacingOccurrences(
-                of: "{\"analytics\"",
-                with: "{\"defaultDevice\":\"127.0.0.1:1\",\"analytics\""
-            ),
+        let legacy = config.replacingOccurrences(
+            of: "{\"analytics\"",
+            with: "{\"defaultDevice\":\"127.0.0.1:1\",\"analytics\""
+        )
+        try await prepare(cli, config: legacy)
+        for arguments in [
+            ["set-default", "127.0.0.1:1"], ["set-default"],
+            ["set-default", ""], ["set-default", "first", "second"],
+            ["get-default"], ["unset-default"],
         ] {
-            if let state {
-                try await write(cli, path: "../.wendy/config.json", text: state)
-                try await write(cli, path: "before-config/config.json", text: state)
-            }
-            for selector in selectors {
-                for format in ["--json", "--json=false"] {
-                    let result = try await run(cli, command + selector + [format], exit: 4)
-                    if format == "--json" {
-                        try error(result, code: "no_device", exit: 4, message: "no device given")
-                    }
-                    #expect(result.stdout == "")
-                    #expect(result.readableStderr.contains("wendy device set-default <device>"))
-                    #expect(!result.stderr.contains("could not open a new TTY"))
-                    #expect(!result.stderr.contains("\u{1B}"))
-                    try await unchanged(cli)
+            for format in ["--json", "--json=false"] {
+                let result = try await run(cli, parent + arguments + [format], exit: 2)
+                if format == "--json" {
+                    try error(result, code: "cli_usage", exit: 2, message: "was removed")
                 }
+                #expect(result.stdout == "")
+                #expect(result.readableStderr.contains("use --device <device> or set WENDY_DEVICE"))
+                #expect(!result.stderr.contains("could not open a new TTY"))
+                #expect(!result.stderr.contains("\u{1B}"))
+                try await unchanged(cli)
             }
         }
     }
