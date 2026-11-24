@@ -190,22 +190,34 @@ func TestSharedMode_ViewerAskingAnotherSizeIsRefusedWithTheMode(t *testing.T) {
 }
 
 // The camera runs at one size and rate whatever format its apps' nodes have.
+// Each row's shares are made by a create for that format, so the refusal names
+// the mode that format's node really has.
 func TestSharedMode_RecordingAtOtherParametersIsRefusedByName(t *testing.T) {
-	for _, mode := range []sharedMode{testSharedMode, sfNativeMode, sfH264Mode} {
-		t.Run(mode.Format, func(t *testing.T) {
-			svc := newTestVideoService(nil, nil)
-			fp := installFakeProducers(svc)
-			shareModeForTest(svc, "/dev/video0", mode, "cv-b", "cv-a")
+	for format, sharedAt := range map[string]string{
+		appconfig.CameraFormatPixels: "1280x720 YUYV, 30 fps",
+		appconfig.CameraFormatNative: "1280x720 MJPG, 30 fps",
+		appconfig.CameraFormatH264:   "1280x720 H264, 30 fps",
+	} {
+		t.Run(format, func(t *testing.T) {
+			h := newCSHarness(t, csBrio())
+			sfCanDeriveFrames(h.s)
+			fp := installFakeProducers(h.s)
+			for _, id := range []string{"cv-b", "cv-a"} {
+				h.s.CreateCameraShares(context.Background(), id, "sh.wendy."+id, []appconfig.Entitlement{sfCameraEntitlement(format, "")})
+				if records := h.records(id); len(records) != 1 || records[0].mode.Format != format || records[0].askedFormat != "" {
+					t.Fatalf("%s: records = %+v, want one %s node; logs: %v", id, records, format, h.logs.All())
+				}
+			}
 
 			req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
-			_, _, _, _, _, _, _, err := svc.joinHubForCapture(context.Background(), "/dev/video0", req, encodedFrames)
+			_, _, _, _, _, _, _, err := h.s.joinHubForCapture(context.Background(), "/dev/video0", req, encodedFrames)
 			if !errors.Is(err, errCameraShared) {
 				t.Fatalf("err = %v, want errCameraShared", err)
 			}
 			if !isCameraCaptureRefusal(err) {
 				t.Fatal("the refusal is not one the campaign records in its manifest")
 			}
-			for _, want := range []string{"/dev/video0", "cv-a, cv-b", mode.String(), "1920x1080 at 30 fps"} {
+			for _, want := range []string{"/dev/video0", "cv-a, cv-b", sharedAt, "1920x1080 at 30 fps"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("refusal %q does not name %q", err.Error(), want)
 				}
@@ -404,7 +416,15 @@ func TestJoinHubForShare_EndsAViewerHoldingAnotherMode(t *testing.T) {
 }
 
 func TestJoinHubForShare_WaitsForARecordingHoldingAnotherMode(t *testing.T) {
-	for _, mode := range []sharedMode{testSharedMode, sfNativeMode, sfH264Mode} {
+	for _, tc := range []struct {
+		mode sharedMode
+		kind frameKind
+	}{
+		{testSharedMode, pixelFrames},
+		{sfNativeMode, nativeFrames},
+		{sfH264Mode, encodedFrames},
+	} {
+		mode := tc.mode
 		t.Run(mode.Format, func(t *testing.T) {
 			svc := newTestVideoService(nil, nil)
 			fp := installFakeProducers(svc)
@@ -464,8 +484,8 @@ func TestJoinHubForShare_WaitsForARecordingHoldingAnotherMode(t *testing.T) {
 				kinds = append(kinds, sub.kind)
 			}
 			hub.mu.Unlock()
-			if len(kinds) != 1 || kinds[0] != shareFrameKinds[mode.Format] {
-				t.Fatalf("the share's subscriptions = %v, want one of kind %v", kinds, shareFrameKinds[mode.Format])
+			if len(kinds) != 1 || kinds[0] != tc.kind {
+				t.Fatalf("the share's subscriptions = %v, want one of kind %v", kinds, tc.kind)
 			}
 		})
 	}
