@@ -345,6 +345,91 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 		t.Fatal("no picture came back from the burst")
 	}
 	checkPairing("the burst")
+
+	// The layer's tags start where GStreamer's video encoders leave timestamps
+	// alone, and it subtracts the segment start in case one moves them anyway.
+	// Whether this encoder moved them is in the log; below the tags it does.
+	checkEncoderTimestamps(t, layer, available, skip, "timestamps from where the layer's tags start", derivedTagBase)
+	checkEncoderTimestamps(t, layer, available, skip, "timestamps from one second", uint64(time.Second))
+}
+
+// checkEncoderTimestamps runs the layer's own H.264 pipeline in a child of the
+// test's on frames timed from first, logs the segment start that child sent,
+// and fails unless the layer's tag table, given that segment start, pairs each
+// access unit with the frame the unit decodes to.
+func checkEncoderTimestamps(t *testing.T, layer *derivedLayer, available map[string]bool, skip func(why string), what string, first uint64) {
+	t.Helper()
+	const frames = 8
+	jpegs := derivedTestJPEGs(t)
+	tags := derivedFrameTags{sources: map[uint64]*videoFrame{}}
+	timestamps := make([]uint64, frames)
+	for i := range timestamps {
+		timestamps[i] = nearestDerivedTag(first + uint64(i)*derivedTestFramePeriod)
+		tags.sources[timestamps[i]] = &videoFrame{sampleID: uint64(i + 1)}
+	}
+
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outR.Close() //nolint:errcheck
+	args := layer.pipelineArgs(pipelineShape{encode: true})
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.ExtraFiles = []*os.File{outW}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stderr, &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	outW.Close() //nolint:errcheck
+	go func() {
+		defer stdin.Close() //nolint:errcheck
+		gdp := &gdpWriter{w: stdin}
+		if gdp.streamHeader(layer.transform.inputCaps(layer.width, layer.height, layer.framerate)) != nil {
+			return
+		}
+		for i, timestamp := range timestamps {
+			if gdp.buffer(timestamp, jpegs[i+1]) != nil {
+				return
+			}
+			// Slower than the encoder, whose queue drops what it has no room for.
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	var units [][]byte
+	var came []uint64
+	gdp := &gdpReader{r: outR, maxPayload: maxFrameBytes}
+	for {
+		timestamp, payload, err := gdp.nextBuffer()
+		if err != nil {
+			break
+		}
+		units, came = append(units, payload), append(came, timestamp)
+	}
+	if err := cmd.Wait(); err != nil || len(units) == 0 {
+		t.Fatalf("%s: the layer's H.264 pipeline gave %d access units for %d frames: %v\n%s", what, len(units), frames, err, stderr.String())
+	}
+	if gdp.segmentStart == 0 {
+		t.Logf("%s: %s sent segment start 0 and %d access units: it left the timestamps as fed", what, layer.encoder.element, len(units))
+	} else {
+		t.Logf("%s: %s sent segment start %d ns and %d access units: it moved the timestamps by that much", what, layer.encoder.element, gdp.segmentStart, len(units))
+	}
+	var decoded decodedGray
+	for i, picture := range decodeTestH264(t, layer.gstPath, available, skip, units) {
+		source, known := tags.source(came[i], gdp.segmentStart)
+		if !known {
+			t.Fatalf("%s: access unit %d, timed %d ns in a segment starting at %d ns, is paired with no frame; the frames were timed %v",
+				what, i, came[i], gdp.segmentStart, timestamps)
+		}
+		if luma, shade := yuyvMeanLuma(picture), derivedTestShade(source.sampleID); !decoded.shows(luma, shade) {
+			t.Fatalf("%s: access unit %d, timed %d ns in a segment starting at %d ns, is paired with frame %d but decodes to luma %d; that frame's JPEG is gray level %d, which decodes to %s",
+				what, i, came[i], gdp.segmentStart, source.sampleID, luma, shade, decoded.lumasOf(shade))
+		}
+	}
 }
 
 // Real gst-launch-1.0 and the real layer between a JPEG camera's hub and an

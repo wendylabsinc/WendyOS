@@ -23,6 +23,8 @@ for required_test in "$test_name" "$store_test" "${h264_tests[@]}"; do
   grep -q "^--- PASS: $required_test " "$output/normal.log"
 done
 grep -q 'H.264 decoder: h264parse ! avdec_h264' "$output/normal.log"
+# Whether the encoder moved the layer's tags is on record, whichever it did.
+grep -q "timestamps from where the layer's tags start: .* sent segment start" "$output/normal.log"
 if grep -q '^--- SKIP:' "$output/normal.log"; then
   echo 'A required derived camera layer regression was skipped' >&2
   exit 1
