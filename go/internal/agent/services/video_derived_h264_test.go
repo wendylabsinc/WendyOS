@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -72,22 +73,36 @@ func TestH264PictureIsBidirectional(t *testing.T) {
 	}
 }
 
+// fedBuffer is one buffer a child was fed: the frame its tag names and its bytes.
+type fedBuffer struct {
+	sampleID uint64
+	data     []byte
+}
+
+func fedSamples(buffers []fedBuffer) []uint64 {
+	ids := make([]uint64, len(buffers))
+	for i, buffer := range buffers {
+		ids[i] = buffer.sampleID
+	}
+	return ids
+}
+
 // feedInto runs one child's feeding over a pipe and returns what reaches the
-// child, as sample IDs, once the frames have been taken.
-func feedInto(t *testing.T, layer *derivedLayer, frames ...*videoFrame) (fed []uint64, ended error) {
+// child once the frames have been taken.
+func feedInto(t *testing.T, layer *derivedLayer, frames ...*videoFrame) (fed []fedBuffer, ended error) {
 	t.Helper()
 	r, w := derivedOutputPipe(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- layer.feedChild(ctx, w) }()
-	read := make(chan []uint64, 1)
+	read := make(chan []fedBuffer, 1)
 	go func() {
-		var ids []uint64
+		var buffers []fedBuffer
 		gdp := &gdpReader{r: r, maxPayload: maxFrameBytes}
 		for {
-			tag, _, err := gdp.nextBuffer()
+			tag, payload, err := gdp.nextBuffer()
 			if err != nil {
-				read <- ids
+				read <- buffers
 				return
 			}
 			source, known := layer.tags.source(tag, 0)
@@ -95,7 +110,7 @@ func feedInto(t *testing.T, layer *derivedLayer, frames ...*videoFrame) (fed []u
 				t.Errorf("the child was fed a buffer whose tag %d names no frame", tag)
 				continue
 			}
-			ids = append(ids, source.sampleID)
+			buffers = append(buffers, fedBuffer{source.sampleID, payload})
 		}
 	}()
 	for _, frame := range frames {
@@ -117,37 +132,28 @@ func feedInto(t *testing.T, layer *derivedLayer, frames ...*videoFrame) (fed []u
 	return <-read, ended
 }
 
-func TestDerivedLayer_FeedsEachChildFromAFrameDecodingCanStartOn(t *testing.T) {
-	layer := &derivedLayer{format: agentpb.VideoCodec_VIDEO_CODEC_H264, transform: derivedTransforms[agentpb.VideoCodec_VIDEO_CODEC_H264],
+func h264FeedTestLayer() *derivedLayer {
+	return &derivedLayer{format: agentpb.VideoCodec_VIDEO_CODEC_H264, transform: derivedTransforms[agentpb.VideoCodec_VIDEO_CODEC_H264],
 		feed: make(chan *videoFrame), created: time.Now(), framerate: 30}
+}
 
+func TestDerivedLayer_FeedsEachChildFromAFrameDecodingCanStartOn(t *testing.T) {
+	layer := h264FeedTestLayer()
 	fed, _ := feedInto(t, layer,
 		numberedH264(1, false), numberedH264(2, false), numberedH264(3, true), numberedH264(4, false),
 		numberedH264(6, false), numberedH264(7, false), // 5 never came
 		numberedH264(8, true), numberedH264(9, false))
-	if want := []uint64{3, 4, 8, 9}; !reflect.DeepEqual(fed, want) {
-		t.Fatalf("the first child was fed frames %v, want %v", fed, want)
+	if want := []uint64{3, 4, 8, 9}; !reflect.DeepEqual(fedSamples(fed), want) {
+		t.Fatalf("the first child was fed frames %v, want %v", fedSamples(fed), want)
 	}
 	if counts := layer.counts(); counts.fed != 4 || counts.awaitedStart != 4 {
 		t.Errorf("counts = %+v, want 4 fed and 4 passed over", counts)
 	}
-	if layer.lastOffered.Load() == 0 {
-		t.Error("a fed frame does not count as one the child was given")
-	}
 
 	// A child started later knows nothing of the stream so far.
 	fed, _ = feedInto(t, layer, numberedH264(10, false), numberedH264(11, false), numberedH264(12, true), numberedH264(13, false))
-	if want := []uint64{12, 13}; !reflect.DeepEqual(fed, want) {
-		t.Fatalf("the second child was fed frames %v, want %v", fed, want)
-	}
-}
-
-func TestDerivedLayer_AFramePassedOverIsNotOneTheChildWasGiven(t *testing.T) {
-	layer := &derivedLayer{format: agentpb.VideoCodec_VIDEO_CODEC_H264, transform: derivedTransforms[agentpb.VideoCodec_VIDEO_CODEC_H264],
-		feed: make(chan *videoFrame), created: time.Now(), framerate: 30}
-	fed, _ := feedInto(t, layer, numberedH264(1, false), numberedH264(2, false), numberedH264(3, false))
-	if len(fed) != 0 || layer.lastOffered.Load() != 0 {
-		t.Fatalf("fed %v, last given at %d; a child waiting for a frame to start on was given none", fed, layer.lastOffered.Load())
+	if want := []uint64{12, 13}; !reflect.DeepEqual(fedSamples(fed), want) {
+		t.Fatalf("the second child was fed frames %v, want %v", fedSamples(fed), want)
 	}
 }
 
@@ -155,20 +161,106 @@ func TestDerivedLayer_EveryJPEGFrameIsOneDecodingCanStartOn(t *testing.T) {
 	layer := &derivedLayer{format: videoCodecMJPEG, transform: derivedTransforms[videoCodecMJPEG],
 		feed: make(chan *videoFrame), created: time.Now(), framerate: 30}
 	fed, _ := feedInto(t, layer, numberedJPEG(1), numberedJPEG(2), numberedJPEG(5), numberedJPEG(6))
-	if want := []uint64{1, 2, 5, 6}; !reflect.DeepEqual(fed, want) {
-		t.Fatalf("fed frames %v, want every one, %v", fed, want)
+	if want := []uint64{1, 2, 5, 6}; !reflect.DeepEqual(fedSamples(fed), want) {
+		t.Fatalf("fed frames %v, want every one, %v", fedSamples(fed), want)
+	}
+}
+
+// A decoder that pairs each picture with its oldest pending buffer would move
+// every later picture one frame off if it were fed a buffer without a picture.
+func TestDerivedLayer_ParameterSetsAloneAreFedWithTheNextPicture(t *testing.T) {
+	layer := h264FeedTestLayer()
+	sets := numberedH264(1, false)
+	sets.data = append([]byte(nil), sfH264ParameterSets...)
+	bareIDR := numberedH264(2, false)
+	bareIDR.data = append([]byte(nil), sfH264IDRSlice...)
+	laterSets := numberedH264(4, false)
+	laterSets.data = append([]byte(nil), sfH264ParameterSets...)
+
+	fed, _ := feedInto(t, layer, sets, bareIDR, numberedH264(3, false), laterSets, numberedH264(5, false))
+	if want := []uint64{2, 3, 5}; !reflect.DeepEqual(fedSamples(fed), want) {
+		t.Fatalf("fed buffers carry samples %v, want only the frames with a picture, %v", fedSamples(fed), want)
+	}
+	if want := append(append([]byte(nil), sfH264ParameterSets...), sfH264IDRSlice...); !bytes.Equal(fed[0].data, want) {
+		t.Errorf("the first buffer = %x, want the parameter sets ahead of the picture they came before, %x", fed[0].data, want)
+	}
+	if want := append(append([]byte(nil), sfH264ParameterSets...), sfH264InterSlice...); !bytes.Equal(fed[2].data, want) {
+		t.Errorf("the buffer of sample 5 = %x, want the later parameter sets ahead of its picture, %x", fed[2].data, want)
+	}
+	if counts := layer.counts(); counts.fed != 3 || counts.awaitedStart != 0 || counts.damaged != 0 {
+		t.Errorf("counts = %+v, want 3 fed and nothing passed over", counts)
+	}
+}
+
+func TestDerivedLayer_NeverFeedsAFrameTheDriverFlaggedOrCutShort(t *testing.T) {
+	for name, damage := range map[string]func(*videoFrame){
+		"flagged as damaged": func(f *videoFrame) { f.nativeFlags |= v4l2BufFlagError },
+		"cut short":          func(f *videoFrame) { f.auAligned = false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			layer := h264FeedTestLayer()
+			damaged, damagedStart := numberedH264(2, false), numberedH264(4, true)
+			damage(damaged)
+			damage(damagedStart)
+			fed, _ := feedInto(t, layer, numberedH264(1, true), damaged, numberedH264(3, false),
+				damagedStart, numberedH264(5, false), numberedH264(6, true), numberedH264(7, false))
+			if want := []uint64{1, 6, 7}; !reflect.DeepEqual(fedSamples(fed), want) {
+				t.Fatalf("fed frames %v, want %v: nothing damaged, and nothing that needs a frame that was not fed", fedSamples(fed), want)
+			}
+			if counts := layer.counts(); counts.damaged != 2 || counts.awaitedStart != 2 {
+				t.Errorf("counts = %+v, want 2 damaged and 2 passed over", counts)
+			}
+		})
 	}
 }
 
 func TestDerivedLayer_StopsFeedingAStreamItsDecoderReorders(t *testing.T) {
-	layer := &derivedLayer{format: agentpb.VideoCodec_VIDEO_CODEC_H264, transform: derivedTransforms[agentpb.VideoCodec_VIDEO_CODEC_H264],
-		feed: make(chan *videoFrame), created: time.Now(), framerate: 30}
+	layer := h264FeedTestLayer()
 	fed, ended := feedInto(t, layer, numberedH264(1, true), numberedH264(2, false), numberedH264BFrame(3), numberedH264(4, false))
 	if !errors.Is(ended, errDerivedFramesReordered) {
 		t.Fatalf("feeding ended with %v, want errDerivedFramesReordered", ended)
 	}
-	if want := []uint64{1, 2}; !reflect.DeepEqual(fed, want) {
-		t.Fatalf("fed frames %v, want only those ahead of the reordered one, %v", fed, want)
+	if want := []uint64{1, 2}; !reflect.DeepEqual(fedSamples(fed), want) {
+		t.Fatalf("fed frames %v, want only those ahead of the reordered one, %v", fedSamples(fed), want)
+	}
+}
+
+// One frame that is not fed leaves the child without input until the camera's
+// next keyframe. When none comes within the stall limit, the picture output
+// has failed, and the layer says so instead of looking alive.
+func TestDerivedLayer_GivesPicturesUpWhenNoFrameToStartOnComesWithinTheStallLimit(t *testing.T) {
+	fakeGStreamerScript(t, "exec /bin/cat > /dev/null\n", h264PictureLayerElements...)
+	layer := fakeH264PictureLayer(t, newFakeEncodeDemand(true, true), (&derivedPublications{}).publish)
+	layer.firstOutputTimeout, layer.idleOutputTimeout = 300*time.Millisecond, 300*time.Millisecond
+	result := make(chan error, 1)
+	go func() { result <- layer.run(context.Background()) }()
+	waitUntil(t, "the child takes frames", layer.feeding.Load)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for sampleID := uint64(1); ; sampleID++ {
+			layer.take(numberedH264(sampleID, false))
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}()
+
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the layer ran on while every frame was passed over")
+	}
+	var gaveUp derivedLayerGaveUp
+	if !errors.As(err, &gaveUp) || gaveUp.lasting || !strings.Contains(gaveUp.msg, "the camera sent no frame that decoding can start on for 300ms") ||
+		!strings.Contains(gaveUp.msg, "frames passed over, 0 flagged or cut short") {
+		t.Fatalf("run returned %v (lasting %v), want it to give pictures up for the missing start frame, for now", err, gaveUp.lasting)
+	}
+	if counts := layer.counts(); counts.fed != 0 || counts.awaitedStart == 0 || counts.childRuns != 1 {
+		t.Errorf("counts = %+v, want nothing fed, frames passed over and one child", counts)
 	}
 }
 
@@ -190,8 +282,8 @@ func TestDerivedLayer_GivesUpOnAStreamItsDecoderReorders(t *testing.T) {
 		t.Fatal("the layer ran on after a frame its decoder reorders")
 	}
 	var gaveUp derivedLayerGaveUp
-	if !errors.As(err, &gaveUp) || gaveUp.msg != errDerivedFramesReordered.Error() {
-		t.Fatalf("run returned %v, want derivedLayerGaveUp saying the frames are reordered", err)
+	if !errors.As(err, &gaveUp) || gaveUp.msg != errDerivedFramesReordered.Error() || !gaveUp.lasting {
+		t.Fatalf("run returned %v (lasting %v), want derivedLayerGaveUp saying the frames are reordered, for good", err, gaveUp.lasting)
 	}
 	if runs := layer.counts().childRuns; runs != 1 {
 		t.Errorf("%d children started, want one: a reordered stream is not retried", runs)

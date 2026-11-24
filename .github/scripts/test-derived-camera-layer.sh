@@ -29,7 +29,7 @@ out = Path(sys.argv[1]).resolve()
 source = Path('go/internal/agent/services/video_derived_tags.go').resolve()
 original = source.read_text()
 # Pair every output with the newest frame fed instead of the frame its tag names.
-before, after = 't.sources[outputTimestamp-shift]', 't.sources[t.last]'
+before, after = 't.sources[nearestDerivedTag(outputTimestamp-shift)]', 't.sources[t.last]'
 if original.count(before) != 1:
     raise SystemExit('newest-frame: source mutation no longer identifies exactly one site')
 replacement = out / 'newest-frame.go'

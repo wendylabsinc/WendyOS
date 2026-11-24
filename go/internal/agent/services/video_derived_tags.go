@@ -11,6 +11,11 @@ const (
 	// back as they were sent.
 	derivedTagBase = uint64(1000 * time.Hour)
 
+	// Tags are whole multiples of this. A decoder may hand a timestamp back
+	// rounded to its own clock (microseconds, 1/90000 s), which stays far
+	// nearer its own tag than the next.
+	derivedTagSpacing = uint64(time.Millisecond)
+
 	derivedTagTableFrames = 64
 )
 
@@ -25,15 +30,21 @@ type derivedFrameTags struct {
 	unknown uint64
 }
 
+// nearestDerivedTag is the tag a timestamp that was rounded on its way through
+// a child stands for.
+func nearestDerivedTag(timestamp uint64) uint64 {
+	return (timestamp + derivedTagSpacing/2) / derivedTagSpacing * derivedTagSpacing
+}
+
 func (t *derivedFrameTags) assign(source *videoFrame, sinceChildStart time.Duration) (tag uint64) {
 	identity := *source
 	identity.data = nil
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	tag = derivedTagBase + uint64(max(sinceChildStart, 0))
+	tag = nearestDerivedTag(derivedTagBase + uint64(max(sinceChildStart, 0)))
 	if tag <= t.last {
-		tag = t.last + 1
+		tag = t.last + derivedTagSpacing
 	}
 	t.last = tag
 	if t.sources == nil {
@@ -51,7 +62,7 @@ func (t *derivedFrameTags) assign(source *videoFrame, sinceChildStart time.Durat
 func (t *derivedFrameTags) source(outputTimestamp, shift uint64) (*videoFrame, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	source, known := t.sources[outputTimestamp-shift]
+	source, known := t.sources[nearestDerivedTag(outputTimestamp-shift)]
 	if !known || outputTimestamp < shift {
 		t.unknown++
 		return nil, false

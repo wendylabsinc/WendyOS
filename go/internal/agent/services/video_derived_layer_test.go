@@ -17,7 +17,7 @@ import (
 )
 
 func numberedJPEG(sampleID uint64) *videoFrame {
-	return &videoFrame{data: []byte{0xFF, 0xD8, byte(sampleID), 0xFF, 0xD9}, codec: videoCodecMJPEG, native: true,
+	return &videoFrame{data: []byte{0xFF, 0xD8, byte(sampleID), 0xFF, 0xD9}, codec: videoCodecMJPEG, native: true, auAligned: true,
 		sampleID: sampleID, tsNs: 1_000 + sampleID, nativeNs: int64(2_000 + sampleID), sequence: uint32(sampleID), sequenceValid: true}
 }
 
@@ -60,12 +60,58 @@ func TestDerivedFrameTags_UndoesAConstantShift(t *testing.T) {
 func TestDerivedFrameTags_UnknownTagIsCountedAndNeverGivenToANeighbour(t *testing.T) {
 	var tags derivedFrameTags
 	tag := tags.assign(numberedJPEG(1), 0)
-	tags.assign(numberedJPEG(2), 2*time.Nanosecond)
-	if _, known := tags.source(tag+1, 0); known {
+	tags.assign(numberedJPEG(2), 2*time.Millisecond)
+	if _, known := tags.source(tag+derivedTagSpacing, 0); known {
 		t.Fatal("a timestamp between two tags was matched to one of them")
 	}
 	if n := tags.unknownOutputs(); n != 1 {
 		t.Fatalf("unknown outputs = %d, want 1", n)
+	}
+}
+
+// A decoder that keeps timestamps on its own clock hands each tag back
+// rounded. Every output must still name its own frame, at any frame rate the
+// tags can be a millisecond apart for.
+func TestDerivedFrameTags_ATimestampRoundedByTheDecoderStillNamesItsFrame(t *testing.T) {
+	roundings := map[string]func(ns uint64) uint64{
+		"to microseconds, down": func(ns uint64) uint64 { return ns / 1000 * 1000 },
+		"to microseconds, up":   func(ns uint64) uint64 { return (ns + 999) / 1000 * 1000 },
+		// A 90 kHz clock: ticks of 11111.1 ns, converted back with integer division.
+		"to 1/90000 s, down":    func(ns uint64) uint64 { return ns * 9 / 100000 * 100000 / 9 },
+		"to 1/90000 s, nearest": func(ns uint64) uint64 { return (ns*9 + 50000) / 100000 * 100000 / 9 },
+	}
+	for name, rounded := range roundings {
+		for _, shift := range []uint64{0, uint64(1000 * time.Hour)} {
+			var tags derivedFrameTags
+			sinceStart := time.Duration(0)
+			for sampleID := uint64(1); sampleID <= 3*derivedTagTableFrames; sampleID++ {
+				// Irregular arrivals, some inside the same millisecond.
+				sinceStart += time.Duration(sampleID%5) * 400 * time.Microsecond
+				tag := tags.assign(numberedJPEG(sampleID), sinceStart)
+				if tag%derivedTagSpacing != 0 {
+					t.Fatalf("%s: tag %d is not a multiple of the spacing", name, tag)
+				}
+				source, known := tags.source(rounded(tag)+shift, shift)
+				if !known || source.sampleID != sampleID {
+					t.Fatalf("%s, shift %d: the output of sample %d (tag %d, read back as %d) names %+v, %v",
+						name, shift, sampleID, tag, rounded(tag), source, known)
+				}
+			}
+			if n := tags.unknownOutputs(); n != 0 {
+				t.Errorf("%s: %d outputs named no frame", name, n)
+			}
+		}
+	}
+}
+
+func TestDerivedFrameTags_ATimestampHalfwayToTheNextTagNamesNoFrameItWasNotFedFor(t *testing.T) {
+	var tags derivedFrameTags
+	tag := tags.assign(numberedJPEG(1), 0)
+	if source, known := tags.source(tag+derivedTagSpacing/2-1, 0); !known || source.sampleID != 1 {
+		t.Fatalf("a timestamp just below halfway = %+v, %v, want sample 1", source, known)
+	}
+	if _, known := tags.source(tag+derivedTagSpacing/2, 0); known {
+		t.Fatal("a timestamp halfway to a tag nothing was fed with named a frame")
 	}
 }
 
@@ -530,7 +576,7 @@ func TestDerivedLayer_PublishesEachOutputUnderTheFrameItsTagNames(t *testing.T) 
 		payload   string
 	}{
 		{second, "unit-42"},
-		{second + 1, "nobody's"},
+		{second + derivedTagSpacing, "nobody's"},
 		{first, "unit-41"},
 		{first, ""},
 	} {
@@ -601,7 +647,7 @@ func TestDerivedLayer_ReadsAndDiscardsPicturesNobodyWants(t *testing.T) {
 
 	write := func(sampleID uint64) {
 		t.Helper()
-		if err := gdp.buffer(layer.tags.assign(numberedJPEG(sampleID), time.Duration(sampleID)), []byte("abcd")); err != nil {
+		if err := gdp.buffer(layer.tags.assign(numberedJPEG(sampleID), time.Duration(sampleID)*time.Millisecond), []byte("abcd")); err != nil {
 			t.Fatal(err)
 		}
 	}

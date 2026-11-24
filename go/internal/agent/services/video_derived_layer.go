@@ -44,6 +44,11 @@ type derivedTransform struct {
 	// GStreamer's decoders then move timestamps between pictures, so no picture
 	// of such a stream can be paired with its frame. Nil when no frame does.
 	reorders func(frame []byte) bool
+	// holdsPicture reports a frame a decoder gives a picture back for. One
+	// that holds none (parameter sets alone) is fed with the next that does: a
+	// decoder that pairs each picture with its oldest pending buffer would put
+	// every later picture on the wrong frame. Nil when every frame holds one.
+	holdsPicture func(frame []byte) bool
 }
 
 // derivedDecoder is one way to decode a format: the stages from the framed
@@ -83,6 +88,7 @@ var derivedTransforms = map[agentpb.VideoCodec]derivedTransform{
 		pictures:      yuyvPictureFormat,
 		rawWhy:        func(uint32, uint32) string { return h264RawWhy },
 		reorders:      h264PictureIsBidirectional,
+		holdsPicture:  h264HasCodedPicture,
 	},
 }
 
@@ -146,13 +152,17 @@ type derivedLayerGaveUp struct {
 	msg string
 	// afterPublishing says subscribers already hold frames this layer derived.
 	afterPublishing bool
+	// lasting says the cause is the camera's stream itself, which another try
+	// later meets again.
+	lasting bool
 }
 
 func (e derivedLayerGaveUp) Error() string { return e.msg }
 
 var (
 	errDerivedChildSilent     = errors.New("the pipeline took frames and produced no usable one")
-	errDerivedFramesReordered = errors.New("the camera's frames are decoded out of order, so no picture can be paired with the frame it came from")
+	errDerivedFramesReordered = errors.New("the camera's H.264 has B frames, which a decoder hands back out of order, so no picture can be paired with the frame it came from")
+	errDerivedNoStartFrame    = errors.New("the camera sent no frame that decoding can start on")
 )
 
 type derivedLayer struct {
@@ -175,13 +185,14 @@ type derivedLayer struct {
 	feeding atomic.Bool
 	tags    derivedFrameTags
 
-	fed, notFed, awaitedStart, unusable, usable, published, childRuns atomic.Uint64
-	failedStarts                                                      int
+	fed, notFed, damaged, awaitedStart, unusable, usable, published, childRuns atomic.Uint64
+	failedStarts                                                               int
+	// awaitingStart says the child is fed nothing until a frame arrives that
+	// decoding can start on.
+	awaitingStart atomic.Bool
 
-	// Nanoseconds since created, of the last frame the child was given or had
-	// no room for and of the last usable output; the watch on a child compares
-	// them. A frame passed over while feeding waits for one decoding can start
-	// on is neither.
+	// Nanoseconds since created, of the last frame capture offered and of the
+	// last usable output; the watch on a child compares them.
 	created                   time.Time
 	lastOffered, lastUsableAt atomic.Int64
 
@@ -250,10 +261,10 @@ func (l *derivedLayer) take(frame *videoFrame) {
 	if frame.codec != l.format || frame.sampleID == 0 || !l.feeding.Load() {
 		return
 	}
+	l.lastOffered.Store(l.sinceCreated())
 	select {
 	case l.feed <- frame:
 	default:
-		l.lastOffered.Store(l.sinceCreated())
 		l.notFed.Add(1)
 	}
 }
@@ -322,6 +333,8 @@ func (l *derivedLayer) launch(ctx context.Context, shape pipelineShape) error {
 	produced := l.usable.Load() > usableBefore
 	switch {
 	case errors.Is(stopped, errDerivedFramesReordered):
+		return derivedLayerGaveUp{msg: stopped.Error(), afterPublishing: l.published.Load() > 0, lasting: true}
+	case errors.Is(stopped, errDerivedNoStartFrame):
 		return derivedLayerGaveUp{msg: stopped.Error(), afterPublishing: l.published.Load() > 0}
 	case produced:
 		l.failedStarts = 0
@@ -475,35 +488,59 @@ func (l *derivedLayer) discardQueuedFrames() {
 	}
 }
 
-// feedChild gives the child every frame from one decoding can start on, and
-// waits for the next such frame after a gap in the frames it is handed.
+// feedChild gives the child whole frames that hold a picture, from one decoding
+// can start on, and waits for the next such frame after any frame it did not
+// feed: one that never reached it, or one the driver flagged or cut short.
 func (l *derivedLayer) feedChild(ctx context.Context, stdin *os.File) error {
 	gdp := &gdpWriter{w: stdin}
 	if err := gdp.streamHeader(l.transform.inputCaps(l.width, l.height, l.framerate)); err != nil {
 		return fmt.Errorf("child stopped reading frames: %w", err)
 	}
 	started := time.Now()
-	awaitingStart, previous := true, uint64(0)
+	previous := uint64(0)
+	var withoutPicture []byte
+	awaitStart := func() {
+		l.awaitingStart.Store(true)
+		withoutPicture = nil
+	}
+	awaitStart()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case frame := <-l.feed:
-			awaitingStart = awaitingStart || sampleGap(previous, frame.sampleID)
+			if sampleGap(previous, frame.sampleID) {
+				awaitStart()
+			}
 			previous = frame.sampleID
-			if awaitingStart {
-				if _, startsHere := frameRandomAccess(frame); !startsHere {
+			if !frame.auAligned || frame.nativeFlags&v4l2BufFlagError != 0 {
+				l.damaged.Add(1)
+				awaitStart()
+				continue
+			}
+			whole := *frame
+			if l.transform.holdsPicture != nil && !l.transform.holdsPicture(frame.data) {
+				if len(withoutPicture)+len(frame.data) <= maxFrameBytes {
+					withoutPicture = append(withoutPicture, frame.data...)
+				}
+				continue
+			}
+			if len(withoutPicture) > 0 && len(withoutPicture)+len(frame.data) <= maxFrameBytes {
+				whole.data = append(withoutPicture, frame.data...)
+			}
+			withoutPicture = nil
+			if l.awaitingStart.Load() {
+				if _, startsHere := frameRandomAccess(&whole); !startsHere {
 					l.awaitedStart.Add(1)
 					continue
 				}
-				awaitingStart = false
+				l.awaitingStart.Store(false)
 			}
-			if l.transform.reorders != nil && l.transform.reorders(frame.data) {
+			if l.transform.reorders != nil && l.transform.reorders(whole.data) {
 				return errDerivedFramesReordered
 			}
-			l.lastOffered.Store(l.sinceCreated())
 			tag := l.tags.assign(frame, time.Since(started))
-			if err := gdp.buffer(tag, frame.data); err != nil {
+			if err := gdp.buffer(tag, whole.data); err != nil {
 				return fmt.Errorf("child stopped reading frames: %w", err)
 			}
 			l.fed.Add(1)
@@ -511,9 +548,11 @@ func (l *derivedLayer) feedChild(ctx context.Context, stdin *os.File) error {
 	}
 }
 
-// watchChild ends a child that keeps being given frames and that has produced
-// no usable output for the limit. A camera that stopped delivering is the
-// capture's to report, so a child nobody gives frames to is left alone.
+// watchChild ends a child that capture keeps offering frames to and that has
+// produced no usable output for the limit: it is silent, or, when it is fed
+// nothing because no frame came that decoding can start on, the stream has no
+// start. A camera that stopped delivering is the capture's to report, so a
+// child nobody offers frames to is left alone.
 func (l *derivedLayer) watchChild(ctx context.Context, started int64) error {
 	check := time.NewTicker(max(min(l.firstOutputTimeout, l.idleOutputTimeout)/10, time.Millisecond))
 	defer check.Stop()
@@ -529,6 +568,10 @@ func (l *derivedLayer) watchChild(ctx context.Context, started int64) error {
 		}
 		now, offered := l.sinceCreated(), l.lastOffered.Load()
 		if offered > lastUsable && now-lastUsable > int64(limit) && now-offered < int64(limit) {
+			if l.awaitingStart.Load() {
+				return fmt.Errorf("%w for %s (%d frames passed over, %d flagged or cut short)",
+					errDerivedNoStartFrame, limit, l.awaitedStart.Load(), l.damaged.Load())
+			}
 			return fmt.Errorf("%w for %s", errDerivedChildSilent, limit)
 		}
 	}
@@ -571,12 +614,12 @@ func (l *derivedLayer) publishOutput(output derivedOutput) error {
 }
 
 type derivedLayerCounts struct {
-	fed, notFed, awaitedStart, unknownTags, unusable, usable, published, childRuns uint64
+	fed, notFed, damaged, awaitedStart, unknownTags, unusable, usable, published, childRuns uint64
 }
 
 func (l *derivedLayer) counts() derivedLayerCounts {
 	return derivedLayerCounts{
-		fed: l.fed.Load(), notFed: l.notFed.Load(), awaitedStart: l.awaitedStart.Load(),
+		fed: l.fed.Load(), notFed: l.notFed.Load(), damaged: l.damaged.Load(), awaitedStart: l.awaitedStart.Load(),
 		unknownTags: l.tags.unknownOutputs(), unusable: l.unusable.Load(),
 		usable: l.usable.Load(), published: l.published.Load(), childRuns: l.childRuns.Load(),
 	}
@@ -584,9 +627,10 @@ func (l *derivedLayer) counts() derivedLayerCounts {
 
 func (c derivedLayerCounts) since(before derivedLayerCounts) derivedLayerCounts {
 	return derivedLayerCounts{
-		fed: c.fed - before.fed, notFed: c.notFed - before.notFed, awaitedStart: c.awaitedStart - before.awaitedStart,
-		unknownTags: c.unknownTags - before.unknownTags,
-		unusable:    c.unusable - before.unusable, usable: c.usable - before.usable, published: c.published - before.published,
+		fed: c.fed - before.fed, notFed: c.notFed - before.notFed, damaged: c.damaged - before.damaged,
+		awaitedStart: c.awaitedStart - before.awaitedStart,
+		unknownTags:  c.unknownTags - before.unknownTags,
+		unusable:     c.unusable - before.unusable, usable: c.usable - before.usable, published: c.published - before.published,
 		childRuns: c.childRuns - before.childRuns,
 	}
 }
@@ -594,6 +638,7 @@ func (c derivedLayerCounts) since(before derivedLayerCounts) derivedLayerCounts 
 func (c derivedLayerCounts) fields() []zap.Field {
 	return []zap.Field{
 		zap.Uint64("frames_fed", c.fed), zap.Uint64("frames_not_fed", c.notFed),
+		zap.Uint64("frames_flagged_or_cut_short", c.damaged),
 		zap.Uint64("frames_passed_over_awaiting_a_start", c.awaitedStart),
 		zap.Uint64("outputs_with_unknown_tag", c.unknownTags), zap.Uint64("outputs_unusable", c.unusable),
 		zap.Uint64("outputs_usable", c.usable), zap.Uint64("frames_published", c.published), zap.Uint64("child_runs", c.childRuns),

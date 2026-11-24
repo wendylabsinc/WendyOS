@@ -247,23 +247,39 @@ func h264PPSID(nal []byte) (id int, ok bool) {
 	return id, true
 }
 
+// h264FirstSlice finds the header byte of an access unit's first coded slice.
+// An access unit without one holds no picture: parameter sets, a delimiter or
+// SEI alone.
+func h264FirstSlice(au []byte) (header int, found bool) {
+	for _, header, ok := h264NextNAL(au, 0); ok; _, header, ok = h264NextNAL(au, header+1) {
+		switch au[header] & 0x1f {
+		case 1, 2, h264NALIDR:
+			return header, true
+		}
+	}
+	return 0, false
+}
+
+func h264HasCodedPicture(au []byte) bool {
+	_, found := h264FirstSlice(au)
+	return found
+}
+
 // h264PictureIsBidirectional reports whether an access unit's picture is coded
 // in B slices, read off its first slice header (first_mb_in_slice, then
 // slice_type). A decoder hands such a picture back before pictures it was given
 // earlier.
 func h264PictureIsBidirectional(au []byte) bool {
-	for _, header, ok := h264NextNAL(au, 0); ok; _, header, ok = h264NextNAL(au, header+1) {
-		switch au[header] & 0x1f {
-		case 1, 2, h264NALIDR:
-			_, bit, ok := h264ExpGolomb(au[header+1:], 0)
-			if !ok {
-				return false
-			}
-			sliceType, _, ok := h264ExpGolomb(au[header+1:], bit)
-			return ok && sliceType%5 == 1
-		}
+	header, found := h264FirstSlice(au)
+	if !found {
+		return false
 	}
-	return false
+	_, bit, ok := h264ExpGolomb(au[header+1:], 0)
+	if !ok {
+		return false
+	}
+	sliceType, _, ok := h264ExpGolomb(au[header+1:], bit)
+	return ok && sliceType%5 == 1
 }
 
 // nativeH264Emit returns the emit callback for one native V4L2 H.264 capture.
