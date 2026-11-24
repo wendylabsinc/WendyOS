@@ -37,6 +37,9 @@ const (
 
 	platformCap      = 365 * day
 	defaultTenantCap = 60 * day
+	// The device tolerates this much over the platform cap (two clocks: the
+	// client signs iat on its own clock); cloud's accept check stays exact.
+	deviceCapTolerance = 5 * 60
 
 	controlContainer = "wendycloud.v2.DeploymentService/ControlContainer"
 )
@@ -189,6 +192,8 @@ func main() {
 	}
 	twoMonths := request(iat+defaultTenantCap, "a1c5e9f3-2b6d-4a8e-9c1f-7d3b5e9a1c42")
 	pastPlatform := request(iat+platformCap+1, "b7d3f1a9-5c2e-4b6d-8f0a-3e9c1d7b5f28")
+	deviceCapEdge := request(iat+platformCap+deviceCapTolerance, "e3a7c1f5-9d2b-4e8a-b6c0-4f8d2a6e1b37")
+	pastDeviceCap := request(iat+platformCap+deviceCapTolerance+1, "f9b5d3a7-1e4c-4a6f-8d2b-7c0e5a9f3d16")
 	onDevice := func(name, sr string, now int64, expect, refusal, reason string) vec {
 		v := vec{"name": name, "stage": "device", "signed_request_b64": sr, "trusted_now": now, "expect": expect}
 		if refusal != "" {
@@ -210,8 +215,9 @@ func main() {
 			"trusted now equals valid_until (iat + 60 days); valid_until is strict, like expiry"),
 		onDevice("valid-until-missing-invalid", request(0, "c2e6a0b4-8d3f-4c7a-9e1b-5f2d6a0c4e83"), iat+10, "invalid", "validity_missing",
 			"ControlContainerRequest without valid_until"),
-		onDevice("above-platform-cap-device-invalid", pastPlatform, iat+10, "invalid", "above_platform_cap",
-			"valid_until = iat + 365 days + 1 s: above the platform cap, which the device checks too (cloud should have refused it at accept)"),
+		onDevice("platform-cap-tolerance-boundary-device-valid", deviceCapEdge, iat+10, "valid", "", ""),
+		onDevice("above-platform-cap-device-invalid", pastDeviceCap, iat+10, "invalid", "above_platform_cap",
+			"valid_until = iat + 365 days + 5 min + 1 s: above the platform cap plus the device's 5-minute tolerance, which the device checks too (cloud should have refused it at accept)"),
 		atAccept("tenant-cap-boundary-accept-valid", twoMonths, defaultTenantCap, "valid", "", ""),
 		atAccept("above-tenant-cap-accept-invalid", request(iat+defaultTenantCap+day, "d8f4b2c6-0a5e-4d9b-8c3f-6e1a7b2d9f54"), defaultTenantCap, "invalid", "above_tenant_cap",
 			"valid_until = iat + 61 days; the tenant cap is the 60-day default"),
@@ -227,15 +233,16 @@ func main() {
 			"deterministic": "ML-DSA-65 keys from seed = SHA-256(label); certificates and JWS signed deterministically; a rerun is byte-identical",
 			"warning":       "TEST KEYS ONLY: the seed labels in the generator ARE the private keys.",
 		},
-		"organization_id":            tenant,
-		"device":                     device,
-		"aud":                        aud,
-		"org_ca_cert_der_b64":        b64(orgCA.der),
-		"verify_at":                  iat,
-		"org_ca_vectors":             caVectors,
-		"operator_ca_cert_der_b64":   b64(operatorCA.der),
-		"platform_cap_seconds":       platformCap,
-		"default_tenant_cap_seconds": defaultTenantCap,
-		"validity_vectors":           validityVectors,
+		"organization_id":              tenant,
+		"device":                       device,
+		"aud":                          aud,
+		"org_ca_cert_der_b64":          b64(orgCA.der),
+		"verify_at":                    iat,
+		"org_ca_vectors":               caVectors,
+		"operator_ca_cert_der_b64":     b64(operatorCA.der),
+		"platform_cap_seconds":         platformCap,
+		"device_cap_tolerance_seconds": deviceCapTolerance,
+		"default_tenant_cap_seconds":   defaultTenantCap,
+		"validity_vectors":             validityVectors,
 	})
 }
