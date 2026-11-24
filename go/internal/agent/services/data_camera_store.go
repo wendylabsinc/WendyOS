@@ -483,26 +483,34 @@ func (c *cameraCapture) noteStorageResumed(receipt int64) {
 	c.nothingStoredSince = 0
 }
 
-// stillsGiveWayToVideo closes the snapshot accounting of a source that stored
-// stills and goes on recording continuously from first. The intervals without
-// a still stay counted, and the subscription's drops up to here, which are
-// frames discarded between stills, do not become losses of the video.
-func (c *cameraCapture) stillsGiveWayToVideo(first *videoFrame) {
+// stillsGiveWayToVideo marks a source that stored stills and goes on recording
+// continuously. Its snapshot accounting stays open until the first video
+// frame is stored, or the episode ends. The subscription's drops up to here
+// are frames discarded between stills, and do not become losses of the video.
+func (c *cameraCapture) stillsGiveWayToVideo() {
 	if c.snapshotNumber == 0 {
 		return
 	}
-	receipt := first.receiptBootNanos
-	if receipt == 0 {
-		_, receipt, _, _ = c.receiptNow()
-	}
-	c.countIntervalsMissedBefore(receipt)
-	c.notes = append(c.notes, fmt.Sprintf(
-		"%d still(s) were stored and %d snapshot interval(s) passed without one before the source went on recording continuously; its frame count adds the video frames stored since to those stills, and its drop count adds the frames lost since to those intervals",
-		c.snapshotNumber, c.missedIntervals))
+	c.stillsAwaitVideo = true
 	if c.hub != nil {
 		c.carriedDrops = 0
 		c.dropBaseline = c.hub.drops(c.subID)
 	}
+}
+
+// closeStillsAccount counts the intervals without a still up to until, the
+// receipt of the first video frame stored or of the episode's end, and says
+// what the source's counts now add up.
+func (c *cameraCapture) closeStillsAccount(until int64, videoStored bool) {
+	c.stillsAwaitVideo = false
+	c.countIntervalsMissedBefore(until)
+	note := fmt.Sprintf("%d still(s) were stored and %d snapshot interval(s) passed without one before ", c.snapshotNumber, c.missedIntervals)
+	if videoStored {
+		note += "the source went on recording continuously; its frame count adds the video frames stored since to those stills, and its drop count adds the frames lost since to those intervals"
+	} else {
+		note += "the episode ended; the source was to go on recording continuously, and its drop count adds the frames lost since the stills to those intervals"
+	}
+	c.notes = append(c.notes, note)
 }
 
 func (c *cameraCapture) rejoinSubscriptions() error {

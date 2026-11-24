@@ -1559,6 +1559,86 @@ func TestSnapshotWhoseOwnFramesAreRefusedLaterGoesOnWithTheVideoAndSaysWhy(t *te
 	}
 }
 
+// The intervals without a still run up to the first video frame that is
+// stored, not the first that arrives: a chunk that is no key frame opens no
+// segment. Stills in intervals 0 and 1, a chunk that is not stored in interval
+// 2, and the first stored chunk in interval 9 leave seven intervals empty.
+func TestSnapshotThatGoesOnAsVideoCountsIntervalsUpToTheFirstVideoFrameStored(t *testing.T) {
+	cam := newKernelClockCamera(t)
+	r := cam.record(t, snapshotEvery(time.Second), 2, func() {
+		cam.deliver(t, jpegAt(1, 600*time.Millisecond, testJPEG(1, 40)))
+		cam.deliver(t, jpegAt(2, 1700*time.Millisecond, testJPEG(2, 50)))
+		cam.hub.nativeNotOffered(fixedReason(gstreamerHasNoWholeFrames))
+		cam.waitForCaptureSubscriptions(t, 1, 0)
+		cam.deliver(t, chunkAt(3, 2800*time.Millisecond, []byte{0, 0, 0, 1, 0x41, 1, 0, 0}))
+		cam.deliver(t, chunkAt(4, 9800*time.Millisecond, testRAUFrame))
+	}, 3)
+
+	assertFileNames(t, r, "snapshot-000001.jpg", "snapshot-000002.jpg", "segment-000001.h264")
+	if drops := r.dropCount(); r.result.Count != 3 || drops != 7 || r.result.DropAccounting != "missed_snapshot_intervals_then_subscriber_drops_only_no_source_sequence" {
+		t.Errorf("count = %d, drops = %d under %q; want 2 stills plus 1 video frame, and the 7 intervals without a still", r.result.Count, drops, r.result.DropAccounting)
+	}
+	assertDetailSays(t, r,
+		"2 still(s) were stored and 7 snapshot interval(s) passed without one before the source went on recording continuously",
+		"nothing was stored for 8.1s between the last still of the camera's own frames and the first video frame")
+}
+
+// When the episode stops before any video frame is stored, the intervals run
+// up to the stop: stills in intervals 0 and 1 and a stop in interval 10 leave
+// eight empty.
+func TestSnapshotThatGoesOnAsVideoCountsIntervalsUpToTheStopWhenNoVideoIsStored(t *testing.T) {
+	clock := &fakeReceipt{}
+	c := newStoreTestCapture(t, clock, snapshotEvery(time.Second))
+	c.source.Detail = "Test Cam"
+	c.mode, c.interval, c.primaryKind = captureModeSnapshot, int64(time.Second), nativeFrames
+	hub := bareHub(t)
+	subID, frames, err := hub.subscribeKind(nativeFrames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.hub, c.subID, c.frames = hub, subID, frames
+	c.ctx, c.cancel = context.WithCancel(context.Background())
+	t.Cleanup(c.cancel)
+	c.done, c.ready = make(chan struct{}), make(chan error, 1)
+	go c.run()
+
+	hub.broadcast(jpegAt(1, 100*time.Millisecond, testJPEG(1, 40)))
+	waitForCaptureCount(t, c, 1)
+	hub.broadcast(jpegAt(2, 1200*time.Millisecond, testJPEG(2, 50)))
+	waitForCaptureCount(t, c, 2)
+	hub.nativeNotOffered(fixedReason(gstreamerHasNoWholeFrames))
+	waitForOnlyAnEncodedSubscriber(t, hub)
+	hub.broadcast(chunkAt(3, 2300*time.Millisecond, []byte{0, 0, 0, 1, 0x41, 1, 0, 0}))
+	// A frame the capture has taken is handled before it looks at its
+	// context again, so the stop below comes after the chunk.
+	taken := func() bool {
+		hub.mu.Lock()
+		defer hub.mu.Unlock()
+		for _, sub := range hub.subs {
+			if !sub.closed && len(sub.ch) > 0 {
+				return false
+			}
+		}
+		return true
+	}
+	for deadline := time.Now().Add(3 * time.Second); !taken() && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	clock.now = int64(10500 * time.Millisecond)
+	results, err := c.Stop(context.Background())
+	if err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	r := storeRecording{dir: c.dir, result: results[0]}
+
+	if drops := r.dropCount(); r.result.Count != 2 || drops != 8 || r.result.DropAccounting != "missed_snapshot_intervals_then_subscriber_drops_only_no_source_sequence" {
+		t.Errorf("count = %d, drops = %d under %q; want the 2 stills and the 8 intervals without one up to the stop", r.result.Count, drops, r.result.DropAccounting)
+	}
+	assertDetailSays(t, r,
+		"2 still(s) were stored and 8 snapshot interval(s) passed without one before the episode ended; the source was to go on recording continuously",
+		"no video frame was stored after the camera's last own frame before the episode ended")
+}
+
 // Video in whole access units keeps the source in snapshot mode: the stills go
 // on as key frames, every one is a still, and the intervals without one are
 // the only losses.

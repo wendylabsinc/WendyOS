@@ -554,6 +554,9 @@ type cameraCapture struct {
 	lastSnapshotIdx int64
 	snapshotNumber  int
 	missedIntervals uint64
+	// stillsAwaitVideo is set from the moment a source that stored stills goes
+	// on recording continuously until its first video frame is stored.
+	stillsAwaitVideo bool
 	// Rate-cap state: receipts of the first and last written frames, and
 	// whether the current group of pictures is being skipped. rateWritten counts
 	// only frames the live loop wrote (not flushed pre-roll), so a campaign that
@@ -666,6 +669,9 @@ func (c *cameraCapture) run() {
 		end := int64(0)
 		if _, receipt, _, err := c.receiptNow(); err == nil {
 			end = receipt
+		}
+		if c.stillsAwaitVideo {
+			c.closeStillsAccount(end, false)
 		}
 		if c.mode == captureModeSnapshot {
 			// Discarding frames between intervals is the normal snapshot
@@ -946,7 +952,7 @@ func (c *cameraCapture) handleFrame(frame *videoFrame) error {
 			if c.mode == captureModeSnapshot {
 				c.mode = "continuous"
 				c.notes = append(c.notes, "snapshot stills require a camera that delivers whole frames (one the agent captures natively); this stream arrives as byte chunks, so the source records continuously instead")
-				c.stillsGiveWayToVideo(frame)
+				c.stillsGiveWayToVideo()
 			}
 			if c.rateCap > 0 {
 				c.notes = append(c.notes, fmt.Sprintf("rate cap %.3g Hz cannot be enforced at GOP granularity on this transport's byte-chunked stream without corrupting it; recording at the stream rate", c.rateCap))
@@ -1185,6 +1191,9 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 	}
 	stream.segmentOffset += int64(n)
 	stream.indexed++
+	if c.stillsAwaitVideo {
+		c.closeStillsAccount(receipt, true)
+	}
 	if c.nothingStoredSince != 0 {
 		c.noteStorageResumed(receipt)
 	}
