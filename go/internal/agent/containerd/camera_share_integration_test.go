@@ -258,26 +258,53 @@ func TestIntegrationCameraShareCoverFailureStillStarts(t *testing.T) {
 }
 
 // Review Focus 1: a create makes the shares; a redeploy removes the old
-// container's before it makes the new one's; a delete removes them. A direct
-// app, and a container made before sharing existed, are never passed on.
+// container's before it makes the new one's; a delete removes them. Each
+// create passes on the camera entries its own deploy carries, with their
+// format and stamp. A direct app, and a container made before sharing
+// existed, are never passed on.
 func TestIntegrationCameraShareNodesFollowCreateReplaceAndDelete(t *testing.T) {
 	c, ctx, fake, _ := newCameraShareClient(t)
 	lifecycle := []string{"create", "remove"}
 
 	const app = "share-life"
-	createShareApp(t, c, ctx, app, "1", sharedCamera, shareAppIdle)
+	camera := func(format, stamp string, allowlist ...string) appconfig.Entitlement {
+		return appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: allowlist, Format: format, Stamp: stamp}
+	}
+	createdWith := func(when string, want ...cameraEntry) {
+		t.Helper()
+		if got := cameraEntriesOf(fake.createdWith(app)); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: the create passed on the camera entries %+v, want %+v", when, got, want)
+		}
+	}
+	createShareApp(t, c, ctx, app, "1", []appconfig.Entitlement{
+		camera(appconfig.CameraFormatNative, appconfig.CameraStampFrame, "Brio 101"),
+		camera(appconfig.CameraFormatH264, "", "/dev/video2"),
+	}, shareAppIdle)
 	if got := fake.ops(app, lifecycle...); !reflect.DeepEqual(got, []string{"create"}) {
 		t.Fatalf("after create: %v, want [create]", got)
 	}
 	if got := fake.callsFor(app)[0]; got.appID != app {
 		t.Fatalf("create's app id = %q, want %q", got.appID, app)
 	}
-	// Redeploy over a running task, as `wendy run` does while iterating.
+	if v, _ := shareLabel(t, c, ctx, app); v != "shared" {
+		t.Fatalf("share label = %q, want shared", v)
+	}
+	createdWith("after create",
+		cameraEntry{"Brio 101", appconfig.CameraFormatNative, appconfig.CameraStampFrame},
+		cameraEntry{"/dev/video2", appconfig.CameraFormatH264, ""})
+	// Redeploy over a running task, as `wendy run` does while iterating, with
+	// other settings for the same cameras.
 	_, done := startShareApp(t, c, ctx, app)
-	createShareApp(t, c, ctx, app, "2", sharedCamera, shareAppIdle)
+	createShareApp(t, c, ctx, app, "2", []appconfig.Entitlement{
+		camera(appconfig.CameraFormatH264, "", "Brio 101"),
+		camera("", appconfig.CameraStampFrame, "/dev/video2"),
+	}, shareAppIdle)
 	if got := fake.ops(app, lifecycle...); !reflect.DeepEqual(got, []string{"create", "remove", "create"}) {
 		t.Fatalf("after redeploy: %v, want [create remove create]", got)
 	}
+	createdWith("after redeploy",
+		cameraEntry{"Brio 101", appconfig.CameraFormatH264, ""},
+		cameraEntry{"/dev/video2", "", appconfig.CameraStampFrame})
 	<-done
 	if err := c.DeleteContainer(ctx, app, false); err != nil {
 		t.Fatal(err)

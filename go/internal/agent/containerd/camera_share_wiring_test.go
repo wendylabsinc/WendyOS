@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -69,6 +70,20 @@ func (f *fakeCameraShares) createdWith(containerID string) []appconfig.Entitleme
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.created[containerID]
+}
+
+// cameraEntry is what a camera entitlement says of its nodes.
+type cameraEntry struct{ allowlist, format, stamp string }
+
+// cameraEntriesOf are the camera entries among entitlements, in order.
+func cameraEntriesOf(entitlements []appconfig.Entitlement) []cameraEntry {
+	var entries []cameraEntry
+	for _, e := range entitlements {
+		if e.Type == appconfig.EntitlementCamera {
+			entries = append(entries, cameraEntry{strings.Join(e.Allowlist, "|"), e.Format, e.Stamp})
+		}
+	}
+	return entries
 }
 
 func (f *fakeCameraShares) CoverCameraShares(_ context.Context, containerID string, pid uint32) []error {
@@ -322,6 +337,10 @@ func TestCreateCameraSharesPassesTheLabelsEntitlements(t *testing.T) {
 	c.createCameraShares(context.Background(), "app", "app", labels)
 
 	got := fake.createdWith("app")
+	want := []cameraEntry{{"/dev/video0", appconfig.CameraFormatNative, appconfig.CameraStampFrame}, {"Brio 101", appconfig.CameraFormatH264, ""}}
+	if entries := cameraEntriesOf(got); !reflect.DeepEqual(entries, want) {
+		t.Errorf("camera entries passed on = %+v, want %+v", entries, want)
+	}
 	for _, tc := range []struct{ path, name, format, stamp string }{
 		{"/dev/video0", "C920", appconfig.CameraFormatNative, appconfig.CameraStampFrame},
 		{"/dev/video2", "Brio 101", appconfig.CameraFormatH264, appconfig.CameraStampTime},
