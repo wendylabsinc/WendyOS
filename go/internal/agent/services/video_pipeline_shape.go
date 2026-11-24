@@ -14,16 +14,49 @@ type pipelineShape struct {
 	// encode adds the H.264 branch writing fd 1. False builds only the tap on
 	// rawTapFD, so a camera nobody is watching costs no encode.
 	encode bool
+	// pixels adds a branch of decoded pictures. Only a derived layer's pipeline
+	// reads it: a camera pipeline tees its tap whenever it has one.
+	pixels bool
+}
+
+func (s pipelineShape) lacksBranchOf(wanted pipelineShape) bool {
+	return (wanted.encode && !s.encode) || (wanted.pixels && !s.pixels)
+}
+
+func (s pipelineShape) hasBranchNotIn(wanted pipelineShape) bool {
+	return (s.encode && !wanted.encode) || (s.pixels && !wanted.pixels)
+}
+
+// errPipelineEndedRestartable is returned by a launch whose pipeline ended by
+// itself and may be started again in the shape then wanted.
+var errPipelineEndedRestartable = errors.New("pipeline ended and can be restarted")
+
+// shapeNeeds reads from a hub's demand the branches a pipeline should run now.
+type shapeNeeds func(demand encodeDemand) pipelineShape
+
+func encoderOnDemand(demand encodeDemand) pipelineShape {
+	return pipelineShape{encode: demand.wantEncoded()}
+}
+
+func branchesOnDemand(demand encodeDemand) pipelineShape {
+	return pipelineShape{encode: demand.wantEncoded(), pixels: demand.wantRaw()}
 }
 
 // errNoTapOnlyPipeline is returned when a shape without the encoder is asked
 // of a pipeline that has no uncompressed frames to hand out.
 var errNoTapOnlyPipeline = errors.New("pipeline has no uncompressed frames to run without an encoder")
 
-// mjpegTapTail converts decoded MJPEG frames to YUYV and writes them to the tap.
-// jpegdec's native output varies (I420 and others); pinning YUY2 makes the bytes
-// match the RawFormat the plan reports.
-var mjpegTapTail = fmt.Sprintf("videoconvert ! video/x-raw,format=YUY2 ! fdsink fd=%d", rawTapFD)
+// mjpegPixelsStages converts decoded MJPEG frames to YUYV. jpegdec's native
+// output varies (I420 and others); pinning YUY2 makes the bytes match the
+// RawFormat mjpegPixelsFormat reports.
+const mjpegPixelsStages = "videoconvert ! video/x-raw,format=YUY2"
+
+// mjpegTapTail writes those frames to the tap.
+var mjpegTapTail = fmt.Sprintf("%s ! fdsink fd=%d", mjpegPixelsStages, rawTapFD)
+
+func mjpegRawWhy(w, h uint32) string {
+	return fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", w, h)
+}
 
 // mjpegPixelsFormat describes the YUYV frames an MJPEG capture tees to the tap,
 // or nil when a frame would exceed the raw frame limit.
@@ -71,6 +104,14 @@ const defaultEncoderIdleGrace = 30 * time.Second
 // With no demand to read (a producer whose sink is not a hub), launch runs once
 // with the encoder: today's behaviour.
 func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Duration, launch func(ctx context.Context, shape pipelineShape) error) error {
+	return runPipelinesShapedBy(ctx, demand, grace, encoderOnDemand, launch)
+}
+
+// runPipelinesShapedBy is runShapedPipelines with the rule that turns demand
+// into a shape given. A branch the subscribers call for is added at once; one
+// they stopped calling for is dropped after grace. A launch that returns
+// errPipelineEndedRestartable is started again.
+func runPipelinesShapedBy(ctx context.Context, demand encodeDemand, grace time.Duration, needs shapeNeeds, launch func(ctx context.Context, shape pipelineShape) error) error {
 	if demand == nil {
 		return launch(ctx, pipelineShape{encode: true})
 	}
@@ -79,7 +120,7 @@ func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Dur
 	// decided: each launch starts in it, and a running launch is replaced only
 	// when it differs, never by another launch of the same shape.
 	wanted := func() pipelineShape {
-		shape := pipelineShape{encode: demand.wantEncoded()}
+		shape := needs(demand)
 		shape.encode = shape.encode || noTap
 		return shape
 	}
@@ -100,6 +141,9 @@ func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Dur
 		}
 		if !shape.encode && errors.Is(err, errNoTapOnlyPipeline) {
 			noTap = true
+			continue
+		}
+		if errors.Is(err, errPipelineEndedRestartable) && ctx.Err() == nil {
 			continue
 		}
 		return err
@@ -130,19 +174,22 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 		}
 	}
 	defer stopGrace()
-	// encoderIdle is the one condition for dropping the encoder: the hub still
-	// has an audience, and the shape it calls for has no encoder.
-	encoderIdle := func() bool { return !wanted().encode && (demand.wantRaw() || demand.wantNative()) }
+	// branchIdle is the one condition for dropping a branch, the encoder or a
+	// derived layer's pictures: the hub still has an audience, and the shape it
+	// calls for lacks a branch this launch runs.
+	branchIdle := func() bool {
+		return shape.hasBranchNotIn(wanted()) && (demand.wantEncoded() || demand.wantRaw() || demand.wantNative())
+	}
 
 	for {
 		// Re-read the hub on every pass, starting with the first: a change that
 		// landed between the shape decision and this launch is acted on too.
 		switch {
-		case !shape.encode && wanted().encode:
+		case shape.lacksBranchOf(wanted()):
 			stop()
 			return true, nil
-		case shape.encode && encoderIdle():
-			// Started once and left running while the encoder stays idle, so a run
+		case branchIdle():
+			// Started once and left running while the branch stays idle, so a run
 			// of raw joins and leaves cannot postpone the drop indefinitely.
 			if graceTimer == nil {
 				graceTimer = time.NewTimer(grace)
@@ -173,7 +220,7 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 			// kill takes, and the new stream opens with a keyframe the viewer's
 			// decoder can start from, so it is accepted rather than closed by
 			// holding the hub's lock across the kill.
-			if encoderIdle() {
+			if branchIdle() {
 				stop()
 				return true, nil
 			}

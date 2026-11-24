@@ -622,6 +622,9 @@ type deviceHub struct {
 	// demand holds the pixel offer and encoder demand (video_hub_demand.go).
 	// Protected by h.mu.
 	demand hubDemand
+	// derived is handed every frame produce numbers while the producer runs a
+	// derived layer (video_derived_layer.go).
+	derived atomic.Pointer[derivedLayer]
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -876,7 +879,17 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 	if before, receipt, after, err := data.CaptureReceipt(); err == nil {
 		frame.receiptBootNanos, frame.receiptUncertaintyNanos = receipt, (after-before+1)/2
 	}
-	return h.broadcast(frame)
+	keepProducing := h.broadcast(frame)
+	if layer := h.derived.Load(); layer != nil {
+		layer.take(frame)
+	}
+	return keepProducing
+}
+
+// feedDerivedLayer hands layer every frame produce numbers until detach.
+func (h *deviceHub) feedDerivedLayer(layer *derivedLayer) (detach func()) {
+	h.derived.Store(layer)
+	return func() { h.derived.CompareAndSwap(layer, nil) }
 }
 
 var errSourceHasNoSampleID = errors.New("derived frame's source has no sample ID")
@@ -2463,6 +2476,15 @@ type hubSink interface {
 }
 
 var _ hubSink = (*deviceHub)(nil)
+
+// derivingHub is the part of a hub a derived layer is built on.
+type derivingHub interface {
+	hubSink
+	broadcastDerivedFrom(source, derived *videoFrame) (keepProducing bool, err error)
+	feedDerivedLayer(layer *derivedLayer) (detach func())
+}
+
+var _ derivingHub = (*deviceHub)(nil)
 
 // tapDeliveries passes everything through to the hub and records when the tap
 // has handed a frame to subscribers. A pipeline without the encoder delivers
@@ -4223,7 +4245,7 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 	case usingPipeWire:
 		plan.rawWhy = pipeWireRawWhy
 	case useMJPEG:
-		plan.rawWhy = fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", capW, capH)
+		plan.rawWhy = mjpegRawWhy(capW, capH)
 		// Decoded frames still reach in-agent consumers, as YUYV, when one fits.
 		plan.pixels = mjpegPixelsFormat(capW, capH)
 	case capW == 0 || capH == 0:
@@ -4479,6 +4501,9 @@ func keyframeArg(encoder string, gop int) string {
 		// An unknown control name is warned-and-ignored by the v4l2 element,
 		// so this is safe even where the driver names the control differently.
 		return fmt.Sprintf(" extra-controls=\"controls,h264_i_frame_period=%d\"", gop)
+	case "vtenc_h264", "vtenc_h264_hw":
+		// VideoToolbox reorders frames unless told not to.
+		return fmt.Sprintf(" max-keyframe-interval=%d realtime=true allow-frame-reordering=false", gop)
 	default:
 		return ""
 	}
