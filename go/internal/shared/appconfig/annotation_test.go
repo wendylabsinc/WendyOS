@@ -368,3 +368,19 @@ func TestValidateAcceptsOrdinaryAllowlistEntries(t *testing.T) {
 		t.Fatalf("Validate() rejected ordinary allowlist entries: %v", err)
 	}
 }
+
+// An agent that reads an empty allowlist value as no allowlist applies the
+// entry to every camera, where the command line applied it to none.
+func TestEntitlementAnnotation_AnAllowlistOfEmptyEntriesIsNotReadAsNoAllowlist(t *testing.T) {
+	for _, allowlist := range [][]string{{""}, {"", ""}, {" "}, {"", "/dev/video0"}, {"/dev/video0", ""}} {
+		in := Entitlement{Type: EntitlementCamera, Format: CameraFormatNative, Stamp: CameraStampFrame, Allowlist: allowlist}
+		got := ParseEntitlementAnnotation(EntitlementCamera, EntitlementAnnotationValue(in))
+		if !reflect.DeepEqual(got, in) {
+			t.Errorf("allowlist %q came back as %+v through %q", allowlist, got, EntitlementAnnotationValue(in))
+		}
+	}
+	plain := Entitlement{Type: EntitlementCamera, Format: CameraFormatNative}
+	if got := ParseEntitlementAnnotation(EntitlementCamera, EntitlementAnnotationValue(plain)); !reflect.DeepEqual(got, plain) {
+		t.Errorf("an entry without an allowlist came back as %+v", got)
+	}
+}

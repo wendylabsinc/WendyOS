@@ -107,6 +107,41 @@ func TestValidate_CameraEntriesClaimingTheSameCameraMustAgree(t *testing.T) {
 			"",
 		},
 		{
+			"two spellings of one device path with the same settings",
+			[]Entitlement{entry("native", "", "/dev/video0"), entry("native", "", "v4l2:/dev/video0")},
+			"",
+		},
+		{
+			"two spellings of one stable id with the same settings",
+			[]Entitlement{entry("", "frame", "by-id:usb-046d_C920-video-index0"), entry("", "frame", "usb-046d_C920-video-index0")},
+			"",
+		},
+		{
+			"a name after the path prefix is not a device path",
+			[]Entitlement{entry("native", "", "v4l2:Brio 101"), entry("", "", "Brio 101")},
+			"",
+		},
+		{
+			"a device path after the stable id prefix is not a stable id",
+			[]Entitlement{entry("native", "", "by-id:/dev/video0"), entry("", "", "/dev/video0")},
+			"",
+		},
+		{
+			"a port stable id is matched only as written",
+			[]Entitlement{entry("native", "", "by-path:pci-0000:00:14.0-usb-0:2:1.0-video-index0"), entry("", "", "pci-0000:00:14.0-usb-0:2:1.0-video-index0")},
+			"",
+		},
+		{
+			"two spellings of one device path, format differs",
+			[]Entitlement{entry("native", "", "/dev/video0"), entry("h264", "", "/dev/video2", "v4l2:/dev/video0")},
+			`entitlement[0] and entitlement[1] claim the same camera ("/dev/video0" and "v4l2:/dev/video0" name one camera) but differ in format ("native" and "h264")` + mustAgree,
+		},
+		{
+			"two spellings of one stable id, stamp differs",
+			[]Entitlement{entry("", "", "usb-046d_C920-video-index0"), entry("", "frame", "by-id:usb-046d_C920-video-index0")},
+			`entitlement[0] and entitlement[1] claim the same camera ("usb-046d_C920-video-index0" and "by-id:usb-046d_C920-video-index0" name one camera) but differ in stamp ("time" and "frame")` + mustAgree,
+		},
+		{
 			"shared allowlist entry with the same settings",
 			[]Entitlement{entry("native", "", "/dev/video0"), entry("native", "", "/dev/video0", "/dev/video2")},
 			"",
@@ -676,6 +711,23 @@ func TestCameraAllowlistEntriesNamingNoCamera(t *testing.T) {
 	}
 }
 
+// The label an entitlement travels in to the device cannot be told from one
+// without an allowlist by an agent that drops an empty value, so an entry that
+// names nothing is refused where its author can be told.
+func TestValidate_AnEmptyOrBlankCameraAllowlistEntryIsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		typ   string
+		entry string
+		want  string
+	}{
+		{EntitlementCamera, "", `entitlement[0]: allowlist[1] must not be empty or blank, got ""; an entry names a camera by its stable id, device path or name`},
+		{EntitlementVideo, " \t", `entitlement[0]: allowlist[1] must not be empty or blank, got " \t"; an entry names a camera by its stable id, device path or name`},
+	} {
+		in := []Entitlement{{Type: tc.typ, Allowlist: []string{"/dev/video0", tc.entry}, Format: "native", Stamp: "frame"}}
+		assertValidationError(t, validateEntitlements(in, "entitlement"), tc.want)
+	}
+}
+
 func TestCameraNodeSettings_UnknownValuesResolveToTheDefaults(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -775,6 +827,10 @@ func TestSchema_ValidatesCameraNodeKeys(t *testing.T) {
 		{"unknown format", `{"type": "camera", "format": "vp8"}`, false},
 		{"unknown stamp", `{"type": "camera", "stamp": "sequence"}`, false},
 		{"unknown format on the video alias", `{"type": "video", "format": "raw"}`, false},
+		{"allowlist naming cameras", `{"type": "camera", "allowlist": ["by-id:usb-046d_C920-video-index0", "v4l2:/dev/video0", "Brio 101"]}`, true},
+		{"empty allowlist entry", `{"type": "camera", "allowlist": ["/dev/video0", ""]}`, false},
+		{"blank allowlist entry", `{"type": "camera", "allowlist": [" "]}`, false},
+		{"empty allowlist entry on the video alias", `{"type": "video", "allowlist": [""]}`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -283,7 +283,7 @@
             },
             "allowlist": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
               "description": "Cameras this entry's format and stamp apply to, each named by its stable_id (preferred), path or name as `wendy device camera list --json` prints them. Omit to apply them to every camera."
             },
             "format": {
@@ -354,7 +354,7 @@
             },
             "allowlist": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
               "description": "Cameras this entry's format and stamp apply to, each named by its stable_id (preferred), path or name as `wendy device camera list --json` prints them. Omit to apply them to every camera."
             },
             "format": {

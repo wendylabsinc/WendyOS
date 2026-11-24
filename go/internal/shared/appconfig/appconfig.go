@@ -778,6 +778,9 @@ func LoadFromBytes(data []byte) (*AppConfig, error) {
 // because the codec has no way to report a problem to the person who can fix it.
 func validateAllowlistEntries(allowlist []string, prefix string, index int) error {
 	for j, entry := range allowlist {
+		if strings.TrimSpace(entry) == "" {
+			return fmt.Errorf("%s[%d]: allowlist[%d] must not be empty or blank, got %q; an entry names a camera by its stable id, device path or name", prefix, index, j, entry)
+		}
 		if strings.ContainsAny(entry, ",=") {
 			return fmt.Errorf("%s[%d]: allowlist[%d] must not contain ',' or '=', got %q; those characters delimit the container label the entitlement is carried in and would corrupt it", prefix, index, j, entry)
 		}
@@ -872,10 +875,41 @@ func validateCameraNodeSettingsWithDirect(entries []locatedEntitlement) error {
 	return nil
 }
 
+// spellingWithoutDevice reduces the spellings of one camera that can be told
+// to be the same without the device to one: a device path after "v4l2:", and a
+// stable id after "by-id:".
+func spellingWithoutDevice(entry string) string {
+	if path, tagged := strings.CutPrefix(entry, cameraPathScheme); tagged && strings.HasPrefix(path, "/") {
+		return path
+	}
+	if id, tagged := strings.CutPrefix(entry, cameraStableIDByIDScheme); tagged && id != "" && !strings.HasPrefix(id, "/") {
+		return id
+	}
+	return entry
+}
+
+// cameraAllowlistOverlap says how two allowlists claim one camera, or "" when
+// they are not seen to.
+func cameraAllowlistOverlap(earlier, later []string) string {
+	for _, b := range later {
+		if slices.Contains(earlier, b) {
+			return fmt.Sprintf("both allowlists contain %q", b)
+		}
+	}
+	for _, b := range later {
+		for _, a := range earlier {
+			if spellingWithoutDevice(a) == spellingWithoutDevice(b) {
+				return fmt.Sprintf("%q and %q name one camera", a, b)
+			}
+		}
+	}
+	return ""
+}
+
 // validateCameraClaims rejects two camera or video entries that claim the same
 // camera with different node settings. An entry without an allowlist claims
 // every camera, and an entry with one claims the cameras it lists, compared as
-// exact strings. Entries that agree after defaults are accepted, because
+// written apart from the spellings spellingWithoutDevice reduces. Entries that agree after defaults are accepted, because
 // manifests with several plain camera entries predate format and stamp.
 func validateCameraClaims(entries []locatedEntitlement) error {
 	for j, later := range entries {
@@ -912,13 +946,10 @@ func validateCameraClaims(entries []locatedEntitlement) error {
 			case len(later.Allowlist) == 0:
 				overlap = later.location + " has no allowlist, so it claims every camera"
 			default:
-				shared := slices.IndexFunc(later.Allowlist, func(camera string) bool {
-					return slices.Contains(earlier.Allowlist, camera)
-				})
-				if shared < 0 {
+				overlap = cameraAllowlistOverlap(earlier.Allowlist, later.Allowlist)
+				if overlap == "" {
 					continue
 				}
-				overlap = fmt.Sprintf("both allowlists contain %q", later.Allowlist[shared])
 			}
 			return fmt.Errorf("%s and %s claim the same camera (%s) but differ in %s; an app gets one node per camera, so entries that claim the same camera must agree", earlier.location, later.location, overlap, strings.Join(differences, " and "))
 		}

@@ -130,9 +130,7 @@ func ParseEntitlementAnnotation(entType, value string) Entitlement {
 				}
 			}
 		case "allowlist":
-			if val != "" {
-				ent.Allowlist = strings.Split(val, ",")
-			}
+			ent.Allowlist = strings.Split(val, ",")
 		case "ports":
 			for _, pm := range strings.Split(val, ",") {
 				protocol := ""
