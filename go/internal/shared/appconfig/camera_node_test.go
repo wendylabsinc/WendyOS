@@ -770,6 +770,34 @@ func TestValidate_AnEmptyOrBlankCameraAllowlistEntryIsRejected(t *testing.T) {
 	}
 }
 
+// An allowlist on another entitlement type is not a camera allowlist: such
+// manifests validated before the blank entry rule and still do.
+func TestValidate_ABlankAllowlistEntryIsRefusedOnACameraOrVideoEntitlementOnly(t *testing.T) {
+	for _, tc := range []struct {
+		entitlement Entitlement
+		want        string
+	}{
+		{Entitlement{Type: EntitlementGPU, Allowlist: []string{""}}, ""},
+		{Entitlement{Type: EntitlementUSB, Allowlist: []string{" "}}, ""},
+		{Entitlement{Type: EntitlementNetwork, Mode: "host", Allowlist: []string{""}}, ""},
+		{
+			Entitlement{Type: EntitlementCamera, Allowlist: []string{""}},
+			`entitlement[0]: allowlist[0] must not be empty or blank, got ""; an entry names a camera by its stable id, device path or name`,
+		},
+		{
+			Entitlement{Type: EntitlementVideo, Allowlist: []string{" "}},
+			`entitlement[0]: allowlist[0] must not be empty or blank, got " "; an entry names a camera by its stable id, device path or name`,
+		},
+	} {
+		cfg := &AppConfig{AppID: "com.example.app", Entitlements: []Entitlement{tc.entitlement}}
+		for name, validate := range map[string]func() error{"Validate": cfg.Validate, "ValidateComposeCompanion": cfg.ValidateComposeCompanion} {
+			t.Run(tc.entitlement.Type+" "+name, func(t *testing.T) {
+				assertValidationError(t, validate(), tc.want)
+			})
+		}
+	}
+}
+
 func TestCameraNodeSettings_UnknownValuesResolveToTheDefaults(t *testing.T) {
 	tests := []struct {
 		name          string

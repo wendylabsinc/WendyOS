@@ -803,11 +803,23 @@ func LoadFromBytes(data []byte) (*AppConfig, error) {
 // because the codec has no way to report a problem to the person who can fix it.
 func validateAllowlistEntries(allowlist []string, prefix string, index int) error {
 	for j, entry := range allowlist {
-		if strings.TrimSpace(entry) == "" {
-			return fmt.Errorf("%s[%d]: allowlist[%d] must not be empty or blank, got %q; an entry names a camera by its stable id, device path or name", prefix, index, j, entry)
-		}
 		if strings.ContainsAny(entry, ",=") {
 			return fmt.Errorf("%s[%d]: allowlist[%d] must not contain ',' or '=', got %q; those characters delimit the container label the entitlement is carried in and would corrupt it", prefix, index, j, entry)
+		}
+	}
+	return nil
+}
+
+// validateCameraAllowlistEntries rejects an entry of a camera or video
+// allowlist that names nothing. Other entitlement types take no meaning from
+// an allowlist, and their manifests are not judged by a camera's rule.
+func validateCameraAllowlistEntries(e Entitlement, prefix string, index int) error {
+	if !isCameraEntitlement(e) {
+		return nil
+	}
+	for j, entry := range e.Allowlist {
+		if strings.TrimSpace(entry) == "" {
+			return fmt.Errorf("%s[%d]: allowlist[%d] must not be empty or blank, got %q; an entry names a camera by its stable id, device path or name", prefix, index, j, entry)
 		}
 	}
 	return nil
@@ -934,8 +946,9 @@ func cameraAllowlistOverlap(earlier, later []string) string {
 // validateCameraClaims rejects two camera or video entries that claim the same
 // camera with different node settings. An entry without an allowlist claims
 // every camera, and an entry with one claims the cameras it lists, compared as
-// written apart from the spellings spellingWithoutDevice reduces. Entries that agree after defaults are accepted, because
-// manifests with several plain camera entries predate format and stamp.
+// written apart from the spellings spellingWithoutDevice reduces. Entries that
+// agree after defaults are accepted, because manifests with several plain
+// camera entries predate format and stamp.
 func validateCameraClaims(entries []locatedEntitlement) error {
 	for j, later := range entries {
 		if !isCameraEntitlement(later.Entitlement) {
@@ -1000,6 +1013,9 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 		}
 		if !slices.Contains(ValidEntitlementTypes, e.Type) {
 			return fmt.Errorf("%s[%d]: unknown type %q", prefix, i, e.Type)
+		}
+		if err := validateCameraAllowlistEntries(e, prefix, i); err != nil {
+			return err
 		}
 		if err := validateAllowlistEntries(e.Allowlist, prefix, i); err != nil {
 			return err
