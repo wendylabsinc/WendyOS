@@ -64,6 +64,16 @@ device deployment; it does not fan deployment out to every fleet member.
   camera selector warns at deployment and only its last capture block applies.
   An agent older than the release that added `store` rejects a campaign that
   uses the key as an unknown field, so omit it there to get `video`.
+- `store: frames` writes a camera's own whole frames, such as a webcam's JPEG,
+  to `segment-NNNNNN.mjpeg` files (a new file every 10 seconds) and indexes
+  each in `index.jsonl` with its sample ID, capture time, file, byte offset,
+  and size under codec `VIDEO_CODEC_MJPEG`. `store: both` writes them beside
+  the `segment-NNNNNN.h264` video in the same index, told apart by `segment`
+  and `codec`. `playable.mp4` comes from the video only, so a `frames` source
+  has none. A camera whose own frames are already H.264 has one stream, stored
+  once as video for every `store` value. A camera with no whole frames of its
+  own, such as a network camera, records video instead; read the source's
+  detail in the episode manifest for the reason before assuming frames exist.
 - Audio supports `continuous` and `threshold`, such as
   `trigger: "level_db > -20"` and `fragment: 30s`. ROS 2 and telemetry support
   `continuous`. Other mode/kind combinations validate, warn, and record

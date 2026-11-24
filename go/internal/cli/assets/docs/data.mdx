@@ -181,6 +181,18 @@ sources:
       store: both
 ```
 
+With `frames`, a camera that has whole frames of its own, such as a webcam
+that offers JPEG, stores them in `segment-NNNNNN.mjpeg` files, a new file
+every 10 seconds, and `index.jsonl` gives each frame's sample ID, capture
+time, file, byte offset, and size under codec `VIDEO_CODEC_MJPEG`. `both`
+writes those files beside the `segment-NNNNNN.h264` video and lists both in
+the same index, told apart by `segment` and `codec`. `playable.mp4` is made
+from the video only, so a `frames` source seals without one. A camera whose
+own frames are already H.264 has one stream, stored once as video for every
+`store` value. A camera with no whole frames of its own, such as a network
+camera, records video instead, and the source's detail in the episode
+manifest says that frames were requested and why they were not stored.
+
 See the [campaign YAML reference](/docs/advanced/clients/wendy-cli/commands/data#campaign-yaml-reference)
 for selectors, capture policies, and all fields.
 
