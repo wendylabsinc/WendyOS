@@ -1,8 +1,12 @@
-"""Read agent-fed loopback frames and their exact hub sample IDs.
+"""Read a camera's frames and their exact hub sample IDs from its camera node.
 
-The copied V4L2 timestamp carries sample_id = tv_sec*1e6 + tv_usec, not a
-clock reading. The kernel sequence is independent and detects reader drops.
-The app records its own dequeue time separately from the sample identity.
+The app's camera entitlement asks for {"format": "native", "stamp": "frame"}:
+the node at the camera's own path carries the camera's own frames, H.264 or
+Motion-JPEG, and each buffer's timestamp carries sample_id = tv_sec*1e6 +
+tv_usec, not a clock reading. A camera whose own frames the agent cannot hand
+on is served as YUYV pictures instead. The kernel sequence is independent and
+detects reader drops. The app records its own dequeue time separately from the
+sample identity.
 """
 
 from __future__ import annotations
@@ -192,7 +196,7 @@ class H264Frames:
 
 
 class CameraNode:
-    """A v4l2loopback node fed by the agent."""
+    """The camera node the agent feeds for this app, at the camera's own path."""
 
     def __init__(self, path: str, source_id: str = "", buffers: int = 4):
         self.path = path

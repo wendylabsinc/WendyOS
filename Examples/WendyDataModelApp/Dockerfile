@@ -4,7 +4,7 @@
 # build step (an Ultralytics ONNX export) that the Stagefile DSL has no
 # instruction for. The export stage is build-time only: ultralytics and
 # torch never enter the runtime image, which carries onnxruntime, OpenCV,
-# NumPy, grpcio, and PyAV on the CPU (see the runtime stage below).
+# NumPy and PyAV on the CPU (see the runtime stage below).
 #
 # Jetson GPU variant: see README.md. The runtime stage swaps
 # onnxruntime for the onnxruntime-gpu wheel from the Jetson wheel index
@@ -31,16 +31,14 @@ FROM python:3.11-slim-bookworm
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
-# av decodes the encoded samples the harness delivers (H.264 access units on
-# the native Video4Linux2 path, byte-stream chunks elsewhere); grpcio carries
-# the sensor subscription. Neither needs a camera device node.
+# av decodes the H.264 access units of a camera that produces H.264.
 #
 # av is pinned exactly rather than bounded: PyAV 14.3.0 and 14.4.0 ship no
 # manylinux aarch64 wheel, so a bare "av<15" resolves to 14.4.0 on this
 # Jetson's arm64 runtime and falls back to a source build, which wants
 # ffmpeg 7, Cython and pkg-config that this slim image does not carry.
 # 14.2.0 is the newest release under 15 with a cp311 aarch64 wheel.
-RUN pip install --no-cache-dir onnxruntime opencv-python-headless "numpy<3" grpcio "av==14.2.0"
+RUN pip install --no-cache-dir onnxruntime opencv-python-headless "numpy<3" "av==14.2.0"
 WORKDIR /app
 COPY --from=export /export/yolov8n.onnx ./yolov8n.onnx
 COPY app.py wendydata.py wendyframes.py ./

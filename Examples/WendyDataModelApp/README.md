@@ -6,19 +6,18 @@ WendyOS, so a Wendy Arm demo needs nothing beyond `wendy run` and
 
 | Contract | Mechanism in this app |
 |---|---|
-| Frames in | Camera frames **fed by the harness** on a v4l2loopback node granted by the `camera` entitlement (`WENDY_CAMERA_NODE`). The app never opens the physical device. |
+| Frames in | Camera frames **fed by the harness** at the camera's own device path (`WENDY_CAMERA_DEVICE`, default `/dev/video0`), through the node the `camera` entitlement gives the app. The app never opens the physical device. |
 | Predictions out | One `prediction` record per scored frame, naming the sample identifiers it was computed from, plus a `person_detected` event, over the app-private data socket granted by the `episode-write` entitlement (`WENDY_DATA_SOCKET`) |
 | Actuation out | A Robot Operating System 2 (ROS 2) `geometry_msgs/Twist` on `/cmd_vel` when ROS 2 is enabled; the identical control decision is logged when it is not |
 
 ```
 WendyDataModelApp/
 ├── wendy.json          ← camera + episode-write entitlements
-├── Dockerfile          ← YOLOv8n ONNX export + gRPC stub generation, CPU runtime
-├── app.py              ← subscribe, detect, record, actuate loop
-├── wendyframes.py      ← reads the agent-fed node (V4L2 + OpenCV decode)
+├── Dockerfile          ← YOLOv8n ONNX export, CPU runtime
+├── app.py              ← read, detect, record, actuate loop
+├── wendyframes.py      ← reads the app's camera node (V4L2, PyAV and OpenCV decode)
 ├── wendydata.py        ← data socket client (standard library only)
 ├── test_wendydata.py   ← unit tests for framing, uncertainty, input references
-├── proto/              ← build-time copy of sensor_service.proto (parity-tested)
 └── campaign.yaml       ← the single flight-recorder plan, armed by the records
 ```
 
@@ -27,18 +26,19 @@ WendyDataModelApp/
 The harness feeds the model, and the episode records exactly what it fed
 it.
 
-1. The app reads the agent-fed v4l2loopback node and gets, with each frame,
-   the hub's `sample_id` encoded as `tv_sec * 1000000 + tv_usec` in the
-   copied V4L2 timestamp. This field carries identity, not clock time.
-   Predictions reference the episode ledger's `(source_id, sample_id)`.
-   The app's dequeue time is separate. This requires the matching agent
-   writer; older writers that stamp clock time are incompatible.
-2. Because the app reads that node rather than `/dev/video0`, it is one
-   more consumer of the producer the campaign's capture adapter consumes.
-   Video4Linux2 admits a single holder of a capture device; the agent is
-   that holder. **This is why the example no longer ships a
-   telemetry-only campaign variant** — there is no conflict left to work
-   around.
+1. `wendy.json` asks for the camera as
+   `{"type": "camera", "format": "native", "stamp": "frame"}`. The app opens
+   the camera's own path and gets the node the agent feeds for it: the
+   camera's own frames, H.264 or Motion-JPEG, with the agent's frame number
+   in each buffer's timestamp, encoded as `tv_sec * 1000000 + tv_usec`. This
+   field carries identity, not clock time; it is the `sample_id` of the
+   episode ledger, and predictions reference `(source_id, sample_id)`. The
+   app's dequeue time is separate.
+2. Because that node is fed by the agent, the app is one more consumer of
+   the producer the campaign's capture adapter consumes. Video4Linux2
+   admits a single holder of a capture device; the agent is that holder.
+   **This is why the example no longer ships a telemetry-only campaign
+   variant** — there is no conflict left to work around.
 3. Each `prediction` record carries `inputs: [{source_id, sample_id}]`.
    The camera capture's `index.jsonl` carries the same identifier on the
    bytes it kept. Match each prediction's source and sample ID to that index
@@ -52,12 +52,14 @@ it.
 Per delivered frame (scoring at most 5 per second, see rate limiting
 below):
 
-1. Reads whole H264 access units from the Agent's loopback node and decodes
-   them with PyAV. Private packet timestamps preserve the original sample
-   identity through decoder reordering. Missing identities, malformed access
-   units, and excessive buffered identities stop capture rather than assign
-   a prediction to guessed input bytes. Raw YUYV, MJPEG, BGR3 and RGB3 nodes
-   remain supported. Arbitrary encoded byte-stream chunks are not supported.
+1. Opens the camera node, reads its pixel format, and decodes accordingly:
+   whole H.264 access units with PyAV, Motion-JPEG frames with OpenCV.
+   Private packet timestamps preserve the original sample identity through
+   H.264 decoder reordering. Missing identities, malformed access units, and
+   excessive buffered identities stop capture rather than assign a prediction
+   to guessed input bytes. YUYV, BGR3 and RGB3 pictures are read too: the
+   agent serves pictures on a camera whose own frames it cannot hand on, and
+   `wendy run` says so when it does.
 2. Runs YOLOv8n, exported to Open Neural Network Exchange (ONNX) at image
    build time, through onnxruntime.
 3. Sends a `prediction` record: model `yolov8n`, the pinned model version,
@@ -69,15 +71,10 @@ below):
    creep forward when centered — and publishes it as a Twist (ROS 2 mode)
    or logs it (default mode).
 
-Set `WENDY_CAMERA_NODE` to pick the node explicitly; it defaults to
-`/dev/video10`, the first node the agent creates. `WENDY_CAMERA_SOURCE`
-labels the frames in prediction records and defaults to the node path.
-
-A camera the harness lists but cannot stream to models is reported with the
-reason rather than silently skipped. Only camera sources are subscribable in
-this release: audio and ROS 2 sources are captured into episodes, and
-subscribing to one is refused with an error saying that kind is not
-subscribable yet.
+Set `WENDY_CAMERA_DEVICE` to read another camera; it defaults to
+`/dev/video0`. `WENDY_CAMERA_SOURCE` is the source ID the prediction records
+name and defaults to `v4l2:` followed by the device path, which is how
+`wendy data sources` lists a local camera.
 
 ### The uncertainty formula
 
@@ -118,12 +115,6 @@ far enough that the harness has to drop samples before it, the sample
 carries `dropped_before` and the app logs a warning — a gap in the sample
 identifiers is always explained, never silent.
 
-`encoding` is a per-sample field, not a per-stream one, so the decoder
-follows the samples: it is rebuilt whenever the encoding changes, and
-anything the retired decoder still holds is drained first and attributed to
-the samples that produced it. A decoder pinned to whichever encoding
-arrived first would decode nothing at all after a mid-stream switch.
-
 ## Run on a dev box (no GPU, no ROS 2)
 
 The default image is CPU-only and needs no ROS 2 stack:
@@ -135,15 +126,14 @@ wendy run
 
 The build has one throwaway stage: it installs Ultralytics (pinned to
 8.3.63) and exports `yolov8n.onnx` at opset 12. The runtime image carries
-onnxruntime, OpenCV, NumPy and grpcio.
+onnxruntime, OpenCV, NumPy and PyAV.
 
-Frame input is not optional the way the data socket is: if the node cannot
-be opened the app has no frames to score and exits with a clear message
-naming the missing entitlement.
+Frame input is not optional the way the data socket is: if the camera
+cannot be opened the app has no frames to score and exits with the error.
 
-A node that was there and then goes away is a different case, and is treated
-as transient: an agent restart removes the node while the app itself is
-perfectly healthy. The app reopens it, up to
+A camera that was there and then goes away is a different case, and is
+treated as transient: it can be unplugged and plugged back in while the app
+itself is perfectly healthy. The app reopens it, up to
 `WENDY_CAMERA_RECONNECT_ATTEMPTS` consecutive times (default 5), one every
 `WENDY_CAMERA_RECONNECT_DELAY_SECONDS` (default 2), and the budget is
 refilled by every frame that arrives, so weeks of unrelated restarts do not
@@ -155,12 +145,6 @@ instead.
 Without a data socket (running outside WendyOS, or without the
 `episode-write` entitlement) it keeps running and logs each dropped record;
 without ROS 2 it logs each actuation decision.
-
-`proto/wendy/agent/apps/v1/sensor_service.proto` is a copy of the
-canonical `Proto/wendy/agent/apps/v1/sensor_service.proto`, because the
-image build context is this directory. A Go test
-(`TestExampleSensorProtoMatchesCanonical`) fails if the two drift; when the
-canonical proto changes, copy it over.
 
 Unit tests (no camera or agent needed):
 
@@ -180,7 +164,7 @@ profile — and add the `gpu` entitlement to `wendy.json`. The app already
 passes `ort.get_available_providers()`, so the CUDA (Compute Unified
 Device Architecture) provider is picked up automatically when present.
 Note that the `gpu` entitlement is about the model, not the camera: frames
-still arrive through the sensor socket.
+still arrive through the camera node.
 
 **ROS 2 actuation**: build from a ROS base image so `rclpy` is importable
 (for example `ros:humble` plus this Dockerfile's pip packages), set the

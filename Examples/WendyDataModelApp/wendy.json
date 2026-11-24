@@ -5,7 +5,9 @@
     "language": "python",
     "entitlements": [
         {
-            "type": "camera"
+            "type": "camera",
+            "format": "native",
+            "stamp": "frame"
         },
         {
             "type": "episode-write"
