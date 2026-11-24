@@ -1214,8 +1214,8 @@ private func renderReport(
     let savedCoverageURL = runURL.appendingPathComponent("coverage/summary.json")
     let savedCoverage =
         try CoverageIO.exists(savedCoverageURL) ? CoverageIO.read(savedCoverageURL) : nil
-    let goCoverageTotal: String
-    let goDiffCoverageTotal: String
+    let goCoverageTotal: ReportCoverageValue
+    let goDiffCoverageTotal: ReportCoverageValue
     if let savedCoverage {
         goCoverageTotal = e2eGoCoverageTotal(savedCoverage)
         goDiffCoverageTotal = e2eGoDiffCoverageTotal(
@@ -1225,17 +1225,19 @@ private func renderReport(
     } else {
         goCoverageTotal =
             coverageAttempts.count > 1
-            ? "Multiple attempts"
-            : coverageAttempts.first.map { e2eAttemptGoCoverageTotal(at: $0) } ?? "Not collected"
+            ? .status("Multiple attempts")
+            : coverageAttempts.first.map { e2eAttemptGoCoverageTotal(at: $0) }
+                ?? .status("Not collected")
         goDiffCoverageTotal =
             coverageAttempts.count > 1
-            ? "Multiple attempts"
-            : coverageAttempts.first.map { e2eAttemptGoDiffCoverageTotal(at: $0) } ?? "Not compared"
+            ? .status("Multiple attempts")
+            : coverageAttempts.first.map { e2eAttemptGoDiffCoverageTotal(at: $0) }
+                ?? .status("Not compared")
     }
     let coverage = try GoCoverageReports(run: runURL, package: packageURL, repo: repo)
     let comparing =
         comparison != nil || savedCoverage?["diff"] != nil
-        || (coverageAttempts.count == 1 && goDiffCoverageTotal != "Not compared")
+        || (coverageAttempts.count == 1 && goDiffCoverageTotal.detail != "Not compared")
     let runValues = coverageValues(
         total: goCoverageTotal,
         diff: comparing ? goDiffCoverageTotal : nil
@@ -1271,8 +1273,8 @@ private func renderReport(
         "{{RUN_OUTCOMES}}": outcomePill(runCounts, labeled: true),
         "{{RUN_COVERAGE_LINKS}}": runLinks,
         "{{RUN_COVERAGE_VALUES}}": runValues,
-        "{{GO_COVERAGE_TOTAL}}": goCoverageTotal,
-        "{{GO_DIFF_COVERAGE_TOTAL}}": goDiffCoverageTotal,
+        "{{GO_COVERAGE_TOTAL}}": goCoverageTotal.detail,
+        "{{GO_DIFF_COVERAGE_TOTAL}}": goDiffCoverageTotal.detail,
         "{{TESTS_PASSED_COUNT}}": String(passed),
         "{{TESTS_FLAKED_COUNT}}": String(flaked),
         "{{TESTS_SKIPPED_COUNT}}": String(skipped),

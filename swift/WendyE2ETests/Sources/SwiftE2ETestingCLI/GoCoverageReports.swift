@@ -123,8 +123,8 @@ struct GoCoverageReports {
 
     func values(for target: String, directory: URL, comparing: Bool) throws -> String {
         let summaryURL = directory.appendingPathComponent("summary.json")
-        let total: String
-        let diff: String
+        let total: ReportCoverageValue
+        let diff: ReportCoverageValue
         if CoverageIO.exists(summaryURL) {
             let summary = try CoverageIO.read(summaryURL)
             total = e2eGoCoverageTotal(summary)
@@ -136,8 +136,8 @@ struct GoCoverageReports {
             total = e2eAttemptGoCoverageTotal(at: members[0])
             diff = e2eAttemptGoDiffCoverageTotal(at: members[0])
         } else {
-            total = "Not collected"
-            diff = "Not compared"
+            total = .status("Not collected")
+            diff = .status("Not compared")
         }
         return coverageValues(total: total, diff: comparing ? diff : nil)
     }
@@ -174,18 +174,9 @@ struct GoCoverageReports {
     }
 }
 
-func coverageValues(total: String, diff: String?) -> String {
-    func value(_ label: String, _ detail: String) -> String {
-        let prefix = detail.prefix { !$0.isWhitespace }
-        let visible: String
-        if prefix.hasSuffix("%") {
-            visible = String(prefix)
-        } else if detail.hasPrefix("Incomplete") {
-            visible = "Partial"
-        } else {
-            visible = "—"
-        }
-        return "<span title=\"\(escapeHTML(detail))\">\(label) <b>\(visible)</b></span>"
+func coverageValues(total: ReportCoverageValue, diff: ReportCoverageValue?) -> String {
+    func value(_ label: String, _ coverage: ReportCoverageValue) -> String {
+        "<span title=\"\(escapeHTML(coverage.detail))\">\(label) <b>\(coverage.visible)</b></span>"
     }
     return (diff.map { value("Diff", $0) + " · " } ?? "") + value("Total", total)
 }

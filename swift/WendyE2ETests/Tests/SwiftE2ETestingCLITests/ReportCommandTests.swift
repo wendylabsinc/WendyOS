@@ -186,20 +186,26 @@ struct `report command` {
 struct `report Go coverage total` {
     @Test(
         arguments: [
-            (#"{"status":"collected","summary":{"percent":1.8833638131730965}}"#, "1.883%"),
-            (#"{"status":"collected","summary":{"percent":0}}"#, "0.000%"),
-            (#"{"status":"incomplete","summary":{"percent":1.8833638131730965}}"#, "Incomplete"),
-            (#"{"status":"no-data"}"#, "No data"),
-            (#"{"status":"collected","summary":{"percent":null}}"#, "Incomplete"),
-            (#"{"status":"collected","summary":{"percent":101}}"#, "Incomplete"),
-            (nil, "Not collected"),
-        ] as [(String?, String)]
+            (#"{"status":"collected","summary":{"percent":1.8833638131730965}}"#, "1.883%", "2%"),
+            (#"{"status":"collected","summary":{"percent":0}}"#, "0.000%", "0%"),
+            (
+                #"{"status":"incomplete","summary":{"percent":1.8833638131730965}}"#, "Incomplete",
+                "Partial"
+            ),
+            (#"{"status":"no-data"}"#, "No data", "—"),
+            (#"{"status":"collected","summary":{"percent":null}}"#, "Incomplete", "Partial"),
+            (#"{"status":"collected","summary":{"percent":101}}"#, "Incomplete", "Partial"),
+            (#"{"status":"collected","summary":{"percent":49.4999}}"#, "49.500%", "49%"),
+            (#"{"status":"collected","summary":{"percent":49.5}}"#, "49.500%", "50%"),
+            (nil, "Not collected", "—"),
+        ] as [(String?, String, String)]
     )
     func `overview reads the attempt total and preserves honest missing states`(
         coverage: String?,
-        expected: String
+        expected: String,
+        visible: String
     ) throws {
-        try assertCoverageOverview(coverages: [coverage], expected: expected)
+        try assertCoverageOverview(coverages: [coverage], expected: expected, visible: visible)
     }
 
     @Test
@@ -209,12 +215,14 @@ struct `report Go coverage total` {
                 #"{"status":"collected","summary":{"percent":20}}"#,
                 #"{"status":"collected","summary":{"percent":80}}"#,
             ],
-            expected: "Multiple attempts"
+            expected: "Multiple attempts",
+            visible: "—"
         )
     }
 }
 
-private func assertCoverageOverview(coverages: [String?], expected: String) throws {
+private func assertCoverageOverview(coverages: [String?], expected: String, visible: String) throws
+{
     let rootURL = temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: rootURL) }
     let packageURL = rootURL.appendingPathComponent("Package")
@@ -244,7 +252,6 @@ private func assertCoverageOverview(coverages: [String?], expected: String) thro
     ])
     try command.run()
     let html = try String(contentsOf: runURL.appendingPathComponent("index.html"), encoding: .utf8)
-    let visible = expected.hasSuffix("%") ? expected : (expected == "Incomplete" ? "Partial" : "—")
     #expect(html.contains("<span title=\"\(expected)\">Total <b>\(visible)</b></span>"))
     #expect(!html.contains(">Diff <b>"))
     #expect(!html.contains("{{GO_COVERAGE_TOTAL}}"))
