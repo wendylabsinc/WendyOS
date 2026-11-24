@@ -653,6 +653,53 @@ func TestASourceWithOnlyACamerasOwnFramesHasNoClipAndSaysWhy(t *testing.T) {
 	}
 }
 
+// A snapshot source on a camera captured as JPEG holds one .jpg file per
+// still and no video. It has no clip, for the reason a frames-only source has
+// none.
+func TestASourceWithOnlyJPEGStillsHasNoClipAndSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "cameras", "cam")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var index []byte
+	for i, name := range []string{"snapshot-000001.jpg", "snapshot-000002.jpg", "snapshot-000003.jpg"} {
+		jpeg := append(append([]byte{0xFF, 0xD8}, make([]byte, 20+i)...), 0xFF, 0xD9)
+		if err := os.WriteFile(filepath.Join(sourceDir, name), jpeg, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		line, err := json.Marshal(map[string]any{
+			"canonical_episode_nanos": int64(i+1) * 1_000_000_000,
+			"segment":                 "cameras/cam/" + name,
+			"byte_offset":             0,
+			"byte_size":               len(jpeg),
+			"codec":                   "VIDEO_CODEC_MJPEG",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		index = append(append(index, line...), '\n')
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "index.jsonl"), index, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ConvertSourceInPlace(dir, sourceDir)
+	if err == nil {
+		t.Fatal("a source holding only JPEG stills produced a clip")
+	}
+	want := "the source stored no H.264 video: its 3 indexed frame(s) are VIDEO_CODEC_MJPEG, and the clip is made from H.264 only"
+	if err.Error() != want {
+		t.Errorf("reason = %q, want %q", err, want)
+	}
+	if result.OwnFrames != 3 || result.Unparsed != 0 || result.Frames != 0 {
+		t.Errorf("own frames %d, unparsed %d, muxed %d; want the 3 stills counted as the camera's own frames and nothing muxed", result.OwnFrames, result.Unparsed, result.Frames)
+	}
+	if _, statErr := os.Stat(filepath.Join(sourceDir, PlayableFileName)); !os.IsNotExist(statErr) {
+		t.Errorf("a playable file was left behind (stat err %v)", statErr)
+	}
+}
+
 // A WebM recording was never a source of the clip, and its seal note is the
 // one it has always had.
 func TestAWebMSourceKeepsItsClipRefusal(t *testing.T) {

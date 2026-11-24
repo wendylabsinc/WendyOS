@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -709,6 +710,66 @@ func TestSealOfAFramesOnlyCameraNamesWhyThereIsNoClip(t *testing.T) {
 	}
 	if frames.Format != "mjpeg" || frames.MediaType != "video/x-motion-jpeg" || frames.SourceID != "cam-front" || frames.Role != "" {
 		t.Errorf("JPEG segment listed as format %q, media type %q, source %q, role %q", frames.Format, frames.MediaType, frames.SourceID, frames.Role)
+	}
+}
+
+// writeJPEGStills lays a camera source the way snapshot mode stores a camera
+// captured as JPEG: one .jpg file per still, each indexed whole.
+func writeJPEGStills(t *testing.T, episodeDir, source string, stills int) {
+	t.Helper()
+	dir := filepath.Join(episodeDir, "cameras", source)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var lines []byte
+	for i := 0; i < stills; i++ {
+		name := fmt.Sprintf("snapshot-%06d.jpg", i+1)
+		jpeg := append(append([]byte{0xFF, 0xD8}, make([]byte, 24+i)...), 0xFF, 0xD9)
+		if err := os.WriteFile(filepath.Join(dir, name), jpeg, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		line, err := json.Marshal(map[string]any{
+			"sample_id":               i + 1,
+			"canonical_episode_nanos": int64(i+1) * 1_000_000_000,
+			"segment":                 "cameras/" + source + "/" + name,
+			"byte_offset":             0,
+			"byte_size":               len(jpeg),
+			"codec":                   "VIDEO_CODEC_MJPEG",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(append(lines, line...), '\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.jsonl"), lines, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSealOfASnapshotCameraWithJPEGStillsNamesWhyThereIsNoClip(t *testing.T) {
+	m, stopped := sealCameraEpisode(t, func(episodeDir string) {
+		writeJPEGStills(t, episodeDir, "cam-front", 3)
+	})
+
+	rel := "cameras/cam-front/" + episodeexport.PlayableFileName
+	if _, ok := fileByPath(stopped.Files, rel); ok {
+		t.Errorf("manifest lists %s for a source with no video", rel)
+	}
+	if _, err := os.Stat(filepath.Join(m.root, stopped.ID, rel)); !os.IsNotExist(err) {
+		t.Errorf("a clip was left on disk (stat err %v)", err)
+	}
+	want := rel + " not written: the source stored no H.264 video: its 3 indexed frame(s) are VIDEO_CODEC_MJPEG, and the clip is made from H.264 only"
+	if len(stopped.PlayableNotes) != 1 || stopped.PlayableNotes[0] != want {
+		t.Errorf("playable notes = %q, want %q", stopped.PlayableNotes, want)
+	}
+	for _, name := range []string{"snapshot-000001.jpg", "snapshot-000002.jpg", "snapshot-000003.jpg"} {
+		still, ok := fileByPath(stopped.Files, "cameras/cam-front/"+name)
+		if !ok {
+			t.Fatalf("manifest does not list %s: %+v", name, stopped.Files)
+		}
+		if still.Format != "jpeg" || still.MediaType != "image/jpeg" || still.SourceID != "cam-front" || still.Role != "" {
+			t.Errorf("%s listed as format %q, media type %q, source %q, role %q", name, still.Format, still.MediaType, still.SourceID, still.Role)
+		}
 	}
 }
 
