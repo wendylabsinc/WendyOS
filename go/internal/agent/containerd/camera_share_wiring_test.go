@@ -352,6 +352,72 @@ func TestCreateCameraSharesPassesTheLabelsEntitlements(t *testing.T) {
 	}
 }
 
+// The label values here are the ones the deploy path's tests hold a service's
+// container to (TestMultiServiceCreateConfig_KeepsAppAndServiceCameraEntriesWithTheirSettings
+// and TestApplyComposeCompanion in the command line's package). The agent
+// makes them from the config it is sent, and reads the camera entries back
+// from them with their format and stamp: two entries, and one alone, whose
+// label has no index.
+func TestCameraEntriesAreReadBackFromADeploysLabels(t *testing.T) {
+	appEntry := appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"},
+		Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame}
+	serviceEntry := appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"Logi H264"},
+		Format: appconfig.CameraFormatH264, Stamp: appconfig.CameraStampFrame}
+	type camera struct{ path, name, format, stamp string }
+	for name, tc := range map[string]struct {
+		entitlements []appconfig.Entitlement
+		labels       map[string]string
+		cameras      []camera
+	}{
+		"the app's entry and the service's": {
+			[]appconfig.Entitlement{appEntry, serviceEntry},
+			map[string]string{
+				"sh.wendy/entitlement.camera.0": "format=native,stamp=frame,allowlist=/dev/video0",
+				"sh.wendy/entitlement.camera.1": "format=h264,stamp=frame,allowlist=Logi H264",
+			},
+			[]camera{
+				{"/dev/video0", "Brio 101", appconfig.CameraFormatNative, appconfig.CameraStampFrame},
+				{"/dev/video2", "Logi H264", appconfig.CameraFormatH264, appconfig.CameraStampFrame},
+				{"/dev/video4", "C920", appconfig.CameraFormatPixels, appconfig.CameraStampTime},
+			},
+		},
+		"the app's entry alone": {
+			[]appconfig.Entitlement{appEntry},
+			map[string]string{"sh.wendy/entitlement.camera": "format=native,stamp=frame,allowlist=/dev/video0"},
+			[]camera{
+				{"/dev/video0", "Brio 101", appconfig.CameraFormatNative, appconfig.CameraStampFrame},
+				{"/dev/video2", "Logi H264", appconfig.CameraFormatPixels, appconfig.CameraStampTime},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			labels := wendyLabels("sh.wendy.examples.vision", "detector", "1.0.0", nil, tc.entitlements, "", nil)
+			for key, value := range tc.labels {
+				if labels[key] != value {
+					t.Fatalf("label %s = %q, want %q; labels: %v", key, labels[key], value, labels)
+				}
+			}
+			if read := parseEntitlementsFromAnnotations(tc.labels); !reflect.DeepEqual(read, tc.entitlements) {
+				t.Fatalf("entries read back from the labels = %+v, want %+v", read, tc.entitlements)
+			}
+
+			fake := &fakeCameraShares{}
+			c := &Client{logger: zap.NewNop()}
+			c.SetCameraShareProvider(fake)
+			c.createCameraShares(context.Background(), "app_detector", "sh.wendy.examples.vision", labels)
+			passed := fake.createdWith("app_detector")
+			if !reflect.DeepEqual(passed, tc.entitlements) {
+				t.Fatalf("entries passed to the share manager = %+v, want %+v", passed, tc.entitlements)
+			}
+			for _, cam := range tc.cameras {
+				if format, stamp := appconfig.CameraNodeSettings(passed, cam.path, cam.name); format != cam.format || stamp != cam.stamp {
+					t.Errorf("%s (%s): node settings = (%q, %q), want (%q, %q)", cam.path, cam.name, format, stamp, cam.format, cam.stamp)
+				}
+			}
+		})
+	}
+}
+
 // Without a provider (no video service, other platforms) every share call is
 // a no-op.
 func TestCameraShareCallsWithoutAProviderDoNothing(t *testing.T) {

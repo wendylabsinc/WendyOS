@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -933,17 +934,14 @@ func TestApplyComposeCompanion(t *testing.T) {
 		}
 		got := baseAppCfg()
 		applyComposeCompanion(got, companion, "camera")
-		if len(got.Entitlements) != 3 || !slices.Equal(got.Entitlements[1].Allowlist, shared.Allowlist) || !slices.Equal(got.Entitlements[2].Allowlist, perService.Allowlist) {
-			t.Fatalf("entitlements = %+v, want the compose one, then the shared and the per-service camera entries", got.Entitlements)
+		if want := []appconfig.Entitlement{{Type: appconfig.EntitlementNetwork}, shared, perService}; !reflect.DeepEqual(got.Entitlements, want) {
+			t.Fatalf("entitlements = %+v, want the compose one, then the shared and the per-service camera entries, %+v", got.Entitlements, want)
 		}
-		read := cameraEntriesInLabels(t, got, map[string]string{
+		wantEntitlementLabels(t, got, map[string]string{
 			"sh.wendy/entitlement.network":  "enabled=true",
 			"sh.wendy/entitlement.camera.0": "format=native,stamp=frame,allowlist=/dev/video0",
 			"sh.wendy/entitlement.camera.1": "format=h264,stamp=frame,allowlist=Logi H264",
 		})
-		if len(read) != 2 || read[0].Format != shared.Format || read[0].Stamp != shared.Stamp || read[1].Format != perService.Format || read[1].Stamp != perService.Stamp {
-			t.Errorf("camera entries read back from the labels = %+v, want %+v and %+v", read, shared, perService)
-		}
 	})
 }
 
