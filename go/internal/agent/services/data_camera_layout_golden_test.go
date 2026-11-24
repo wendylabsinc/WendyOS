@@ -372,8 +372,8 @@ func preRollLayout(t *testing.T) storeRecording {
 }
 
 // The golden files are what the adapter wrote for these scenarios at
-// 757113c1e, before store existed. testdata/camera_store/provenance.sh runs
-// them on that tree to show it.
+// 757113c1e, before it stored a camera's own frames.
+// testdata/camera_store/provenance.sh runs this test on that tree to show it.
 func TestDefaultCameraLayoutsMatchTheAdapterBeforeStore(t *testing.T) {
 	layouts := []struct {
 		golden string
