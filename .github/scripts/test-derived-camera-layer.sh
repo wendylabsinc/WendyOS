@@ -43,11 +43,20 @@ replacement = out / 'newest-frame.go'
 replacement.write_text(original.replace(before, after))
 (out / 'newest-frame.json').write_text(json.dumps({'Replace': {str(source): str(replacement)}}))
 PY
-if go test -race -overlay "$output/newest-frame.json" ./go/internal/agent/services -run "^${test_name}$" -v -count=1 -timeout 120s > "$output/newest-frame.log" 2>&1; then
+# The control runs the H.264 picture fixture too: fed one frame at a time, the
+# newest frame fed is the picture's own, so that fixture also feeds frames
+# together.
+h264_picture_test=${h264_tests[0]}
+if go test -race -overlay "$output/newest-frame.json" ./go/internal/agent/services -run "^(${test_name}|${h264_picture_test})$" -v -count=1 -timeout 240s > "$output/newest-frame.log" 2>&1; then
   cat "$output/newest-frame.log"
   echo 'Regression did not reject pairing outputs with the newest frame' >&2
   exit 1
 fi
 cat "$output/newest-frame.log"
 grep -q "^--- FAIL: $test_name " "$output/newest-frame.log"
-grep -q 'but shows luma' "$output/newest-frame.log"
+grep -q "^--- FAIL: $h264_picture_test " "$output/newest-frame.log"
+# A picture and an access unit made from JPEG frames, and a picture decoded
+# from H.264, each rejected for showing another frame than the one it names.
+grep -q "but shows luma .* that sample's JPEG shows" "$output/newest-frame.log"
+grep -q 'but decodes to luma' "$output/newest-frame.log"
+grep -q "but shows luma .* that sample's frame shows" "$output/newest-frame.log"

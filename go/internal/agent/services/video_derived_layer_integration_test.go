@@ -76,6 +76,12 @@ func (s *derivedFramesSeen) collect(ch <-chan *videoFrame) {
 	}
 }
 
+func (s *derivedFramesSeen) add(frame *videoFrame) {
+	s.mu.Lock()
+	s.frames = append(s.frames, frame)
+	s.mu.Unlock()
+}
+
 func (s *derivedFramesSeen) all() []*videoFrame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,10 +117,20 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 	defer cancelHub()
 	hub.sampleSeq = new(atomic.Uint64)
 
+	// Every access unit the layer publishes, in order. The subscriber below
+	// can lose one in the burst, and what follows a lost unit does not decode.
+	var stream derivedFramesSeen
 	layer, err := newDerivedLayer(derivedLayerConfig{
 		logger: zap.NewNop(), device: "/dev/video44", format: videoCodecMJPEG,
 		gstPath: gstPath, available: available, width: derivedTestWidth, height: derivedTestHeight, framerate: 30,
-		grace: time.Minute, demand: hub, publish: hub.broadcastDerivedFrom,
+		grace: time.Minute, demand: hub,
+		publish: func(source, derived *videoFrame) (bool, error) {
+			keepProducing, err := hub.broadcastDerivedFrom(source, derived)
+			if err == nil && derived.codec == agentpb.VideoCodec_VIDEO_CODEC_H264 {
+				stream.add(derived)
+			}
+			return keepProducing, err
+		},
 	})
 	if err != nil {
 		skip("this GStreamer cannot run the derived layer: " + err.Error())
@@ -190,8 +206,26 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 	// A JPEG decodes to its own gray level, or to that level scaled into video
 	// range; which one is this GStreamer's choice, read off the first picture.
 	var lumaOf func(shade int) int
+	var decoded decodedGray
 	checkPairing := func(what string) {
 		t.Helper()
+		// Each access unit must decode to the picture of the frame whose
+		// sample ID it carries.
+		published := stream.all()
+		payloads := make([][]byte, len(published))
+		for i, unit := range published {
+			if unit.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || !unit.auAligned || !bytes.HasPrefix(unit.data, []byte{0, 0, 0, 1}) {
+				t.Fatalf("%s: published access unit %d: codec=%v auAligned=%v, %d bytes, want one whole Annex B access unit", what, i, unit.codec, unit.auAligned, len(unit.data))
+			}
+			payloads[i] = unit.data
+		}
+		for i, picture := range decodeTestH264(t, gstPath, available, skip, payloads) {
+			if luma, shade := yuyvMeanLuma(picture), derivedTestShade(published[i].sampleID); !decoded.shows(luma, shade) {
+				t.Errorf("%s: access unit %d carries sample %d but decodes to luma %d; that sample's JPEG is gray level %d, which decodes to %s",
+					what, i, published[i].sampleID, luma, shade, decoded.lumasOf(shade))
+				break
+			}
+		}
 		for i, picture := range pictures.all() {
 			if picture.codec != agentpb.VideoCodec_VIDEO_CODEC_RAW || len(picture.data) != derivedTestWidth*2*derivedTestHeight ||
 				picture.rawFmt.GetFourcc() != fourccYUYV || picture.rawFmt.GetBytesPerLine() != derivedTestWidth*2 ||
@@ -310,6 +344,97 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 		t.Fatal("no picture came back from the burst")
 	}
 	checkPairing("the burst")
+}
+
+// decodedGray says whether a picture decoded from H.264 shows a gray level. A
+// decoder gives the level back as it is, or scaled into video range; which one
+// is this GStreamer's choice, read off the first picture that shows either.
+type decodedGray struct {
+	lumaOf func(shade int) int
+}
+
+func videoRangeLuma(shade int) int { return 16 + shade*219/255 }
+
+func (g *decodedGray) shows(luma, shade int) bool {
+	near := func(want int) bool { return luma >= want-4 && luma <= want+4 }
+	if g.lumaOf == nil {
+		switch {
+		case near(shade):
+			g.lumaOf = func(shade int) int { return shade }
+		case near(videoRangeLuma(shade)):
+			g.lumaOf = videoRangeLuma
+		default:
+			return false
+		}
+	}
+	return near(g.lumaOf(shade))
+}
+
+func (g *decodedGray) lumasOf(shade int) string {
+	if g.lumaOf == nil {
+		return fmt.Sprintf("%d or %d", shade, videoRangeLuma(shade))
+	}
+	return fmt.Sprint(g.lumaOf(shade))
+}
+
+// decodeTestH264 decodes access units in a gst-launch-1.0 child of its own,
+// which is given no tag of the layer's, and returns the YUYV picture of each
+// unit, in the order of the units.
+func decodeTestH264(t *testing.T, gstPath string, available map[string]bool, skip func(why string), units [][]byte) [][]byte {
+	t.Helper()
+	transform := derivedTransforms[agentpb.VideoCodec_VIDEO_CODEC_H264]
+	decoder, err := derivedLayerDecoder(transform, available)
+	if err != nil {
+		skip("this GStreamer cannot decode H.264 to check an access unit's picture: " + err.Error())
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outR.Close() //nolint:errcheck
+	cmd := exec.Command(gstPath, append([]string{"-q"},
+		strings.Fields("fdsrc fd=0 ! gdpdepay ! "+decoder.stages+" ! "+yuyvPictureStages+" ! gdppay ! fdsink fd=3")...)...)
+	cmd.ExtraFiles = []*os.File{outW}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stderr, &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	outW.Close() //nolint:errcheck
+	go func() {
+		defer stdin.Close() //nolint:errcheck
+		gdp := &gdpWriter{w: stdin}
+		if gdp.streamHeader(transform.inputCaps(derivedTestWidth, derivedTestHeight, 30)) != nil {
+			return
+		}
+		for i, unit := range units {
+			if gdp.buffer(derivedTagBase+uint64(i)*derivedTestFramePeriod, unit) != nil {
+				return
+			}
+		}
+	}()
+	var pictures [][]byte
+	var problem string
+	gdp := &gdpReader{r: outR, maxPayload: maxRawFrameBytes}
+	for {
+		timestamp, payload, err := gdp.nextBuffer()
+		if err != nil {
+			break
+		}
+		of := int((timestamp - gdp.segmentStart - derivedTagBase + derivedTestFramePeriod/2) / derivedTestFramePeriod)
+		if problem == "" && (of != len(pictures) || len(payload) != derivedTestWidth*2*derivedTestHeight) {
+			problem = fmt.Sprintf("picture %d is %d bytes and is timed as the picture of unit %d", len(pictures), len(payload), of)
+		}
+		pictures = append(pictures, payload)
+	}
+	if err := cmd.Wait(); err != nil || problem != "" || len(pictures) != len(units) {
+		t.Fatalf("decoding %d access units gave %d pictures: %v %s\n%s", len(units), len(pictures), err, problem, stderr.String())
+	}
+	return pictures
 }
 
 // derivedTestGStreamer is the real GStreamer of this machine, or a skip.
@@ -481,16 +606,42 @@ func (p *h264PicturesTest) readPictures() (leave func()) {
 	}
 }
 
-// produce hands the hub one access unit as native capture does and waits until
-// the layer has fed it or passed it over, so the feed queue drops nothing.
-func (p *h264PicturesTest) produce(unit h264TestUnit) (sampleID uint64, fed bool) {
-	p.t.Helper()
-	before := p.layer.counts()
+// capture hands the hub one access unit as native capture does.
+func (p *h264PicturesTest) capture(unit h264TestUnit) (sampleID uint64) {
 	sampleID = p.hub.sampleSeq.Load() + 1
 	p.shadeOf[sampleID] = derivedTestShade(uint64(unit.frame % derivedTestShades))
 	p.hub.produceCaptured(unit.data, frameTimestamp{wallNs: derivedTestCaptureEpoch + sampleID*derivedTestFramePeriod, nativeNs: int64(sampleID),
 		nativeClock: "CLOCK_MONOTONIC_V4L2", sequence: uint32(sampleID), sequenceValid: true, auAligned: true, native: true},
 		agentpb.VideoCodec_VIDEO_CODEC_H264)
+	return sampleID
+}
+
+// produceTogether hands the hub as many access units as the feed queue holds
+// with no wait between them, so the last is fed before the picture of the
+// first comes back, and then waits until the layer has fed them all.
+func (p *h264PicturesTest) produceTogether(units []h264TestUnit) {
+	p.t.Helper()
+	before := p.layer.counts()
+	var last uint64
+	for _, unit := range units {
+		last = p.capture(unit)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for p.layer.counts().fed < before.fed+uint64(len(units)) {
+		if time.Now().After(deadline) {
+			p.t.Fatalf("the layer did not feed the %d frames up to sample %d (counts %+v, before them %+v)", len(units), last, p.layer.counts(), before)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	p.awaitPictureOf(last)
+}
+
+// produce hands the hub one access unit as native capture does and waits until
+// the layer has fed it or passed it over, so the feed queue drops nothing.
+func (p *h264PicturesTest) produce(unit h264TestUnit) (sampleID uint64, fed bool) {
+	p.t.Helper()
+	before := p.layer.counts()
+	sampleID = p.capture(unit)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		counts := p.layer.counts()
@@ -592,7 +743,9 @@ func TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame(t *testi
 		encoderStages = "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=15 bframes=0 option-string=scenecut=0" + h264TestByteStream
 	}
 	p := startH264PicturesTest(t, gstPath, available, skip)
-	units := encodeTestH264(t, gstPath, 90, encoderStages)
+	// The last 30 are fed as many at a time as the feed queue holds.
+	const paced = 90
+	units := encodeTestH264(t, gstPath, paced+30, encoderStages)
 	starts := h264TestStarts(units)
 	t.Logf("test stream: %d access units, decoding can start at %v", len(units), starts)
 	for i, unit := range units {
@@ -647,9 +800,9 @@ func TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame(t *testi
 	defer leave()
 	waitUntil(t, "the second child takes frames", func() bool { return p.layer.feeding.Load() && p.layer.counts().childRuns == 2 })
 	want = nil
-	produceFrom("the second child", starts[2]+1, len(units))
+	produceFrom("the second child", starts[2]+1, paced)
 	second := want
-	if len(second) != len(units)-starts[3] {
+	if len(second) != paced-starts[3] {
 		t.Fatalf("the second child was fed %d frames, want the %d from the stream's fourth start on", len(second), len(units)-starts[3])
 	}
 	pictures = p.settledPictures()
@@ -666,6 +819,22 @@ func TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame(t *testi
 	t.Logf("the second child was fed %d frames and gave %d pictures", len(second), len(afterRestart))
 	if counts := p.layer.counts(); counts.unknownTags != 0 || counts.unusable != 0 || counts.notFed != 0 {
 		t.Fatalf("the layer counts %+v, want no unknown tag and nothing unusable", counts)
+	}
+
+	// Until here every picture came back before the next frame was fed, so the
+	// newest frame fed was always the picture's own.
+	before := len(pictures)
+	for at := paced; at < len(units); at += derivedFeedQueueFrames {
+		p.produceTogether(units[at:min(at+derivedFeedQueueFrames, len(units))])
+	}
+	pictures = p.settledPictures()
+	p.checkPictures("frames fed together", pictures)
+	if got, fed := len(pictures)-before, len(units)-paced; got < fed-heldBack {
+		t.Fatalf("%d frames fed together gave %d pictures; want nearly all", fed, got)
+	}
+	t.Logf("%d frames fed %d at a time gave %d pictures", len(units)-paced, derivedFeedQueueFrames, len(pictures)-before)
+	if counts := p.layer.counts(); counts.unknownTags != 0 || counts.unusable != 0 || counts.notFed != 0 {
+		t.Fatalf("after frames fed together the layer counts %+v, want no unknown tag, nothing unusable and nothing unfed", counts)
 	}
 }
 
