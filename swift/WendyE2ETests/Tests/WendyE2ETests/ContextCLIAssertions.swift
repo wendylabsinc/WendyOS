@@ -64,7 +64,7 @@ enum ContextCLIAssertions {
                         self.observer_errors.append(type(error).__name__)
                 self.thread = threading.Thread(target=observe)
                 self.original = {
-                    'currentContext': 'alpha', 'defaultDevice': 'device-preference-SENTINEL',
+                    'currentContext': 'alpha', 'defaultBuildHost': 'build-host-preference-SENTINEL',
                     'analytics': {'enabled': False}, 'completionPromptDismissed': True,
                     'lastCompletionPromptCheck': '2026-01-01T00:00:00Z',
                     'auth': [self.account('alpha', 41, VALID_CERT), self.account('beta', 73, EXPIRED_CERT)]}
