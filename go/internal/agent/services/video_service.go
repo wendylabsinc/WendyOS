@@ -2213,13 +2213,7 @@ func isCameraCaptureRefusal(err error) bool {
 //   - On a camera apps share, explicit parameters other than the shared mode
 //     are refused with errCameraShared, and the shared mode itself joins as a
 //     parameter-less capture (applySharedModeToCapture).
-func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
-	return s.joinHubKindForCapture(ctx, key, req, encodedFrames)
-}
-
-// joinHubKindForCapture is joinHubForCapture for a subscription of the given
-// frame kind.
-func (s *VideoService) joinHubKindForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
+func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
 	req, admitted, err := s.applySharedModeToCapture(key, req)
 	if err != nil {
 		return nil, 0, nil, 0, 0, 0, false, err

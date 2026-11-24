@@ -121,12 +121,12 @@ type ClipResult struct {
 	// Unparsed counts index lines that were not valid records, which is the
 	// expected shape of a partial tail left by an interrupted episode.
 	Unparsed int
-	// OtherFormats counts valid index records whose segment is not an H.264
-	// elementary stream: a camera's own JPEG frames, stored beside the video
-	// or in its place, or a WebM recording. The clip is not made from them.
-	// OtherCodecs names their codecs, in the order first seen.
-	OtherFormats int
-	OtherCodecs  []string
+	// OwnFrames counts valid index records that address a camera's own frames
+	// (see ownFrameSegment), stored beside the video or in its place. The clip
+	// is not made from them. OwnFrameCodecs names their codecs, in the order
+	// first seen.
+	OwnFrames      int
+	OwnFrameCodecs []string
 	// Segments counts distinct segment files the frames came from.
 	Segments int
 	// Span is the index's last-minus-first canonical timestamp.
@@ -234,9 +234,9 @@ func convertSource(episodeDir, sourceDir, indexPath, out string) (ClipResult, er
 	if err != nil {
 		return result, err
 	}
-	if len(frames) == 0 && result.OtherFormats > 0 {
+	if len(frames) == 0 && result.OwnFrames > 0 {
 		return result, fmt.Errorf("the source stored no H.264 video: its %d indexed frame(s) are %s, and the clip is made from H.264 only",
-			result.OtherFormats, strings.Join(result.OtherCodecs, ", "))
+			result.OwnFrames, strings.Join(result.OwnFrameCodecs, ", "))
 	}
 	if len(frames) == 0 {
 		return result, fmt.Errorf("index names no usable H.264 frames (%d unparsed lines)", result.Unparsed)
@@ -284,8 +284,8 @@ type cameraIndexLine struct {
 // readCameraIndex reads the frame index and returns its H.264 frames in the
 // order the index records them, which is capture order. Lines that are not
 // valid records, which is what the tail of an interrupted episode's index
-// looks like, are counted and skipped rather than guessed at. Valid records
-// stored in another form are counted apart from those (see OtherFormats).
+// looks like, are counted and skipped rather than guessed at. Records of a
+// camera's own frames are counted apart from those (see OwnFrames).
 //
 // The order is deliberately left alone. Sorting by canonical timestamp would
 // reorder coded H.264 frames whenever two timestamps invert, and an inter
@@ -316,11 +316,15 @@ func readCameraIndex(path string) ([]cameraIndexLine, ClipResult, error) {
 			result.Unparsed++
 			continue
 		}
-		if !strings.HasSuffix(strings.ToLower(rec.Segment), ".h264") {
-			result.OtherFormats++
-			if !slices.Contains(result.OtherCodecs, rec.Codec) {
-				result.OtherCodecs = append(result.OtherCodecs, rec.Codec)
+		if ownFrameSegment(rec.Segment) {
+			result.OwnFrames++
+			if !slices.Contains(result.OwnFrameCodecs, rec.Codec) {
+				result.OwnFrameCodecs = append(result.OwnFrameCodecs, rec.Codec)
 			}
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(rec.Segment), ".h264") {
+			result.Unparsed++
 			continue
 		}
 		frames = append(frames, rec)
@@ -331,6 +335,13 @@ func readCameraIndex(path string) ([]cameraIndexLine, ClipResult, error) {
 		}
 	}
 	return frames, result, nil
+}
+
+// ownFrameSegment reports a segment of a camera's own frames: one in neither
+// of the two forms encoded video is stored in.
+func ownFrameSegment(segment string) bool {
+	extension := strings.ToLower(filepath.Ext(segment))
+	return extension != ".h264" && extension != ".webm"
 }
 
 // sample is one muxed access unit: its presentation time in media ticks, where

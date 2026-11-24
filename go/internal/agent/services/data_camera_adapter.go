@@ -34,6 +34,9 @@ type cameraDataAdapter struct {
 	// populated by Arm and consumed by Start when the campaign triggers.
 	armedMu sync.Mutex
 	armed   map[string]map[string]*armedCameraSource
+	// monotonicMapping is a test seam over data.SampleMonotonicMapping, which
+	// only Linux implements.
+	monotonicMapping func() (data.MonotonicMappingSample, error)
 }
 
 func newCameraDataAdapter(video *VideoService) dataCaptureAdapter {
@@ -211,7 +214,7 @@ func (a *cameraDataAdapter) Arm(campaignKey string, buffer time.Duration, select
 		primaryKind, nativeBeside := subscriptionKindsFor(source.Capture)
 		as := &armedCameraSource{
 			video: a.video, source: source, key: src.key, devID: devID, buffer: buffer,
-			primaryKind: primaryKind, wantsNativeBeside: nativeBeside,
+			primaryKind: primaryKind, wantsNativeBeside: nativeBeside, monotonicMapping: a.monotonicMapping,
 			ring: &cameraPreRollRing{buffer: buffer}, done: make(chan struct{}),
 		}
 		// A parameter-less request: arming must never take a running stream from
@@ -332,9 +335,9 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 	rejoin := func(ctx context.Context, kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
 		return a.video.joinHubKind(ctx, src.key, &agentpb.StreamVideoRequest{DeviceId: devID}, kind)
 	}
-	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, primaryKind: primaryKind, wantsNativeBeside: nativeBeside, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, lastSnapshotIdx: -1}
+	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, primaryKind: primaryKind, wantsNativeBeside: nativeBeside, monotonicMapping: a.monotonicMapping, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, lastSnapshotIdx: -1}
 	if ownFramesRefusal != nil {
-		c.noteOwnFramesUnavailable(ownFramesRefusal)
+		c.ownFramesNoLongerStored(ownFramesRefusal)
 	}
 	c.joinNativeBeside()
 	go c.run()
@@ -424,7 +427,7 @@ func describeStreamParams(w, h, fps uint32) string {
 // error rather than a silent downgrade, and a capture that asserts no
 // parameters joins whatever runs and reports requested-vs-achieved.
 func (a *cameraDataAdapter) subscribeHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (*deviceHub, int, chan *videoFrame, uint32, uint32, uint32, bool, error) {
-	return a.video.joinHubKindForCapture(ctx, key, req, kind)
+	return a.video.joinHubForCapture(ctx, key, req, kind)
 }
 
 type cameraCaptureGroup struct {
@@ -449,24 +452,19 @@ func (g *cameraCaptureGroup) Stop(ctx context.Context) ([]data.CaptureResult, er
 }
 
 type cameraCapture struct {
-	source  data.Source
-	session data.CaptureSession
-	dir     string
-	hub     *deviceHub
-	subID   int
-	frames  chan *videoFrame
-	// primaryKind is the kind of frames the subscription above delivers.
-	// nativeSubID and nativeFrames are a second, native subscription on the
-	// same hub, held only while a campaign that stores both video and frames
-	// has an encoded primary; nativeFrames is nil otherwise.
+	source            data.Source
+	session           data.CaptureSession
+	dir               string
+	hub               *deviceHub
+	subID             int
+	frames            chan *videoFrame
 	primaryKind       frameKind
 	wantsNativeBeside bool
 	nativeSubID       int
 	nativeFrames      chan *videoFrame
-	// ownFramesAreVideo records that the camera's own frames turned out to be
-	// its encoded video, in ownFramesCodec.
 	ownFramesAreVideo bool
 	ownFramesCodec    agentpb.VideoCodec
+	ownFramesRefused  bool
 	// rejoin resubscribes to the device's hub, asserting no parameters. A
 	// capture that itself asserted none is a parameter-less subscriber, so
 	// when a concurrent episode's explicit campaign parameters restart the
@@ -495,22 +493,22 @@ type cameraCapture struct {
 	// unit tests that drive a bare capture.
 	logger             *zap.Logger
 	index, mappingFile *os.File
-	// The embedded stream is the encoded video's; ownFrameStream holds the
-	// camera's own-format frames (see isOwnFormatFrame).
 	cameraSegmentStream
-	ownFrameStream cameraSegmentStream
-	ownFrameRate   perFrameRateCap
-	// videoRateGated records that the rate cap was applied to encoded video.
-	videoRateGated bool
-	refusedCodecs  map[agentpb.VideoCodec]uint64
-	ctx            context.Context
-	cancel         context.CancelFunc
-	done           chan struct{}
-	ready          chan error
-	readyOnce      sync.Once
-	stopOnce       sync.Once
-	result         data.CaptureResult
-	runErr         error
+	ownFrameStream     cameraSegmentStream
+	ownFrameRate       perFrameRateCap
+	videoRateGated     bool
+	refusedCodecs      map[agentpb.VideoCodec]uint64
+	sampleTimes        sampleTimes
+	lastStoredReceipt  int64
+	nothingStoredSince int64
+	ctx                context.Context
+	cancel             context.CancelFunc
+	done               chan struct{}
+	ready              chan error
+	readyOnce          sync.Once
+	stopOnce           sync.Once
+	result             data.CaptureResult
+	runErr             error
 	// lastSampleID is the hub identity of the previous VP8 frame this capture
 	// handled, written or not; a jump in it is a loss (see sampleGap).
 	// webmResync is set from such a loss until the next segment opens, and
@@ -543,6 +541,8 @@ type cameraCapture struct {
 	alignmentKnown bool
 	// captureReceipt is a test seam over data.CaptureReceipt (see receiptNow).
 	captureReceipt func() (int64, int64, int64, error)
+	// monotonicMapping is the same over data.SampleMonotonicMapping.
+	monotonicMapping func() (data.MonotonicMappingSample, error)
 	// notes accumulates honesty notes folded into the result's source detail.
 	notes []string
 	// Snapshot state: the interval index of the last written snapshot (-1
@@ -687,8 +687,14 @@ func (c *cameraCapture) run() {
 			// no trace in the stream: the subscriber counter is the only loss
 			// signal there is, and it sees only what the hub itself discarded.
 			drops := subscriberDrops
-			c.result.Drops = &drops
 			c.result.DropAccounting = "subscriber_drops_only_no_source_sequence"
+			if c.result.Drops != nil {
+				// Sequence gaps counted before the recorded stream changed to
+				// one without sequence numbers (see recordedStreamChanged).
+				drops += *c.result.Drops
+				c.result.DropAccounting = "driver_sequence_gaps_then_subscriber_drops"
+			}
+			c.result.Drops = &drops
 		}
 		c.finishResultDetail(end)
 		c.finishMapping(c.result.Count)
@@ -931,7 +937,7 @@ func (c *cameraCapture) handleFrame(frame *videoFrame) error {
 		if !frame.auAligned {
 			if c.mode == captureModeSnapshot {
 				c.mode = "continuous"
-				c.notes = append(c.notes, "snapshot stills require a transport that delivers whole access units; this stream arrives as byte chunks, so the source records continuously instead")
+				c.notes = append(c.notes, "snapshot stills require a transport that delivers whole access units (native V4L2 H.264); this stream arrives as byte chunks, so the source records continuously instead")
 			}
 			if c.rateCap > 0 {
 				c.notes = append(c.notes, fmt.Sprintf("rate cap %.3g Hz cannot be enforced at GOP granularity on this transport's byte-chunked stream without corrupting it; recording at the stream rate", c.rateCap))
@@ -948,7 +954,7 @@ func (c *cameraCapture) handleFrame(frame *videoFrame) error {
 	return c.writeFrame(frame)
 }
 
-// canonicalTime stamps one frame on the canonical CLOCK_BOOTTIME episode
+// computeCanonicalTime stamps one frame on the canonical CLOCK_BOOTTIME episode
 // timeline, maintaining the native-clock mapping segments as a side effect.
 //
 // The receipt bracket is the one the HUB took when it broadcast the frame
@@ -959,7 +965,7 @@ func (c *cameraCapture) handleFrame(frame *videoFrame) error {
 // sample_id, which is exactly the join those two records exist to support. A
 // zero receipt means the hub's clock read failed (or a unit test drove the
 // capture with a bare frame), and only then is a fresh read taken.
-func (c *cameraCapture) canonicalTime(frame *videoFrame) (canonical, uncertainty int64, mappingID string, receipt int64, err error) {
+func (c *cameraCapture) computeCanonicalTime(frame *videoFrame) (canonical, uncertainty int64, mappingID string, receipt int64, err error) {
 	if c.observedDomains == nil {
 		c.observedDomains = make(map[string]bool)
 	}
@@ -1119,6 +1125,9 @@ func (c *cameraCapture) writeBufferedFrame(bf bufferedCameraFrame) error {
 	if uncertainty > c.maxCanonicalError {
 		c.maxCanonicalError = uncertainty
 	}
+	if c.indexesSamplesTwice() && frame.sampleID != 0 {
+		c.sampleTimes.keep(frame.sampleID, sampleTime{canonical: frame.receiptBootNanos, uncertainty: uncertainty, receipt: frame.receiptBootNanos, mappingID: "receipt-bracket-v1"})
+	}
 	return c.writeEncodedFrame(c.streamFor(frame), frame, frame.receiptBootNanos, uncertainty, "receipt-bracket-v1", frame.receiptBootNanos, bf.resetSegment)
 }
 
@@ -1167,6 +1176,10 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 	}
 	stream.segmentOffset += int64(n)
 	stream.indexed++
+	if c.nothingStoredSince != 0 {
+		c.noteStorageResumed(receipt)
+	}
+	c.lastStoredReceipt = receipt
 	c.trackSequence(stream, frame)
 	var seq *uint32
 	if frame.sequenceValid {
@@ -1188,11 +1201,6 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 
 // writeSnapshot implements snapshot capture: one standalone decodable still
 // per campaign interval.
-//
-// Format choice: snapshots are written as single H.264 random-access units
-// (snapshot-<n>.h264) from the encoded subscription, for every camera alike,
-// including one whose own frames are JPEG; the episode file inventory already
-// classifies .h264 payloads.
 //
 // Decodability rests on two checks, both required. handleFrame only routes
 // access-unit-aligned frames here (H.264 a camera produces itself, one whole
@@ -1311,8 +1319,8 @@ func (c *cameraCapture) finishResultDetail(end int64) {
 		}
 		c.notes = append(c.notes, note)
 	}
-	if c.rateCap > 0 && c.ownFrameRate.started {
-		c.notes = append(c.notes, c.ownFrameRate.note(c.rateCap, end))
+	if c.ownFrameRate.started {
+		c.notes = append(c.notes, c.ownFrameRate.note())
 	}
 	if c.webmBreaks > 0 {
 		c.notes = append(c.notes, fmt.Sprintf("reads of the WebM stream were lost before reaching this capture %d time(s); a WebM file cannot continue across missing bytes, so each time the recording resumed in a new segment at the next key frame, and the reads discarded on the way are counted as drops", c.webmBreaks))
@@ -1425,7 +1433,11 @@ func h264NextNAL(payload []byte, from int) (start, header int, ok bool) {
 }
 
 func (c *cameraCapture) sampleMapping(receipt int64) error {
-	sample, err := data.SampleMonotonicMapping()
+	sampleMonotonicMapping := data.SampleMonotonicMapping
+	if c.monotonicMapping != nil {
+		sampleMonotonicMapping = c.monotonicMapping
+	}
+	sample, err := sampleMonotonicMapping()
 	if err != nil {
 		return err
 	}

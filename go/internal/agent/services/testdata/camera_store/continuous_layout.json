@@ -5,10 +5,17 @@
     "segment-000001.h264": "000000016701000000016802000000016503000000014101000000014101000000016701000000016802000000016503",
     "segment-000002.h264": "000000016701000000016802000000016503000000014101"
   },
-  "count": 6,
-  "drops": 1,
-  "drop_accounting": "driver_sequence_gaps_include_subscriber_drops",
-  "clock_domain": "GSTREAMER_PIPE/AGENT_RECEIPT",
-  "source_detail": "Test Cam (pipeline PTS unavailable; canonical time uses bounded agent receipt)",
-  "actual_offset": 500000000
+  "result": {
+    "SourceID": "v4l2:/dev/video0",
+    "ClockDomain": "GSTREAMER_PIPE/AGENT_RECEIPT",
+    "SourceDetail": "Test Cam (pipeline PTS unavailable; canonical time uses bounded agent receipt)",
+    "ActualOffset": 500000000,
+    "Count": 6,
+    "Drops": 1,
+    "DropAccounting": "driver_sequence_gaps_include_subscriber_drops",
+    "ArmedDrops": null,
+    "MappingError": 700,
+    "Discontinuities": 0,
+    "Mappings": null
+  }
 }

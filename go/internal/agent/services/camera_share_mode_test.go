@@ -190,7 +190,7 @@ func TestSharedMode_RecordingAtOtherParametersIsRefusedByName(t *testing.T) {
 	shareForTest(svc, "/dev/video0", "cv-b", "cv-a")
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
-	_, _, _, _, _, _, _, err := svc.joinHubForCapture(context.Background(), "/dev/video0", req)
+	_, _, _, _, _, _, _, err := svc.joinHubForCapture(context.Background(), "/dev/video0", req, encodedFrames)
 	if !errors.Is(err, errCameraShared) {
 		t.Fatalf("err = %v, want errCameraShared", err)
 	}
@@ -219,7 +219,7 @@ func TestSharedMode_RecordingWithoutParametersRecordsAtTheSharedMode(t *testing.
 	}
 	defer share.Leave()
 
-	hub, id, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", &agentpb.StreamVideoRequest{DeviceId: 0})
+	hub, id, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", &agentpb.StreamVideoRequest{DeviceId: 0}, encodedFrames)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestSharedMode_RecordingAskingTheSharedModeJoinsAsDefault(t *testing.T) {
 	defer share.Leave()
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1280, Height: 720, Framerate: 30}
-	hub, id, _, w, h, fps, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req)
+	hub, id, _, w, h, fps, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestSharedMode_RulesLiftWhenTheLastRecordGoes(t *testing.T) {
 	}
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
-	hub, id, _, _, _, _, _, err := svc.joinHubForCapture(context.Background(), "/dev/video0", req)
+	hub, id, _, _, _, _, _, err := svc.joinHubForCapture(context.Background(), "/dev/video0", req, encodedFrames)
 	if err != nil {
 		t.Fatalf("explicit recording refused after the last share went: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestJoinHubForShare_WaitsForARecordingHoldingAnotherMode(t *testing.T) {
 
 	// A recording runs at 1920x1080 explicitly before the camera is shared.
 	recReq := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
-	recHub, recID, recCh, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", recReq)
+	recHub, recID, recCh, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", recReq, encodedFrames)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func TestJoinHubForShare_WaitsWhenARecordingSharesTheHoldWithAViewer(t *testing.
 		t.Fatal(err)
 	}
 	defer viewerHub.unsubscribe(viewerID)
-	recHub, recID, recCh, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", params)
+	recHub, recID, recCh, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", params, encodedFrames)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +520,7 @@ func TestJoinHubForShare_StartsWhenTheRecordingLeavesAndAViewerStays(t *testing.
 	ctx := context.Background()
 
 	recReq := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
-	recHub, recID, _, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", recReq)
+	recHub, recID, _, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", recReq, encodedFrames)
 	if err != nil {
 		t.Fatal(err)
 	}

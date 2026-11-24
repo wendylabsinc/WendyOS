@@ -622,8 +622,8 @@ func TestClipIsMadeFromTheVideoBesideACamerasOwnFrames(t *testing.T) {
 	if result.Frames != 3 || result.Skipped != 0 || result.SyncSamples != 1 {
 		t.Errorf("clip holds %d frame(s), %d skipped, %d sync sample(s); want the 3 H.264 frames", result.Frames, result.Skipped, result.SyncSamples)
 	}
-	if result.OtherFormats != 3 || len(result.OtherCodecs) != 1 || result.OtherCodecs[0] != "VIDEO_CODEC_MJPEG" {
-		t.Errorf("other formats = %d %v, want the 3 JPEG records named", result.OtherFormats, result.OtherCodecs)
+	if result.OwnFrames != 3 || len(result.OwnFrameCodecs) != 1 || result.OwnFrameCodecs[0] != "VIDEO_CODEC_MJPEG" {
+		t.Errorf("own frames = %d %v, want the 3 JPEG records named", result.OwnFrames, result.OwnFrameCodecs)
 	}
 	if result.Unparsed != 0 || result.TimestampInversions != 0 {
 		t.Errorf("unparsed %d, inversions %d; JPEG records must not read as damage or as out-of-order video", result.Unparsed, result.TimestampInversions)
@@ -650,5 +650,28 @@ func TestASourceWithOnlyACamerasOwnFramesHasNoClipAndSaysWhy(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(sourceDir, PlayableFileName)); !os.IsNotExist(statErr) {
 		t.Errorf("a playable file was left behind (stat err %v)", statErr)
+	}
+}
+
+// A WebM recording was never a source of the clip, and its seal note is the
+// one it has always had.
+func TestAWebMSourceKeepsItsClipRefusal(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "cameras", "cam")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	index := `{"canonical_episode_nanos":1,"segment":"cameras/cam/segment-000001.webm","byte_offset":40,"byte_size":7,"codec":"VIDEO_CODEC_VP8"}
+{"canonical_episode_nanos":2,"segment":"cameras/cam/segment-000001.webm","byte_offset":47,"byte_size":7,"codec":"VIDEO_CODEC_VP8"}
+`
+	if err := os.WriteFile(filepath.Join(sourceDir, "index.jsonl"), []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := ConvertSourceInPlace(dir, sourceDir)
+	if err == nil || err.Error() != "index names no usable H.264 frames (2 unparsed lines)" {
+		t.Fatalf("reason = %v, want the refusal WebM sources have always had", err)
+	}
+	if result.OwnFrames != 0 || result.Unparsed != 2 {
+		t.Errorf("own frames %d, unparsed %d; want 0 and 2", result.OwnFrames, result.Unparsed)
 	}
 }

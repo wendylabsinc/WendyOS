@@ -57,7 +57,7 @@ func muxPlayableClips(dir string) []string {
 			continue
 		}
 		if result.Skipped > 0 {
-			note := fmt.Sprintf("%s omits %d of %d indexed frame(s)", rel, result.Skipped, result.IndexLines-result.OtherFormats)
+			note := fmt.Sprintf("%s omits %d of %d indexed frame(s)", rel, result.Skipped, result.IndexLines-result.OwnFrames)
 			if result.SkippedReason != "" {
 				note += ": " + result.SkippedReason
 			}

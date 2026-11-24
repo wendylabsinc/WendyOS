@@ -79,8 +79,8 @@ The episode directory is never modified.
 		if r.Unparsed > 0 {
 			fmt.Printf("  index lines unusable %d (expected for an interrupted episode)\n", r.Unparsed)
 		}
-		if r.OtherFormats > 0 {
-			fmt.Printf("  index lines in other formats %d (%s; the clip is made from H.264 only)\n", r.OtherFormats, strings.Join(r.OtherCodecs, ", "))
+		if r.OwnFrames > 0 {
+			fmt.Printf("  index lines of the camera's own frames %d (%s; the clip is made from H.264 only)\n", r.OwnFrames, strings.Join(r.OwnFrameCodecs, ", "))
 		}
 		fmt.Printf("  index span       %s\n", r.Span)
 		fmt.Printf("  interval min/mean/max  %s / %s / %s\n", r.MinInterval, r.MeanInterval, r.MaxInterval)

@@ -740,7 +740,7 @@ func TestPlayableOmissionNoteCountsOnlyTheVideoFrames(t *testing.T) {
 	previous := convertClip
 	t.Cleanup(func() { convertClip = previous })
 	convertClip = func(string, string) (episodeexport.ClipResult, error) {
-		return episodeexport.ClipResult{IndexLines: 10, OtherFormats: 6, Frames: 3, Skipped: 1, SyncSamples: 1, SkippedReason: "segment truncated"}, nil
+		return episodeexport.ClipResult{IndexLines: 10, OwnFrames: 6, Frames: 3, Skipped: 1, SyncSamples: 1, SkippedReason: "segment truncated"}, nil
 	}
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "cameras", "cam-front"), 0o755); err != nil {

@@ -202,10 +202,8 @@ func (r *cameraPreRollRing) flush(triggerBoot int64) (frames []bufferedCameraFra
 	return frames, earliest - triggerBoot, earliest <= windowStart
 }
 
-// flushRings flushes every ring this source filled into one pre-roll, ordered
-// by receipt. The achieved offset is the latest of the rings' openings, so it
-// names the window every stored form covers, and the pre-roll falls short when
-// any ring does.
+// flushRings reports the latest of the rings' openings as the achieved offset:
+// the window every stored form covers.
 func (a *armedCameraSource) flushRings(triggerBoot int64) (frames []bufferedCameraFrame, achievedOffset int64, shortfall bool) {
 	frames, achievedOffset, reachedFull := a.ring.flush(triggerBoot)
 	shortfall = !reachedFull && len(frames) > 0
@@ -222,8 +220,8 @@ func (a *armedCameraSource) flushRings(triggerBoot int64) (frames []bufferedCame
 	return mergeByReceipt(frames, own), achievedOffset, shortfall || !ownReachedFull
 }
 
-// mergeByReceipt interleaves two rings' frames by receipt. Each ring's own
-// order is kept, because coded video must be replayed in the order it arrived.
+// mergeByReceipt keeps each ring's own order: coded video must be replayed in
+// the order it arrived.
 func mergeByReceipt(a, b []bufferedCameraFrame) []bufferedCameraFrame {
 	merged := make([]bufferedCameraFrame, 0, len(a)+len(b))
 	for len(a) > 0 && len(b) > 0 {
@@ -260,9 +258,7 @@ type frameDrain struct {
 }
 
 type drainedFrame struct {
-	frame *videoFrame
-	// nativeBeside marks a frame from the native subscription held beside an
-	// encoded primary, which is replayed through its own handler.
+	frame        *videoFrame
 	nativeBeside bool
 }
 
@@ -372,14 +368,10 @@ type armedCameraSource struct {
 	// hub, subID and frames are the current subscription. They are owned by the
 	// fill goroutine (which reassigns them on reattach) and read elsewhere only
 	// after that goroutine has stopped.
-	hub    *deviceHub
-	subID  int
-	frames chan *videoFrame
-	ring   *cameraPreRollRing
-	// primaryKind is the kind of frames the subscription above delivers.
-	// nativeSubID, nativeFrames and ownFrameRing are a second, native
-	// subscription and its ring, held only while a campaign that stores both
-	// video and frames has an encoded primary; they are owned as the primary is.
+	hub               *deviceHub
+	subID             int
+	frames            chan *videoFrame
+	ring              *cameraPreRollRing
 	primaryKind       frameKind
 	wantsNativeBeside bool
 	nativeSubID       int
@@ -387,9 +379,9 @@ type armedCameraSource struct {
 	ownFrameRing      *cameraPreRollRing
 	ownFramesAreVideo bool
 	ownFramesCodec    agentpb.VideoCodec
-	// storeNotes says why the camera's own frames are not being buffered, for
-	// the episode's manifest.
-	storeNotes []string
+	ownFramesRefused  bool
+	storeNotes        []string
+	monotonicMapping  func() (data.MonotonicMappingSample, error)
 	// carriedDrops accumulates the hub drop counters of subscriptions this
 	// armed source has already left, so a mid-arm producer restart does not
 	// lose the count. activate hands the total to the capture, which reports
@@ -462,8 +454,6 @@ func (a *armedCameraSource) fill(ctx context.Context) {
 	}
 }
 
-// join subscribes the armed source for what its campaign stores, asserting no
-// stream parameters.
 func (a *armedCameraSource) join(ctx context.Context) error {
 	hub, subID, frames, kind, refusal, err := joinWithVideoFallback(a.primaryKind, func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
 		return a.video.joinHubKind(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: a.devID}, kind)
@@ -473,11 +463,11 @@ func (a *armedCameraSource) join(ctx context.Context) error {
 	}
 	a.hub, a.subID, a.frames, a.primaryKind = hub, subID, frames, kind
 	if refusal != nil {
-		a.noteOwnFramesUnavailable(refusal)
+		a.ownFramesNoLongerStored(refusal)
 	}
-	if a.wantsNativeBeside && !a.ownFramesAreVideo && a.primaryKind == encodedFrames {
+	if a.wantsNativeBeside && !a.ownFramesRefused && !a.ownFramesAreVideo && a.primaryKind == encodedFrames {
 		if id, ch, err := a.hub.subscribeKind(nativeFrames); err != nil {
-			a.noteOwnFramesUnavailable(err)
+			a.ownFramesNoLongerStored(err)
 		} else {
 			a.nativeSubID, a.nativeFrames = id, ch
 			if a.ownFrameRing == nil {
@@ -489,8 +479,6 @@ func (a *armedCameraSource) join(ctx context.Context) error {
 	return nil
 }
 
-// shareRingBytes divides preRollCameraLimitBytes among the rings this source
-// fills, so what it buffers in total stays within the bound.
 func (a *armedCameraSource) shareRingBytes() {
 	if a.ownFrameRing == nil {
 		a.ring.limitBytes = preRollCameraLimitBytes
@@ -510,21 +498,16 @@ func (a *armedCameraSource) leaveNativeBeside() {
 	a.carriedDrops += a.hub.unsubscribe(a.nativeSubID)
 }
 
-// nativeBesideEnded handles the native subscription's channel closing. A
-// producer that turned it away has no frames of its own, so their ring is
-// given up; a producer that ended is rejoined by the primary's handling.
 func (a *armedCameraSource) nativeBesideEnded() {
 	refusal := a.hub.subscriberErr(a.nativeSubID)
 	a.leaveNativeBeside()
 	if refusal != nil {
-		a.noteOwnFramesUnavailable(refusal)
+		a.ownFramesNoLongerStored(refusal)
 		a.ownFrameRing = nil
 		a.shareRingBytes()
 	}
 }
 
-// bufferVideoInstead swaps a native primary the producer turned away for an
-// encoded one on the same hub, and starts the ring over for it.
 func (a *armedCameraSource) bufferVideoInstead(refusal error) error {
 	id, ch, drops, err := a.hub.resubscribeAs(a.subID, encodedFrames)
 	if err != nil {
@@ -533,18 +516,18 @@ func (a *armedCameraSource) bufferVideoInstead(refusal error) error {
 	a.carriedDrops += drops
 	a.subID, a.frames, a.primaryKind = id, ch, encodedFrames
 	a.ring = &cameraPreRollRing{buffer: a.buffer, limitBytes: preRollCameraLimitBytes}
-	a.noteOwnFramesUnavailable(refusal)
+	a.ownFramesNoLongerStored(refusal)
 	return nil
 }
 
-func (a *armedCameraSource) noteOwnFramesUnavailable(cause error) {
-	note := ownFramesUnavailableNote(a.source.Capture, cause, 0)
-	for _, existing := range a.storeNotes {
-		if existing == note {
-			return
-		}
+// ownFramesNoLongerStored is final for the armed period and the episode it
+// opens, as it is for a running capture.
+func (a *armedCameraSource) ownFramesNoLongerStored(cause error) {
+	if a.ownFramesRefused {
+		return
 	}
-	a.storeNotes = append(a.storeNotes, note)
+	a.ownFramesRefused = true
+	a.storeNotes = append(a.storeNotes, ownFramesUnavailableNote(a.source.Capture, cause, 0))
 }
 
 func (a *armedCameraSource) reattach(ctx context.Context) error {
@@ -639,7 +622,8 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	c := &cameraCapture{
 		source: a.source, session: session, dir: dir, hub: a.hub, subID: a.subID, frames: a.frames,
 		primaryKind: a.primaryKind, wantsNativeBeside: a.wantsNativeBeside, nativeSubID: a.nativeSubID, nativeFrames: a.nativeFrames,
-		ownFramesAreVideo: a.ownFramesAreVideo, ownFramesCodec: a.ownFramesCodec,
+		monotonicMapping:  a.monotonicMapping,
+		ownFramesAreVideo: a.ownFramesAreVideo, ownFramesCodec: a.ownFramesCodec, ownFramesRefused: a.ownFramesRefused,
 		rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel,
 		done: make(chan struct{}), ready: make(chan error, 1), mode: "continuous", rateCap: rateCap,
 		notes: notes, lastSnapshotIdx: -1, preRoll: preRoll, armed: true,
