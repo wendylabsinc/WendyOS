@@ -2131,15 +2131,19 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 // joining the running hub as it is. Callers that care about the difference
 // compare the returned parameters against what they asked for and report it.
 func (s *VideoService) joinHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (*deviceHub, int, chan *videoFrame, error) {
-	hub, id, ch, _, _, _, err := s.joinHubReportingParams(ctx, key, req)
+	return s.joinHubKind(ctx, key, req, encodedFrames)
+}
+
+func (s *VideoService) joinHubKind(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
+	hub, id, ch, _, _, _, err := s.joinHubReportingParams(ctx, key, req, kind)
 	return hub, id, ch, err
 }
 
 // joinHubReportingParams is joinHub, additionally reporting the stream
 // parameters the subscription actually runs at.
-func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (*deviceHub, int, chan *videoFrame, uint32, uint32, uint32, error) {
+func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (*deviceHub, int, chan *videoFrame, uint32, uint32, uint32, error) {
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
-		hub, id, ch, err := s.getOrCreateHub(ctx, key, req, hubHolderStreamClient)
+		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderStreamClient, kind)
 		if err == nil {
 			// Report the hub's ACTUAL parameters, never the request's. A
 			// request that asserts none now joins whatever the camera is
@@ -2153,7 +2157,7 @@ func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, r
 		if status.Code(err) != codes.InvalidArgument {
 			return nil, 0, nil, 0, 0, 0, err
 		}
-		hub, id, ch, w, h, fps, ok, err := s.subscribeExistingHub(key)
+		hub, id, ch, w, h, fps, ok, err := s.subscribeExistingHub(key, kind)
 		if err != nil {
 			return nil, 0, nil, 0, 0, 0, err
 		}
@@ -2210,12 +2214,18 @@ func isCameraCaptureRefusal(err error) bool {
 //     are refused with errCameraShared, and the shared mode itself joins as a
 //     parameter-less capture (applySharedModeToCapture).
 func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
+	return s.joinHubKindForCapture(ctx, key, req, encodedFrames)
+}
+
+// joinHubKindForCapture is joinHubForCapture for a subscription of the given
+// frame kind.
+func (s *VideoService) joinHubKindForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
 	req, admitted, err := s.applySharedModeToCapture(key, req)
 	if err != nil {
 		return nil, 0, nil, 0, 0, 0, false, err
 	}
 	if !streamRequestAssertsParams(req) {
-		hub, id, ch, width, height, framerate, err = s.joinHubReportingParams(ctx, key, req)
+		hub, id, ch, width, height, framerate, err = s.joinHubReportingParams(ctx, key, req, kind)
 		if err == nil && admitted != nil && width == 0 && height == 0 && framerate == 0 {
 			// A shared camera's defaults are its shared mode, which is what this
 			// capture asked for; reporting 0x0@0 would note a mismatch that is not.
@@ -2224,14 +2234,14 @@ func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *a
 		return hub, id, ch, width, height, framerate, false, err
 	}
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
-		hub, id, ch, err := s.getOrCreateHub(ctx, key, req, hubHolderEpisodeCapture)
+		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderEpisodeCapture, kind)
 		if err == nil {
 			return hub, id, ch, req.GetWidth(), req.GetHeight(), req.GetFramerate(), false, nil
 		}
 		if status.Code(err) != codes.InvalidArgument {
 			return nil, 0, nil, 0, 0, 0, false, err
 		}
-		hub, id, ch, retry, err := s.takeOverDefaultedHub(ctx, key, req)
+		hub, id, ch, retry, err := s.takeOverDefaultedHub(ctx, key, req, kind)
 		if err != nil {
 			return nil, 0, nil, 0, 0, 0, false, err
 		}
@@ -2263,7 +2273,7 @@ func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *a
 // The replacement hub is installed in s.hubs BEFORE the old producer is
 // cancelled, so every reattaching subscriber lands on it rather than racing
 // this takeover to create a competing defaulted hub.
-func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (h *deviceHub, id int, ch chan *videoFrame, retry bool, err error) {
+func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (h *deviceHub, id int, ch chan *videoFrame, retry bool, err error) {
 	s.mu.Lock()
 	old, exists := s.hubs[key]
 	if !exists || old.ctx.Err() != nil {
@@ -2297,7 +2307,7 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		framerate: req.GetFramerate(),
 		sampleSeq: s.sampleSeqLocked(key),
 	}
-	id, ch, _ = h.subscribeAs(hubHolderEpisodeCapture)
+	id, ch, _ = h.subscribeAsKind(hubHolderEpisodeCapture, kind)
 	s.hubs[key] = h
 	old.mu.Lock()
 	old.restarted = true
@@ -2407,14 +2417,14 @@ func (s *VideoService) sampleSeqLocked(path string) *atomic.Uint64 {
 // in which case the caller should create one via getOrCreateHub. Episode
 // capture uses this to coexist with a live viewer instead of failing the
 // episode when the viewer's stream parameters differ from the campaign's caps.
-func (s *VideoService) subscribeExistingHub(path string) (h *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, ok bool, err error) {
+func (s *VideoService) subscribeExistingHub(path string, kind frameKind) (h *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, ok bool, err error) {
 	s.mu.Lock()
 	h, exists := s.hubs[path]
 	if !exists || h.ctx.Err() != nil {
 		s.mu.Unlock()
 		return nil, 0, nil, 0, 0, 0, false, nil
 	}
-	id, ch, err = h.subscribe()
+	id, ch, err = h.subscribeKind(kind)
 	s.mu.Unlock()
 	if err != nil {
 		if st, _ := status.FromError(err); st.Code() == codes.Unavailable {
