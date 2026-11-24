@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -518,8 +519,17 @@ func parseFileToFlash(path string) ([]partition, error) {
 		if len(fields) < 12 {
 			return nil, fmt.Errorf("malformed FileToFlash line (%d fields): %q", len(fields), line)
 		}
-		start, _ := strconv.ParseInt(fields[3], 10, 64)
-		size, _ := strconv.ParseInt(fields[4], 10, 64)
+		start, err := strconv.ParseInt(fields[3], 10, 64)
+		if err != nil || start < 0 {
+			return nil, fmt.Errorf("%w: FileToFlash row for %s partition %q has invalid offset %q", ErrOldDataNotCleared, fields[0], fields[1], fields[3])
+		}
+		size, err := strconv.ParseInt(fields[4], 10, 64)
+		if err != nil || size <= 0 {
+			return nil, fmt.Errorf("%w: FileToFlash row for %s partition %q has invalid size %q", ErrOldDataNotCleared, fields[0], fields[1], fields[4])
+		}
+		if start > math.MaxInt64-size {
+			return nil, fmt.Errorf("%w: FileToFlash row for %s partition %q has an overflowing range (offset %d, size %d)", ErrOldDataNotCleared, fields[0], fields[1], start, size)
+		}
 		resize, _ := strconv.Atoi(fields[6])
 		out = append(out, partition{
 			Device:   fields[0],
