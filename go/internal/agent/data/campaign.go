@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
 	"gopkg.in/yaml.v3"
@@ -70,6 +71,11 @@ type SourceCapture struct {
 	// Store is what the episode keeps of a camera's continuous recording: video
 	// (default), frames, or both (camera sources only, not snapshot mode).
 	Store string `json:"store,omitempty" yaml:"store,omitempty"`
+	// Preset is how fast the software encoder works for the video this source
+	// stores, one of appconfig.EncodePresets (camera sources that store
+	// video, not snapshot mode). The camera's one encoder runs at the fastest
+	// preset any consumer of its video states.
+	Preset string `json:"preset,omitempty" yaml:"preset,omitempty"`
 }
 
 const (
@@ -86,6 +92,14 @@ func (sc *SourceCapture) StoresVideo() bool {
 
 func (sc *SourceCapture) StoresFrames() bool {
 	return sc != nil && (sc.Store == CaptureStoreFrames || sc.Store == CaptureStoreBoth)
+}
+
+// EncodePreset is the preset the source states, and unset without one.
+func (sc *SourceCapture) EncodePreset() appconfig.EncodePreset {
+	if sc == nil {
+		return appconfig.EncodePresetUnset
+	}
+	return appconfig.ParseEncodePreset(sc.Preset)
 }
 
 // EffectiveMode returns the declared capture mode, defaulting to continuous.
@@ -376,10 +390,13 @@ func (c Campaign) planDigestInput() map[string]any {
 				"fragment":       capture.Fragment,
 				"max_resolution": capture.MaxResolution,
 			}
-			// Absent when unset, so plans deployed before store existed keep
-			// their revision.
+			// Absent when unset, so plans deployed before store and preset
+			// existed keep their revision.
 			if capture.Store != "" {
 				entry["capture"].(map[string]any)["store"] = capture.Store
+			}
+			if capture.Preset != "" {
+				entry["capture"].(map[string]any)["preset"] = capture.Preset
 			}
 		}
 		sources = append(sources, entry)
@@ -1495,6 +1512,20 @@ func validateSourceCapture(source CampaignSource) error {
 		}
 		if !slices.Contains(validCaptureStores, capture.Store) {
 			return fmt.Errorf("store must be one of %s", strings.Join(validCaptureStores, ", "))
+		}
+	}
+	if capture.Preset != "" {
+		if source.Camera == "" {
+			return errors.New("preset applies only to camera sources")
+		}
+		if mode == "snapshot" {
+			return errors.New("preset applies only to continuous capture, not snapshot mode")
+		}
+		if !capture.StoresVideo() {
+			return fmt.Errorf("preset applies only to a source that stores video; store: %s stores the camera's own frames", capture.Store)
+		}
+		if capture.EncodePreset() == appconfig.EncodePresetUnset {
+			return fmt.Errorf("preset must be one of %s", strings.Join(appconfig.EncodePresets, ", "))
 		}
 	}
 	return nil
