@@ -120,7 +120,7 @@ Camera / V4L2 device access.
 | Field | Description |
 |-------|-------------|
 | `allowlist` | Names the cameras that this entry's `format` and `stamp` apply to, each by its `stable_id` (a `by-id:` one preferred), device path or camera name as `wendy device camera list --json` prints them. Omit to apply them to every camera. |
-| `format` | What the app's camera node carries. `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example Motion JPEG (MJPEG) or H.264. `"h264"`: H.264, one whole frame per buffer. On a device without a hardware H.264 encoder, `"h264"` from a camera that produces JPEG is encoded in software for as long as the app reads its node. |
+| `format` | What the app's camera node carries. `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example Motion JPEG (MJPEG) or H.264. `"h264"`: H.264, one whole frame per buffer. Where the device encodes the `"h264"` of a camera that produces JPEG in software, the encoder runs for as long as the app reads its node. |
 | `stamp` | What each frame's timestamp field holds on the node. `"time"` (default): the capture time. `"frame"`: the agent's frame number, the frame's `sample_id` in a Wendy Data episode. |
 | `user` | Username for a registered IP camera. Ignored for local cameras. |
 | `password` | Password for a registered IP camera. Ignored for local cameras. |

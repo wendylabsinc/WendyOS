@@ -157,10 +157,10 @@ Two optional keys on the camera entitlement set what the node carries:
 
 On a camera that produces H.264, `"native"` and `"h264"` are the same thing:
 the camera's own H.264, one whole frame per buffer. `"pixels"` on such a
-camera are pictures decoded from it. On a device without a hardware H.264
-encoder, the `"h264"` node of a camera that produces JPEG is encoded in
-software for as long as the app reads it, and the deploy notice, the agent's
-log and the camera's status say so; `"native"` and `"pixels"` need no encoder.
+camera are pictures decoded from it. Where the device encodes the `"h264"` of
+a camera that produces JPEG in software, the encoder runs for as long as the
+app reads its node, and the deploy notice, the agent's log and the camera's
+status say so; `"native"` and `"pixels"` run no encoder.
 
 ```json
 { "type": "camera", "format": "pixels", "stamp": "time" }
@@ -271,11 +271,10 @@ in the JSON from `wendy device hardware list --category camera --json` as the
 properties `share_mode`, `share_unavailable`, `shared_with` and `share_state`,
 with `share_mode_native` and `share_mode_h264` for the mode of a node in those
 formats, or `share_unavailable_native` and `share_unavailable_h264` for why the
-camera has none. A camera whose H.264 the device encodes in software carries
-`h264_encoder`, for example `x264enc (software)`. A camera that is not shared
-carries `share_unavailable` with the reason. The row of each camera
-`wendy device camera list` lists also
-carries `stable_id`, the stable id that command's `--json` prints for it and
+camera has none. The row of a camera this device shares with an h264 mode and
+encodes in software carries `h264_encoder`, for example `x264enc (software)`.
+A camera that is not shared carries `share_unavailable` with the reason. The
+row of each camera `wendy device camera list` lists also carries `stable_id`, the stable id that command's `--json` prints for it and
 the one an allowlist entry may hold; it is empty for a camera without one. A
 row for a node that list leaves out, such as a camera's metadata node, has no
 `stable_id`. A network or ROS 2 camera's row carries `stable_id` and none of

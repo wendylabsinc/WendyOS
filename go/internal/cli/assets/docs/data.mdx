@@ -197,10 +197,12 @@ told apart by `segment` and `codec`; the source's frame and drop counts are
 then sums over both. `playable.mp4` is made from the video only, so a `frames`
 source whose frames are JPEG seals without one, as does a snapshot source
 whose stills are JPEG. A camera whose own frames are already H.264 has one
-stream, stored once as video for every `store` value. On a device without a
-hardware H.264 encoder, the video of a webcam captured as JPEG is encoded in
-software while the campaign records or buffers, and deployment warns of it;
-`store: frames` keeps the camera's own frames without encoding.
+stream, stored once as video for every `store` value. Where the device
+encodes a camera's video in software, `wendy data campaign deploy` warns of
+it: the encoder runs while the campaign records or buffers, and for as long as
+the campaign's inference runs when it has `inference`. Without inference,
+`store: frames` keeps the own frames of a webcam captured as JPEG without
+encoding.
 
 See the [campaign YAML reference](/docs/advanced/clients/wendy-cli/commands/data#campaign-yaml-reference)
 for selectors, capture policies, and all fields.

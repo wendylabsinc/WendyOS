@@ -407,10 +407,11 @@ recorded once per episode, only its last `capture` block applies, and
 deployment warns when the same camera selector is listed more than once. An
 agent older than the release that added `store` rejects a campaign that uses
 the key, because campaign parsing rejects unknown fields; leave it out to get
-`video` on those agents. On a device without a hardware H.264 encoder, the
-video of a webcam captured as JPEG is encoded in software while the campaign
-records or buffers, and deployment warns of it; `store: frames` keeps the
-camera's own frames without encoding.
+`video` on those agents. Where the device encodes a camera's video in
+software, `wendy data campaign deploy` warns of it: the encoder runs while the
+campaign records or buffers, and for as long as the campaign's inference runs
+when it has `inference`. Without inference, `store: frames` keeps the own
+frames of a webcam captured as JPEG without encoding.
 
 What each adapter honors today: cameras implement `continuous` and `snapshot`,
 audio implements `continuous` and `threshold`, and the ROS 2 and telemetry
