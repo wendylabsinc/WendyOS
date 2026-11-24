@@ -401,6 +401,9 @@ func main() {
 	// image agent that may not know the file, and an Enrolled device must
 	// still start on its enrollment.
 	accessKeys, err := trustedkeys.Open(filepath.Join(configPath, trustedkeys.FileName))
+	if seedErr := configpartition.TrustedKeysSeedError(); err == nil && seedErr != nil {
+		accessKeys, err = trustedkeys.Unusable(filepath.Join(configPath, trustedkeys.FileName)), seedErr
+	}
 	if err != nil {
 		logger.Error("the device access file is unusable: Closed with no trusted key until it is fixed, removed or the device is reset", zap.Error(err))
 	}

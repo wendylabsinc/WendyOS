@@ -170,9 +170,22 @@ func keyAlgorithm(pub any) string {
 func Open(path string) (*Store, error) {
 	f, err := load(path)
 	if err != nil {
-		return &Store{path: path, file: &fileFormat{Shape: shapeClosed}}, err
+		return Unusable(path), err
 	}
 	return &Store{path: path, file: f}, nil
+}
+
+// Unusable is a Closed device that trusts no key, for an access file (or an
+// install seed) that exists but cannot be used. Nothing can change it; the
+// file must be fixed or removed, or the device reset.
+func Unusable(path string) *Store {
+	return &Store{path: path, file: &fileFormat{Shape: shapeClosed}}
+}
+
+// Validate reports whether data is an access file Open would load.
+func Validate(data []byte) error {
+	_, err := parse(data)
+	return err
 }
 
 func load(path string) (*fileFormat, error) {

@@ -114,3 +114,57 @@ func TestApplyTrustedKeysSeed_FailsWhenTheSeedCannotBeInstalled(t *testing.T) {
 		t.Error("seed removed although it was not installed")
 	}
 }
+
+// A seed the agent could not load is not installed and stays on the config
+// partition for the installer to replace; Apply reports it so the agent keeps
+// the device Closed with no key instead of Open.
+func TestApplyTrustedKeysSeed_LeavesAnUnusableSeedInPlace(t *testing.T) {
+	_, good := testSeed(t)
+	for name, seed := range map[string][]byte{
+		"truncated":     good[:len(good)/2],
+		"bom":           append([]byte{0xef, 0xbb, 0xbf}, good...),
+		"unknown field": bytes.Replace(good, []byte(`"shape"`), []byte(`"future": 1, "shape"`), 1),
+	} {
+		cfgDir, configPath := t.TempDir(), t.TempDir()
+		src := filepath.Join(cfgDir, trustedKeysFile)
+		if err := os.WriteFile(src, seed, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := applyTrustedKeysSeed(zap.NewNop(), cfgDir, configPath); err == nil {
+			t.Errorf("%s: unusable seed reported installed", name)
+		}
+		if _, err := os.Stat(filepath.Join(configPath, trustedKeysFile)); !os.IsNotExist(err) {
+			t.Errorf("%s: unusable seed installed", name)
+		}
+		if _, err := os.Stat(src); err != nil {
+			t.Errorf("%s: unusable seed removed: %v", name, err)
+		}
+	}
+}
+
+// A seed whose removal failed is not installed again once the owner reopens
+// the device.
+func TestApplyTrustedKeysSeed_NotReappliedAfterReopen(t *testing.T) {
+	cfgDir, configPath := t.TempDir(), t.TempDir()
+	_, seed := testSeed(t)
+	src := filepath.Join(cfgDir, trustedKeysFile)
+	if err := os.WriteFile(src, seed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyTrustedKeysSeed(zap.NewNop(), cfgDir, configPath); err != nil {
+		t.Fatal(err)
+	}
+	// The removal "failed": the seed is back, and the owner reopened the device.
+	if err := os.WriteFile(src, seed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(configPath, trustedKeysFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyTrustedKeysSeed(zap.NewNop(), cfgDir, configPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(configPath, trustedKeysFile)); !os.IsNotExist(err) {
+		t.Error("a reopened device was closed again by the old seed")
+	}
+}
