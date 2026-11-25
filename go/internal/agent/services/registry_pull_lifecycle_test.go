@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -816,5 +817,52 @@ func TestPutBackRunsAnAppThatWasOnlyDown(t *testing.T) {
 	f.revision(rec, base, 2, "b")
 	if last := rec.starts[len(rec.starts)-1]; !slices.Equal(last.Env, []string{"MODE=a"}) || !last.Run {
 		t.Fatalf("last start %+v: want revision 1 put back running", last)
+	}
+}
+
+// M6: the start step's budget covers containerd's 30-minute unpack lease,
+// and a start that ran its budget out still puts the last applied app back
+// under a budget of its own.
+func TestRegistryPullStartBudgetCoversTheUnpackAndThePutBack(t *testing.T) {
+	if startStepTimeout <= 30*time.Minute {
+		t.Fatalf("startStepTimeout %v: a healthy 30-minute unpack would fail", startStepTimeout)
+	}
+	f := newPBFixture(t)
+	r := f.release(t)
+	r.assign.DesiredState = cloudpbv2.Running_RUNNING
+	rec := f.withArtifacts(&fakeArtifacts{r: r})
+	f.assignEntry(r.assign)
+	f.cycle()
+	f.p.waitPulls()
+	rec.present = map[string]bool{r.assign.GetAppReleaseId(): true}
+	next := proto.Clone(r.assign).(*cloudpbv2.DeviceAssignment)
+	next.Revision, next.ConfigJson = 2, `{"MODE":"b"}`
+	rec.startErr = func(s ReleaseStart) error {
+		if slices.Contains(s.Env, "MODE=b") {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+	// Held as applyAssignment holds it: revision 1 is the one put back.
+	prev, err := proto.Marshal(r.assign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.p.commit(func(st *postboxState) {
+		h := *st.Assignments[next.GetDeploymentId()]
+		h.Previous = prev
+		st.Assignments = maps.Clone(st.Assignments)
+		st.Assignments[next.GetDeploymentId()] = &h
+	}); err != nil {
+		t.Fatal(err)
+	}
+	spent, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if err := f.p.startRelease(spent, next); err == nil {
+		t.Fatal("want the start that ran out its budget to fail")
+	}
+	last := len(rec.starts) - 1
+	if len(rec.starts[last].Env) != 0 || rec.startCtx[last] != nil || !rec.app.running {
+		t.Fatalf("last start %+v (ctx %v), app %+v: want the previous app put back under a live budget", rec.starts[last], rec.startCtx[last], rec.app)
 	}
 }

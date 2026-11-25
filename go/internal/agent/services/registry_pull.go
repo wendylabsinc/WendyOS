@@ -109,8 +109,10 @@ const (
 	// (17x at 1 byte) past the sizes the operator signed. At the floor the
 	// tags add under 0.4 %.
 	minChunkSize = 4096
-	// startStepTimeout bounds a start the pull's stop does not cut.
-	startStepTimeout  = 5 * time.Minute
+	// startStepTimeout bounds a start the pull's stop does not cut. The
+	// start unpacks the release, which containerd's unpack lease allows 30
+	// minutes (multi-GB images on SD or eMMC), plus the create and start.
+	startStepTimeout  = 35 * time.Minute
 	mediaTypeDockerV2 = "application/vnd.docker.distribution.manifest.v2+json"
 )
 
@@ -230,8 +232,6 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 	if err == nil {
 		// A start once begun is not cut by the pull's stop: it ends started
 		// or with the last applied app put back, never between the two.
-		// ponytail: a fixed bound on a hung create or start; make it a
-		// setting if large images need longer.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startStepTimeout)
 		err = p.startRelease(sctx, a)
 		cancel()

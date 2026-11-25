@@ -145,7 +145,10 @@ func (p *Postbox) startRelease(ctx context.Context, a *cloudpbv2.DeviceAssignmen
 	}
 	// The state the user wanted: running (as the statement asks), unless
 	// the user had stopped it, not the instant it was observed in.
-	if perr := p.restart(ctx, prev, !before.StoppedByUser); perr != nil {
+	// The put-back has its own budget: the failed start may have spent ctx's.
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startStepTimeout)
+	defer cancel()
+	if perr := p.restart(pctx, prev, !before.StoppedByUser); perr != nil {
 		return errors.Join(err, fmt.Errorf("putting back the previous release: %w", perr))
 	}
 	return err
