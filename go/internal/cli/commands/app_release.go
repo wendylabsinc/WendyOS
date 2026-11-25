@@ -18,6 +18,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Release identity (apps spec section 1-2): a release is a tag naming one
@@ -167,6 +169,23 @@ func (r *deployRelease) prepare(ctx context.Context, provisioning deploymentProv
 	}
 	if r.tenant == "" {
 		return fmt.Errorf("--record-release needs a device enrolled with Wendy Cloud")
+	}
+	// Any failure but "no such app" is left to the release's creation, as
+	// before this check.
+	var missing error
+	_ = withCloud(ctx, r.auth, func(ctx context.Context, cc grpc.ClientConnInterface) error {
+		missing = r.checkApp(ctx, cc)
+		return nil
+	})
+	return missing
+}
+
+// checkApp refuses, before anything is built, an app Cloud does not have:
+// its release could not be created.
+func (r *deployRelease) checkApp(ctx context.Context, conn grpc.ClientConnInterface) error {
+	_, err := cloudpb.NewAppServiceClient(conn).GetApp(ctx, &cloudpb.GetAppRequest{Id: r.appID, OrganizationId: r.tenant})
+	if status.Code(err) == codes.NotFound {
+		return fmt.Errorf("--record-release records a release of %s, which is not in Wendy Cloud yet. Run wendy app create --app %s first.", r.appID, r.appID)
 	}
 	return nil
 }

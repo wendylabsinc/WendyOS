@@ -210,3 +210,20 @@ func TestDeployReleasePrepareRefusesBeforeBuild(t *testing.T) {
 		t.Fatalf("prepared tenant %q, auth %v, id %q: want the device's tenant, a session and no release yet", r.tenant, r.auth, r.id)
 	}
 }
+
+// M24: a recorded deploy of an app Cloud does not have is refused before
+// the build, naming the app and `wendy app create`; an app Cloud has passes.
+func TestDeployReleaseRefusesAMissingAppBeforeBuild(t *testing.T) {
+	op, fake := registryFixture(t)
+	conn := op.conn
+	r := &deployRelease{appID: "sh.wendy.missing", tag: "v1", tenant: testOperatorTenant}
+	err := r.checkApp(context.Background(), conn)
+	if err == nil || !strings.Contains(err.Error(), "sh.wendy.missing") || !strings.Contains(err.Error(), "wendy app create --app sh.wendy.missing") {
+		t.Fatalf("missing app: err %v", err)
+	}
+	fake.apps["sh.wendy.there"] = &cloudpb.App{Id: "sh.wendy.there", OrganizationId: testOperatorTenant}
+	r.appID = "sh.wendy.there"
+	if err := r.checkApp(context.Background(), conn); err != nil {
+		t.Fatalf("existing app: %v", err)
+	}
+}
