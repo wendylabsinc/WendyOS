@@ -266,6 +266,7 @@ class ReviewInputTests(unittest.TestCase):
             fixture = {'risk': 'mid', 'decisions': [], 'compatibility_verdict': 'not_assessed', 'compatibility_findings': [],
                        'compatibility_updates': [], 'compatibility_coverage': {d: {'status': 'not_assessed', 'reason': 'Source-only fixture does not supply a runtime chain', 'evidence': []}
                                                   for d in api_review.compat.DIRECTIONS}}
+            fixture.pop("compatibility_findings")
             with patch.object(api_review, 'review_model', return_value=fixture) as model:
                 code = api_review.command_review(args)
             return code, json.loads((path / 'result').read_text()), model

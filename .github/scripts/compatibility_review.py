@@ -465,7 +465,7 @@ def validate_aggregate(result, changed, supplemental):
 
 def public_result(result):
     # Fail closed for new compatibility outputs; legacy API results remain valid.
-    if "compatibility_findings" in result and result.get("input_visibility") != "public":
+    if ("compatibility_findings" in result or result.get("unified_review")) and result.get("input_visibility") != "public":
         raise ReviewError("Private or unknown-provenance compatibility result cannot be published or uploaded")
     if result.get("input_visibility", "public") != "public":
         raise ReviewError("Private review result cannot be published or uploaded")
