@@ -625,14 +625,33 @@ func (op *registryOp) revisionDevices(ctx context.Context, deploymentID string, 
 	return out, nil
 }
 
+// assetID resolves a device by its id, then its name (unique in the
+// organization), then its display name, a free label: only when exactly one
+// device carries it.
 func assetID(assets []*cloudpb.Asset, name string) (string, error) {
-	i := slices.IndexFunc(assets, func(d *cloudpb.Asset) bool {
-		return d.GetId() == name || d.GetName() == name || d.GetDisplayName() == name
-	})
-	if i < 0 || name == "" {
+	if name == "" {
 		return "", usageErrorf("No device %q in this organization.", name)
 	}
-	return assets[i].GetId(), nil
+	for _, field := range []func(*cloudpb.Asset) string{(*cloudpb.Asset).GetId, (*cloudpb.Asset).GetName} {
+		if i := slices.IndexFunc(assets, func(d *cloudpb.Asset) bool { return field(d) == name }); i >= 0 {
+			return assets[i].GetId(), nil
+		}
+	}
+	var same []string
+	id := ""
+	for _, d := range assets {
+		if d.GetDisplayName() == name {
+			id = d.GetId()
+			same = append(same, fmt.Sprintf("%s (%s)", d.GetName(), d.GetId()))
+		}
+	}
+	switch len(same) {
+	case 0:
+		return "", usageErrorf("No device %q in this organization.", name)
+	case 1:
+		return id, nil
+	}
+	return "", usageErrorf("%d devices are shown as %q: %s. Use the device id.", len(same), name, strings.Join(same, ", "))
 }
 
 func resolveSelection(assets []*cloudpb.Asset, sel *cloudpb.DeviceSelection) []string {
