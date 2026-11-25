@@ -102,6 +102,21 @@ func TestResolverAmbiguousDifferentDevicesOnLAN(t *testing.T) {
 	}
 }
 
+func TestLegacyResolverFallsBackToRosterOnLANCollision(t *testing.T) {
+	roster := provisionedRoster(t)
+	roster.applyResponse(roster.generation, &cloudpbv2.GetMeshRosterResponse{
+		Entries: []*cloudpbv2.MeshRosterEntry{{Name: "brave-dolphin", AssetId: rosterAssetA}},
+	})
+	r := NewMeshResolver(zaptest.NewLogger(t), roster, lanBrowse(
+		models.LANDevice{MeshName: "brave-dolphin", PrincipalURI: certs.DeviceSPIFFEURI(rosterTenant, rosterDevice)},
+		models.LANDevice{MeshName: "brave dolphin", PrincipalURI: certs.DeviceSPIFFEURI(rosterTenant, rosterDeviceB)},
+	))
+	got, ok := r.Resolve("brave-dolphin")
+	if !ok || got != mustDevice(t, rosterTenant, rosterDevice) {
+		t.Fatalf("roster fallback = %v,%v want the Cloud device principal", got, ok)
+	}
+}
+
 func TestResolverSameDeviceRepeatedNotAmbiguous(t *testing.T) {
 	roster := provisionedRoster(t)
 	device := certs.DeviceSPIFFEURI(rosterTenant, rosterDeviceB)
