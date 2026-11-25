@@ -548,10 +548,10 @@ func TestCameraSoftwareEncoderNotices_NameNoPresetForAnAgentThatReportsNone(t *t
 }
 
 func TestCameraPresetNotices_AStatedPresetTheDeviceDoesNotApplyIsSaidWithTheAgentsReason(t *testing.T) {
-	const why = "this device encodes H.264 with nvv4l2h264enc, which takes no preset"
+	const why = "this device encodes with nvv4l2h264enc, which takes no preset"
 	hardware := c920Row()
 	hardware.Properties[camerashare.KeyH264PresetIgnored] = why
-	want := []string{`Camera: HD Pro Webcam C920: HD Pro Webc (video0): "preset": "veryfast" is not applied: ` + why + `.`}
+	want := []string{`Camera: HD Pro Webcam C920: HD Pro Webc (video0): preset veryfast is not applied: ` + why + `.`}
 	if got := cameraPresetNotices([]*appconfig.AppConfig{h264CfgAt("veryfast")}, []*hwCap{hardware}); !slices.Equal(got, want) {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
@@ -563,22 +563,8 @@ func TestCameraPresetNotices_AStatedPresetTheDeviceDoesNotApplyIsSaidWithTheAgen
 	}
 }
 
-func TestCameraPresetNotices_AnAgentFromBeforePresetsIsSaidNotToReadOne(t *testing.T) {
-	const notRead = `Camera: the agent on this device does not read a camera entitlement's preset: "preset": "veryfast" has no effect until the agent is updated.`
-	for name, row := range map[string]*hwCap{
-		"an agent that names its software encoder": c920RowEncodedInSoftware(),
-		"an agent that names no encoder":           c920Row(),
-		"an agent from before stable ids":          c920RowFromAnAgentBeforeStableIDs(),
-	} {
-		if got := cameraPresetNotices([]*appconfig.AppConfig{h264CfgAt("veryfast")}, []*hwCap{row, row}); !slices.Equal(got, []string{notRead}) {
-			t.Errorf("%s:\ngot  %q\nwant %q", name, got, notRead)
-		}
-		if got := cameraPresetNotices([]*appconfig.AppConfig{h264CfgAt("")}, []*hwCap{row}); len(got) != 0 {
-			t.Errorf("%s: an app that states no preset was told %q", name, got)
-		}
-	}
-}
-
+// A row that says nothing of presets gets no line: the notice passes on what
+// the agent says and infers nothing from what it does not say.
 func TestCameraPresetNotices_NothingIsSaidWhereThePresetIsAppliedOrNoH264NodeIsServed(t *testing.T) {
 	withoutH264Node := c920RowEncodedAtAPreset()
 	delete(withoutH264Node.Properties, camerashare.KeyModeOfFormat(appconfig.CameraFormatH264))
@@ -588,6 +574,9 @@ func TestCameraPresetNotices_NothingIsSaidWhereThePresetIsAppliedOrNoH264NodeIsS
 		cfg *appconfig.AppConfig
 	}{
 		"the agent applies the preset":                {c920RowEncodedAtAPreset(), h264CfgAt("veryfast")},
+		"a row that names its software encoder only":  {c920RowEncodedInSoftware(), h264CfgAt("veryfast")},
+		"a row that says nothing of presets":          {c920Row(), h264CfgAt("veryfast")},
+		"a row from an agent before stable ids":       {c920RowFromAnAgentBeforeStableIDs(), h264CfgAt("veryfast")},
 		"the app asked for h264 and is served other":  {withoutH264Node, h264CfgAt("veryfast")},
 		"the preset is stated for another camera":     {c920Row(), &appconfig.AppConfig{Entitlements: append(h264CfgAt("fast", "/dev/video9").Entitlements, h264CfgAt("", c920StableID).Entitlements...)}},
 		"the app takes the real device":               {c920Row(), shareCfg("direct")},
@@ -607,12 +596,12 @@ func TestPrintCameraShareNotice_ThePresetLinesFollowTheEncoderLine(t *testing.T)
 	}
 	software := c920RowEncodedInSoftware()
 	software.Properties[camerashare.KeyH264Encoder] = "openh264enc (software)"
-	software.Properties[camerashare.KeyH264PresetIgnored] = "this device encodes H.264 with openh264enc, which takes no preset"
+	software.Properties[camerashare.KeyH264PresetIgnored] = "this device encodes with openh264enc, which takes no preset"
 	ignored := printedCameraNotice(t, []*hwCap{software}, h264CfgAt("fast"))
 	wantIgnored := []string{
 		c920SharedH264,
 		`Camera: HD Pro Webcam C920: HD Pro Webc (video0): its H.264 is encoded in software (openh264enc)` + noEncoderOtherwise,
-		`Camera: HD Pro Webcam C920: HD Pro Webc (video0): "preset": "fast" is not applied: this device encodes H.264 with openh264enc, which takes no preset.`,
+		`Camera: HD Pro Webcam C920: HD Pro Webc (video0): preset fast is not applied: this device encodes with openh264enc, which takes no preset.`,
 	}
 	if !slices.Equal(ignored, wantIgnored) {
 		t.Errorf("printed %q\nwant    %q", ignored, wantIgnored)

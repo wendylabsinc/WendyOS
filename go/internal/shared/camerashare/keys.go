@@ -37,10 +37,9 @@ const (
 	// that mode is made by an encoder that takes one.
 	KeyH264DefaultPreset = "h264_default_preset"
 	// KeyH264PresetIgnored is why a preset stated for the camera's h264 node
-	// is not applied, e.g. "this device encodes H.264 with nvv4l2h264enc,
-	// which takes no preset". An agent that reads presets sets this key or
-	// KeyH264DefaultPreset on every row with an h264 mode, and an agent from
-	// before presets neither.
+	// is not applied, e.g. "this device encodes with nvv4l2h264enc, which
+	// takes no preset". A row with an h264 mode has this key or
+	// KeyH264DefaultPreset.
 	KeyH264PresetIgnored = "h264_preset_ignored"
 )
 
@@ -65,6 +64,12 @@ func DescribeEncoderPreset(stated, fallback string) string {
 		return fmt.Sprintf("at preset %s or the fastest one a consumer of the camera states", fallback)
 	}
 	return fmt.Sprintf("at preset %s or a faster one another consumer of the camera states", stated)
+}
+
+// DescribePresetNotApplied says that a stated preset is not applied, with the
+// agent's reason.
+func DescribePresetNotApplied(stated, why string) string {
+	return fmt.Sprintf("preset %s is not applied: %s", stated, why)
 }
 
 // KeyModeOfFormat is the mode of the node an app gets for the camera when its

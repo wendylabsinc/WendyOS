@@ -56,8 +56,7 @@ func cameraIdentityOf(c *cameraRow) appconfig.CameraIdentity {
 
 // agentGeneration is what the agent that listed a device's camera rows does
 // with a camera entitlement's format, stamp and allowlist, as far as its rows
-// tell. Whether it reads a preset is told by each camera's row instead
-// (cameraPresetNotices).
+// tell.
 type agentGeneration int
 
 const (
@@ -229,28 +228,24 @@ func cameraSoftwareEncoderNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow
 }
 
 // cameraPresetNotices returns a line for each camera whose h264 node an app
-// states a preset for that the device does not apply, with the agent's reason,
-// and one line for an agent whose rows say nothing of presets: it is from
-// before them.
+// states a preset for that the device does not apply, with the agent's reason.
+// A row that gives none gets no line.
 func cameraPresetNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow) []string {
 	generation := agentGenerationOf(cams)
-	var lines, unread []string
+	var lines []string
 	for _, c := range cams {
-		props := c.GetProperties()
+		why := c.GetProperties()[camerashare.KeyH264PresetIgnored]
+		if why == "" {
+			continue
+		}
 		for _, cfg := range sharingConfigs(cfgs) {
 			asked, _, preset, _ := nodeSettingsOf(cfg.Entitlements, c, generation)
-			if served, _ := servedNodeOf(c, asked); served != appconfig.CameraFormatH264 || preset == appconfig.EncodePresetUnset {
-				continue
-			}
-			switch why := props[camerashare.KeyH264PresetIgnored]; {
-			case why != "":
-				lines = appendOnce(lines, fmt.Sprintf("Camera: %s: \"preset\": %q is not applied: %s.", c.GetDescription(), preset, why))
-			case props[camerashare.KeyH264DefaultPreset] == "":
-				unread = appendOnce(unread, fmt.Sprintf("Camera: the agent on this device does not read a camera entitlement's preset: \"preset\": %q has no effect until the agent is updated.", preset))
+			if served, _ := servedNodeOf(c, asked); served == appconfig.CameraFormatH264 && preset != appconfig.EncodePresetUnset {
+				lines = appendOnce(lines, fmt.Sprintf("Camera: %s: %s.", c.GetDescription(), camerashare.DescribePresetNotApplied(preset.String(), why)))
 			}
 		}
 	}
-	return append(lines, unread...)
+	return lines
 }
 
 // cameraSettingsConflictNotices returns one line for each shared camera whose
