@@ -13,6 +13,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -638,9 +639,59 @@ func (c *cameraCapture) rejoinSubscriptions() error {
 	return nil
 }
 
+// opensNewEncoderSegmentWith reports that the video frame about to be stored
+// must open a segment: an encoder run at another preset than the frame before
+// it made it, with parameter sets of its own, and decoding can start on it.
+func (c *cameraCapture) opensNewEncoderSegmentWith(frame *videoFrame) bool {
+	if c.videoStoredAt == nil {
+		c.videoStoredAt = make(map[appconfig.EncodePreset]uint64)
+	} else if frame.encodedAt != c.lastVideoAt {
+		c.awaitNewEncoderSegment = true
+	}
+	c.lastVideoAt = frame.encodedAt
+	if !c.awaitNewEncoderSegment {
+		return false
+	}
+	if _, randomAccess := frameRandomAccess(frame); !randomAccess {
+		return false
+	}
+	c.awaitNewEncoderSegment = false
+	return true
+}
+
+// presetNotAppliedNote says how many of a recording's video frames were not
+// encoded at the preset its source states, or "".
+func presetNotAppliedNote(stated appconfig.EncodePreset, storedAt map[appconfig.EncodePreset]uint64) string {
+	if stated == noPreset {
+		return ""
+	}
+	var atOthers []string
+	for _, name := range appconfig.EncodePresets {
+		preset := appconfig.ParseEncodePreset(name)
+		if frames := storedAt[preset]; frames > 0 && preset != stated {
+			atOthers = append(atOthers, fmt.Sprintf("%d at %s", frames, name))
+		}
+	}
+	var said []string
+	if len(atOthers) > 0 {
+		first, rest, _ := strings.Cut(strings.Join(atOthers, " and "), " at ")
+		said = append(said, fmt.Sprintf("%s video frame(s) were encoded at %s", first, rest))
+	}
+	if frames := storedAt[noPreset]; frames > 0 {
+		said = append(said, fmt.Sprintf("%d video frame(s) were not encoded at a preset: they are the camera's own or come from an encoder that takes none", frames))
+	}
+	if len(said) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("preset: %s was requested, but %s", stated, strings.Join(said, "; "))
+}
+
 func (c *cameraCapture) storeNotes() []string {
 	var notes []string
 	capture := c.source.Capture
+	if note := presetNotAppliedNote(capture.EncodePreset(), c.videoStoredAt); note != "" {
+		notes = append(notes, note)
+	}
 	if c.nothingStoredSince != 0 {
 		notes = append(notes, "no video frame was stored after the camera's last own frame before the episode ended")
 	}

@@ -551,6 +551,14 @@ type cameraCapture struct {
 	monotonicMapping func() (data.MonotonicMappingSample, error)
 	// notes accumulates honesty notes folded into the result's source detail.
 	notes []string
+	// videoStoredAt counts the video frames stored by the preset the agent's
+	// encoder made each at (videoFrame.encodedAt), and lastVideoAt is that of
+	// the last one. awaitNewEncoderSegment is set from a video frame made at
+	// another preset than the one before it until a frame that decoding can
+	// start on opens a segment for that encoder's video.
+	videoStoredAt          map[appconfig.EncodePreset]uint64
+	lastVideoAt            appconfig.EncodePreset
+	awaitNewEncoderSegment bool
 	// Snapshot state: the interval index of the last written snapshot (-1
 	// before the first) and intervals that produced no still.
 	lastSnapshotIdx int64
@@ -1169,6 +1177,10 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 		}
 		c.lastSampleID = frame.sampleID
 	}
+	video := stream == &c.cameraSegmentStream
+	if video && c.opensNewEncoderSegmentWith(frame) {
+		newStream = true
+	}
 	if newStream && stream.segment != nil {
 		if err := stream.endProducerStream(); err != nil {
 			return err
@@ -1193,6 +1205,9 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 	}
 	stream.segmentOffset += int64(n)
 	stream.indexed++
+	if video {
+		c.videoStoredAt[frame.encodedAt]++
+	}
 	if c.stillsAwaitVideo {
 		c.closeStillsAccount(receipt, true)
 	}
