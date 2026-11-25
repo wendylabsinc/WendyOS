@@ -3,6 +3,9 @@ import Foundation
 struct NearbySetupDevice: Identifiable, Sendable {
     let id, name: String
     var rssi: Int = 0
+    /// Advertises the authenticated management door instead of the setup door.
+    /// Such a device cannot be enrolled again; it can be given Wi-Fi.
+    var enrolled = false
     var title: String { name.isEmpty ? "Wendy device" : DeviceDisplayName.title(name) }
 }
 
@@ -34,7 +37,7 @@ extension GoClient {
             defer { WDNearbyDevicesFree(p) }
             try Self.check(p.pointee.status)
             return UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map {
-                NearbySetupDevice(id: Self.string($0.address), name: Self.string($0.name), rssi: Int($0.rssi))
+                NearbySetupDevice(id: Self.string($0.address), name: Self.string($0.name), rssi: Int($0.rssi), enrolled: $0.enrolled != 0)
             }
         }
     }

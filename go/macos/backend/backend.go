@@ -56,6 +56,7 @@ type Backend struct {
 	tunnelSession           commands.TunnelSession
 	appTunnelContext        func(context.Context) context.Context
 	nearby                  nearbySetup
+	nearbyWiFi              nearbyWiFi
 	UnitreeControl          UnitreeController
 	modelRun                *ModelRun
 	chatTurn                *ChatTurn

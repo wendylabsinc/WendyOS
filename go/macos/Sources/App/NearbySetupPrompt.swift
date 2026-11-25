@@ -8,8 +8,11 @@ import UIKit
 struct NearbySetupPromptHistory {
     private var prompted: Set<String> = []
 
+    /// Only an unenrolled device invites setup. An enrolled one advertises
+    /// its management door for as long as it runs; it is offered Wi-Fi from
+    /// the manual setup list instead of interrupting the user.
     mutating func next(_ devices: [NearbySetupDevice]) -> NearbySetupDevice? {
-        guard let device = devices.filter({ (-80 ... -1).contains($0.rssi) && !prompted.contains($0.id) })
+        guard let device = devices.filter({ !$0.enrolled && (-80 ... -1).contains($0.rssi) && !prompted.contains($0.id) })
             .sorted(by: { $0.rssi == $1.rssi ? $0.id < $1.id : $0.rssi > $1.rssi }).first else { return nil }
         prompted.insert(device.id)
         return device

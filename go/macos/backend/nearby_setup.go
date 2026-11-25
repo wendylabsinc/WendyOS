@@ -7,15 +7,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/ble"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/nearbysetup"
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble/scan"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
+// NearbyDevice is a Bluetooth advertisement, not a verified identity. Enrolled
+// devices advertise the authenticated management door instead of the setup
+// door, so they can only be given Wi-Fi through NearbyWiFiOpen.
 type NearbyDevice struct {
 	Address, Name string
 	RSSI          int
+	Enrolled      bool
 }
 type NearbySetupState struct {
 	Session                                                                 uint64
@@ -57,7 +62,7 @@ type nearbySetup struct {
 func (b *Backend) NearbyDiscover() ([]NearbyDevice, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	stream, err := scan.DiscoverBluetoothContinuous(ctx, scan.Options{Services: []string{nearbysetup.ServiceUUID}})
+	stream, err := scan.DiscoverBluetoothContinuous(ctx, scan.Options{Services: []string{nearbysetup.ServiceUUID, ble.AgentServiceUUID}})
 	if err != nil {
 		return nil, errors.New("Bluetooth is unavailable. Enable Bluetooth and allow Wendy access in Settings")
 	}
@@ -73,7 +78,7 @@ func (b *Backend) NearbyDiscover() ([]NearbyDevice, error) {
 	out := make([]NearbyDevice, 0, len(found))
 	for _, d := range found {
 		if nearbySetupSighting(d, time.Now()) {
-			out = append(out, NearbyDevice{Address: d.Address, Name: d.Name, RSSI: d.RSSI})
+			out = append(out, NearbyDevice{Address: d.Address, Name: d.Name, RSSI: d.RSSI, Enrolled: nearbyEnrolledAdvertisement(d)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

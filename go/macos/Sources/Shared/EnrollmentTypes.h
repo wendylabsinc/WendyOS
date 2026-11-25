@@ -9,7 +9,7 @@ void WDEnrollmentFree(WDEnrollmentResult *value);
 WDEnrollmentOrganizationsResult *WDEnrollmentOrganizations(void);
 void WDEnrollmentOrganizationsFree(WDEnrollmentOrganizationsResult *value);
 WDStatus *WDEnrollDevice(uint64_t session, char *account, char *organization, char *name);
-typedef struct { char *address, *name; int32_t rssi; } WDNearbyDevice;
+typedef struct { char *address, *name; int32_t rssi, enrolled; } WDNearbyDevice;
 typedef struct { WDStatus status; WDNearbyDevice *items; size_t count; } WDNearbyDevicesResult;
 typedef struct {
     WDStatus status;
@@ -25,4 +25,16 @@ WDNearbySetupResult *WDNearbyOpen(char *address);
 WDNearbySetupResult *WDNearbyAction(uint64_t session, int32_t action, char *ssid, char *password, char *account, char *organization, char *name);
 void WDNearbyClose(uint64_t session);
 void WDNearbySetupFree(WDNearbySetupResult *value);
+typedef struct {
+    WDStatus status;
+    uint64_t session;
+    int32_t connected, wifi_connected;
+    char *ssid, *device_id, *principal, *organization;
+    char **networks;
+    size_t network_count;
+} WDNearbyWiFiResult;
+WDNearbyWiFiResult *WDNearbyWiFiOpen(char *address, char *name, char *account);
+WDNearbyWiFiResult *WDNearbyWiFiAction(uint64_t session, int32_t action, char *ssid, char *password);
+void WDNearbyWiFiClose(uint64_t session);
+void WDNearbyWiFiFree(WDNearbyWiFiResult *value);
 #endif

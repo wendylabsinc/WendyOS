@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble/central"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/protobuf/proto"
@@ -32,6 +33,24 @@ const agentReadTimeout = 30 * time.Second
 // agent/bluetooth/l2cap_server_linux.go, which must agree with this). It is the
 // fallback when discovery did not report the device's own PSM.
 const DefaultL2CAPPSM uint16 = 128
+
+// AgentServiceUUID is the service an enrolled WendyOS agent advertises for its
+// mTLS-over-L2CAP management door (agent/bluetooth/advertiser_linux.go, which
+// must agree with this). It replaces the unauthenticated setup service once a
+// device is provisioned, so a scan for it finds enrolled devices only.
+const AgentServiceUUID = "7565e9eb-4c20-4b67-9272-d708b397b631"
+
+// agentHandshakeTimeout bounds the mTLS handshake. The L2CAP net.Conn blocks
+// indefinitely without a deadline, and a device that accepted the channel but
+// never answers the ClientHello would otherwise hang ConnectAgent forever.
+const agentHandshakeTimeout = 30 * time.Second
+
+// AgentError is a failure the agent reported in its reply, as opposed to a
+// transport failure: the Bluetooth link is still usable afterwards, so a
+// caller may keep the session and let the user correct the request.
+type AgentError struct{ Message string }
+
+func (e *AgentError) Error() string { return e.Message }
 
 // AgentClient communicates with a WendyOS agent over BLE L2CAP using
 // protobuf-framed messages (UInt16 BE length prefix) over mTLS.
@@ -60,12 +79,28 @@ func ConnectAgent(device *models.BluetoothDevice, tlsConfig *tls.Config) (*Agent
 	}
 
 	tlsConn := tls.Client(central.NewL2CAPStream(conn), tlsConfig)
+	tlsConn.SetReadDeadline(time.Now().Add(agentHandshakeTimeout)) //nolint:errcheck
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("BLE mTLS handshake: %w", err)
 	}
+	tlsConn.SetReadDeadline(time.Time{}) //nolint:errcheck
 
 	return &AgentClient{conn: conn, tlsConn: tlsConn}, nil
+}
+
+// PeerIdentity returns the Wendy identity the agent proved during the mTLS
+// handshake: its leaf certificate was verified by tlsConfig.VerifyConnection
+// before ConnectAgent returned, so this is the device the caller is talking
+// to, not an advertised name. ok is false when the leaf carries no Wendy
+// identity.
+func (c *AgentClient) PeerIdentity() (id certs.WendyIdentity, ok bool) {
+	state := c.tlsConn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return certs.WendyIdentity{}, false
+	}
+	id, ok, err := certs.IdentityFromCert(state.PeerCertificates[0])
+	return id, ok && err == nil
 }
 
 // Close disconnects the BLE connection.
@@ -118,7 +153,7 @@ func (c *AgentClient) sendCommand(cmd *agentpb.BluetoothCommand) (*agentpb.Bluet
 	}
 
 	if errResp := resp.GetError(); errResp != nil {
-		return nil, fmt.Errorf("agent error: %s", errResp.GetMessage())
+		return nil, &AgentError{Message: fmt.Sprintf("agent error: %s", errResp.GetMessage())}
 	}
 
 	return resp, nil
@@ -164,7 +199,7 @@ func (c *AgentClient) WifiConnectWith(ssid, password string, security agentpb.Wi
 		if msg == "" {
 			msg = "unknown error"
 		}
-		return fmt.Errorf("WiFi connect failed: %s", msg)
+		return &AgentError{Message: fmt.Sprintf("WiFi connect failed: %s", msg)}
 	}
 
 	return nil
@@ -231,7 +266,7 @@ func (c *AgentClient) WifiDisconnect() error {
 		if msg == "" {
 			msg = "unknown error"
 		}
-		return fmt.Errorf("WiFi disconnect failed: %s", msg)
+		return &AgentError{Message: fmt.Sprintf("WiFi disconnect failed: %s", msg)}
 	}
 	return nil
 }
@@ -277,7 +312,7 @@ func (c *AgentClient) WifiSetPriority(ssid string, priority int32) error {
 		if msg == "" {
 			msg = "unknown error"
 		}
-		return fmt.Errorf("WiFi set priority failed: %s", msg)
+		return &AgentError{Message: fmt.Sprintf("WiFi set priority failed: %s", msg)}
 	}
 	return nil
 }
@@ -302,7 +337,7 @@ func (c *AgentClient) WifiReorder(order []string) error {
 		if msg == "" {
 			msg = "unknown error"
 		}
-		return fmt.Errorf("WiFi reorder failed: %s", msg)
+		return &AgentError{Message: fmt.Sprintf("WiFi reorder failed: %s", msg)}
 	}
 	return nil
 }
@@ -361,7 +396,7 @@ func (c *AgentClient) AppsStop(appName string) error {
 		if msg == "" {
 			msg = "unknown error"
 		}
-		return fmt.Errorf("apps stop failed: %s", msg)
+		return &AgentError{Message: fmt.Sprintf("apps stop failed: %s", msg)}
 	}
 	return nil
 }
@@ -389,7 +424,7 @@ func (c *AgentClient) AppsRemove(appName string, purgeImage bool) error {
 		if msg == "" {
 			msg = "unknown error"
 		}
-		return fmt.Errorf("apps remove failed: %s", msg)
+		return &AgentError{Message: fmt.Sprintf("apps remove failed: %s", msg)}
 	}
 	return nil
 }
@@ -432,7 +467,7 @@ func (c *AgentClient) WifiForget(ssid string) error {
 		if msg == "" {
 			msg = "unknown error"
 		}
-		return fmt.Errorf("WiFi forget failed: %s", msg)
+		return &AgentError{Message: fmt.Sprintf("WiFi forget failed: %s", msg)}
 	}
 	return nil
 }

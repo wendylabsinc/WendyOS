@@ -17,6 +17,13 @@ final class NearbySetupPromptTests: XCTestCase {
         XCTAssertNil(history.next([devices[2]]), "Returning or dismissed devices must not repeatedly interrupt setup")
     }
 
+    func testEnrolledDevicesNeverPrompt() {
+        var history = NearbySetupPromptHistory()
+        let enrolled = NearbySetupDevice(id: "enrolled", name: "Kitchen", rssi: -40, enrolled: true)
+        XCTAssertNil(history.next([enrolled]), "An enrolled device advertises its management door indefinitely; it must not interrupt the user")
+        XCTAssertEqual(history.next([enrolled, NearbySetupDevice(id: "new", name: "New", rssi: -70)])?.id, "new")
+    }
+
     func testNamesDoNotCollapseDifferentDevices() {
         var history = NearbySetupPromptHistory()
         let devices = [NearbySetupDevice(id: "b", name: "Wendy", rssi: -40), NearbySetupDevice(id: "a", name: "Wendy", rssi: -40)]
@@ -74,5 +81,25 @@ final class NearbySetupObservationTests: XCTestCase {
         XCTAssertEqual(next(state, wifi: true, statusAge: 1), .scanWiFi)
         XCTAssertEqual(next(state, wifi: true, statusAge: 1, scanAge: 1), .idle)
         XCTAssertEqual(next(NearbySetupSnapshot(enrolled: true), wifi: true), .idle)
+    }
+}
+
+final class NearbyWiFiObservationTests: XCTestCase {
+    private func next(_ state: NearbyWiFiSnapshot, canReconnect: Bool = true,
+                      statusAge: TimeInterval = 30, scanAge: TimeInterval = 30) -> NearbyWiFiObservation {
+        state.observation(canReconnect: canReconnect, statusAge: statusAge, scanAge: scanAge)
+    }
+
+    func testConnectionRecoversUnlessRefused() {
+        XCTAssertEqual(next(NearbyWiFiSnapshot()), .reconnect)
+        XCTAssertEqual(next(NearbyWiFiSnapshot(), canReconnect: false), .idle,
+                       "A sign-in or identity refusal is not fixed by reconnecting")
+    }
+
+    func testOnlyReadsRepeatAndAreThrottled() {
+        let state = NearbyWiFiSnapshot(connected: true)
+        XCTAssertEqual(next(state), .status)
+        XCTAssertEqual(next(state, statusAge: 1), .scanWiFi)
+        XCTAssertEqual(next(state, statusAge: 1, scanAge: 1), .idle)
     }
 }

@@ -16,7 +16,7 @@ func WDNearbyDiscover() *C.WDNearbyDevicesResult {
 	p.status = status(err)
 	p.items, p.count = alloc[C.WDNearbyDevice](len(values)), C.size_t(len(values))
 	for i, v := range values {
-		unsafe.Slice(p.items, len(values))[i] = C.WDNearbyDevice{address: C.CString(v.Address), name: C.CString(v.Name), rssi: C.int32_t(v.RSSI)}
+		unsafe.Slice(p.items, len(values))[i] = C.WDNearbyDevice{address: C.CString(v.Address), name: C.CString(v.Name), rssi: C.int32_t(v.RSSI), enrolled: boolInt(v.Enrolled)}
 	}
 	return p
 }

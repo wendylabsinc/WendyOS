@@ -3296,12 +3296,22 @@ func bleAgentTLSConfig(device *models.BluetoothDevice, cert config.CertificateIn
 				return err
 			}
 			if id, ok, err := certs.IdentityFromCert(cs.PeerCertificates[0]); err != nil || !ok || id.TenantUUID != tenant {
-				return fmt.Errorf("Bluetooth device %q does not belong to your sign-in's tenant", device.DisplayName)
+				return &BLETenantMismatchError{Device: device.DisplayName}
 			}
 			return nil
 		}
 	}
 	return tlsCfg, nil
+}
+
+// BLETenantMismatchError reports that a Bluetooth device proved an identity in
+// a different tenant than the certificate presented to it. The desktop app
+// uses it to try the user's other saved organizations, as connectBLEAgent
+// does for a legacy OrgMismatchError.
+type BLETenantMismatchError struct{ Device string }
+
+func (e *BLETenantMismatchError) Error() string {
+	return fmt.Sprintf("Bluetooth device %q does not belong to your sign-in's tenant", e.Device)
 }
 
 // connectBLEAgent connects to device via BLE mTLS, automatically retrying

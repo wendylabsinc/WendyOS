@@ -51,6 +51,7 @@
 		2054375A5977FF55666B68F3 /* HomeWidgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C346DD1F50E7077D61A811B9 /* HomeWidgetTests.swift */; };
 		208C0E9F54D7F70AEF42FA8E /* UnitreeMotionDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 527F884C5D6A85892B2986F9 /* UnitreeMotionDriver.swift */; };
 		21805F5A70B8CD5EF18ABE3B /* DeviceChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4CC89666184527D86018FD /* DeviceChatView.swift */; };
+		230A1B35A531C34C7D38297C /* NearbyWiFiView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C6140C7FFEB29EB7D9393A5 /* NearbyWiFiView.swift */; };
 		231FFC2629E5283477116560 /* UnitreeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F64D9550FF2B1B30B931811 /* UnitreeClient.swift */; };
 		242167659010421CEAED4A73 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 956D04288AC871766E33F388 /* IOKit.framework */; };
 		26717A4509B3D56222630879 /* UnitreeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F64D9550FF2B1B30B931811 /* UnitreeClient.swift */; };
@@ -164,6 +165,7 @@
 		7C589CB13E67C02FA454FD9C /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 283DE4ACABB5F31B90C062E0 /* UserNotifications.framework */; };
 		7CFAF9F525687ACC94CA637A /* SiteCameraPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B8A9451F3CCE3202F92697 /* SiteCameraPicker.swift */; };
 		7E4317BA630E69F764675067 /* ThermalCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8B3A78D6205C63AD446D63 /* ThermalCameraView.swift */; };
+		7E4D77A965D79A46D8620289 /* NearbyWiFiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94B338F99E8B16E4D3799C00 /* NearbyWiFiClient.swift */; };
 		819BE305C463CE619D441D70 /* DeviceAppearanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF11CFFFA6C015AEF47DE015 /* DeviceAppearanceTests.swift */; };
 		8455994379C39B9DCB041A54 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */; };
 		8488FA42FD8192E0AB5100F7 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00BC44983830F926484A6FE9 /* PacketTunnelProvider.swift */; };
@@ -249,6 +251,7 @@
 		B55D56471F1D00551BBEB799 /* CloudChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F85C825F391DB90657D2435A /* CloudChatTests.swift */; };
 		B6814F13047D063DDC783CEE /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC609FC5E6A530F493D66E7D /* AppModel.swift */; };
 		B755A7544C278B994D81687B /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9E2EF35E68D5CA5FA24980A4 /* CoreBluetooth.framework */; };
+		B88E43FB74F414B4553AE6AC /* NearbyWiFiView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C6140C7FFEB29EB7D9393A5 /* NearbyWiFiView.swift */; };
 		B9C57EBD0B7D5276EE374D5B /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD1FE3F2E1DB38F68D72019A /* AudioToolbox.framework */; };
 		B9F0E595D20733A7F82106F9 /* ThermalCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8B3A78D6205C63AD446D63 /* ThermalCameraView.swift */; };
 		BAC41772BF0B80F5A5D9E0D4 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2DD8002D524E68CA3DE04823 /* CoreFoundation.framework */; };
@@ -322,6 +325,7 @@
 		EAE7C22DFFF4B0E3A8F9AE2B /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC609FC5E6A530F493D66E7D /* AppModel.swift */; };
 		EBDA62DB23BF39D278567570 /* InstallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0EBD1A032792BDF75E472D /* InstallView.swift */; };
 		EC3BAA4FC0A41DC9E31F0865 /* SiteAutomaticAlignment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8365356E3DFE9319DA387C60 /* SiteAutomaticAlignment.swift */; };
+		ECA9311433B648570A6BB6AE /* NearbyWiFiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94B338F99E8B16E4D3799C00 /* NearbyWiFiClient.swift */; };
 		ED3B5B05170B2F25C3B580F8 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 283DE4ACABB5F31B90C062E0 /* UserNotifications.framework */; };
 		ED5C60D0DC443633C03EAAC6 /* DataVisualPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CC8CB61B052F1C86F785BA5 /* DataVisualPlayback.swift */; };
 		EDB5B7F313CEB4E662199D2E /* CameraWallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C165580EAB422936E3B036B0 /* CameraWallView.swift */; };
@@ -504,6 +508,7 @@
 		6A0B565A410E3EAD5C517D6C /* ScreenLensCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenLensCalibration.swift; sourceTree = "<group>"; };
 		6AD35567E3E64E4A8791C0FD /* CampaignEventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignEventLog.swift; sourceTree = "<group>"; };
 		6BBA9B44CCD75A2D6A9B2D43 /* DeviceLocalResetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLocalResetView.swift; sourceTree = "<group>"; };
+		6C6140C7FFEB29EB7D9393A5 /* NearbyWiFiView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbyWiFiView.swift; sourceTree = "<group>"; };
 		6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		6CA03F0043D1569ECB9D2ECF /* SystemExtensions.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemExtensions.framework; path = System/Library/Frameworks/SystemExtensions.framework; sourceTree = SDKROOT; };
 		6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotGeometry.swift; sourceTree = "<group>"; };
@@ -540,6 +545,7 @@
 		8F2C391C97D1BB19C1786EB2 /* DeviceViewfinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceViewfinder.swift; sourceTree = "<group>"; };
 		8F51BA9603852A5455AADE5C /* MobileOSUpdateTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileOSUpdateTask.swift; sourceTree = "<group>"; };
 		91E03E29F774A31822696188 /* PhoneLensCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLensCalibrationView.swift; sourceTree = "<group>"; };
+		94B338F99E8B16E4D3799C00 /* NearbyWiFiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbyWiFiClient.swift; sourceTree = "<group>"; };
 		956D04288AC871766E33F388 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		972AA28D77CF54F9EBCDDA77 /* CloudManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudManagementView.swift; sourceTree = "<group>"; };
 		97B878F9B8525136814A1077 /* WendyMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WendyMobileApp.swift; sourceTree = "<group>"; };
@@ -777,6 +783,8 @@
 				E75A157CBBD32C6A883151B3 /* NearbySetupClient.swift */,
 				74B07768E5B406DF7B749C81 /* NearbySetupPrompt.swift */,
 				A59A57EA9A8FAF4CB85087DB /* NearbySetupView.swift */,
+				94B338F99E8B16E4D3799C00 /* NearbyWiFiClient.swift */,
+				6C6140C7FFEB29EB7D9393A5 /* NearbyWiFiView.swift */,
 				E29D1E80A8CC5F01C5E2250D /* NetworkTrafficView.swift */,
 				BE9A9C8F45E321960D15CEF8 /* PairingView.swift */,
 				586213F4C9CD3726515B5EBF /* PaneRefresh.swift */,
@@ -1276,12 +1284,12 @@
 			projectRoot = "";
 			targets = (
 				061A3B38F40254E591224986 /* WendyDesktop */,
+				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 				66549B7B32DEF8896208E2C0 /* WendyDesktopTests */,
 				4660FE6CC78F07FE7C2A1CD9 /* WendyMobile */,
 				ACDB653814C81DAD375DF0E3 /* WendyMobileNetwork */,
 				9F296B433343571747FBC234 /* WendyMobileTests */,
 				5198757F852AB57452928A68 /* WendyMobileUITests */,
-				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 			);
 		};
 /* End PBXProject section */
@@ -1673,6 +1681,8 @@
 				4B82905690EA5FC17220BE45 /* NearbySetupClient.swift in Sources */,
 				C7ADFC1823E822B835BAF008 /* NearbySetupPrompt.swift in Sources */,
 				5239EE4DFFA71FA8A3B47F9E /* NearbySetupView.swift in Sources */,
+				ECA9311433B648570A6BB6AE /* NearbyWiFiClient.swift in Sources */,
+				B88E43FB74F414B4553AE6AC /* NearbyWiFiView.swift in Sources */,
 				86AFBD2BAE00A99C77D170D4 /* NetworkTrafficView.swift in Sources */,
 				2FD819F5EEB474D4FF9E0C1F /* PairingView.swift in Sources */,
 				690FE17CF9867B47C0F4E8FE /* PaneRefresh.swift in Sources */,
@@ -1831,6 +1841,8 @@
 				A789A504088C208FE124EBF3 /* NearbySetupClient.swift in Sources */,
 				9A954B12571210EF2B8837E9 /* NearbySetupPrompt.swift in Sources */,
 				57947AB4924735E657C857C4 /* NearbySetupView.swift in Sources */,
+				7E4D77A965D79A46D8620289 /* NearbyWiFiClient.swift in Sources */,
+				230A1B35A531C34C7D38297C /* NearbyWiFiView.swift in Sources */,
 				68D083942019941E4F042347 /* NetworkTrafficView.swift in Sources */,
 				BDEF450DB9F50B282F0713CD /* PairingView.swift in Sources */,
 				A640420891322DEAC7DA2208 /* PaneRefresh.swift in Sources */,

@@ -107,6 +107,17 @@ While the app is active, a nearby unenrolled WendyOS or Wendy Lite device automa
 
 The automatic nearby invitation opens setup. The **+** menu also offers manual discovery on macOS and iOS. Setup presents one stage at a time, with name and organization changes under an optional disclosure. Wi-Fi configuration is optional and collapsed by default. Setup uses encrypted BLE L2CAP on PSM 130, separate from management and mesh connections. It supports WendyOS ACME enrollment and Wendy Lite enrollment with provisioned trust roots and device-bound signed time. While setup is visible and the app is active, discovery, connection recovery, Wi-Fi scans, and pending enrollment checks run automatically. Connection retries back off to 30 seconds; enrollment checks continue until confirmed or the sheet closes. Enrollment and Wi-Fi changes still require an explicit action. Routine waiting is a progress state, with connection errors available under **Connection details**.
 
+An enrolled WendyOS device no longer advertises the setup service; it advertises
+its authenticated management service instead. Such a device appears in the manual
+setup list marked **Already enrolled** and never triggers the automatic prompt.
+Choosing it opens the management service over Bluetooth with the operator
+certificate of the selected account (other saved organizations are tried only
+when the device proves it belongs to one of them), verifies the device's
+enrolled identity, and offers Wi-Fi scan, connect, disconnect and forget. The
+device must accept the certificate; a connect is reported as successful only
+after the device confirms the requested network. This is the way to give an
+enrolled device Wi-Fi when it has lost its network.
+
 The setup sheet remains open when advertisements disappear and automatically opens a fresh encrypted session after a disconnect. Once Cloud may have issued credentials, the app retains that attempt for the same Bluetooth address until the app exits and prevents another issuance attempt. Automatic enrollment checks verify the expected device UUID and organization using fresh Cloud presence; a saved Lite configuration alone is not success. A device may start enrollment without Wi-Fi, but it needs a supported network path to complete issuance and appear online. If the app quits during an uncertain attempt, inspect the organization's Cloud device list before starting again.
 
 ## Site models on macOS and iOS

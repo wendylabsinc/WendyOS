@@ -52,11 +52,16 @@ struct NearbySetupView: View {
     @State private var observationError: String?
     @State private var nextReconnect = Date.distantPast
     @State private var reconnectDelay: TimeInterval = 3
+    @State private var enrolledDeviceID = ""
     private var editingLocked: Bool { busy && !automatic }
+    /// The selection advertised the management door: setup never opens, and
+    /// Wi-Fi goes through the authenticated session instead.
+    private var enrolledSelection: Bool { selected?.enrolled == true }
     private var choice: EnrollmentOrganization? { organizations.first { $0.id == organization } }
     private var nameValid: Bool { name.range(of: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", options: .regularExpression) != nil }
 
-    private var finished: Bool { state.completed || state.enrolled && !state.attempted }
+    private var finished: Bool { state.completed || state.enrolled && !state.attempted || enrolledSelection }
+    private var alreadyEnrolled: Bool { finished && !state.completed }
     private var stage: String {
         if finished { return "done" }
         if !state.failure.isEmpty && !editingLocked { return "attention" }
@@ -84,10 +89,16 @@ struct NearbySetupView: View {
                     Group {
                         switch stage {
                         case "done":
+                            if alreadyEnrolled, let selected {
+                                NearbyWiFiSection(device: selected, deviceID: $enrolledDeviceID)
+                            }
                             if opening {
                                 ProgressView("Opening device…").controlSize(.large)
                             } else {
                                 primaryButton("Open device", symbol: "arrow.right") { actions.submit { await finish() } }
+                            }
+                            if alreadyEnrolled {
+                                Button("Choose another device") { actions.submit { await chooseAnother() } }.disabled(editingLocked)
                             }
                         case "discovering": discovery
                         case "connecting":
@@ -190,7 +201,7 @@ struct NearbySetupView: View {
     private var explanation: String {
         switch stage {
         case "attention": return state.failure
-        case "done": return "Your device is enrolled and ready to open."
+        case "done": return state.completed ? "Your device is enrolled and ready to open." : "This device is already enrolled. Change its Wi-Fi over Bluetooth, or open it."
         case "discovering": return "Power on your device and keep it nearby. We’ll find it automatically."
         case "connecting": return "Keep your device nearby."
         case "working":
@@ -262,6 +273,9 @@ struct NearbySetupView: View {
                         DeviceEmblem(size: 40)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(device.title).font(.headline)
+                            if device.enrolled {
+                                Text("Already enrolled · change Wi-Fi").font(.caption).foregroundStyle(.secondary)
+                            }
                             Text(device.rssi < 0 ? "Bluetooth signal \(device.rssi) dBm" : "Bluetooth signal unavailable")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -297,7 +311,7 @@ struct NearbySetupView: View {
         await GoClient.shared.closeNearbySetup(state.session)
         guard !Task.isCancelled else { return }
         selected = nil; candidate = nil; state = NearbySetupSnapshot(); flow = NearbySetupFlow()
-        password = ""; ssid = ""; error = nil; observationError = nil
+        password = ""; ssid = ""; error = nil; observationError = nil; enrolledDeviceID = ""
         nextReconnect = .distantPast; reconnectDelay = 3
     }
 
@@ -361,8 +375,9 @@ struct NearbySetupView: View {
     }
 
     private func openKnownDevice() -> Bool {
-        guard !state.deviceID.isEmpty, let device = (app.cloud + app.nearby).first(where: {
-            $0.id == state.deviceID || ($0.selector.hasPrefix("cloud://") && URL(string: $0.selector)?.lastPathComponent == state.deviceID)
+        let deviceID = state.deviceID.isEmpty ? enrolledDeviceID : state.deviceID
+        guard !deviceID.isEmpty, let device = (app.cloud + app.nearby).first(where: {
+            $0.id == deviceID || ($0.selector.hasPrefix("cloud://") && URL(string: $0.selector)?.lastPathComponent == deviceID)
         }) else { return false }
         app.requestedDevice = device
         dismiss()
@@ -389,6 +404,12 @@ struct NearbySetupView: View {
         guard selected == nil, !Task.isCancelled, devices.contains(where: { $0.id == device.id }) else { return }
         name = DeviceEnrollmentForm.suggestedName(device.title)
         flow.choseDevice(); wifiExpanded = true
+        if device.enrolled {
+            // The setup door is closed on an enrolled device; NearbyWiFiSection
+            // opens the authenticated management door instead.
+            selected = device
+            return
+        }
         await connect(device)
     }
 
@@ -401,6 +422,7 @@ struct NearbySetupView: View {
             guard !Task.isCancelled else { await GoClient.shared.closeNearbySetup(result.session); return }
             state = result
             observationError = state.error; lastStatus = .now
+            await releaseSetupIfEnrolled()
         } catch { if !Task.isCancelled { observationError = error.localizedDescription } }
         nextReconnect = .now.addingTimeInterval(reconnectDelay)
         reconnectDelay = state.connected ? 3 : min(reconnectDelay * 2, 30)
@@ -440,6 +462,7 @@ struct NearbySetupView: View {
             }
             if (state.pending || state.canResume) && !state.wifiConnected && action == .enroll { wifiExpanded = true }
             if state.completed { error = nil; observationError = nil }
+            await releaseSetupIfEnrolled()
         } catch {
             if !Task.isCancelled {
                 if automatically { observationError = error.localizedDescription }
@@ -447,6 +470,14 @@ struct NearbySetupView: View {
                 else { self.error = error.localizedDescription }
             }
         }
+    }
+
+    /// A device that reports itself enrolled no longer serves setup. Release
+    /// the setup channel so the management session can use the same radio link.
+    private func releaseSetupIfEnrolled() async {
+        guard state.enrolled, !state.attempted, state.connected else { return }
+        await GoClient.shared.closeNearbySetup(state.session)
+        state.connected = false
     }
 
     private func loadOrganizations() async {
@@ -474,7 +505,7 @@ struct NearbySetupView: View {
         }
         await loadOrganizations()
         while !Task.isCancelled {
-            if !busy {
+            if !busy && !enrolledSelection {
                 if scenePhase != .active {
                     if state.connected { await GoClient.shared.closeNearbySetup(state.session); state.connected = false }
                 } else {
