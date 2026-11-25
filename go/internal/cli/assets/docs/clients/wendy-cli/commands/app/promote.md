@@ -32,6 +32,6 @@ keep the running container yet.
 | `--device` | The device you ran the app on: its name or id. Asked when missing in a terminal |
 | `--tag` | Release tag: the version you give this release, for example `1.0.0`. Asked when missing in a terminal |
 | `--untagged` | Name the release `<git branch>@<manifest digest>` instead of a tag |
-| `--platform` | Platform of the run's image (default `linux/arm64`) |
+| `--platform` | Platform of the run's image. By default the device's architecture (`linux/arm64` when Cloud lists none), with the OS or platform of `wendy.json` when it sets one |
 | `--name`, `--move`, `--config`, `--config-file`, `--remove-config`, `--run`, `--install-only`, `--keep-trying`, `--note`, `--yes`, `--wait`, `--wait-timeout` | The remaining deploy questions, as in [`wendy app deploy`](./deploy.md) |
 | `--cloud-grpc` | Cloud gRPC endpoint of the session to use |
