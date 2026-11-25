@@ -752,10 +752,26 @@ func newAppDeploymentCmd() *cobra.Command {
 // findDeployment is appID's live deployment called name (or a removed one,
 // with includeRemoved).
 func (op *registryOp) findDeployment(ctx context.Context, appID, name string, includeRemoved bool) (*cloudpb.Deployment, error) {
+	var found *cloudpb.Deployment
+	err := op.eachDeployment(ctx, appID, includeRemoved, func(d *cloudpb.Deployment) bool {
+		if d.GetName() == name {
+			found = d
+		}
+		return found != nil
+	})
+	if err == nil && found == nil {
+		err = usageErrorf("%s has no deployment %s.", appID, name)
+	}
+	return found, err
+}
+
+// eachDeployment calls fn with appID's deployments in Cloud's order (newest
+// first) until fn returns true.
+func (op *registryOp) eachDeployment(ctx context.Context, appID string, includeRemoved bool, fn func(*cloudpb.Deployment) bool) error {
 	for offset := int32(0); ; {
 		stream, err := cloudpb.NewDeploymentServiceClient(op.conn).ListDeployments(ctx, &cloudpb.ListDeploymentsRequest{OrganizationId: op.org, AppId: appID, Offset: offset, IncludeRemoved: includeRemoved})
 		if err != nil {
-			return nil, fmt.Errorf("reading the deployments of %s: %w", appID, err)
+			return fmt.Errorf("reading the deployments of %s: %w", appID, err)
 		}
 		var seen, total int32
 		for {
@@ -764,18 +780,18 @@ func (op *registryOp) findDeployment(ctx context.Context, appID, name string, in
 				break
 			}
 			if err != nil {
-				return nil, fmt.Errorf("reading the deployments of %s: %w", appID, err)
+				return fmt.Errorf("reading the deployments of %s: %w", appID, err)
 			}
 			total = page.GetTotal()
 			for _, d := range page.GetDeployments() {
 				seen++
-				if d.GetName() == name && d.GetAppId() == appID && (includeRemoved || d.GetRemovedAt() == nil) {
-					return d, nil
+				if d.GetAppId() == appID && (includeRemoved || d.GetRemovedAt() == nil) && fn(d) {
+					return nil
 				}
 			}
 		}
 		if offset += seen; seen == 0 || offset >= total {
-			return nil, usageErrorf("%s has no deployment %s.", appID, name)
+			return nil
 		}
 	}
 }

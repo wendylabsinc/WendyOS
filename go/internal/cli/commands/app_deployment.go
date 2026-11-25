@@ -419,17 +419,11 @@ func runRemove(ctx context.Context, op *registryOp, appID, name string, c change
 
 func runResume(ctx context.Context, op *registryOp, appID, name string, c changeFlags, out io.Writer, interactive bool) error {
 	say := func(format string, args ...any) { _, _ = fmt.Fprintf(out, format+"\n", args...) }
-	d, err := op.findDeployment(ctx, appID, name, true)
+	d, rows, err := op.resumeTarget(ctx, appID, name, say)
 	if err != nil {
 		return err
 	}
-	rows, err := pages(func(token string) ([]*cloudpb.PendingDeviceStatement, string, error) {
-		page, err := cloudpb.NewDeploymentServiceClient(op.conn).ListPendingDeviceStatements(ctx, &cloudpb.ListPendingDeviceStatementsRequest{DeploymentId: d.GetId(), PageToken: token})
-		return page.GetStatements(), page.GetNextPageToken(), err
-	})
-	if err != nil {
-		return fmt.Errorf("reading what %s still needs: %w", name, err)
-	}
+	name = d.GetName()
 	if len(rows) == 0 {
 		say("Every device of %s has its instruction.", name)
 		return nil
@@ -498,6 +492,59 @@ func runResume(ctx context.Context, op *registryOp, appID, name string, c change
 		conf.kd.validity = d.GetValidity().AsDuration()
 	}
 	return op.signPending(ctx, conf, rows, "")
+}
+
+// resumeTarget is the deployment resume works on and what it still needs:
+// the one whose id is given, else the one named so. When a removed
+// deployment and a newer one share the name, the newest with devices still
+// to be told is taken, and any other with some is named by its id.
+func (op *registryOp) resumeTarget(ctx context.Context, appID, name string, say func(string, ...any)) (*cloudpb.Deployment, []*cloudpb.PendingDeviceStatement, error) {
+	var named []*cloudpb.Deployment
+	var byID *cloudpb.Deployment
+	if err := op.eachDeployment(ctx, appID, true, func(d *cloudpb.Deployment) bool {
+		if d.GetId() == name {
+			byID = d
+			return true
+		}
+		if d.GetName() == name {
+			named = append(named, d)
+		}
+		return false
+	}); err != nil {
+		return nil, nil, err
+	}
+	if byID != nil {
+		named = []*cloudpb.Deployment{byID}
+	}
+	if len(named) == 0 {
+		return nil, nil, usageErrorf("%s has no deployment %s.", appID, name)
+	}
+	pending := func(d *cloudpb.Deployment) ([]*cloudpb.PendingDeviceStatement, error) {
+		rows, err := pages(func(token string) ([]*cloudpb.PendingDeviceStatement, string, error) {
+			page, err := cloudpb.NewDeploymentServiceClient(op.conn).ListPendingDeviceStatements(ctx, &cloudpb.ListPendingDeviceStatementsRequest{DeploymentId: d.GetId(), PageToken: token})
+			return page.GetStatements(), page.GetNextPageToken(), err
+		})
+		if err != nil {
+			return nil, fmt.Errorf("reading what %s still needs: %w", d.GetName(), err)
+		}
+		return rows, nil
+	}
+	target, rows := named[0], []*cloudpb.PendingDeviceStatement(nil)
+	picked := false
+	for _, d := range named {
+		r, err := pending(d)
+		if err != nil {
+			return nil, nil, err
+		}
+		switch {
+		case len(r) == 0:
+		case !picked:
+			target, rows, picked = d, r, true
+		default:
+			say("Deployment %s of the same name (removed) also has devices to be told: wendy app deployment resume %s/%s", d.GetId(), appID, d.GetId())
+		}
+	}
+	return target, rows, nil
 }
 
 // change records one revision (method with req), checks that cloud recorded

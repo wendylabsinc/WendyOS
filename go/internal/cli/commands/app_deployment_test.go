@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -350,5 +351,32 @@ func TestAFailedKeyUploadIsRepairedByResumeAndUpdate(t *testing.T) {
 	if err := runResume(ctx, op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err != nil || len(fake.assigned) != n+1 ||
 		fake.assigned[n].GetManifestDigest() != mB.GetManifestDigest() {
 		t.Fatalf("resume after the failed update: %v", err)
+	}
+}
+
+// M14: a removal interrupted while signing is still resumed after a newer
+// deployment took the name: by name the one with devices still to be told
+// is taken, and its id names it directly.
+func TestResumeFindsAnInterruptedRemovalUnderAReusedName(t *testing.T) {
+	op, fake, _, oldID := deployedFixture(t)
+	ctx := context.Background()
+	now := time.Now()
+	old := fake.deploys[oldID]
+	old.CreatedAt, old.RemovedAt = timestamppb.New(now.Add(-2*time.Hour)), timestamppb.New(now.Add(-time.Hour))
+	device := certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice)
+	fake.pending[oldID] = []*cloudpb.PendingDeviceStatement{{Kind: cloudpb.PendingDeviceStatement_KIND_UNASSIGN, DeploymentId: oldID, Device: device, Revision: maxRevision}}
+	newer := proto.Clone(old).(*cloudpb.Deployment)
+	newer.Id, newer.CreatedAt, newer.RemovedAt = "00000000-0000-4000-8000-0000000000aa", timestamppb.New(now), nil
+	fake.deploys[newer.Id] = newer
+	if err := runResume(ctx, op, "sh.wendy.example", old.GetName(), changeFlags{yes: true}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.removed) != 1 || fake.removed[0].GetDeploymentId() != oldID {
+		t.Fatalf("removals %v: want the interrupted removal of %s sent", fake.removed, oldID)
+	}
+	// By id, whatever the name now names.
+	fake.pending[oldID][0].Revision = maxRevision
+	if err := runResume(ctx, op, "sh.wendy.example", oldID, changeFlags{yes: true}, io.Discard, false); err != nil || len(fake.removed) != 2 {
+		t.Fatalf("resume by id: %v, removals %d", err, len(fake.removed))
 	}
 }

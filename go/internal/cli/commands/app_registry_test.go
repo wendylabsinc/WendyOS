@@ -569,6 +569,13 @@ func (f *fakeRegistry) ListDeployments(in *cloudpb.ListDeploymentsRequest, strea
 		}
 	}
 	f.mu.Unlock()
+	// As Cloud: newest first.
+	slices.SortStableFunc(page.Deployments, func(a, b *cloudpb.Deployment) int {
+		if c := b.GetCreatedAt().AsTime().Compare(a.GetCreatedAt().AsTime()); c != 0 {
+			return c
+		}
+		return strings.Compare(a.GetId(), b.GetId())
+	})
 	page.Total = int32(len(page.Deployments))
 	return stream.Send(page)
 }
