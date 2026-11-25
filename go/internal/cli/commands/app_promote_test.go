@@ -189,3 +189,25 @@ func TestPromoteUsesTheDevicesArchitectureAndNamesTheImage(t *testing.T) {
 		}
 	}
 }
+
+// M10/M22: after publishing, promote's advice follows what happened. A
+// deployment that was made (here a device failed) points to deployment
+// show, never to a second deploy. When nothing was made, the deploy command
+// carries the user's answers, so it works without a terminal.
+func TestPromoteAdviceAfterPublish(t *testing.T) {
+	_, fake := promoteFixture(t)
+	keepRunImage(t)
+	fake.report = func(s *cloudpb.AssetApp) { s.Outcome = cloudpb.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED }
+	_, err := runApp(newAppPromoteCmd(), promoteArgs...)
+	if err == nil || !strings.Contains(err.Error(), "See it with: wendy app deployment show sh.wendy.example/bench") || strings.Contains(err.Error(), "wendy app deploy ") {
+		t.Fatalf("a made deployment: %v", err)
+	}
+
+	fake.keys = nil // the device has no key: nothing is made
+	_, err = runApp(newAppPromoteCmd(), "--device", "packer-01", "--tag", "1.0.1", "--name", "bench-2", "--run", "--yes", "--config", "MODE=fast mode")
+	if err == nil || !strings.Contains(err.Error(), "nothing was deployed") ||
+		!strings.Contains(err.Error(), "Deploy it with: wendy app deploy --app sh.wendy.example --release 1.0.1 --device packer-01 --name bench-2 --config 'MODE=fast mode' --digest sha256:") ||
+		!strings.HasSuffix(err.Error(), " --run --yes") {
+		t.Fatalf("nothing made: %v", err)
+	}
+}

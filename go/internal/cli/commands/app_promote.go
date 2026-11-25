@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -83,7 +84,11 @@ func newAppPromoteCmd() *cobra.Command {
 				}
 				return runDeploy(ctx, op, a, out, interactive)
 			}); err != nil {
-				return fmt.Errorf("release %s of %s is published, but deploying it did not finish: %w\nDeploy it with: wendy app deploy --app %s --release %s --device %s", rel.name, rel.app, err, rel.app, rel.name, device)
+				if d, ok := errors.AsType[*deployedError](err); ok {
+					return fmt.Errorf("release %s of %s is published and deployment %s/%s was made, but: %w\nSee it with: wendy app deployment show %s/%s", rel.name, rel.app, d.app, d.name, err, d.app, d.name)
+				}
+				a.release = rel.name
+				return fmt.Errorf("release %s of %s is published, but nothing was deployed: %w\nDeploy it with: %s", rel.name, rel.app, err, deployCommand(a))
 			}
 			_, _ = fmt.Fprintf(out, "%s replaces the running app with the published release; it does not keep the running container yet.\n", device)
 			return nil

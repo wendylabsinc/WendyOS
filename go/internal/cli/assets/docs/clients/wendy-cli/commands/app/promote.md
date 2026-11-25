@@ -20,7 +20,9 @@ with `wendy app publish`.
 Before it publishes, promote checks the deploy answers: the device must
 exist and, without a terminal, every answer must be given and every required
 setting must have a value. If the deploy fails after the publish, the error
-names the release and the `wendy app deploy` command that deploys it.
+names the release. When the deployment was made (a device failed, or
+`--wait` ran out), it points to `wendy app deployment show`; when nothing
+was made, it gives the `wendy app deploy` command with your answers.
 
 The device replaces the running app with the published release. It does not
 keep the running container yet.

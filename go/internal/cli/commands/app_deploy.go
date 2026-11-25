@@ -365,13 +365,57 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 	}
 	failed, err := op.progress(ctx, d, rel.GetName(), online, interactive || a.wait, timeout, say)
 	if err != nil {
-		return err
+		return &deployedError{a.app, plan.name, err}
 	}
 	if failed > 0 {
-		return fmt.Errorf("%s failed. The reason is next to each device above; fix it, then update the deployment", plural(failed, "device"))
+		return &deployedError{a.app, plan.name, fmt.Errorf("%s failed. The reason is next to each device above; fix it, then update the deployment", plural(failed, "device"))}
 	}
 	say("Follow it later with: wendy app deployment show %s/%s", a.app, plan.name)
 	return err
+}
+
+// deployedError is a deploy error after the deployment app/name was
+// created: a caller must not suggest deploying again.
+type deployedError struct {
+	app, name string
+	err       error
+}
+
+func (e *deployedError) Error() string { return e.err.Error() }
+func (e *deployedError) Unwrap() error { return e.err }
+
+// deployCommand is the wendy app deploy command line for a's answers, so it
+// works without a terminal when they were all given as flags.
+func deployCommand(a deployAnswers) string {
+	args := []string{"wendy", "app", "deploy", "--app", a.app, "--release", a.release}
+	add := func(flag string, values ...string) {
+		for _, v := range values {
+			if v != "" {
+				args = append(args, flag, shellQuoteArg(v))
+			}
+		}
+	}
+	add("--device", a.devices...)
+	add("--tag", a.tags...)
+	add("--site", a.sites...)
+	add("--name", a.name)
+	add("--config", a.config...)
+	add("--config-file", a.configFile)
+	add("--keep-trying", a.keepTrying)
+	add("--note", a.note)
+	add("--digest", a.digest)
+	for _, f := range []struct {
+		flag string
+		on   bool
+	}{{"--move", a.move}, {"--run", a.run}, {"--install-only", a.installOnly}, {"--yes", a.yes}, {"--wait", a.wait}} {
+		if f.on {
+			args = append(args, f.flag)
+		}
+	}
+	if a.wait {
+		add("--wait-timeout", a.waitTimeout.String())
+	}
+	return strings.Join(args, " ")
 }
 
 // deployConfig resolves question 4: the release's defaults, overridden by
