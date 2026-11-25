@@ -361,6 +361,31 @@ func TestCreateCameraSharesPassesTheLabelsEntitlements(t *testing.T) {
 	}
 }
 
+// The preset an entry states travels in the container's label with its format,
+// so the share manager is given it for the camera's h264 node.
+func TestCreateCameraSharesPassesThePresetAnEntryStates(t *testing.T) {
+	fake := &fakeCameraShares{}
+	c := &Client{logger: zap.NewNop()}
+	c.SetCameraShareProvider(fake)
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"Brio 101"}, Format: appconfig.CameraFormatH264, Preset: "veryfast"},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: appconfig.CameraFormatH264},
+	}
+	labels := wendyLabels("app", "", "1.0.0", nil, entitlements, "", nil)
+	addCameraShareLabel(labels, entitlements)
+	c.createCameraShares(context.Background(), "app", "app", labels)
+
+	got := fake.createdWith("app")
+	for camera, want := range map[appconfig.CameraIdentity]appconfig.EncodePreset{
+		{Path: "/dev/video2", Name: "Brio 101"}: appconfig.EncodePresetVeryfast,
+		{Path: "/dev/video0", Name: "C920"}:     appconfig.EncodePresetUnset,
+	} {
+		if format, _, preset, conflicts := appconfig.CameraNodeSettings(got, camera); format != appconfig.CameraFormatH264 || preset != want || len(conflicts) != 0 {
+			t.Errorf("%+v: the passed entitlements give format %q and preset %q with conflicts %q, want h264 and %q", camera, format, preset, conflicts, want)
+		}
+	}
+}
+
 // The label values here are the ones the deploy path's tests hold a service's
 // container to (TestMultiServiceCreateConfig_KeepsAppAndServiceCameraEntriesWithTheirSettings
 // and TestApplyComposeCompanion in the command line's package). The agent
