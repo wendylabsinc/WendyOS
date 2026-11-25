@@ -924,7 +924,7 @@ func (op *registryOp) current(ctx context.Context, deploymentID string, repair b
 			if repair {
 				continue
 			}
-			return nil, fmt.Errorf("deployment %s: its key does not match release %s, so nothing was signed. Update it to a release with wendy app deployment update --release <version> to make a key for that release", deploymentID, d.GetAppReleaseId())
+			return nil, fmt.Errorf("deployment %s: its key does not match release %s, so nothing was signed. Make the key for its release with: wendy app deployment resume %s/%s", deploymentID, d.GetAppReleaseId(), d.GetAppId(), d.GetName())
 		}
 		key, err := op.open(w, registrycrypto.ScopeDeployment, deploymentID)
 		if err != nil {

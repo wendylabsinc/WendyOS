@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -1042,5 +1043,32 @@ func TestDeviceKeysFetchInBatches(t *testing.T) {
 	}
 	if len(fake.keyCalls) != 5 || slices.Max(fake.keyCalls) > recipientKeyBatch {
 		t.Fatalf("calls %v: want 5 batches of at most %d", fake.keyCalls, recipientKeyBatch)
+	}
+}
+
+// M13: when an update's key upload failed, Cloud names the new release but
+// this machine's key is for the old one. Rotate refuses and names resume,
+// which makes the key; rotate then works.
+func TestRotateRefusalNamesACommandThatWorks(t *testing.T) {
+	op, fake, _, _, depID := deployFixture(t)
+	ctx := context.Background()
+	releaseB, _ := publishFixture(t, op)
+	fake.wrapsErr = errors.New("registry down")
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{release: releaseB, yes: true}, io.Discard, false); err == nil {
+		t.Fatal("setup: update with a failed key upload succeeded")
+	}
+	fake.wrapsErr = nil
+	err := op.rotate(ctx, depID, "sh.wendy.example", []string{vectorDevice})
+	const advice = "wendy app deployment resume sh.wendy.example/line-3"
+	if err == nil || !strings.Contains(err.Error(), advice) {
+		t.Fatalf("rotate's refusal: %v", err)
+	}
+	device := certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice)
+	fake.pending[depID] = []*cloudpb.PendingDeviceStatement{{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, DeploymentId: depID, Device: device, Revision: fake.deploys[depID].GetRevision()}}
+	if err := runResume(ctx, op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err != nil {
+		t.Fatalf("%s: %v", advice, err)
+	}
+	if err := op.rotate(ctx, depID, "sh.wendy.example", []string{vectorDevice}); err != nil {
+		t.Fatalf("rotate after resume: %v", err)
 	}
 }
