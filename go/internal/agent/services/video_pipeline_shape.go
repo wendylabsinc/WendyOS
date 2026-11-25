@@ -40,6 +40,15 @@ func (s pipelineShape) encodesFasterThan(wanted pipelineShape) bool {
 	return s.preset.FasterThan(wanted.preset)
 }
 
+// graceReason is what the idle grace of a running pipeline waits for.
+type graceReason uint8
+
+const (
+	noGrace graceReason = iota
+	branchUnwanted
+	presetFaster
+)
+
 var errPipelineEndedRestartable = errors.New("pipeline ended and can be restarted")
 
 type shapeNeeds func(demand encodeDemand) pipelineShape
@@ -187,6 +196,7 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 	changed := demand.demandChanged()
 	var graceTimer *time.Timer
 	var graceUp <-chan time.Time
+	var graceFor graceReason
 	stopGrace := func() {
 		if graceTimer != nil {
 			graceTimer.Stop()
@@ -194,31 +204,43 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 		}
 	}
 	defer stopGrace()
-	// branchIdle is the one condition for dropping a branch, the encoder or a
+	// waitsFor is the one condition for dropping a branch, the encoder or a
 	// derived layer's pictures, and for slowing the encoder down: the hub still
 	// has an audience, and the shape it calls for lacks a branch this launch
 	// runs, or encodes at a slower preset.
-	branchIdle := func() bool {
+	waitsFor := func() graceReason {
 		wanted := wanted()
-		return (shape.hasBranchNotIn(wanted) || shape.encodesFasterThan(wanted)) && (demand.wantEncoded() || demand.wantRaw() || demand.wantNative())
+		switch {
+		case !demand.wantEncoded() && !demand.wantRaw() && !demand.wantNative():
+			return noGrace
+		case shape.hasBranchNotIn(wanted):
+			return branchUnwanted
+		case shape.encodesFasterThan(wanted):
+			return presetFaster
+		}
+		return noGrace
 	}
 
 	for {
 		// Re-read the hub on every pass, starting with the first: a change that
 		// landed between the shape decision and this launch is acted on too.
-		switch wanted := wanted(); {
+		wanted, reason := wanted(), waitsFor()
+		switch {
 		case shape.lacksBranchOf(wanted) || shape.encodesSlowerThan(wanted):
 			stop()
 			return true, nil
-		case branchIdle():
-			// Started once and left running while the branch stays idle, so a run
-			// of raw joins and leaves cannot postpone the drop indefinitely.
-			if graceTimer == nil {
-				graceTimer = time.NewTimer(grace)
-				graceUp = graceTimer.C
-			}
-		default:
+		case reason == noGrace:
 			stopGrace()
+		case graceTimer == nil || reason != graceFor:
+			// Started once and left running while it waits for the same thing,
+			// so a run of raw joins and leaves cannot postpone the drop
+			// indefinitely. It starts again when what it waits for changes: an
+			// encoder whose last consumer left late in a grace for a slower
+			// preset keeps its own full grace, and so does a consumer of a
+			// slower preset that joined late in the grace of an idle encoder.
+			stopGrace()
+			graceTimer = time.NewTimer(grace)
+			graceUp, graceFor = graceTimer.C, reason
 		}
 		select {
 		case launchErr := <-done:
@@ -242,7 +264,7 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 			// kill takes, and the new stream opens with a keyframe the viewer's
 			// decoder can start from, so it is accepted rather than closed by
 			// holding the hub's lock across the kill.
-			if branchIdle() {
+			if waitsFor() == graceFor {
 				stop()
 				return true, nil
 			}

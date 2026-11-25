@@ -1178,3 +1178,114 @@ func TestRunShapedPipelines_NilDemandRunsTheEncoderAtTheDefault(t *testing.T) {
 		t.Errorf("the encoder stage of that launch is %q, want the default preset", stage)
 	}
 }
+
+// stateEncoded changes who subscribes to encoded frames and what they state
+// in one step, as a hub does when its last consumer of a kind leaves.
+func (d *fakeEncodeDemand) stateEncoded(encoded bool, preset appconfig.EncodePreset) {
+	d.mu.Lock()
+	d.encoded, d.stated = encoded, preset
+	d.mu.Unlock()
+	select {
+	case d.changed <- struct{}{}:
+	default:
+	}
+}
+
+// The grace runs in full for the reason it is running for. A timer started to
+// slow the encoder down must not drop the encoder when its last consumer
+// leaves late in that grace, and one started to drop the encoder must not slow
+// it down under a consumer that joined late in it.
+func TestRunShapedPipelines_TheGraceStartsAgainWhenWhatItWaitsForChanges(t *testing.T) {
+	const grace = time.Second
+	const late = grace / 2
+	for name, tc := range map[string]struct {
+		first, then func(d *fakeEncodeDemand)
+		want        pipelineShape
+	}{
+		"slowing down, then the last encoded consumer leaves": {
+			func(d *fakeEncodeDemand) { d.state(appconfig.EncodePresetMedium) },
+			func(d *fakeEncodeDemand) { d.stateEncoded(false, noPreset) },
+			pipelineShape{},
+		},
+		"dropping the encoder, then a consumer of a slower preset joins": {
+			func(d *fakeEncodeDemand) { d.stateEncoded(false, noPreset) },
+			func(d *fakeEncodeDemand) { d.stateEncoded(true, appconfig.EncodePresetMedium) },
+			pipelineShape{encode: true, preset: appconfig.EncodePresetMedium},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			demand := newFakeEncodeDemand(true, true)
+			demand.stated = appconfig.EncodePresetUltrafast
+			launches := newRecordedLaunches()
+			runShapedWith(t, "x264enc", demand, grace, launches)
+			launches.next(t, time.Second)
+
+			tc.first(demand)
+			time.Sleep(late)
+			changed := time.Now()
+			tc.then(demand)
+			shape := launches.next(t, 3*grace)
+			// A grace that ran on from the first reason ends half a grace after the
+			// change, and one that only starts again once that one has run out
+			// ends a grace and a half after it.
+			if waited := time.Since(changed); waited < grace*9/10 || waited > grace*13/10 {
+				t.Errorf("the pipeline was launched again %v after what the grace waits for changed, want the grace of %v from then",
+					waited.Round(10*time.Millisecond), grace)
+			}
+			if shape != tc.want {
+				t.Errorf("relaunched as %+v, want %+v", shape, tc.want)
+			}
+		})
+	}
+}
+
+// Joins and leaves that leave the grace waiting for the same thing do not
+// start it again: raw readers coming and going under an idle encoder, and
+// consumers of other slower presets under one that runs too fast.
+func TestRunShapedPipelines_ChangesOfTheSameKindCannotPostponeTheGrace(t *testing.T) {
+	const grace = 600 * time.Millisecond
+	for name, tc := range map[string]struct {
+		idle, churn func(d *fakeEncodeDemand, i int)
+		want        pipelineShape
+	}{
+		"raw readers under an idle encoder": {
+			func(d *fakeEncodeDemand, _ int) { d.stateEncoded(false, noPreset) },
+			func(d *fakeEncodeDemand, i int) {
+				d.mu.Lock()
+				d.native = true
+				d.mu.Unlock()
+				d.set(false, i%2 == 0)
+			},
+			pipelineShape{},
+		},
+		"other slower presets under an encoder that runs too fast": {
+			func(d *fakeEncodeDemand, _ int) { d.state(appconfig.EncodePresetMedium) },
+			func(d *fakeEncodeDemand, i int) {
+				d.state([]appconfig.EncodePreset{appconfig.EncodePresetFast, appconfig.EncodePresetMedium}[i%2])
+			},
+			pipelineShape{encode: true, preset: appconfig.EncodePresetMedium},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			demand := newFakeEncodeDemand(true, true)
+			demand.stated = appconfig.EncodePresetUltrafast
+			launches := newRecordedLaunches()
+			runShapedWith(t, "x264enc", demand, grace, launches)
+			launches.next(t, time.Second)
+
+			tc.idle(demand, 0)
+			began := time.Now()
+			for i := 1; time.Since(began) < grace-100*time.Millisecond; i++ {
+				time.Sleep(50 * time.Millisecond)
+				tc.churn(demand, i)
+			}
+			shape := launches.next(t, grace)
+			if waited := time.Since(began); waited > grace+300*time.Millisecond {
+				t.Errorf("the pipeline was launched again %v after the grace began, want it at the %v grace", waited.Round(10*time.Millisecond), grace)
+			}
+			if shape.encode != tc.want.encode {
+				t.Errorf("relaunched as %+v, want %+v", shape, tc.want)
+			}
+		})
+	}
+}
