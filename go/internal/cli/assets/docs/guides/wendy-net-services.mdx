@@ -188,6 +188,10 @@ the exact tenant/device principal, and must pass the destination's running-app
 port authorization. Keep the hostname in configuration because the virtual IP
 belongs to the calling host.
 
+For Cloud fallback, both agents need `wendy-app` support and the source
+device needs a `tunnel:request` grant scoped to the destination. See the
+[Cloud relay prerequisites](#connect-through-wendy-cloud).
+
 `device-<uuid>.mesh.wendy.internal` and `device-<uuid>.cloud.wendy.dev` are
 existing UUID aliases. Short DNS support adds `device-<uuid>.wendy.internal`.
 When the client's resolver supports all three spellings, they share one VIP
@@ -260,36 +264,52 @@ destination's published port in [Troubleshoot discovery](#troubleshoot-discovery
 
 ### Connect through Wendy Cloud
 
-Wendy Net tries Cloud for TCP or UDP only when the local mesh route is missing.
-Local connection failures such as an identity or published-port refusal end
-the attempt.
+Cloud app relay requires the source and destination apps to use network mode
+`mesh` in their `wendy.json`. The destination app must publish its incoming port.
+The device's Wendy Net participation setting controls local peer routes
+independently of the app's network mode. With participation disabled, the
+source app can still use its `mesh` network and virtual IP to reach Cloud.
+
+Wendy Net tries Cloud for TCP or UDP when the source has no active local mesh
+route to the destination. Local connection failures such as an identity or
+published-port refusal end the attempt.
 
 Keep both devices enrolled in the same Wendy Cloud organization. The backend
-and both agents need the `wendy-app` capability. Update the destination agent
-before the source. An older destination rejects Cloud app connections until
-you update it.
+must support `wendy-app` device-originated app connections. Both the source
+agent that makes the request and the destination agent that receives it must
+run the WendyOS release that introduces `wendy-app` support or a later release.
 
-Run `wendy device info` on each device and compare its **Agent Version** with
-the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases)
-for `wendy-app` support on both agents.
+Run `wendy device info` against the source device, then against the destination.
+Check **Agent Version** for each device against the release that introduces
+`wendy-app` in the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
+Update the destination agent before updating the source. An older destination
+rejects `wendy-app` connections, including requests from an updated source.
 
-To check the deployed backend separately, make a test app connection with no
-local mesh route. A backend without `wendy-app` support returns this relay error.
+In Wendy Cloud, grant the **source device** `tunnel:request` permission scoped
+to the **destination device's UUID**. Cloud may return `target device not found`
+when it denies the grant. Check the destination's enrollment and the source's
+active grant for that destination UUID.
+
+To verify Cloud relay, use test devices that can reach Wendy Cloud and have no
+local mesh route to each other. Run
+[`wendy net topology`](/docs/guides/wendy-net#3-check-the-result) against the
+source to confirm it has no route to the destination. Then retry the request
+from the source app to the destination's published port. A successful request
+in this setup verifies the Cloud path. A backend without `wendy-app` support
+returns this relay error.
 
 ```text
 Cloud does not offer device-originated application relays; the Cloud backend must support the wendy-app service
 ```
 
-Grant the source device `tunnel:request` for the destination device. Cloud can
-report `target device not found` when it denies that grant. Check the enrollment
-and active grant for the destination UUID. If the destination agent version is
-correct and the connection still fails, check its logs for
+If the destination agent version is correct and the connection still fails,
+check its logs for
 `Cloud application admission unavailable`.
 That message means the destination's app listener failed to start. Correct the
 reported error and restart the destination agent.
 
-The app connects directly through its device's relay grant. The
-`wendy cloud tunnel` command opens an operator session with separate permissions.
+The app connects through its device's relay grant. The `wendy cloud tunnel`
+command opens an operator session with separate permissions.
 
 ## Try the complete Python example
 
