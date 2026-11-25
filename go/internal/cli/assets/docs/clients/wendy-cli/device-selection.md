@@ -22,47 +22,67 @@ A value made only of digits, such as `283`, is rejected: it is not a hostname or
 
 ### Private Wendy Net hostnames
 
-Sign in with [`wendy cloud login`](./commands/cloud/login.md) and select the
-device's organization. Pass a short device hostname or its certificate UUID.
-The CLI discovers and authenticates the device through mesh, LAN, or Cloud
-within that organization.
+Sign in with [`wendy cloud login`](./commands/cloud/login.md). If you have
+multiple Cloud contexts, run [`wendy auth use`](./commands/auth/use.md) and
+select the context for the device's enrolled organization. The CLI searches
+for the hostname through mesh, LAN, and Cloud within that organization.
+
+To use the UUID hostname, run
+[`wendy cloud discover --all --json`](./commands/cloud/discover.md). The
+`--all` flag includes enrolled devices that are offline. Set `DEVICE_UUID`
+to the device's `pkiDeviceName`, such as
+`00000000-0000-4000-8000-000000000001`. If that field is missing, use `id` only
+if it is a UUID. Devices with only a numeric asset ID use a Cloud selector.
 
 ```sh
 wendy --device jetson.wendy.internal device info
-wendy --device device-${DEVICE_UUID}.wendy.internal device info
+wendy --device "device-${DEVICE_UUID}.wendy.internal" device info
 ```
 
-For a device enrolled with a UUID, run
-[`wendy cloud discover --json`](./commands/cloud/discover.md). Use its
-`pkiDeviceName` as `DEVICE_UUID` when present, or its `id` otherwise. Valid DNS
-labels keep their repeated hyphens. A legacy display name such as `Jetson A`
+Valid enrolled DNS labels keep their repeated hyphens, so `jetson--a` and
+`jetson-a` refer to different names. A legacy display name such as `Jetson A`
 becomes `jetson-a.wendy.internal`.
 
 The CLI gathers mesh, LAN, and Cloud candidates in parallel with a three-second
-budget. A friendly name needs a signed mesh name, authenticated Cloud inventory,
-or a saved binding. The certificate authenticates the UUID form directly, so
-it works with a LAN sighting alone. Use the UUID form when a name is ambiguous
-or the mesh directory is incomplete.
+budget. A friendly name needs a trusted binding from the signed mesh directory,
+authenticated Cloud inventory, or a saved pin. If the mesh directory reports
+that its results are incomplete, the CLI refuses friendly names even when
+Cloud inventory or a saved pin has a match. An omitted peer could share the
+name. Use the UUID form when a name is ambiguous or the directory is incomplete.
 
-For offline LAN use, connect once by the exact short hostname while your
-Cloud session is active and inventory is reachable. The CLI checks the trusted
-binding and the peer's certificate before saving it under that hostname.
+For LAN access when Cloud is unavailable, use the credentials for the device's
+organization and choose the hostname form:
 
-If you switch organizations, use [`wendy auth use`](./commands/auth/use.md)
-to return to the context with the saved hostname binding. After an
-intentional replacement, select the organization and run the following command.
-It clears the hostname's saved binding and any older matching hostname or
-label key owned by the selected organization.
+- **Friendly hostname.** When LAN discovery is the only available source, the
+  CLI requires a saved pin for that hostname in the selected organization.
+  To save it, connect once by the exact friendly hostname while Cloud
+  inventory is reachable. The CLI verifies the peer's certificate before
+  saving the binding.
+- **UUID hostname.** A reachable LAN sighting is enough. The CLI verifies
+  the peer's certificate against the UUID in the hostname, so you can connect
+  without a prior online connection or saved pin.
+
+See [Device identity](#device-identity) for unexpected identity changes.
+
+The CLI refuses a saved selector from another organization before starting
+discovery. Switch back to the original organization with `wendy auth use` and
+retry. A pin under the selected organization's key that points to a device in
+another organization also causes a refusal before discovery.
+
+After verifying an intentional replacement or an invalid saved pin, select
+the intended organization's context and unpin the hostname:
 
 ```sh
 wendy device unpin jetson.wendy.internal
 ```
 
-Check the replacement's UUID in the authenticated roster with
-[`wendy cloud discover --json`](./commands/cloud/discover.md). Then connect by
-short hostname while Cloud inventory is reachable so the CLI can verify and
-save the replacement's binding. If the replacement has yet to be enrolled,
-complete enrollment first.
+Pass the hostname as shown. The CLI derives the pin key for the selected
+organization and clears that binding and any older matching keys owned by that
+organization. To clear a binding in another organization, switch to its
+context first. Check the replacement's UUID with
+`wendy cloud discover --all --json`, then reconnect by short hostname while
+Cloud inventory is reachable so the CLI can verify and save the new binding.
+If the replacement has yet to be enrolled, complete enrollment first.
 
 ## 2. `WENDY_DEVICE`
 
