@@ -44,7 +44,7 @@ struct ReportCommand: ParsableCommand {
                 ?? packageURL.appendingPathComponent("Support/e2e-report.template.html")
                 .path
         )
-        let runURL = URL(fileURLWithPath: runDir, isDirectory: true)
+        let runURL = URL(fileURLWithPath: runDir, isDirectory: true).resolvingSymlinksInPath()
         guard try isRunDirectory(runURL) else {
             throw ValidationError("Report input must be a Swift E2E run directory: \(runURL.path)")
         }

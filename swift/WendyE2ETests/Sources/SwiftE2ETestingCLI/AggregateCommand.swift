@@ -47,12 +47,16 @@ struct AggregateCommand: ParsableCommand {
             fileURLWithPath: packageDir ?? FileManager.default.currentDirectoryPath,
             isDirectory: true
         ).standardizedFileURL
-        let outputURL = URL(
+        let requestedOutput = URL(
             fileURLWithPath: outputDir ?? firstAttemptURL.deletingLastPathComponent().path,
             isDirectory: true
         ).standardizedFileURL
 
-        try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: requestedOutput,
+            withIntermediateDirectories: true
+        )
+        let outputURL = requestedOutput.resolvingSymlinksInPath()
 
         var planned: [URL: Set<String>] = [:]
         for input in attemptURLs {
@@ -143,13 +147,12 @@ struct AggregateCommand: ParsableCommand {
         for root in runURLs.sorted(by: { $0.path < $1.path }) {
             let inputs = inputsByRun[root] ?? []
             let captures = coverageByRun[root] ?? []
+            var coverage = RunCoverageAggregation(run: root, repo: repositories[root], diff: diff)
             if try aggregateGoCoverage(
                 inputs: inputs,
                 captured: captures,
                 errors: inputs.flatMap { errorsByInput[$0] ?? [] },
-                run: root,
-                repo: repositories[root],
-                diff: diff
+                context: &coverage
             ) {
                 failed = true
             }
@@ -163,9 +166,7 @@ struct AggregateCommand: ParsableCommand {
                         inputs: members,
                         captured: captures.filter { memberURLs.contains($0.input) },
                         errors: members.flatMap { errorsByInput[$0] ?? [] },
-                        run: root,
-                        repo: repositories[root],
-                        diff: diff,
+                        context: &coverage,
                         target: target
                     ) {
                         failed = true

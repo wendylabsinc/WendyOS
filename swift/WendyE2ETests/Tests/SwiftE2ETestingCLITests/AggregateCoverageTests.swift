@@ -167,8 +167,35 @@ struct `aggregate saved coverage` {
     }
 
     @Test
+    func `missing coverage outputs resolve within their existing parent`() throws {
+        let scratch = try CoverageIO.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let root = scratch.appendingPathComponent("coverage")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let alias = scratch.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: root)
+        let output = try CoverageIO.evidence("targets/local", in: alias)
+        #expect(try CoverageIO.relative(output, to: root) == "targets/local")
+
+        let targets = root.appendingPathComponent("targets")
+        for destination in [scratch, scratch.appendingPathComponent("missing")] {
+            try FileManager.default.createSymbolicLink(at: targets, withDestinationURL: destination)
+            #expect(throws: (any Error).self) {
+                try CoverageIO.evidence("targets/local", in: alias)
+            }
+            try FileManager.default.removeItem(at: targets)
+        }
+    }
+
+    @Test
     func `target coverage unions retries and links the matching target profile`() throws {
-        let f = try GoCoverageFixture()
+        let f = try GoCoverageFixture(build: false)
+        try f.write(
+            "go/internal/sample/branch.go",
+            GoCoverageFixture.branch.replacingOccurrences(of: "return 2", with: "return 3")
+        )
+        try f.commit()
+        try f.buildBinaries()
         try f.attempt()
         let location = "observations/sample/branch"
         var inputs: [String] = []
@@ -185,9 +212,12 @@ struct `aggregate saved coverage` {
             inputs.append(input.path)
             try CoverageIO.remove(native)
         }
-        let output = f.repo.appendingPathComponent("run-output")
+        let physical = f.repo.appendingPathComponent("run-output")
+        try FileManager.default.createDirectory(at: physical, withIntermediateDirectories: true)
+        let output = f.repo.appendingPathComponent("output-link")
+        try FileManager.default.createSymbolicLink(at: output, withDestinationURL: physical)
         var aggregate = try AggregateCommand.parse(
-            ["--repo", f.repo.path, "--output-dir", output.path] + inputs
+            ["--repo", f.repo.path, "--diff", "HEAD^..HEAD", "--output-dir", output.path] + inputs
         )
         try aggregate.run()
         let run = output.appendingPathComponent("swift.123")
@@ -201,11 +231,12 @@ struct `aggregate saved coverage` {
         let b = try measured("coverage/targets/b")
         #expect(a > b)
         #expect(try measured("coverage") == a)
-        let scopes = [
-            "coverage", "coverage/targets/a", "coverage/targets/b",
-            "attempts/a/0001/coverage", "attempts/a/0002/coverage", "attempts/b/0001/coverage",
-        ]
+        let scopes = ["coverage", "coverage/targets/a", "coverage/targets/b"]
         for scope in scopes {
+            let summary = try CoverageIO.read(run.appendingPathComponent(scope + "/summary.json"))
+            let diff = try #require(summary["diff"] as? [String: Any])
+            #expect(diff["statements"] as? Int == 1)
+            #expect(diff["covered"] as? Int == (scope == "coverage/targets/b" ? 0 : 1))
             #expect(CoverageIO.exists(run.appendingPathComponent(scope + "/functions.txt")))
             #expect(!CoverageIO.exists(run.appendingPathComponent(scope + "/source.html")))
         }
@@ -217,6 +248,15 @@ struct `aggregate saved coverage` {
         }
         for scope in scopes {
             #expect(CoverageIO.exists(run.appendingPathComponent(scope + "/source.html")))
+        }
+        for attempt in ["a/0001", "a/0002", "b/0001"] {
+            let directory = run.appendingPathComponent("attempts/" + attempt + "/coverage")
+            for name in ["source.json", "summary.json", "coverage.out"] {
+                #expect(CoverageIO.exists(directory.appendingPathComponent(name)))
+            }
+            for name in ["source.html", "functions.txt"] {
+                #expect(!CoverageIO.exists(directory.appendingPathComponent(name)))
+            }
         }
         try f.write("go/internal/sample/branch.go", GoCoverageFixture.branch + "// edited\n")
         let mismatch = try GoCoverageReports(run: run, package: f.product, repo: f.repo)
@@ -254,14 +294,13 @@ struct `aggregate saved coverage` {
         defer { try? FileManager.default.removeItem(at: second.scratch) }
         let run = f.repo.appendingPathComponent("run-combined")
         try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+        var aggregation = RunCoverageAggregation(run: run, repo: f.repo, diff: nil)
         #expect(
             try aggregateGoCoverage(
                 inputs: [f.run, other],
                 captured: [first, second],
                 errors: [],
-                run: run,
-                repo: f.repo,
-                diff: nil
+                context: &aggregation
             )
         )
         let bad = try CoverageIO.read(run.appendingPathComponent("coverage/summary.json"))
@@ -334,14 +373,13 @@ struct `aggregate coverage boundaries` {
         }
         let run = f.repo.appendingPathComponent("run-union")
         try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+        var aggregation = RunCoverageAggregation(run: run, repo: f.repo, diff: nil)
         #expect(
             try !aggregateGoCoverage(
                 inputs: captures.map(\.input),
                 captured: captures,
                 errors: [],
-                run: run,
-                repo: f.repo,
-                diff: nil
+                context: &aggregation
             )
         )
         let combined =

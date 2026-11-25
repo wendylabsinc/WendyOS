@@ -178,11 +178,11 @@ when reaggregating coverage; use a fresh output directory for a subset. The
 aggregate stores `coverage/coverage.out` and `coverage/functions.txt` for the run.
 For multiple targets it also merges attempts by target under
 `coverage/targets/<target>/`. For multiple attempts it retains the individual
-profiles and function lists in `attempts/<target>/<attempt>/coverage/`. A
+profiles in `attempts/<target>/<attempt>/coverage/`. A
 single-attempt run shares its run artifacts with that attempt and target.
 
-`report` reads saved totals and renders `source.html` alongside each complete
-profile. Pass `--repo /path/to/tested/checkout` to aggregate and report when
+`report` reads saved totals and renders `source.html` for complete run and target
+profiles. Pass `--repo /path/to/tested/checkout` to the analysis stages when
 the tooling and measured source live in different checkouts. Source views require
 the recorded revision and source identity. Older runs can display their saved
 numbers without the source. Hover or focus a target row for its source report

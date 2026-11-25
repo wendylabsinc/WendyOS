@@ -57,7 +57,7 @@ struct E2ERunComparison: Codable {
     }
 }
 
-struct E2EGitComparison {
+final class E2EGitComparison {
     let repo: URL
     let base: String
     let head: String
@@ -143,7 +143,10 @@ struct E2EGitComparison {
         return result
     }
 
-    func changedPaths() throws -> [String] {
+    private lazy var paths = Result { try changedPaths() }
+    private lazy var goLines = Result { try changedGoLines() }
+
+    private func changedPaths() throws -> [String] {
         try CoverageIO.command(
             ["git", "diff", "--name-only", "-z", "--no-renames", base, head],
             cwd: repo
@@ -151,7 +154,7 @@ struct E2EGitComparison {
         .components(separatedBy: "\0").filter { !$0.isEmpty }
     }
 
-    func goCoverage(source: [String: Any], profile: URL, complete: Bool) throws -> [String: Any] {
+    private func changedGoLines() throws -> [String: Set<Int>] {
         let dirty = try CoverageIO.command(
             [
                 "git", "diff", head, "--", "*.go", "go.mod", "go.sum", ".gitattributes",
@@ -168,14 +171,11 @@ struct E2EGitComparison {
                 "Comparison needs the recorded committed Go source and exclusions"
             )
         }
-        let files = source["files"] as! [String: Any]
         var changed: [String: Set<Int>] = [:]
-        let measuredPaths = Set(GoCoverage.sourcePaths(files))
-        for path in try changedPaths()
+        for path in try paths.get()
         where path.hasPrefix("go/") && path.hasSuffix(".go") && !path.hasSuffix("_test.go")
             && !path.split(separator: "/").contains("testdata")
             && !path.hasPrefix("go/internal/testfixture/")
-            && (path != "go/internal/cli/closedtest/closedtest.go" || measuredPaths.contains(path))
             && !GoCoverage.hookPaths.contains(path)
         {
             guard let text = try blob(head, path: path), try !GoCoverage.generated(text) else {
@@ -186,15 +186,25 @@ struct E2EGitComparison {
                 cwd: repo
             ).trimmingCharacters(in: .whitespacesAndNewlines)
             if attribute.hasSuffix(": true") || attribute.hasSuffix(": set") { continue }
-            if files.values.contains(where: { value in
-                guard let file = value as? [String: Any] else { return false }
-                return file["path"] as? String == path
-                    && (file["generated"] as? Bool == true || file["testHarness"] as? Bool == true)
-            }) {
-                continue
-            }
             let lines = try changedLines(path: path)
             if !lines.isEmpty { changed[path] = lines }
+        }
+        return changed
+    }
+
+    func goCoverage(source: [String: Any], profile: URL, complete: Bool) throws -> [String: Any] {
+        let files = source["files"] as! [String: Any]
+        let measuredPaths = Set(GoCoverage.sourcePaths(files))
+        var changed = try goLines.get()
+        if !measuredPaths.contains("go/internal/cli/closedtest/closedtest.go") {
+            changed.removeValue(forKey: "go/internal/cli/closedtest/closedtest.go")
+        }
+        for case let file as [String: Any] in files.values {
+            if let path = file["path"] as? String,
+                file["generated"] as? Bool == true || file["testHarness"] as? Bool == true
+            {
+                changed.removeValue(forKey: path)
+            }
         }
         var blocks: [String: GoCoverageBlock] = [:]
         if CoverageIO.exists(profile) {
@@ -235,7 +245,7 @@ struct E2EGitComparison {
 
     func specs() throws -> [E2ERunComparison.Spec] {
         let prefix = "swift/WendyE2ETests/Tests/WendyE2ETests/"
-        let paths = try changedPaths().filter { $0.hasPrefix(prefix) && $0.hasSuffix(".swift") }
+        let paths = try self.paths.get().filter { $0.hasPrefix(prefix) && $0.hasSuffix(".swift") }
         struct Declaration {
             let path: String
             let document: WendyE2EReference.Document

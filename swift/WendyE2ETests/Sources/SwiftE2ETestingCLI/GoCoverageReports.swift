@@ -20,9 +20,6 @@ struct GoCoverageReports {
                 directories.append((try directory(for: target), members))
             }
         }
-        for attempt in all {
-            directories.append((attempt.appendingPathComponent("coverage"), [attempt]))
-        }
         var sources: [String: GoReportSource] = [:]
         for (directory, members) in directories {
             let profile = directory.appendingPathComponent("coverage.out")
