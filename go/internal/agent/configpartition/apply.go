@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/sysextfs"
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/network"
@@ -723,7 +724,7 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 // principal is what mesh peers dial: it is the full device identity, so a
 // sighting cannot be spoofed by re-advertising someone else's id.
 func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, principal string) {
-	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, principal, func() bool {
+	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, principal, AccessEnrolled, func() bool {
 		return restartAvahiDaemon(logger, nil)
 	})
 }
@@ -732,9 +733,9 @@ func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, principal stri
 // advertise the plaintext agent port, a tls=false TXT record, and removes the
 // principal TXT record, then restarts avahi-daemon. It is the inverse of
 // UpdateAvahiForProvisioning, used when a device is unprovisioned so it is
-// rediscoverable for re-enrollment.
-func UpdateAvahiForUnprovisioning(logger *zap.Logger, plaintextPort int) {
-	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, "", func() bool {
+// rediscoverable for re-enrollment. access is AccessOpen or AccessClosed.
+func UpdateAvahiForUnprovisioning(logger *zap.Logger, plaintextPort int, access string) {
+	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, "", access, func() bool {
 		return restartAvahiDaemon(logger, nil)
 	})
 }
@@ -756,6 +757,13 @@ func ApplyDiscoveryAccess(logger *zap.Logger, policy networkaccess.Policy) {
 	}
 }
 
+// The access TXT record values: the device's access shape.
+const (
+	AccessOpen     = "open"
+	AccessClosed   = "closed"
+	AccessEnrolled = "enrolled"
+)
+
 // defaultAvahiServiceDir is the directory scanned for avahi service files on
 // a real device. Tests pass an alternate directory to updateAvahiService.
 const defaultAvahiServiceDir = "/etc/avahi/services"
@@ -771,7 +779,7 @@ const defaultAvahiServiceDir = "/etc/avahi/services"
 // temporary directory, so every guard passes and the restart is reached for
 // real. Left un-injected it prompts for polkit authorization on a developer
 // machine and blocks the package's tests for the length of that timeout.
-func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, principal string, restartAvahi func() bool) {
+func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, principal, access string, restartAvahi func() bool) {
 	unlock := services.LockAvahiServiceFile()
 	defer unlock()
 
@@ -794,7 +802,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 			continue
 		}
 
-		content := updateWendyOSServicePort(string(data), port, tls, principal)
+		content := updateWendyOSServicePort(string(data), port, tls, principal, access)
 		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
 			logger.Warn("Could not write avahi service file",
 				zap.String("path", serviceFile), zap.Error(err))
@@ -815,7 +823,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 // its port, tls TXT record, and principal TXT record. Other service blocks
 // (SSH, HTTP, etc.) are left untouched. When principal is empty, the TXT
 // record is removed (used on unprovisioning).
-func updateWendyOSServicePort(content string, port int, tls bool, principal string) string {
+func updateWendyOSServicePort(content string, port int, tls bool, principal, access string) string {
 	const typeTag = "<type>_wendyos._udp</type>"
 	portRe := regexp.MustCompile(`<port>\d+</port>`)
 
@@ -855,6 +863,15 @@ func updateWendyOSServicePort(content string, port int, tls bool, principal stri
 	}
 
 	block = updatePrincipalTXTRecord(block, principal)
+
+	// The access shape, so a client knows what it is talking to before it
+	// connects: open, closed (trusted keys only) or enrolled.
+	if strings.Contains(block, "<txt-record>access=") {
+		block = replaceTXTRecord(block, "access", access)
+	} else {
+		block = strings.Replace(block, "</service>",
+			"    <txt-record>access="+access+"</txt-record>\n  </service>", 1)
+	}
 
 	return content[:serviceStart] + block + content[serviceEnd:]
 }
@@ -1096,7 +1113,82 @@ func applyHandoffs(logger *zap.Logger, configPath string) {
 	applyWendyConf(logger, configDir, configPath)
 	applyPreProvisioning(logger, configDir, configPath)
 	applyClockFloor(logger, configDir, configPath)
+	// A seed that cannot be installed stays on the config partition for the
+	// installer to replace, and the agent keeps this boot Closed with no key
+	// trusted (TrustedKeysSeedError); it never exits, which under the
+	// supervisor would end on an image agent that may come up Open.
+	trustedKeysSeedErr = applyTrustedKeysSeed(logger, configDir, configPath)
+	if trustedKeysSeedErr != nil {
+		logger.Error("the owner key seeded at install is not installed; the device stays Closed with no trusted key", zap.Error(trustedKeysSeedErr))
+	}
 	applyExtensions(logger, configDir)
+}
+
+// trustedKeysFile is both the seed's name on the config partition and the
+// access file's name in configPath (trustedkeys.FileName).
+const trustedKeysFile = "trusted-keys.json"
+
+// trustedKeysSeedApplied in configPath holds the SHA-256 of the last seed
+// installed, so a seed whose removal failed is not installed again after the
+// owner reopens the device.
+const trustedKeysSeedApplied = "trusted-keys.seed-applied"
+
+var trustedKeysSeedErr error
+
+// TrustedKeysSeedError is why a seed on the config partition was not
+// installed by Apply, or nil. The agent then treats the device as Closed with
+// no trusted key.
+func TrustedKeysSeedError() error { return trustedKeysSeedErr }
+
+// applyTrustedKeysSeed installs the access file `wendy os install` placed on
+// the config partition as configPath/trusted-keys.json (0600), so the device
+// starts Closed with the installer's key as its first owner, then deletes the
+// seed.
+//
+// A device that already has an access file ignores the seed: anyone holding
+// the storage can write /config, and it must not become a way to add an owner
+// to a device that has one. A seed the agent could not load is left in place
+// and not installed. An error means a seed is present but not installed; the
+// device must then not start Open.
+func applyTrustedKeysSeed(logger *zap.Logger, cfgDir, configPath string) error {
+	src := filepath.Join(cfgDir, trustedKeysFile)
+	data, err := os.ReadFile(src)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", src, err)
+	}
+	sum := sha256.Sum256(data)
+	applied := filepath.Join(configPath, trustedKeysSeedApplied)
+	if prev, err := os.ReadFile(applied); err == nil && string(prev) == hex.EncodeToString(sum[:]) {
+		logger.Warn("configpartition: the seed on the config partition was installed before; removing it")
+		os.Remove(src) //nolint:errcheck
+		return nil
+	}
+	dst := filepath.Join(configPath, trustedKeysFile)
+	if _, err := os.Lstat(dst); err == nil {
+		logger.Warn("configpartition: device already has trusted keys; ignoring and removing the seed on the config partition")
+		os.Remove(src) //nolint:errcheck
+		return nil
+	}
+	if err := trustedkeys.Validate(data); err != nil {
+		return fmt.Errorf("the seed %s is unusable; reinstall with a fresh one: %w", src, err)
+	}
+	if err := os.MkdirAll(configPath, 0o700); err != nil {
+		return err
+	}
+	if err := atomicfile.Write(dst, data, 0o600); err != nil {
+		return fmt.Errorf("installing trusted keys: %w", err)
+	}
+	if err := atomicfile.Write(applied, []byte(hex.EncodeToString(sum[:])), 0o600); err != nil {
+		logger.Warn("configpartition: cannot record the installed seed", zap.Error(err))
+	}
+	if err := os.Remove(src); err != nil {
+		logger.Warn("configpartition: failed to remove trusted keys seed", zap.Error(err))
+	}
+	logger.Info("configpartition: installed the owner key seeded at install; the device starts Closed")
+	return nil
 }
 
 // applyClockFloor copies clock_floor from cfgDir (the FAT32 config partition,

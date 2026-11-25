@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"io"
 	"net"
 	"net/http"
@@ -75,11 +76,19 @@ func LocalImagePrefix(listenAddr string) (string, error) { return imagePrefixFor
 type authorizationOptions struct {
 	source delivery.Source
 	mode   interceptor.OrgMode
+	keys   *trustedkeys.Store
 }
 type Option func(*authorizationOptions)
 
 func WithDeliveryAuthorization(source delivery.Source, mode interceptor.OrgMode) Option {
 	return func(o *authorizationOptions) { o.source = source; o.mode = mode }
+}
+
+// WithTrustedKeys makes the registry a Closed device's: a push needs a
+// trusted key with at least the operator role, or, over plain HTTP, the
+// owner's keyless apps switch. It replaces the enrolled-device checks.
+func WithTrustedKeys(keys *trustedkeys.Store) Option {
+	return func(o *authorizationOptions) { o.keys = keys }
 }
 
 func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger, tlsConfig *tls.Config, options ...Option) (*Server, error) {
@@ -120,7 +129,9 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 	mux.Handle("/", ociHandler)
 
 	var handler http.Handler = mux
-	if config.source != nil {
+	if config.keys != nil {
+		handler = trustedKeyMiddleware(config.keys)(handler)
+	} else if config.source != nil {
 		handler = authorizationMiddleware(config.source, config.mode)(handler)
 	}
 	handler = loggingMiddleware(logger)(securityHeadersMiddleware(handler))

@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -98,6 +99,12 @@ func (s *PowerService) Reboot(ctx context.Context, req *agentpbv2.RebootRequest)
 	}
 	if !s.supported() {
 		return nil, status.Error(codes.Unavailable, "the agent cannot reboot this host")
+	}
+	// On a Closed device, forced recovery takes the board off the network until
+	// someone power-cycles it: owner only, like an OS update.
+	if role, closed := trustedkeys.CallerRole(ctx); closed && role < trustedkeys.RoleOwner &&
+		mode == agentpbv2.RebootMode_REBOOT_MODE_FORCED_RECOVERY {
+		return nil, status.Error(codes.PermissionDenied, "a reboot into forced-recovery mode needs the owner key on this closed device")
 	}
 	if mode == agentpbv2.RebootMode_REBOOT_MODE_FORCED_RECOVERY && !s.hasForcedRecovery() {
 		return nil, status.Error(codes.FailedPrecondition, "forced-recovery mode exists only on NVIDIA Jetson boards, and this device is not one")

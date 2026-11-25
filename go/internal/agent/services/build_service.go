@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/buildargs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -323,6 +324,11 @@ func onLocalAdminSocket(p *peer.Peer) bool {
 // which org "owns" it beyond the certificate chain that already admitted the
 // connection.
 func userIdentityFromContext(ctx context.Context, action string) (certs.WendyIdentity, error) {
+	// A trusted key on a Closed device: the access table checked its role, and
+	// its fingerprint names it in the audit log.
+	if c, ok := interceptor.TrustedKeyCaller(ctx); ok {
+		return certs.WendyIdentity{EntityType: "user", EntityID: c.Fingerprint}, nil
+	}
 	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return certs.WendyIdentity{}, status.Errorf(codes.PermissionDenied, "%s requires mTLS", action)

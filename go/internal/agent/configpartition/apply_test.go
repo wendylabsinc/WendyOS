@@ -548,7 +548,7 @@ const avahiServiceTemplate = `<?xml version="1.0" standalone='no'?>
 `
 
 func TestUpdateWendyOSServicePort_Provisioned(t *testing.T) {
-	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, "")
+	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, "", AccessEnrolled)
 
 	if !strings.Contains(out, "<port>50052</port>") {
 		t.Errorf("expected wendyos port updated to 50052:\n%s", out)
@@ -564,8 +564,8 @@ func TestUpdateWendyOSServicePort_Provisioned(t *testing.T) {
 
 func TestUpdateWendyOSServicePort_Unprovisioned(t *testing.T) {
 	// Start from a provisioned advertisement and revert it.
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
-	out := updateWendyOSServicePort(provisioned, 50051, false, "")
+	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal, AccessEnrolled)
+	out := updateWendyOSServicePort(provisioned, 50051, false, "", AccessOpen)
 
 	if !strings.Contains(out, "<port>50051</port>") {
 		t.Errorf("expected wendyos port reverted to 50051:\n%s", out)
@@ -579,7 +579,7 @@ func TestUpdateWendyOSServicePort_Unprovisioned(t *testing.T) {
 }
 
 func TestUpdateWendyOSServicePort_ProvisionedWithPrincipal(t *testing.T) {
-	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
+	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal, AccessEnrolled)
 
 	if !strings.Contains(out, "<txt-record>principal="+testPrincipal+"</txt-record>") {
 		t.Errorf("expected principal TXT record:\n%s", out)
@@ -587,12 +587,12 @@ func TestUpdateWendyOSServicePort_ProvisionedWithPrincipal(t *testing.T) {
 }
 
 func TestUpdateWendyOSServicePort_UnprovisioningRemovesPrincipal(t *testing.T) {
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
+	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal, AccessEnrolled)
 	if !strings.Contains(provisioned, "principal=") {
 		t.Fatalf("test setup: expected principal TXT to be present:\n%s", provisioned)
 	}
 
-	out := updateWendyOSServicePort(provisioned, 50051, false, "")
+	out := updateWendyOSServicePort(provisioned, 50051, false, "", AccessOpen)
 
 	if strings.Contains(out, "principal=") {
 		t.Errorf("expected principal TXT record to be removed on unprovisioning:\n%s", out)
@@ -604,9 +604,9 @@ func TestUpdateWendyOSServicePort_UnprovisioningRemovesPrincipal(t *testing.T) {
 }
 
 func TestUpdateWendyOSServicePort_UpdatesExistingPrincipal(t *testing.T) {
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
+	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal, AccessEnrolled)
 	rotated := "spiffe://wendy.sh/tenant/2f6a8a10-1111-4aaa-8bbb-000000000001/device/00000000-0000-4000-8000-000000000002"
-	out := updateWendyOSServicePort(provisioned, 50052, true, rotated)
+	out := updateWendyOSServicePort(provisioned, 50052, true, rotated, AccessEnrolled)
 
 	if !strings.Contains(out, "<txt-record>principal="+rotated+"</txt-record>") {
 		t.Errorf("expected principal updated:\n%s", out)
@@ -625,7 +625,7 @@ func TestUpdateAvahiService_ProvisioningWritesPrincipalTXTRecord(t *testing.T) {
 
 	logger, _ := zap.NewDevelopment()
 	restarts := 0
-	updateAvahiService(logger, dir, 50052, true, testPrincipal, func() bool { restarts++; return true })
+	updateAvahiService(logger, dir, 50052, true, testPrincipal, AccessEnrolled, func() bool { restarts++; return true })
 	if restarts != 1 {
 		t.Errorf("restarted avahi %d times, want 1", restarts)
 	}
@@ -655,7 +655,7 @@ func TestUpdateAvahiService_UnprovisioningClearsEnrollment(t *testing.T) {
 
 	logger, _ := zap.NewDevelopment()
 	restarts := 0
-	updateAvahiService(logger, dir, 50051, false, "", func() bool { restarts++; return true })
+	updateAvahiService(logger, dir, 50051, false, "", AccessOpen, func() bool { restarts++; return true })
 	if restarts != 1 {
 		t.Errorf("restarted avahi %d times, want 1", restarts)
 	}
@@ -771,5 +771,22 @@ func TestApplyBinaryUpdateDropsAMarkerLeftWithoutASeed(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("a marker without its seed must go")
+	}
+}
+
+// Discovery says which shape the device is in, and moves with it.
+func TestUpdateWendyOSServicePort_AccessShape(t *testing.T) {
+	closed := updateWendyOSServicePort(avahiServiceTemplate, 50051, false, "", AccessClosed)
+	enrolled := updateWendyOSServicePort(closed, 50052, true, testPrincipal, AccessEnrolled)
+	open := updateWendyOSServicePort(enrolled, 50051, false, "", AccessOpen)
+	for _, c := range []struct{ out, want string }{
+		{closed, AccessClosed}, {enrolled, AccessEnrolled}, {open, AccessOpen},
+	} {
+		if n := strings.Count(c.out, "<txt-record>access="); n != 1 {
+			t.Fatalf("want one access record, got %d:\n%s", n, c.out)
+		}
+		if !strings.Contains(c.out, "<txt-record>access="+c.want+"</txt-record>") {
+			t.Errorf("want access=%s:\n%s", c.want, c.out)
+		}
 	}
 }

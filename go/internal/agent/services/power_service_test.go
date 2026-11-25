@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -239,5 +240,25 @@ func TestRebootForAnotherModeWhileOneIsPendingIsRefused(t *testing.T) {
 	}
 	if len(h.scheduled) != 1 {
 		t.Fatalf("scheduled %d reboots, want only the first", len(h.scheduled))
+	}
+}
+
+// On a Closed device forced recovery is owner only; a normal reboot stays
+// operator, and Open/Enrolled devices (no caller role) are unchanged.
+func TestForcedRecoveryNeedsTheOwnerOnAClosedDevice(t *testing.T) {
+	for _, role := range []trustedkeys.Role{trustedkeys.RoleNone, trustedkeys.RoleViewer, trustedkeys.RoleOperator} {
+		h := newPowerServiceHarness(t)
+		ctx := trustedkeys.WithCallerRole(context.Background(), role)
+		_, err := h.svc.Reboot(ctx, &agentpbv2.RebootRequest{Mode: forcedRecovery})
+		if status.Code(err) != codes.PermissionDenied || len(h.scheduled) != 0 {
+			t.Fatalf("%v: forced recovery = %v scheduled=%d, want PermissionDenied", role, err, len(h.scheduled))
+		}
+		if _, err := h.svc.Reboot(ctx, &agentpbv2.RebootRequest{}); err != nil {
+			t.Fatalf("%v: normal reboot = %v", role, err)
+		}
+	}
+	h := newPowerServiceHarness(t)
+	if _, err := h.svc.Reboot(trustedkeys.WithCallerRole(context.Background(), trustedkeys.RoleOwner), &agentpbv2.RebootRequest{Mode: forcedRecovery}); err != nil {
+		t.Fatalf("owner forced recovery = %v", err)
 	}
 }
