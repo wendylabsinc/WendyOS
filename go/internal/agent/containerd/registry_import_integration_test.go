@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	digest "github.com/opencontainers/go-digest"
@@ -123,5 +124,29 @@ func TestIntegrationDeleteReleaseImagesCollectsLayers(t *testing.T) {
 	}
 	if _, err := c.client.GetImage(ctx, removed.img.name); !errdefs.IsNotFound(err) {
 		t.Fatalf("removed release image: err = %v, want not found", err)
+	}
+}
+
+// An image that cannot be read does not stop the cleanup: the removed
+// release's layers are still taken off the disk (#3054 review, H2).
+func TestIntegrationDeleteReleaseImagesPastAnUnreadableImage(t *testing.T) {
+	c, ctx := newIntegrationClient(t)
+	const app = "sh.wendy.test"
+	removed := importIntegrationRelease(t, c, ctx, app, []string{"base.txt", "removed.txt"})
+	is := c.client.ImageService()
+	broken := images.Image{Name: "docker.io/library/unreadable:" + uuid.NewString(), Target: ocispec.Descriptor{
+		MediaType: ocispec.MediaTypeImageManifest, Digest: digest.FromString("content that is gone"), Size: 20,
+	}}
+	if _, err := is.Create(ctx, broken); err != nil {
+		t.Fatalf("creating the unreadable image: %v", err)
+	}
+	t.Cleanup(func() { _ = is.Delete(ctx, broken.Name) })
+
+	if err := c.DeleteReleaseImages(ctx, app, nil); err != nil {
+		t.Fatalf("deleting releases: %v", err)
+	}
+	sn := c.client.SnapshotService(c.snapshotter)
+	if _, err := sn.Stat(ctx, removed.img.topChainID()); !errdefs.IsNotFound(err) {
+		t.Fatalf("removed release's own layer: stat err = %v, want not found", err)
 	}
 }

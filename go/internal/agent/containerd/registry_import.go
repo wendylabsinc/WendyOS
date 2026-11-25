@@ -305,7 +305,12 @@ func (c *Client) DeleteReleaseImages(ctx context.Context, app string, keep []str
 // snapshot from the layers of the removable releases that no other image
 // uses, so the image delete's collection takes them. A container on one keeps
 // it through containerd's parent reference. An image whose layers cannot be
-// read keeps every layer: nothing is released.
+// read is logged and skipped, and the rest is still released: its layers are
+// unknown, but a container on it keeps its chain through the parent
+// reference, and an image whose content is readable to containerd keeps its
+// own through that content's references (ponytail: an image wendy unpacked
+// whose config alone is unreadable and whose top layer is a removed one can
+// lose that layer; it cannot start a container without its config anyway).
 func (c *Client) releaseLayerRoots(ctx context.Context, is images.Store, app string, keep []string) error {
 	imgs, err := is.List(ctx)
 	if err != nil {
@@ -315,8 +320,9 @@ func (c *Client) releaseLayerRoots(ctx context.Context, is images.Store, app str
 	for _, img := range imgs {
 		diffIDs, err := containerd.NewImage(c.client, img).RootFS(ctx)
 		if removableRelease(img.Name, app, keep) {
-			if err != nil {
-				continue // not unpacked, or its content is gone: no layer of its own to release
+			if err != nil { // its content is gone: its layers cannot be found
+				c.logger.Warn("Cannot release a removed release's layers: its image is unreadable", zap.String("image", img.Name), zap.Error(err))
+				continue
 			}
 			for _, id := range layerChainIDs(diffIDs) {
 				removed[id] = true
@@ -324,8 +330,8 @@ func (c *Client) releaseLayerRoots(ctx context.Context, is images.Store, app str
 			continue
 		}
 		if err != nil {
-			c.logger.Warn("Keeping removed releases' layers: another image's layers are unreadable", zap.String("image", img.Name), zap.Error(err))
-			return nil
+			c.logger.Warn("Releasing removed releases' layers without checking an unreadable image", zap.String("image", img.Name), zap.Error(err))
+			continue
 		}
 		for _, id := range layerChainIDs(diffIDs) {
 			kept[id] = true
