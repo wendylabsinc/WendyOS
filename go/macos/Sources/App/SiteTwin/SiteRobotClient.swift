@@ -44,6 +44,7 @@ protocol SiteRobotTurning: Sendable {
 }
 
 protocol SiteRobotSearching: Sendable {
+    func confirmLocalization(_ handle: UInt64, sequence: UInt64, matchSequence: UInt64, frame: String, candidate: Int) async throws
     func resetLocalization(_ handle: UInt64, sequence: UInt64, frame: String) async throws
     func fuse(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws -> RobotFusionReport
     func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws
