@@ -7,83 +7,19 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/litebuild"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/protobuf/proto"
 )
-
-func TestLiteSimulatorDownloadBounds(t *testing.T) {
-	for _, tc := range []struct {
-		name                        string
-		manifestSize, contentLength int64
-		bodySize, wantRead          int64
-		wantError                   string
-		wantRequest                 bool
-	}{
-		{name: "known size", manifestSize: 1024, contentLength: 1024, bodySize: 1024, wantRead: 1024, wantRequest: true},
-		{name: "unknown size", contentLength: -1, bodySize: 1024, wantRead: 1024, wantRequest: true},
-		{name: "negative manifest", manifestSize: -1, wantError: "manifest size"},
-		{name: "oversized manifest", manifestSize: maxLiteFirmwareBytes + 1, wantError: "manifest size"},
-		{name: "oversized declared size", contentLength: maxLiteFirmwareBytes + 1, wantRequest: true, wantError: "Content-Length"},
-		{name: "declared size exceeds manifest", manifestSize: 1024, contentLength: 1025, wantRequest: true, wantError: "Content-Length"},
-		{name: "stream exceeds manifest", manifestSize: 1024, contentLength: -1, bodySize: 2048, wantRead: 1025, wantRequest: true, wantError: "download limit"},
-		{name: "stream exceeds absolute limit", contentLength: -1, bodySize: maxLiteFirmwareBytes + 1024, wantRead: maxLiteFirmwareBytes + 1, wantRequest: true, wantError: "download limit"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			previous := http.DefaultTransport
-			t.Cleanup(func() { http.DefaultTransport = previous })
-			body := &liteDownloadBody{}
-			requested := false
-			http.DefaultTransport = cliUpdateTransport(func(req *http.Request) (*http.Response, error) {
-				requested = true
-				return &http.Response{
-					StatusCode: http.StatusOK, ContentLength: tc.contentLength,
-					Body: io.NopCloser(io.LimitReader(body, tc.bodySize)), Header: make(http.Header),
-				}, nil
-			})
-			path, err := downloadLiteSimulatorImage(context.Background(), dir, &imageInfo{
-				DownloadURL: "https://example.test/firmware.bin", ImageSize: tc.manifestSize,
-			})
-			if requested != tc.wantRequest || body.read != tc.wantRead {
-				t.Fatalf("requested=%v bytes read=%d; want requested=%v bytes read=%d", requested, body.read, tc.wantRequest, tc.wantRead)
-			}
-			if tc.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantError) || path != "" {
-					t.Fatalf("path=%q error=%v; want %q and no path", path, err, tc.wantError)
-				}
-				files, err := os.ReadDir(dir)
-				if err != nil || len(files) != 0 {
-					t.Fatalf("failed download left files: %v, %v", files, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			stat, err := os.Stat(path)
-			if err != nil || stat.Size() != tc.bodySize {
-				t.Fatalf("downloaded file: %v, %v", stat, err)
-			}
-		})
-	}
-}
-
-type liteDownloadBody struct{ read int64 }
-
-func (r *liteDownloadBody) Read(p []byte) (int, error) {
-	clear(p)
-	r.read += int64(len(p))
-	return len(p), nil
-}
 
 func liteTestImage() []byte {
 	b := bytes.Repeat([]byte{0xff}, 0x10000)
@@ -97,6 +33,269 @@ func liteTestImage() []byte {
 	binary.LittleEndian.PutUint32(p[8:], 0x1000)
 	copy(p[12:], "wendy_conf")
 	return b
+}
+
+// liteTestNativeImage is liteTestImage with the OTA partitions of native
+// firmware.
+func liteTestNativeImage() []byte {
+	b := liteTestImage()
+	for i, part := range []struct {
+		name         string
+		typ, subtype byte
+		offset, size uint32
+	}{
+		{"otadata", 1, 0, 0xd000, 0x2000},
+		{"ota_0", 0, 0x10, 0x10000, 0x1000},
+		{"ota_1", 0, 0x11, 0x11000, 0x1000},
+	} {
+		p := b[espPartTableOffset+(i+1)*espPartEntrySize : espPartTableOffset+(i+2)*espPartEntrySize]
+		clear(p)
+		binary.LittleEndian.PutUint16(p, espPartMagic)
+		p[2], p[3] = part.typ, part.subtype
+		binary.LittleEndian.PutUint32(p[4:], part.offset)
+		binary.LittleEndian.PutUint32(p[8:], part.size)
+		copy(p[12:], part.name)
+	}
+	return b
+}
+
+// stubLiteSimulatorBuild replaces the Wendy Lite build: it records the
+// options and returns image.
+func stubLiteSimulatorBuild(t *testing.T, image []byte) *[]liteBuildOptions {
+	t.Helper()
+	var calls []liteBuildOptions
+	previous := buildLiteFirmwareFn
+	t.Cleanup(func() { buildLiteFirmwareFn = previous })
+	buildLiteFirmwareFn = func(_ context.Context, o liteBuildOptions) (*liteFirmware, error) {
+		calls = append(calls, o)
+		src := litebuild.Source{Name: "feature/x", Version: strings.Repeat("ab", 20), Commit: strings.Repeat("ab", 20)}
+		return &liteFirmware{img: NewEspFlashImage(bytes.Clone(image)), src: src}, nil
+	}
+	return &calls
+}
+
+func TestLiteSimulatorBuildsFirmware(t *testing.T) {
+	for _, tc := range []struct {
+		profile string
+		image   []byte
+	}{
+		{vm.ProfileWendyLite, liteTestImage()},
+		{vm.ProfileWendyLiteNative, liteTestNativeImage()},
+	} {
+		t.Run(tc.profile, func(t *testing.T) {
+			calls := stubLiteSimulatorBuild(t, tc.image)
+			store := &vm.Store{Root: t.TempDir()}
+			info, err := createLiteSimulator(context.Background(), store, wendymcp.SimulatorCreateOptions{Name: "lite", Profile: tc.profile, Version: "feature/x"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(*calls) != 1 {
+				t.Fatalf("%d builds, want 1", len(*calls))
+			}
+			o := (*calls)[0]
+			// The values of the profile come from the master configuration
+			// of the version that is built (liteSimulatorGiven).
+			if len(o.attrs) != 0 || o.simulator != tc.profile || o.version != "feature/x" || o.nightly {
+				t.Fatalf("build options: attrs %v, simulator %q, version %q, nightly %v", o.attrs, o.simulator, o.version, o.nightly)
+			}
+			// stdout is the JSON-RPC channel of the MCP server.
+			if o.out != os.Stderr {
+				t.Fatal("the build output does not go to stderr")
+			}
+			if !strings.Contains(o.versionHint, "wendy vm create lite --profile "+tc.profile+" --version") {
+				t.Fatalf("version hint: %q", o.versionHint)
+			}
+			if info.Profile != tc.profile || info.Version != strings.Repeat("ab", 20) || info.Source != "build" || info.State != "stopped" {
+				t.Fatalf("unexpected simulator: %+v", info)
+			}
+			disk, err := os.ReadFile(store.DiskPath("lite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(disk[0xf000:0xf004]) != "WYC0" {
+				t.Fatal("the simulator configuration is not written")
+			}
+
+			// A taken name fails before the build.
+			if _, err := createLiteSimulator(context.Background(), store, wendymcp.SimulatorCreateOptions{Name: "lite", Profile: tc.profile, Nightly: true}); err == nil {
+				t.Fatal("duplicate accepted")
+			}
+			if len(*calls) != 1 {
+				t.Fatal("a taken name was built")
+			}
+		})
+	}
+}
+
+func TestLiteSimulatorBuildChecks(t *testing.T) {
+	calls := stubLiteSimulatorBuild(t, liteTestImage())
+	store := &vm.Store{Root: t.TempDir()}
+
+	// A WASM build has no OTA slots: the native profile refuses it.
+	_, err := createLiteSimulator(context.Background(), store, wendymcp.SimulatorCreateOptions{Name: "native", Profile: vm.ProfileWendyLiteNative, Nightly: true})
+	if err == nil || !strings.Contains(err.Error(), "OTA slots") {
+		t.Fatalf("got %v", err)
+	}
+	if len(*calls) != 1 || !(*calls)[0].nightly {
+		t.Fatalf("builds: %+v", *calls)
+	}
+	if _, err := os.Stat(store.Dir("native")); !os.IsNotExist(err) {
+		t.Fatal("incompatible firmware created a simulator")
+	}
+
+	path := t.TempDir() + "/firmware.bin"
+	if err := os.WriteFile(path, liteTestImage(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, opts := range []wendymcp.SimulatorCreateOptions{
+		{Name: "lite", Image: path, Nightly: true},
+		{Name: "lite", Image: path, Version: "1.0.0"},
+		{Name: "lite", Nightly: true, Version: "1.0.0"},
+	} {
+		if _, err := createLiteSimulator(context.Background(), store, opts); err == nil {
+			t.Errorf("%+v accepted", opts)
+		}
+	}
+	if len(*calls) != 1 {
+		t.Fatal("refused options were built")
+	}
+}
+
+// liteSimulatorConf is a master configuration with the attributes and the
+// simulator profiles of the real one. Each attribute changes the sdkconfig,
+// as in the real one: an attribute that changes nothing is never asked, and
+// a value given for it is not possible.
+const liteSimulatorConf = `
+attributes:
+  board: {type: string, enum: [custom, esp32c6_devkit_c_1_n8]}
+  chip: {type: string, enum: [esp32c6, esp32s3]}
+  idf_version: {type: string, enum: ["6.0.3"]}
+  idf_preview: {type: boolean}
+  flash_size: {type: size, enum: [4MiB, 8MiB]}
+  app_type: {type: string, enum: [native, wasm]}
+  sensor_link_av: {type: boolean}
+  wendy_net: {type: boolean}
+  cloud_tunnel: {type: boolean}
+  chain_algorithm: {type: string, enum: [ecdsa_p256, ml_dsa]}
+rules:
+  - if: board == "custom"
+    set: {wendy_net: false}
+  - if: board == "esp32c6_devkit_c_1_n8"
+    set: {chip: esp32c6, flash_size: 8MiB}
+    sdkconfig: CONFIG_DEVKIT=y
+  - set: {idf_version: "6.0.3", idf_preview: false}
+  - if: chip == "esp32c6"
+    sdkconfig: CONFIG_C6=y
+  - if: flash_size == 8MiB
+    sdkconfig: CONFIG_8MB=y
+  - if: app_type == "native"
+    sdkconfig: CONFIG_NATIVE=y
+  - if: sensor_link_av
+    sdkconfig: CONFIG_AV=y
+  - if: wendy_net
+    sdkconfig: CONFIG_NET=y
+  - if: cloud_tunnel
+    sdkconfig: CONFIG_TUNNEL=y
+  - if: chain_algorithm == "ml_dsa"
+    sdkconfig: CONFIG_MLDSA=y
+  - if: chain_algorithm == "ml_dsa" && chip == "esp32c6"
+    warn: {id: w1, message: The ESP32-C6 has no PSRAM for ML-DSA.}
+display:
+  board: {priority: 1}
+  chip: {priority: 2}
+  flash_size: {priority: 3}
+  sensor_link_av: {priority: 4}
+  app_type: {priority: 5}
+  wendy_net: {priority: 6}
+  cloud_tunnel: {priority: 7}
+  chain_algorithm: {priority: 8}
+simulator:
+  wendy-lite:
+    board: custom
+    chip: esp32c6
+    flash_size: 8MiB
+    app_type: wasm
+    sensor_link_av: false
+    wendy_net: false
+    cloud_tunnel: false
+    chain_algorithm: ecdsa_p256
+  wendy-lite-native:
+    board: custom
+    chip: esp32c6
+    flash_size: 8MiB
+    app_type: native
+    sensor_link_av: false
+    wendy_net: false
+    cloud_tunnel: false
+    chain_algorithm: ecdsa_p256
+`
+
+func TestLiteSimulatorBuildValues(t *testing.T) {
+	src := litebuild.Source{Name: "1.2.3", Version: "1.2.3", Commit: strings.Repeat("cd", 20)}
+	run := func(conf, profile string) (*litebuild.Model, *litebuild.Result, error) {
+		t.Helper()
+		m, err := litebuild.Load([]byte(conf), "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := litebuild.NewConfigurator(m, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Given, err = liteSimulatorGiven(m, src, profile)
+		if err != nil {
+			return m, nil, err
+		}
+		res, err := c.Run(&liteSimulatorPrompter{TUIPrompter: litebuild.TUIPrompter{Out: io.Discard}, src: src, profile: profile})
+		return m, res, err
+	}
+
+	// Each profile of the CLI answers every question, with its values from
+	// the master configuration.
+	for profile, appType := range map[string]string{vm.ProfileWendyLite: "wasm", vm.ProfileWendyLiteNative: "native"} {
+		m, res, err := run(liteSimulatorConf, profile)
+		if err != nil {
+			t.Fatalf("%s: %v", profile, err)
+		}
+		b, err := liteBuildSteps(m, res)
+		if err != nil || b.chip != vm.LiteChip {
+			t.Fatalf("%s: build: %+v, %v", profile, b, err)
+		}
+		if err := checkLiteSimulatorChip(src, profile, b.chip); err != nil {
+			t.Fatalf("%s: %v", profile, err)
+		}
+		// wendy_net=false is a value of the profile, but the custom board
+		// rule sets it: it is not an input.
+		want := []string{"board=custom", "chip=esp32c6", "flash_size=8MiB", "app_type=" + appType,
+			"sensor_link_av=false", "cloud_tunnel=false", "chain_algorithm=ecdsa_p256"}
+		if !slices.Equal(b.configure, want) {
+			t.Fatalf("%s: configure.py arguments %v, want %v", profile, b.configure, want)
+		}
+		if len(res.Solution.Warnings) != 0 {
+			t.Errorf("%s: the profile gives warning %s", profile, res.Solution.Warnings[0].Warning.ID)
+		}
+	}
+
+	// A question that the profile does not answer.
+	noCustomRule := strings.Replace(liteSimulatorConf, "  - if: board == \"custom\"\n    set: {wendy_net: false}\n", "", 1)
+	noCustomRule = strings.ReplaceAll(noCustomRule, "    wendy_net: false\n", "")
+	_, _, err := run(noCustomRule, vm.ProfileWendyLiteNative)
+	if err == nil || !strings.Contains(err.Error(), "(wendy_net), which the wendy-lite-native simulator does not set") {
+		t.Fatalf("got %v", err)
+	}
+
+	// A Wendy Lite version without the profile.
+	_, _, err = run(strings.Replace(liteSimulatorConf, "  wendy-lite-native:\n", "  wendy-lite-other:\n", 1), vm.ProfileWendyLiteNative)
+	if err == nil || !strings.HasPrefix(err.Error(), "Wendy Lite 1.2.3 cannot be built for the wendy-lite-native simulator: ") ||
+		!strings.Contains(err.Error(), `master_config.yaml has no simulator profile "wendy-lite-native"`) {
+		t.Fatalf("got %v", err)
+	}
+
+	// A profile for a chip that esp-emu does not emulate.
+	err = checkLiteSimulatorChip(src, vm.ProfileWendyLiteNative, "esp32s3")
+	if err == nil || !strings.Contains(err.Error(), "the profile gives chip esp32s3, but the simulator emulates an esp32c6") {
+		t.Fatalf("got %v", err)
+	}
 }
 
 func TestLiteFlashPrivateConfiguration(t *testing.T) {

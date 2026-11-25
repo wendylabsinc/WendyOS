@@ -56,7 +56,7 @@ func TestPrepareWendyCore(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeCoreFixture(t, dir, map[string]string{"main/application.cpp": tc.source})
-			setup, err := PrepareWendyCore(dir, nil)
+			setup, err := PrepareWendyCore(dir, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +68,7 @@ func TestPrepareWendyCore(t *testing.T) {
 				t.Fatalf("preparation changed source: %q, %v", original, err)
 			}
 			writeCoreFixture(t, dir, map[string]string{"main/application.cpp": tc.want})
-			again, err := PrepareWendyCore(dir, nil)
+			again, err := PrepareWendyCore(dir, nil, "")
 			if err != nil || string(again.updated) != tc.want {
 				t.Fatalf("setup is not idempotent: %v", err)
 			}
@@ -90,7 +90,7 @@ func TestPrepareWendyCoreRejectsAmbiguousSource(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeCoreFixture(t, dir, tc.files)
-			_, err := PrepareWendyCore(dir, nil)
+			_, err := PrepareWendyCore(dir, nil, "")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
@@ -113,7 +113,7 @@ func TestApplyWendyCore(t *testing.T) {
 				manifest += "  wendy_core:\n    path: ../../my-core\n"
 			}
 			writeCoreFixture(t, dir, map[string]string{"main/main.c": "void app_main(void) {}\n", "main/idf_component.yml": manifest})
-			setup, err := PrepareWendyCore(dir, nil)
+			setup, err := PrepareWendyCore(dir, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -131,7 +131,7 @@ func TestApplyWendyCore(t *testing.T) {
 			}
 			want := [][]string{{"eim", "run", "idf.py reconfigure", DefaultVersion}}
 			if !existing {
-				want = append([][]string{{"eim", "run", "idf.py add-dependency --component main --git " + wendyCoreGitURL + " --git-path components/wendy_core wendy_core", DefaultVersion}}, want...)
+				want = append([][]string{{"eim", "run", "idf.py add-dependency --component main --git " + WendyLiteGitURL + " --git-path components/wendy_core wendy_core", DefaultVersion}}, want...)
 			}
 			if !reflect.DeepEqual(*calls, want) {
 				t.Fatalf("commands = %v, want %v", *calls, want)
@@ -157,7 +157,8 @@ func TestApplyWendyCoreUsesProjectToolchain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setup, err := PrepareWendyCore(dir, toolchain)
+	// A release version is pinned to its tag.
+	setup, err := PrepareWendyCore(dir, toolchain, "0.9.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +169,7 @@ func TestApplyWendyCoreUsesProjectToolchain(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{image, "idf.py", "add-dependency", "--component", "main", "--git", wendyCoreGitURL, "--git-path", "components/wendy_core", "wendy_core"},
+		{image, "idf.py", "add-dependency", "--component", "main", "--git", WendyLiteGitURL, "--git-path", "components/wendy_core", "--git-ref", "v0.9.3", "wendy_core"},
 		{image, "idf.py", "reconfigure"},
 	}
 	if len(*calls) != len(want) {
@@ -187,7 +188,7 @@ func TestApplyWendyCoreFailures(t *testing.T) {
 			dir := t.TempDir()
 			const source = "void app_main(void) {}\n"
 			writeCoreFixture(t, dir, map[string]string{"main/main.c": source})
-			setup, err := PrepareWendyCore(dir, nil)
+			setup, err := PrepareWendyCore(dir, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}

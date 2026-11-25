@@ -24,6 +24,26 @@ type ProjectToolchain struct {
 	Preview        bool   `json:"preview"`
 	root, relative string
 	outputOwner    string
+	// The ESP-IDF of the EIM toolchain (see UseIDF).
+	idfVersion string
+	idfPreview bool
+}
+
+// UseIDF selects the ESP-IDF version of the EIM toolchain, an eim name such
+// as "v6.1", and whether idf.py needs --preview for the target. Without it
+// the EIM toolchain uses DefaultVersion. A container toolchain keeps the
+// ESP-IDF of its image.
+func (p *ProjectToolchain) UseIDF(version string, preview bool) {
+	p.idfVersion, p.idfPreview = version, preview
+}
+
+// IDFVersion returns the eim name of the ESP-IDF version that the EIM
+// toolchain uses.
+func (p *ProjectToolchain) IDFVersion() string {
+	if p == nil || p.idfVersion == "" {
+		return DefaultVersion
+	}
+	return p.idfVersion
 }
 
 func LoadProjectToolchain(projectPath, target string) (*ProjectToolchain, error) {
@@ -68,9 +88,11 @@ func LoadProjectToolchain(projectPath, target string) (*ProjectToolchain, error)
 	return &p, nil
 }
 
+// Ensure installs the ESP-IDF version of the EIM toolchain when it is
+// missing, or checks that Docker runs for a container toolchain.
 func (p *ProjectToolchain) Ensure(ctx context.Context) error {
 	if p.Image == "" {
-		return EnsureVersion(ctx)
+		return EnsureIDF(ctx, p.IDFVersion())
 	}
 	p.outputOwner = ""
 	cmd := execCommandContext(ctx, "docker", "info", "--format", "{{json .}}")
@@ -148,7 +170,10 @@ func (p *ProjectToolchain) restoreOutputOwnership(ctx context.Context) error {
 
 func (p *ProjectToolchain) command(ctx context.Context, args ...string) *exec.Cmd {
 	if p == nil || p.Image == "" {
-		return IdfCommandContext(ctx, args...)
+		if p != nil && p.idfPreview {
+			args = append([]string{"--preview"}, args...)
+		}
+		return EIMCommandContext(ctx, p.IDFVersion(), "idf.py", args...)
 	}
 	command := []string{"-v", p.root + ":/project", "-w", filepath.ToSlash(filepath.Join("/project", p.relative)), p.Image, "idf.py"}
 	if p.Preview {

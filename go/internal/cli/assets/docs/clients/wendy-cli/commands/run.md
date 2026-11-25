@@ -215,7 +215,7 @@ Regular ESP-IDF projects are the recommended app model for ESP32 targets. Wendy 
 wendy run
 ```
 
-The connected device must run a firmware variant with native app support. Wendy reads its chip target, ensures ESP-IDF 6.0.3 is available through `eim` (offering to install `eim` with Homebrew when it is missing), runs `idf.py set-target` when needed, builds the project, uploads the native application firmware, reboots, reconnects, and streams its console output. ESP-IDF projects are detected automatically; `--build-type` does not need to be set.
+The connected device must run a firmware variant with native app support. Wendy installs ESP-IDF with `eim`, the ESP-IDF Installation Manager, and offers to install `eim` with Homebrew when it is missing. Before each build, Wendy makes sure the project matches the Wendy Lite build on the device and uses the ESP-IDF version that build needs, installing it if necessary. Wendy asks before changing the project or cleaning its build folder; saying no stops the run. See [Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) for what it sets up in the project. Wendy then builds the project, uploads it to the device, restarts the device, and streams its console output. ESP-IDF projects are detected automatically; `--build-type` does not need to be set.
 
 See [ESP32 installation](/docs/installation/wendy-lite-esp32) for setup and a minimal project layout.
 

@@ -32,8 +32,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
-	"github.com/wendylabsinc/wendy/go/internal/cli/espidftoolchain"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/litebuild"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -1998,31 +1998,32 @@ func providerBuild(ctx context.Context, p providers.DeviceProvider, device model
 		return tb.BuildWithType(ctx, device, projectPath, product, projectType, opts.debug)
 	}
 	app, err := p.Build(ctx, device, projectPath, projectType, product, opts.debug)
-	// Both repairs below need someone to accept them, and neither runs while
+	// The repairs need someone to accept them, and none runs while
 	// watching.
 	if opts.isWatch() || (!opts.yes && !isInteractiveTerminal()) {
 		return app, err
 	}
-	// The EIM check comes before the wendy_core one, so the retried build can
-	// still reach that offer.
-	if errors.Is(err, espidftoolchain.ErrEIMNotInstalled) {
-		installed, installErr := installMissingEIM(ctx, opts.yes)
-		if installErr != nil {
-			return nil, installErr
-		}
-		if !installed {
+	// A new project can need several repairs, one per build: see
+	// liteBuildRepair. Each runs at most once, so a repair that does not
+	// take effect cannot loop.
+	done := map[string]bool{}
+	for err != nil {
+		kind, repair := liteBuildRepair(err, projectPath, opts.yes)
+		if repair == nil || done[kind] {
 			return app, err
 		}
+		done[kind] = true
+		retry, repairErr := repair(ctx)
+		if repairErr != nil {
+			return nil, repairErr
+		}
+		if !retry {
+			return app, err
+		}
+		cliLogln("Retrying the build...")
 		app, err = p.Build(ctx, device, projectPath, projectType, product, opts.debug)
 	}
-	var missingCore *providers.MissingWendyCoreError
-	if !errors.As(err, &missingCore) {
-		return app, err
-	}
-	if err := setupLiteProject(ctx, projectPath, missingCore.Toolchain, opts.yes); err != nil {
-		return nil, err
-	}
-	return p.Build(ctx, device, projectPath, projectType, product, opts.debug)
+	return app, err
 }
 
 // shouldOfferLiteReinstall reports whether a failed provider build should turn
@@ -2086,9 +2087,10 @@ func waitForSerialPortFree(ctx context.Context, port string) bool {
 // the device cannot host the app: either its existing firmware does not
 // support the app's requirements (native or WASM apps), or it has no Wendy
 // Lite firmware installed at all. Either way, it offers to (re)install Wendy
-// Lite (the classic `wendy os install` flow) and, once the device is back,
-// builds again. In every other case — including --yes, which must not
-// silently accept a destructive reinstall — it returns the build error
+// Lite (the Wendy Lite build of `wendy os install`, see liteRunBuildOptions,
+// or the published firmware with liteCatalogInstallEnv) and, once the device
+// is back, builds again. In every other case — including --yes, which must
+// not silently accept a destructive reinstall — it returns the build error
 // unchanged.
 func offerLiteReinstallAndRebuild(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, projectType, product string, opts runOptions, buildErr error) (*providers.BuiltApp, error) {
 	wrapped := commandErrorf(errBuildFailed, "provider build: %w", buildErr)
@@ -2117,30 +2119,43 @@ func offerLiteReinstallAndRebuild(ctx context.Context, p providers.DeviceProvide
 		return nil, wrapped
 	}
 
-	board, err := pickWendyLiteBoard("", false)
-	if err != nil {
-		if errors.Is(err, ErrUserCancelled) {
-			return nil, wrapped
+	// The published firmware only with liteCatalogInstallEnv; otherwise
+	// Wendy Lite is built for the board and the app.
+	catalog := liteCatalogInstallEnabled()
+	var board string
+	if catalog {
+		board, err = pickWendyLiteBoard("", false)
+		if err != nil {
+			if errors.Is(err, ErrUserCancelled) {
+				return nil, wrapped
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 
 	if freshInstall {
 		// Improbable, but the picker's scanner may still be probing this port,
 		// so wait until the port is free. The lock is released immediately:
-		// installESP32Firmware takes its own, and flock is per-descriptor, so
-		// holding ours would block it.
+		// the flash takes its own, and flock is per-descriptor, so holding
+		// ours would block it.
 		port := device.ConnectionInfo["serialPort"]
 		if !waitForSerialPortFree(ctx, port) {
 			cliNotice("Serial port %s is still in use; attempting the install anyway.", port)
 		}
 	}
 
-	serialDevice := discovery.SerialPortInfo{
-		Port:      device.ConnectionInfo["serialPort"],
-		Transport: discovery.SerialTransportNativeUSB,
-	}
-	if err := installESP32Firmware(ctx, false, board, serialDevice, wifiCLIOptions{}, "", preEnrollOptions{mode: preEnrollAuto}); err != nil {
+	if catalog {
+		serialDevice := discovery.SerialPortInfo{
+			Port:      device.ConnectionInfo["serialPort"],
+			Transport: discovery.SerialTransportNativeUSB,
+		}
+		if err := installESP32Firmware(ctx, false, board, serialDevice, wifiCLIOptions{}, "", preEnrollOptions{mode: preEnrollAuto}); err != nil {
+			return nil, fmt.Errorf("reinstalling Wendy Lite: %w", err)
+		}
+	} else if err := runLiteBuildFn(ctx, liteRunBuildOptions(device, unsupported, projectType)); err != nil {
+		if errors.Is(err, ErrUserCancelled) {
+			return nil, wrapped
+		}
 		return nil, fmt.Errorf("reinstalling Wendy Lite: %w", err)
 	}
 
@@ -2171,6 +2186,36 @@ func offerLiteReinstallAndRebuild(ctx context.Context, p providers.DeviceProvide
 		return nil, commandErrorf(errBuildFailed, "provider build: %w", err)
 	}
 	return app, nil
+}
+
+// liteRunBuildVersionHint is what to do when the latest Wendy Lite release
+// cannot be built: wendy run has no flag for the Wendy Lite version.
+const liteRunBuildVersionHint = "Install a Wendy Lite version with 'wendy install --device-type esp32 --version <version>'"
+
+// liteRunBuildOptions returns the Wendy Lite build that wendy run offers for
+// device: the latest release, for the app type of the project and, on a
+// reinstall, for the chip of the board, flashed to the device's port. The
+// questions (board, Wi-Fi, name, enrollment) are asked as in wendy install.
+func liteRunBuildOptions(device models.ExternalDevice, unsupported *providers.AppRequirementsUnsupportedError, projectType string) liteBuildOptions {
+	required := map[string]string{}
+	switch projectType {
+	case "esp-idf":
+		required[litebuild.AppType] = "native"
+	case "swift":
+		required[litebuild.AppType] = "wasm"
+	}
+	if unsupported.Target != "" {
+		required[litebuild.Chip] = unsupported.Target
+	}
+	return liteBuildOptions{
+		required: required,
+		preOpts:  preEnrollOptions{mode: preEnrollAuto},
+		port: discovery.SerialPortInfo{
+			Port:      device.ConnectionInfo["serialPort"],
+			Transport: discovery.SerialTransportNativeUSB,
+		},
+		versionHint: liteRunBuildVersionHint,
+	}
 }
 
 // waitForDeviceReady polls the provider until the device answers again after

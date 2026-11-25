@@ -316,6 +316,13 @@ func (r *liteRelayStub) WendyComRelay(stream wcomrelaypb.WendyComRelayService_We
 					Os: "wendy-lite", OsVersion: "0.9.1", CpuArchitecture: "riscv32", Target: "esp32c6",
 				}},
 			}}}
+		case req.GetCommand().GetGetBuildInfo() != nil:
+			reply = &wendypb.WendyComMessage{Msg: &wendypb.WendyComMessage_Response{Response: &wendypb.WendyComResponse{
+				RequestId: req.GetCommand().GetRequestId(),
+				Data: &wendypb.WendyComResponse_BuildInfo{BuildInfo: &wendypb.WendyComBuildInfo{
+					OsVersion: "0.9.1", BuildProfile: `{"board":"esp32c6_devkit_c_1"}`, BuildTool: "idf-v6.0.3",
+				}},
+			}}}
 		default:
 			continue
 		}

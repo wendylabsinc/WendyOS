@@ -248,3 +248,26 @@ func TestDetectedInstallPickerEmptyScanKeepsManualTabs(t *testing.T) {
 		t.Fatalf("empty scan changed manual picker: %+v", m.tabs)
 	}
 }
+
+// Without the published-firmware targets, a detected S31 builds Wendy Lite
+// for the S31.
+func TestDetectedS31BuildsWendyLite(t *testing.T) {
+	s31 := []installUSBDevice{{0x303a, 0x0020}}
+	items := append(installPickerTestItems()[:1], liteBuildPickerItem())
+	detected := detectedInstallItems(items, s31)
+	if len(detected) != 1 || detected[0].Value != liteBuildS31Value || detected[0].Name != "ESP32-S31" {
+		t.Fatalf("detected = %+v, want the ESP32-S31 build", detected)
+	}
+	if want := "1 connected in ROM download mode; builds Wendy Lite for it"; detected[0].Description != want {
+		t.Errorf("description = %q, want %q", detected[0].Description, want)
+	}
+	// Without the ESP32 platform entry (a --pr run), nothing is offered.
+	if got := detectedInstallItems(installPickerTestItems()[:1], s31); len(got) != 0 {
+		t.Errorf("without the ESP32 platform entry: %+v", got)
+	}
+	// With the published-firmware target, the detected S31 leads to it.
+	items = append(items, tui.PickerItem{Name: "ESP32-S31", Value: esp32S31TargetValue})
+	if got := detectedInstallItems(items, s31); len(got) != 1 || got[0].Value != esp32S31TargetValue {
+		t.Errorf("with the published firmware: %+v", got)
+	}
+}

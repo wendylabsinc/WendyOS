@@ -107,6 +107,7 @@ Wendy recognizes the standard ESP-IDF project markers: a top-level `CMakeLists.t
 hello-esp32/
 ├── CMakeLists.txt
 ├── sdkconfig.defaults
+├── sdkconfig.defaults.wendy
 ├── wendy.json
 └── main/
     ├── CMakeLists.txt
@@ -114,7 +115,7 @@ hello-esp32/
     └── main.c
 ```
 
-The top-level `CMakeLists.txt` remains standard ESP-IDF:
+The top-level `CMakeLists.txt` starts as standard ESP-IDF:
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -134,17 +135,20 @@ Add a Wendy manifest using the `wendy-lite` device platform:
 }
 ```
 
-Your project also needs the **`wendy_core`** component. When it is missing, `wendy run` offers to add the dependency and initialize it in `app_main()`, then retries the build. This supports C and C++ projects with a single `app_main()` definition under `main/`. Use `wendy run --yes` to accept setup without a prompt.
+Your project also needs the **`wendy_core`** component, and a `sdkconfig.defaults.wendy` file that configures the app to match your Wendy Lite version.
+`wendy run` offers to set up each of them: it adds the `wendy_core` dependency and initializes it in `app_main()`, writes `sdkconfig.defaults.wendy`, and lists it in `SDKCONFIG_DEFAULTS` in `CMakeLists.txt`.
+The `wendy_core` setup supports C and C++ projects with a single `app_main()` definition under `main/`. Use `wendy run --yes` to accept setup without a prompt.
 
-To configure it manually, declare the dependency in `main/idf_component.yml`:
+To set up the project manually, declare the `wendy_core` dependency in `main/idf_component.yml`, with the git tag of the device's Wendy Lite version: `v` followed by the version the device reports, for example `v1.2.3`.
 
 ```yaml
 dependencies:
   idf:
-    version: ">=5.5.0"
+    version: ">=6.0.0"
   wendy_core:
     git: "https://github.com/wendylabsinc/wendy-lite.git"
     path: "components/wendy_core"
+    version: "v<X.Y.Z>"
 ```
 
 Then require it from your component in `main/CMakeLists.txt`:
@@ -167,6 +171,18 @@ void app_main(void)
     /* Your application starts here. */
 }
 ```
+
+Finally, list `sdkconfig.defaults.wendy` in `SDKCONFIG_DEFAULTS` in the top-level `CMakeLists.txt`, before the include of `project.cmake`. Your own `sdkconfig.defaults` comes last, so its settings win. Keep that file, even empty: ESP-IDF stops when a listed file is missing.
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+
+set(SDKCONFIG_DEFAULTS "sdkconfig.defaults.wendy;sdkconfig.defaults")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(hello_esp32)
+```
+
+`wendy run` still writes `sdkconfig.defaults.wendy` itself, to match the device's Wendy Lite version.
 
 `wendy_core` is what makes the device manageable by the Wendy CLI and reachable through Wendy Cloud. Apart from that, your app code uses normal ESP-IDF components and APIs — no other custom SDK or wrapper is required. See [Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) for the full walkthrough, including which peripherals (USB, Wi-Fi, BLE) Wendy Lite owns and your app must not configure itself.
 

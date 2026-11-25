@@ -46,7 +46,9 @@ func newVMCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create [name]",
 		Short: "Create a VM, downloading the WendyOS image if needed",
-		Long: "Create a VM, downloading the WendyOS image if needed.\n\n" +
+		Long: "Create a VM, downloading the WendyOS image if needed. The wendy-lite and " +
+			"wendy-lite-native profiles build Wendy Lite for ESP32-C6 on this computer instead, " +
+			"as wendy install --device-type esp32 does.\n\n" +
 			"In an interactive terminal, prompts for the VM name and simulator profile " +
 			"when omitted. Pass a name and --profile to skip the prompts. " +
 			"With --yes or without an interactive terminal, a name is required " +
@@ -61,14 +63,20 @@ func newVMCreateCmd() *cobra.Command {
 				if cmd.Flags().Changed("arch") {
 					return fmt.Errorf("--arch applies to WendyOS simulators; %s runs ESP32-C6 firmware", selectedProfile)
 				}
-				if nightly || prNumber != 0 || cmd.Flags().Changed("disk") {
-					return fmt.Errorf("wendy-lite does not use --nightly, --pr or --disk; supply a merged ESP32-C6 --image or use the stable firmware")
+				if prNumber != 0 || cmd.Flags().Changed("disk") {
+					return fmt.Errorf("%s does not use --pr or --disk; it builds Wendy Lite for ESP32-C6, or takes a merged ESP32-C6 --image", selectedProfile)
+				}
+				if nightly && version != "" {
+					return fmt.Errorf("--nightly and --version cannot be combined")
+				}
+				if image != "" && (nightly || version != "") {
+					return fmt.Errorf("--image cannot be combined with --nightly or --version")
 				}
 				store, err := vm.NewStore()
 				if err != nil {
 					return err
 				}
-				info, err := createLiteSimulator(cmd.Context(), store, wendymcp.SimulatorCreateOptions{Name: name, Profile: selectedProfile, Image: image, Version: version})
+				info, err := createLiteSimulator(cmd.Context(), store, wendymcp.SimulatorCreateOptions{Name: name, Profile: selectedProfile, Image: image, Version: version, Nightly: nightly})
 				if err == nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "Created Wendy Lite simulator %q. Connect with --device %s.\n", name, info.Device)
 				}
@@ -81,8 +89,8 @@ func newVMCreateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&image, "image", "", "Local WendyOS disk image or merged ESP32-C6 firmware for wendy-lite or wendy-lite-native")
-	cmd.Flags().StringVar(&version, "version", "", "WendyOS version to download (default: latest)")
-	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
+	cmd.Flags().StringVar(&version, "version", "", "WendyOS version to download, or Wendy Lite version, branch or commit to build (default: latest release)")
+	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds (Wendy Lite: build the nightly tag)")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Create from a pull request's build, so a change can be tried before it merges")
 	cmd.Flags().IntVar(&diskGiB, "disk", 16, "Disk size in GiB (the image is grown to this size)")
 	cmd.Flags().StringVar(&arch, "arch", "", "Guest architecture: arm64 or amd64 (default: this computer's default; a local --image is treated as arm64)")

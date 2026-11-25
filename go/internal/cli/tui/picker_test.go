@@ -919,6 +919,48 @@ func TestPickerModel_ShowsSelectedHintAtBottom(t *testing.T) {
 	}
 }
 
+// The warning of the highlighted row is the last line, under its hint, in
+// the amber of WarningMessage.
+func TestPickerModel_ShowsSelectedWarningAtBottom(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	const hint, warning = "Hint: the fast one.", "Not enough RAM for this one."
+	updated, _ := NewPicker().Update(PickerAddMsg{Items: []PickerItem{
+		{Name: "a", Hint: hint, Warning: warning, SortKey: "1", Value: "a"},
+		{Name: "b", Hint: "Hint: the other one.", SortKey: "2", Value: "b"},
+	}})
+	pm := updated.(PickerModel)
+
+	view := pm.View()
+	plain := ansi.Strip(view)
+	if got := lastNonEmptyLine(plain); got != "⚠ "+warning {
+		t.Fatalf("last line = %q, want the warning", got)
+	}
+	if strings.Index(plain, hint) > strings.Index(plain, warning) {
+		t.Errorf("the warning is above the hint in %q", plain)
+	}
+	if !strings.Contains(view, warningStyle.Render(pickerWarningPrefix+warning)) || !strings.Contains(view, "38;2;245;158;11") {
+		t.Errorf("the warning is not in the amber warning style: %q", view)
+	}
+
+	updated, _ = pm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if plain := ansi.Strip(updated.(PickerModel).View()); strings.Contains(plain, warning) {
+		t.Errorf("the warning of a stays after moving to b: %q", plain)
+	}
+}
+
+// PickerHintHeight reserves the hint and the warning, wrapped.
+func TestPickerHintHeightCountsTheWarning(t *testing.T) {
+	items := []PickerItem{
+		{Name: "a", Hint: "short hint"},
+		{Name: "b", Hint: "short hint", Warning: "a warning long enough to take two lines"},
+		{Name: "c", Warning: "short"},
+	}
+	if got := PickerHintHeight(items, 30, "  "); got != 3 {
+		t.Errorf("PickerHintHeight = %d, want 3 (one hint line and two warning lines)", got)
+	}
+}
+
 func TestPickerModel_DefaultKeyShowsStar(t *testing.T) {
 	m := NewPickerWithTitle("Select a device")
 	m.DefaultKey = "alpha"

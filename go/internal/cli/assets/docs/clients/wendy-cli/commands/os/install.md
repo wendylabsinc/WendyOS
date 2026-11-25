@@ -4,12 +4,12 @@ Installs WendyOS onto an NVMe or SD card, fully recovers supported Jetsons over 
 
 > **Tip:** [`wendy install`](../install.md) is the recommended, surfaced entry point for this command. `wendy os install` remains available and behaves identically — it is kept for backward compatibility and for discoverability under the `wendy os` group.
 
-The command presents a device picker with Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, then use the arrow keys and Enter to select a device. Linux includes WendyOS targets and Linux Desktop, Mac offers Headless Mac, and Microcontrollers lists ESP32 targets with published firmware. Empty categories are hidden. When a Jetson in USB recovery mode, a Qualcomm board in EDL mode, or an ESP32-S31 in ROM download mode is connected, a Detected USB tab appears first; see [`wendy install`](../install.md). Select the device type to take the appropriate path:
+The command presents a device picker with Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, then use the arrow keys and Enter to select a device. Linux includes WendyOS targets and Linux Desktop, Mac offers Headless Mac, and Microcontrollers offers Wendy Lite for the ESP32 platform. Empty categories are hidden. When a Jetson in USB recovery mode, a Qualcomm board in EDL mode, or an ESP32-S31 in ROM download mode is connected, a Detected USB tab appears first; see [`wendy install`](../install.md). Select the device type to take the appropriate path:
 
 - **Jetson Orin Nano / AGX Orin** -> download a recovery flashpack -> verify the module/carrier -> update QSPI and NVMe/eMMC together
 - **Raspberry Pi targets** -> download OS image -> write to SD/NVMe -> write config partition
 - **Jetson AGX Thor** -> download flashpack -> boot over USB recovery -> flash QSPI and internal NVMe
-- **ESP32 targets** → detect USB serial port → download firmware `.bin` → flash over serial
+- **ESP32 platform** (`--device-type esp32`) → download the Wendy Lite sources → answer the build questions → build with ESP-IDF → flash over serial
 
 ```sh
 # Interactive (recommended)
@@ -36,9 +36,13 @@ wendy install --device-type jetson-orin-nano --rootfs-only --drive /dev/disk4
 
 # Direct install from a local image (Linux only)
 wendy install path/to/image.img /dev/disk4 --force
+
+# ESP32: build Wendy Lite for the connected board and flash it
+wendy install --device-type esp32 --build-attr board=esp32c61_devkit_c_1 \
+  --build-attr cloud_tunnel=false --no-wifi
 ```
 
-> **Note:** `--device-type` is not supported for ESP32 targets. Use the interactive picker to flash an ESP32.
+> **Note:** `--device-type esp32` builds Wendy Lite for your board and flashes it to the connected ESP32. The install asks a few build questions, starting with the board. To answer one in advance, pass `--build-attr NAME=VALUE`, for example `--build-attr board=esp32c61_devkit_c_1`. You don't need to answer what the board already sets, such as its chip and flash size. Without a terminal, the install stops at the first unanswered question and lists its allowed values.
 
 > **Without a terminal**, also pass a Wi-Fi choice (`--wifi`, `--wifi-ssid` or `--no-wifi`) and `--force`. See [Running without a terminal](#running-without-a-terminal).
 
@@ -91,11 +95,11 @@ Make sure your ESP32 is connected via USB and in bootloader mode.
 To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.
 ```
 
-### 2. Firmware resolution
+### 2. Firmware build
 
-Firmware versions are served from the same manifest used for WendyOS images. With `--nightly`, the latest nightly build is used instead of the latest stable.
+Wendy Lite is built from its sources: the latest release by default, the nightly build with `--nightly`, or the version, branch or commit given with `--version`. The build questions choose the board and its options; the answers of the last run are the defaults. The sources and the build stay in the CLI cache, so the next build of the same version is incremental.
 
-Boards without published firmware are omitted from the picker. Immediately before any chip-specific initialization or flash erase, the ROM bootloader's detected chip model is checked against the selected board; a mismatch is rejected before firmware is written. Wendy Lite currently supports ESP32-C5, C6, C61, P4, and S3 targets.
+Immediately before any chip-specific initialization or flash erase, the ROM bootloader's detected chip model is checked against the chip of the selected board; a mismatch is rejected before firmware is written. Wendy Lite currently supports ESP32-C5, C6, C61, P4, S3 and S31 targets.
 
 ### 3. Serial flash protocol
 
@@ -256,8 +260,9 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--binary` | — | Path to a local Linux ELF `wendy-agent` binary; skips the agent download and requires matching ARM64 or x86_64 architecture |
 | `--nightly` | false | Use nightly/pre-release builds |
 | `--pr` | — | Install from wendyos-builder PR #N (mutually exclusive with `--nightly`, `--version`, positional path; not supported for ESP32 targets) |
-| `--device-type` | — | Device type from manifest (Linux targets only, e.g. `raspberry-pi-5`; not supported for ESP32 targets: `esp32-c5`, `esp32-c6`, `esp32-c61`, `esp32-p4`, `esp32-s3`) |
-| `--version` | latest | WendyOS version to install (Linux only) |
+| `--device-type` | — | Device type from manifest (e.g. `raspberry-pi-5`), or `esp32` to build Wendy Lite for an ESP32 board and flash it |
+| `--build-attr` | — | Repeatable `NAME=VALUE`: a build attribute of Wendy Lite (`--device-type esp32`), which answers that build question |
+| `--version` | latest | WendyOS or Wendy Lite version to install |
 | `--drive` | interactive | Target drive path (e.g. `/dev/disk4`) |
 | `--rootfs-only` | false | Explicitly write only an Orin SD/NVMe image; QSPI is not updated |
 | `--force` | false | Skip confirmation prompts; required without a terminal |
@@ -292,6 +297,7 @@ Without a terminal on the input (CI, an agent's shell), nothing is asked, and ev
 | Erase and ready confirmations | `--force` is required. |
 | Internal drive | `--yes-overwrite-internal` is required. |
 | Several boards in recovery or EDL mode | Connect only the one to flash. |
+| Wendy Lite build questions (`--device-type esp32`) | One `--build-attr NAME=VALUE` per question that earlier answers do not settle. The answers of the last run are not used. |
 
 Before anything is erased or flashed, the installer prints what first boot will apply, also with `--force`. Passwords are never printed:
 

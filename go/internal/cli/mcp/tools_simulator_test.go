@@ -83,6 +83,41 @@ func TestSimulatorCreateRejectsInvalidInputsBeforeBackend(t *testing.T) {
 	}
 }
 
+func TestSimulatorCreateLiteVersionIsABuildRef(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	var got []SimulatorCreateOptions
+	s.SetSimulatorBackend(SimulatorBackend{Create: func(_ context.Context, opts SimulatorCreateOptions) (*SimulatorInfo, error) {
+		got = append(got, opts)
+		return &SimulatorInfo{Name: opts.Name, Profile: opts.Profile}, nil
+	}})
+	// A Wendy Lite branch has slashes; a WendyOS release tag has none.
+	r, err := s.handleSimulatorCreate(context.Background(), callToolReq("simulator_create", map[string]any{"name": "lite", "profile": "wendy-lite-native", "version": "gab/configurator"}))
+	if err != nil || r.IsError || len(got) != 1 || got[0].Version != "gab/configurator" {
+		t.Fatalf("Wendy Lite branch: %v %v %+v", r, err, got)
+	}
+	for _, args := range []map[string]any{
+		{"name": "dev", "version": "gab/configurator"},
+		{"name": "lite", "profile": "wendy-lite", "version": "/main"},
+	} {
+		r, err := s.handleSimulatorCreate(context.Background(), callToolReq("simulator_create", args))
+		if err != nil || !r.IsError || structuredMap(t, r)["error_code"] != "INVALID_ARGUMENT" {
+			t.Fatalf("args %v: %v %v", args, r, err)
+		}
+	}
+	for _, opts := range []SimulatorCreateOptions{
+		{Name: "lite", Profile: "wendy-lite", DiskGiB: 16, Nightly: true, Image: "fw.bin"},
+		{Name: "lite", Profile: "wendy-lite", DiskGiB: 16, Nightly: true, Version: "1.0.0"},
+		{Name: "dev", Profile: "generic", DiskGiB: 16, Nightly: true},
+	} {
+		if err := opts.Validate(); err == nil {
+			t.Errorf("%+v accepted", opts)
+		}
+	}
+	if err := (SimulatorCreateOptions{Name: "lite", Profile: "wendy-lite", DiskGiB: 16, Nightly: true}).Validate(); err != nil {
+		t.Errorf("nightly Wendy Lite: %v", err)
+	}
+}
+
 func TestSimulatorToolsWorkWithoutConnectionAndKeepReadinessUnknown(t *testing.T) {
 	s := New(&config.Config{}, nil)
 	s.SetSimulatorBackend(SimulatorBackend{

@@ -54,12 +54,17 @@ func pickInstallDevice(items []tui.PickerItem) (string, error) {
 	return selected, nil
 }
 
-// installDeviceTypeChoices lists the --device-type values among items; Wendy
-// Lite boards have none, since only the picker installs them.
+// installDeviceTypeChoices lists the --device-type values among items: the
+// Wendy Lite build is esp32, and the published Wendy Lite firmware has none,
+// since only the picker installs it.
 func installDeviceTypeChoices(items []tui.PickerItem) []string {
 	var types []string
 	for _, item := range items {
-		if v, ok := item.Value.(string); ok && v != "" && !strings.HasPrefix(v, "wlite_") {
+		v, ok := item.Value.(string)
+		switch {
+		case v == liteBuildValue:
+			types = append(types, liteBuildDeviceType)
+		case ok && v != "" && !strings.HasPrefix(v, "wlite_"):
 			types = append(types, v)
 		}
 	}

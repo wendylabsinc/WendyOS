@@ -272,6 +272,7 @@ func TestInstallAsksWiFi(t *testing.T) {
 		linuxDesktopValue:    false,
 		headlessMacValue:     false,
 		"esp32-c6":           false,
+		liteBuildDeviceType:  true,
 	} {
 		if got := installAsksWiFi(deviceType); got != want {
 			t.Errorf("installAsksWiFi(%q) = %v; want %v", deviceType, got, want)

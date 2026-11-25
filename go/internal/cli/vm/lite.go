@@ -18,6 +18,10 @@ func IsLiteProfile(profile string) bool {
 const LiteSSID = "wendy-simulator"
 const LitePassword = "wendy-simulator"
 
+// LiteChip is the ESP-IDF target that esp-emu emulates: the only chip of a
+// Wendy Lite simulator.
+const LiteChip = "esp32c6"
+
 func (s Spec) liteArgs() ([]string, error) {
 	if err := ValidName(s.Name); err != nil {
 		return nil, err
@@ -39,7 +43,7 @@ func (s Spec) liteArgs() ([]string, error) {
 		}
 		network += ",dns=" + address.String()
 	}
-	return []string{"--chip", "esp32c6", "--firmware", s.DiskPath,
+	return []string{"--chip", LiteChip, "--firmware", s.DiskPath,
 		"--save-state", "--net", network,
 		"--wifi-ssid", LiteSSID, "--wifi-password", LitePassword}, nil
 }

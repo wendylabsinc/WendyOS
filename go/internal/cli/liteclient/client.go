@@ -67,6 +67,26 @@ type DeviceInfo struct {
 	NativeAppSupport bool
 }
 
+// BuildInfo tells how the Wendy Lite firmware of a device was built. A field
+// is "" when the build does not know it, typically when wendy-lite was not
+// configured with its tools/configure.py.
+type BuildInfo struct {
+	// OSVersion is the version of the wendy-lite source
+	// (CONFIG_WENDY_VERSION): "X.Y.Z" for the tag vX.Y.Z, else the full
+	// commit hash, with "-dirty" when the source had uncommitted changes.
+	OSVersion string
+	// BuildProfile is the configurator input values
+	// (CONFIG_WENDY_BUILD_PROFILE), a JSON object on one line.
+	BuildProfile string
+	// BuildTool is "idf-" followed by the ESP-IDF version, e.g. "idf-v6.0.3".
+	BuildTool string
+}
+
+// ErrBuildInfoUnsupported reports that the firmware of the device is older
+// than the get_build_info command: it answers an unknown command with
+// WENDY_COM_RESULT_UNKNOWN_ERROR.
+var ErrBuildInfoUnsupported = errors.New("the device firmware does not support get_build_info")
+
 // ErrSerialPortUnavailable marks failures that happened before a serial port
 // was successfully opened. Callers that probe for Wendy Lite firmware use it
 // to distinguish a busy/missing/inaccessible port from a port that opened but
@@ -662,6 +682,36 @@ func (c *WendyLiteClient) GetDeviceInfo(timeout time.Duration) (*DeviceInfo, err
 		Board:            di.GetBoard(),
 		WasmAppSupport:   di.GetWasmAppSupport(),
 		NativeAppSupport: di.GetNativeAppSupport(),
+	}, nil
+}
+
+// GetBuildInfo asks the device how its firmware was built. The values are
+// returned as the device gives them. A firmware older than the command gives
+// ErrBuildInfoUnsupported.
+func (c *WendyLiteClient) GetBuildInfo(timeout time.Duration) (*BuildInfo, error) {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_GetBuildInfo{
+			GetBuildInfo: &wendypb.WendyComGetBuildInfoParams{},
+		},
+	}, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Result == wendypb.WendyComResult_WENDY_COM_RESULT_UNKNOWN_ERROR {
+		return nil, ErrBuildInfoUnsupported
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return nil, fmt.Errorf("device returned error: %w", err)
+	}
+	bi := resp.GetBuildInfo()
+	if bi == nil {
+		return nil, fmt.Errorf("device returned no build info")
+	}
+	return &BuildInfo{
+		OSVersion:    bi.GetOsVersion(),
+		BuildProfile: bi.GetBuildProfile(),
+		BuildTool:    bi.GetBuildTool(),
 	}, nil
 }
 

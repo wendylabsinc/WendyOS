@@ -91,8 +91,10 @@ func detectedInstallItems(items []tui.PickerItem, devices []installUSBDevice) []
 		}
 	}
 	var detected []tui.PickerItem
+	catalogS31 := false
 	for _, item := range items {
 		key, _ := item.Value.(string)
+		catalogS31 = catalogS31 || key == esp32S31TargetValue
 		if count := counts[key]; count > 0 {
 			item.Section = "USB flashing devices"
 			description := fmt.Sprintf("%d connected in USB recovery mode", count)
@@ -105,6 +107,20 @@ func detectedInstallItems(items []tui.PickerItem, devices []installUSBDevice) []
 			}
 			item.Description = description
 			detected = append(detected, item)
+		}
+	}
+	// Without the published-firmware targets (see liteCatalogInstallEnv), a
+	// detected S31 builds Wendy Lite for the S31.
+	if count := counts[esp32S31TargetValue]; count > 0 && !catalogS31 {
+		for _, item := range items {
+			if item.Value == liteBuildValue {
+				item.Name = "ESP32-S31"
+				item.Section = "USB flashing devices"
+				item.Description = fmt.Sprintf("%d connected in ROM download mode; builds Wendy Lite for it", count)
+				item.Value = liteBuildS31Value
+				detected = append(detected, item)
+				break
+			}
 		}
 	}
 	if count := counts[detectedEDLValue]; count > 0 && len(edlInstallItems(items)) > 0 {
