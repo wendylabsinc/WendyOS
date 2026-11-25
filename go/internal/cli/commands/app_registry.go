@@ -165,6 +165,18 @@ func publishProject(cmd *cobra.Command, p publishArgs) (*publishedRelease, error
 	if err != nil {
 		return nil, err
 	}
+	if p.lastRun {
+		// What the last run built, to match against what the device runs.
+		digest, err := img.Digest()
+		if err != nil {
+			return nil, err
+		}
+		built := "at an unknown time"
+		if fi, err := os.Stat(filepath.Join(p.layoutDir, "index.json")); err == nil {
+			built = fi.ModTime().Format("2006-01-02 15:04:05")
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Promoting the image wendy run last built for %s: %s, built %s.\n", p.platform, digest, built)
+	}
 	if img, err = withAppDefinition(img, def); err != nil {
 		return nil, err
 	}

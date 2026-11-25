@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 // newAppPromoteCmd is `wendy app promote` (spec 4.5): publish the image the
@@ -51,14 +54,19 @@ func newAppPromoteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var platform string
 			if err := withAppCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
 				op, err := newRegistryOp(ctx, conn, auth)
 				if err != nil {
 					return err
 				}
-				return promoteCheck(ctx, op, appCfg, a, device, interactive)
+				platform, err = promoteCheck(ctx, op, appCfg, a, device, interactive)
+				return err
 			}); err != nil {
 				return err
+			}
+			if !cmd.Flags().Changed("platform") {
+				p.platform = platform
 			}
 			p.lastRun = true
 			rel, err := publishProject(cmd, p)
@@ -90,30 +98,48 @@ func newAppPromoteCmd() *cobra.Command {
 // promoteCheck refuses, before anything is published, what deploying to
 // device would refuse: an unknown device and, without a terminal, a missing
 // answer or a configuration with an empty required setting or one a device
-// refuses. In a terminal the deploy questions ask for what is missing.
-func promoteCheck(ctx context.Context, op *registryOp, cfg *appconfig.AppConfig, a deployAnswers, device string, interactive bool) error {
+// refuses. In a terminal the deploy questions ask for what is missing. It
+// returns the platform wendy run builds for device.
+func promoteCheck(ctx context.Context, op *registryOp, cfg *appconfig.AppConfig, a deployAnswers, device string, interactive bool) (string, error) {
 	assets, _, err := op.devices(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	id, err := assetID(assets, device)
-	if err != nil || interactive {
-		return err
+	if err != nil {
+		return "", err
+	}
+	i := slices.IndexFunc(assets, func(d *cloudpb.Asset) bool { return d.GetId() == id })
+	platform := resolveAgentPlatform(cfg.Platform, "", deviceArch(assets[i].GetArchitecture()))
+	if interactive {
+		return platform, nil
 	}
 	switch {
 	case a.name == "":
-		return missing("deployment name given", "--name <name>", "enter one")
+		return "", missing("deployment name given", "--name <name>", "enter one")
 	case !a.run && !a.installOnly:
-		return missing("run state chosen", "--run or --install-only", "choose")
+		return "", missing("run state chosen", "--run or --install-only", "choose")
 	case !a.yes:
-		return usageErrorf("Not confirmed. Add --yes to deploy without a terminal.")
+		return "", usageErrorf("Not confirmed. Add --yes to deploy without a terminal.")
 	}
 	if _, err := op.confirmMoves(ctx, cfg.AppID, "", []string{id}, assets, a.move, false); err != nil {
-		return err
+		return "", err
 	}
 	config, _, err := deployConfig(releaseDefaults(cfg), a, false, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return checkDeployConfig(config, cfg.RequiredEnv)
+	return platform, checkDeployConfig(config, cfg.RequiredEnv)
+}
+
+// deviceArch is the Go architecture name of a device's CPU as Cloud lists
+// it; none is arm64, as wendy run assumes when the agent reports none.
+func deviceArch(arch string) string {
+	switch arch = strings.ToLower(strings.TrimSpace(arch)); arch {
+	case "", "arm64", "aarch64":
+		return "arm64"
+	case "amd64", "x86_64":
+		return "amd64"
+	}
+	return arch
 }

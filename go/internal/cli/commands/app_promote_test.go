@@ -13,6 +13,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -44,6 +46,13 @@ func promoteFixture(t *testing.T) (*registryOp, *fakeRegistry) {
 // keepRunImage writes an image where wendy run keeps its last build.
 func keepRunImage(t *testing.T) v1.Image {
 	t.Helper()
+	return keepRunImageFor(t, "linux/arm64")
+}
+
+// keepRunImageFor writes an image where wendy run keeps its last build for
+// platform.
+func keepRunImageFor(t *testing.T, platform string) v1.Image {
+	t.Helper()
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +62,7 @@ func keepRunImage(t *testing.T) v1.Image {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := layout.Write(chunkLayoutDir(cache, "sh.wendy.example", "linux/arm64"), empty.Index)
+	p, err := layout.Write(chunkLayoutDir(cache, "sh.wendy.example", platform), empty.Index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,5 +164,28 @@ func TestPromoteChecksDeployAnswersBeforePublishing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "release 1.0.0 of sh.wendy.example is published") ||
 		!strings.Contains(err.Error(), "wendy app deploy --app sh.wendy.example --release 1.0.0 --device packer-01") || len(fake.releases) != 1 {
 		t.Fatalf("a deploy failed after the publish: %v", err)
+	}
+}
+
+// M21: promote picks the last run's build for the device's own CPU (an
+// x86_64 device here), not arm64, and names its digest and build time
+// before publishing.
+func TestPromoteUsesTheDevicesArchitectureAndNamesTheImage(t *testing.T) {
+	_, fake := promoteFixture(t)
+	fake.assets[0].Architecture = proto.String("x86_64")
+	keepRunImage(t) // an arm64 build that must not be picked
+	kept := keepRunImageFor(t, "linux/amd64")
+	out, err := runApp(newAppPromoteCmd(), promoteArgs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := kept.Digest()
+	if !strings.Contains(out, "Promoting the image wendy run last built for linux/amd64: "+d.String()+", built ") {
+		t.Fatalf("output does not name the amd64 build %s:\n%s", d, out)
+	}
+	for in, want := range map[string]string{"": "arm64", "aarch64": "arm64", "AMD64": "amd64", "x86_64": "amd64", "riscv64": "riscv64"} {
+		if got := deviceArch(in); got != want {
+			t.Errorf("deviceArch(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
