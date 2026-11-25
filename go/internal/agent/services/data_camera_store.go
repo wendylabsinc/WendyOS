@@ -645,24 +645,31 @@ func (c *cameraCapture) rejoinSubscriptions() error {
 	return nil
 }
 
-// opensNewEncoderSegmentWith reports that the video frame about to be stored
-// must open a segment: an encoder run at another preset than the frame before
-// it made it, with parameter sets of its own, and decoding can start on it.
-func (c *cameraCapture) opensNewEncoderSegmentWith(frame *videoFrame) bool {
-	if c.videoStoredAt == nil {
+// encoderChangedAt reports that an encoder run at another preset than the
+// video frame before it made this one, with parameter sets of its own.
+func (c *cameraCapture) encoderChangedAt(frame *videoFrame) bool {
+	first := c.videoStoredAt == nil
+	if first {
 		c.videoStoredAt = make(map[appconfig.EncodePreset]uint64)
-	} else if frame.encodedAt != c.lastVideoAt {
-		c.awaitNewEncoderSegment = true
 	}
+	changed := !first && frame.encodedAt != c.lastVideoAt
 	c.lastVideoAt = frame.encodedAt
-	if !c.awaitNewEncoderSegment {
-		return false
+	return changed
+}
+
+// countLeftOut counts a frame the recording took and could not store. Where
+// frames are numbered it follows the numbering first, so the frames lost
+// before this one are counted with it and not again at the next one stored.
+func (c *cameraCapture) countLeftOut(stream *cameraSegmentStream, frame *videoFrame) {
+	if !frame.sequenceValid {
+		c.carriedDrops++
+		return
 	}
-	if _, randomAccess := frameRandomAccess(frame); !randomAccess {
-		return false
+	c.trackSequence(stream, frame)
+	if c.result.Drops == nil {
+		c.result.Drops = new(uint64)
 	}
-	c.awaitNewEncoderSegment = false
-	return true
+	*c.result.Drops++
 }
 
 // presetNotAppliedNote says how many of a recording's video frames were not

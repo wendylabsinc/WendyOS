@@ -553,9 +553,10 @@ type cameraCapture struct {
 	notes []string
 	// videoStoredAt counts the video frames stored by the preset the agent's
 	// encoder made each at (videoFrame.encodedAt), and lastVideoAt is that of
-	// the last one. awaitNewEncoderSegment is set from a video frame made at
-	// another preset than the one before it until a frame that decoding can
-	// start on opens a segment for that encoder's video.
+	// the last one taken. awaitNewEncoderSegment is set from a video frame made
+	// at another preset than the one before it until a frame that decoding can
+	// start on opens a segment for that encoder's video; the frames between
+	// decode from neither file and are left out.
 	videoStoredAt          map[appconfig.EncodePreset]uint64
 	lastVideoAt            appconfig.EncodePreset
 	awaitNewEncoderSegment bool
@@ -1178,8 +1179,13 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 		c.lastSampleID = frame.sampleID
 	}
 	video := stream == &c.cameraSegmentStream
-	if video && c.opensNewEncoderSegmentWith(frame) {
-		newStream = true
+	if video && c.encoderChangedAt(frame) {
+		// The producer is the same and its numbering runs on, so the segment
+		// ends without endProducerStream.
+		if err := stream.closeSegment(); err != nil {
+			return err
+		}
+		c.awaitNewEncoderSegment = true
 	}
 	if newStream && stream.segment != nil {
 		if err := stream.endProducerStream(); err != nil {
@@ -1188,12 +1194,19 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 	}
 	trim, err := c.ensureSegment(stream, frame, canonical)
 	if err != nil {
-		if c.webmResync && errors.Is(err, errAwaitCameraRandomAccess) {
+		switch {
+		case !errors.Is(err, errAwaitCameraRandomAccess):
+		case c.webmResync:
 			c.carriedDrops++
+		case video && c.awaitNewEncoderSegment:
+			c.countLeftOut(stream, frame)
 		}
 		return err
 	}
 	c.webmResync = false
+	if video {
+		c.awaitNewEncoderSegment = false
+	}
 	payload := frame.data[trim:]
 	offset := stream.segmentOffset
 	n, err := stream.segment.Write(payload)

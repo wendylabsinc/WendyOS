@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,43 +99,143 @@ func TestRecordingCountsOnlyVideoFramesAgainstTheStatedPreset(t *testing.T) {
 	}
 }
 
+func storedDrops(c *cameraCapture) uint64 {
+	if c.result.Drops == nil {
+		return 0
+	}
+	return *c.result.Drops
+}
+
 // Another preset is another encoder run, with parameter sets of its own, so
 // the video it makes starts a new segment file at its first frame decoding can
-// start on.
+// start on. Frames of the new run that arrive before that one cannot be
+// decoded from either file: they are not stored, and count as drops.
 func TestRecordingOpensANewSegmentWhereTheEncoderChangesPreset(t *testing.T) {
 	const veryfast, ultrafast, medium = appconfig.EncodePresetVeryfast, appconfig.EncodePresetUltrafast, appconfig.EncodePresetMedium
+	const notStored = ""
 	c := newStoreTestCapture(t, &fakeReceipt{}, &data.SourceCapture{Store: data.CaptureStoreVideo, Preset: "veryfast"})
 	frames := []struct {
-		preset  appconfig.EncodePreset
-		payload []byte
-		segment string
+		sequence uint64
+		preset   appconfig.EncodePreset
+		payload  []byte
+		segment  string
 	}{
-		{veryfast, testRAUFrame, "segment-000001.h264"},
-		{veryfast, testInterFrame, "segment-000001.h264"},
-		{ultrafast, testRAUFrame, "segment-000002.h264"},
-		{ultrafast, testInterFrame, "segment-000002.h264"},
-		{ultrafast, testRAUFrame, "segment-000002.h264"},
-		// The hub dropped the first frame of the next run for this recording.
-		{medium, testInterFrame, "segment-000002.h264"},
-		{medium, testRAUFrame, "segment-000003.h264"},
-		{medium, testInterFrame, "segment-000003.h264"},
+		{1, veryfast, testRAUFrame, "segment-000001.h264"},
+		{2, veryfast, testInterFrame, "segment-000001.h264"},
+		{3, ultrafast, testRAUFrame, "segment-000002.h264"},
+		{4, ultrafast, testInterFrame, "segment-000002.h264"},
+		{5, ultrafast, testRAUFrame, "segment-000002.h264"},
+		// The hub dropped frame 6, the first of the next run, for this recording.
+		{7, medium, testInterFrame, notStored},
+		{8, medium, testInterFrame, notStored},
+		{9, medium, testRAUFrame, "segment-000003.h264"},
+		{10, medium, testInterFrame, "segment-000003.h264"},
 	}
-	for i, frame := range frames {
-		if err := c.handleFrame(encodedAt(frame.preset, uint64(i+1), time.Duration(i+1)*100*time.Millisecond, frame.payload)); err != nil {
+	var want []string
+	for _, frame := range frames {
+		err := c.handleFrame(encodedAt(frame.preset, frame.sequence, time.Duration(frame.sequence)*100*time.Millisecond, frame.payload))
+		if frame.segment == notStored {
+			if !errors.Is(err, errAwaitCameraRandomAccess) {
+				t.Fatalf("frame %d of the new run, before its first key frame: err = %v, want it left out", frame.sequence, err)
+			}
+			continue
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
+		want = append(want, frame.segment)
 	}
 	recording := storeRecording{dir: c.dir, result: c.result}
 	index := recording.index(t)
-	if len(index) != len(frames) {
-		t.Fatalf("%d frames indexed, want %d", len(index), len(frames))
+	if len(index) != len(want) {
+		t.Fatalf("%d frames indexed, want %d", len(index), len(want))
 	}
 	for i, record := range index {
-		if got := filepath.Base(record.Segment); got != frames[i].segment {
-			t.Errorf("frame %d (preset %s) is in %s, want %s", i+1, frames[i].preset, got, frames[i].segment)
+		if got := filepath.Base(record.Segment); got != want[i] {
+			t.Errorf("stored frame %d (sample %d) is in %s, want %s", i+1, record.SampleID, got, want[i])
 		}
 	}
 	assertFileNames(t, recording, "segment-000001.h264", "segment-000002.h264", "segment-000003.h264")
+	if got := storedDrops(c); got != 3 {
+		t.Errorf("drops = %d, want 3: the frame the hub dropped and the two left out", got)
+	}
+}
+
+// A stream without sequence numbers has only the count of what was left out.
+func TestRecordingCountsFramesLeftOutBeforeTheNewEncodersKeyFrameWithoutSequenceNumbers(t *testing.T) {
+	c := newStoreTestCapture(t, &fakeReceipt{}, &data.SourceCapture{Store: data.CaptureStoreVideo})
+	chunk := func(preset appconfig.EncodePreset, payload []byte) *videoFrame {
+		frame := testChunkedH264Frame(payload)
+		frame.encodedAt = preset
+		return frame
+	}
+	for i, frame := range []*videoFrame{
+		chunk(appconfig.EncodePresetMedium, testRAUFrame),
+		chunk(appconfig.EncodePresetUltrafast, testInterFrame),
+		chunk(appconfig.EncodePresetUltrafast, testInterFrame),
+		chunk(appconfig.EncodePresetUltrafast, testRAUFrame),
+	} {
+		if err := c.handleFrame(frame); err != nil && !errors.Is(err, errAwaitCameraRandomAccess) {
+			t.Fatalf("frame %d: %v", i, err)
+		}
+	}
+	if c.result.Count != 2 || c.carriedDrops != 2 || c.result.Drops != nil {
+		t.Errorf("stored %d frames, %d left out and counted, sequence drops %v; want 2, 2 and none", c.result.Count, c.carriedDrops, c.result.Drops)
+	}
+}
+
+// The sequence a derived frame carries is the camera's own, which runs on
+// while the encoder is replaced for another preset: the camera frames that
+// became no access unit meanwhile are a gap in it, counted as any gap is.
+func TestRecordingCountsFramesLostWhileTheEncoderIsReplacedAsDrops(t *testing.T) {
+	for name, second := range map[string]appconfig.EncodePreset{
+		"the same encoder":             appconfig.EncodePresetVeryfast,
+		"an encoder at another preset": appconfig.EncodePresetUltrafast,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newStoreTestCapture(t, &fakeReceipt{}, &data.SourceCapture{Store: data.CaptureStoreVideo, Preset: "veryfast"})
+			for _, frame := range []struct {
+				sequence uint64
+				preset   appconfig.EncodePreset
+				payload  []byte
+			}{
+				{1, appconfig.EncodePresetVeryfast, testRAUFrame},
+				{2, appconfig.EncodePresetVeryfast, testInterFrame},
+				{10, second, testRAUFrame},
+				{11, second, testInterFrame},
+			} {
+				if err := c.handleFrame(encodedAt(frame.preset, frame.sequence, time.Duration(frame.sequence)*33*time.Millisecond, frame.payload)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := storedDrops(c); got != 7 {
+				t.Errorf("camera frames 3 to 9 never reached the recording, and it counts %d drop(s)", got)
+			}
+		})
+	}
+}
+
+// A producer that ended took its numbering with it: the one that replaces it
+// counts from where it likes, and the difference is not a loss.
+func TestRecordingStartsSequenceTrackingAgainForANewProducer(t *testing.T) {
+	c := newStoreTestCapture(t, &fakeReceipt{}, &data.SourceCapture{Store: data.CaptureStoreVideo})
+	write := func(sequence uint64, payload []byte) {
+		t.Helper()
+		if err := c.handleFrame(encodedAt(appconfig.EncodePresetUltrafast, sequence, time.Duration(sequence)*33*time.Millisecond, payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(5, testRAUFrame)
+	write(6, testInterFrame)
+	if err := c.endProducerStreams(); err != nil {
+		t.Fatal(err)
+	}
+	write(50, testRAUFrame)
+	write(51, testInterFrame)
+	if got := storedDrops(c); got != 0 {
+		t.Errorf("drops = %d across a producer's end, want none", got)
+	}
+	assertFileNames(t, storeRecording{dir: c.dir, result: c.result}, "segment-000001.h264", "segment-000002.h264")
 }
 
 // Frames that carry no preset come from one run as far as the recording can
