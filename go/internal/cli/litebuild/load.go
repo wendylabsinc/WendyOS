@@ -1,6 +1,7 @@
 package litebuild
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -711,25 +712,21 @@ func checkFormatVersion(raw *yaml.Node) (string, error) {
 	}
 }
 
-// CheckFormatVersion checks only the format_version of a master
-// configuration: a newer format may not load. It returns nil when the text
-// is not a YAML map; Load then reports the problem.
-func CheckFormatVersion(data []byte) error {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil
-	}
-	root := documentRoot(&doc)
-	if root == nil || root.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if key := resolve(root.Content[i]); key.Kind == yaml.ScalarNode && key.Value == "format_version" {
-			_, err := checkFormatVersion(resolve(root.Content[i+1]))
-			return err
-		}
-	}
-	return nil
+// IsConfigError reports whether err, an error of Load, is a problem of the
+// master configuration: a format_version that this code does not read
+// (FormatVersionError), or a content that it rejects (ConfError). An error
+// to read the file is not.
+func IsConfigError(err error) bool {
+	var formatErr *FormatVersionError
+	var confErr *ConfError
+	return errors.As(err, &formatErr) || errors.As(err, &confErr)
+}
+
+// NewerFormat reports whether err is (or wraps) the FormatVersionError of a
+// format newer than this code: a newer CLI may read it.
+func NewerFormat(err error) bool {
+	var formatErr *FormatVersionError
+	return errors.As(err, &formatErr) && formatErr.Newer
 }
 
 // formatVersionText returns format_version as str() does in Python: a

@@ -99,16 +99,20 @@ func LookupMasterConf(ctx context.Context, url, commit string) (data []byte, fou
 }
 
 // FormatError is the error of a Wendy Lite version whose master
-// configuration has a format that this code does not read (see
-// FormatVersionError).
+// configuration this code does not read: a format that it does not read
+// (FormatVersionError), or a content that it rejects (ConfError).
 type FormatError struct {
 	Version string // the Wendy Lite version, for the message
-	Err     *FormatVersionError
+	Err     error  // a *FormatVersionError or a *ConfError
 }
 
 func (e *FormatError) Error() string {
-	if e.Err.Newer {
+	var confErr *ConfError
+	switch {
+	case NewerFormat(e.Err):
 		return fmt.Sprintf("Wendy Lite %s needs a newer version of the CLI. Update the CLI", e.Version)
+	case errors.As(e.Err, &confErr):
+		return fmt.Sprintf("Wendy Lite %s is not compatible with this version of the CLI. Verify that the CLI is up-to-date", e.Version)
 	}
 	return fmt.Sprintf("Wendy Lite %s is not compatible with this version of the CLI", e.Version)
 }
@@ -164,9 +168,8 @@ func FetchMasterConf(ctx context.Context, url, ref string, logf func(format stri
 		return nil, err
 	}
 	m, err := Load(data, fmt.Sprintf("wendy-lite %s:%s", ShortVersion(ref), MasterConfFile))
-	var formatErr *FormatVersionError
-	if errors.As(err, &formatErr) {
-		return nil, &FormatError{Version: ShortVersion(ref), Err: formatErr}
+	if IsConfigError(err) {
+		return nil, &FormatError{Version: ShortVersion(ref), Err: err}
 	}
 	if err != nil {
 		return nil, err

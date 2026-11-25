@@ -122,26 +122,32 @@ func TestLookupMasterConf(t *testing.T) {
 	}
 }
 
-// FetchMasterConf of a newer format asks to update the CLI.
+// FetchMasterConf of a newer format asks to update the CLI; a content that
+// this code rejects asks to verify it.
 func TestFetchMasterConfFormat(t *testing.T) {
 	origLook, origFetch := lookPath, fetchFile
 	t.Cleanup(func() { lookPath, fetchFile = origLook, origFetch })
 	lookPath = func(string) (string, error) { return "/usr/bin/git", nil }
-	for version, want := range map[string]string{
-		"2.0": "Wendy Lite v9.0.0 needs a newer version of the CLI. Update the CLI",
-		"0.1": "Wendy Lite v9.0.1 is not compatible with this version of the CLI",
+	for _, tc := range []struct {
+		version, ref, want string
+		format             bool // a FormatVersionError, else a ConfError
+	}{
+		{"2.0", "v9.0.0", "Wendy Lite v9.0.0 needs a newer version of the CLI. Update the CLI", true},
+		{"0.1", "v9.0.1", "Wendy Lite v9.0.1 is not compatible with this version of the CLI", true},
+		{"1.0", "v9.0.2", "Wendy Lite v9.0.2 is not compatible with this version of the CLI. Verify that the CLI is up-to-date", false},
 	} {
-		ref := "v9.0.0"
-		if version == "0.1" {
-			ref = "v9.0.1"
-		}
 		fetchFile = func(context.Context, string, string, string) ([]byte, error) {
-			return []byte("format_version: \"" + version + "\"\nnew_key: 1\n"), nil
+			return []byte("format_version: \"" + tc.version + "\"\nattributes: {}\nnew_key: 1\n"), nil
 		}
-		_, err := FetchMasterConf(context.Background(), "https://example.test/wendy-lite.git", ref, nil)
+		_, err := FetchMasterConf(context.Background(), "https://example.test/wendy-lite.git", tc.ref, nil)
 		var formatErr *FormatVersionError
-		if err == nil || err.Error() != want || !errors.As(err, &formatErr) {
-			t.Errorf("format %s: %v, want %q", version, err, want)
+		var confErr *ConfError
+		wraps := errors.As(err, &confErr)
+		if tc.format {
+			wraps = errors.As(err, &formatErr)
+		}
+		if err == nil || err.Error() != tc.want || !wraps {
+			t.Errorf("format %s: %v, want %q", tc.version, err, tc.want)
 		}
 	}
 }

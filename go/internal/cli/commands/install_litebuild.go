@@ -405,12 +405,11 @@ func buildLiteFirmware(ctx context.Context, o liteBuildOptions) (*liteFirmware, 
 	// Questions, from the master configuration of the folder: the code that
 	// is built.
 	model, err := litebuild.LoadFile(litebuild.MasterConfPath(dir))
-	var formatErr *litebuild.FormatVersionError
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil, o.withVersionHint(liteBuildIncompatible(src))
-	case errors.As(err, &formatErr):
-		return nil, o.withVersionHint(&liteBuildIncompatibleError{src: src, format: formatErr})
+	case litebuild.IsConfigError(err):
+		return nil, o.withVersionHint(&liteBuildIncompatibleError{src: src, err: err})
 	case err != nil:
 		return nil, err
 	}
@@ -559,9 +558,10 @@ func ensureLiteBuildEIM(ctx context.Context, offer bool) error {
 // build, and that version: the nightly tag with nightly, else version, else
 // the latest release (see litebuild.ResolveSource) of the wendy-lite
 // repository at url. Its progress goes to out. It locks the build cache
-// first: release unlocks it, and calling it more than once is harmless. It checks that the version has a master
-// configuration (checkLiteBuildSource): a version without it changes
-// nothing in the cache. Then it removes the old build folders
+// first: release unlocks it, and calling it more than once is harmless. It
+// checks that the version has a master configuration that this CLI loads
+// (checkLiteBuildSource): a version without it changes nothing in the
+// cache. Then it removes the old build folders
 // (litebuild.PruneBuildFolders), and reuses or clones the folder of the
 // commit (litebuild.PrepareSources).
 func openLiteBuildFolder(ctx context.Context, out io.Writer, url string, nightly bool, version string) (dir string, src litebuild.Source, release func(), err error) {
@@ -620,10 +620,11 @@ func liteBuildRequest(nightly bool, version string) string {
 }
 
 // checkLiteBuildSource checks that src, a version of the wendy-lite
-// repository at url, has a master configuration in a format that this CLI
-// reads: the versions without it are older than the configurator, and a
-// newer format needs a newer CLI. It reads the file in the build folder of
-// src in root when the folder has it, else the file of src at url.
+// repository at url, has a master configuration that this CLI loads: the
+// versions without it are older than the configurator, a newer format needs
+// a newer CLI, and a content that this CLI rejects may need one too. It
+// reads the file in the build folder of src in root when the folder has it,
+// else the file of src at url.
 func checkLiteBuildSource(ctx context.Context, root, url string, src litebuild.Source) error {
 	folder := filepath.Join(root, litebuild.BuildFolderName(src.Commit))
 	data, err := os.ReadFile(litebuild.MasterConfPath(folder))
@@ -637,21 +638,20 @@ func checkLiteBuildSource(ctx context.Context, root, url string, src litebuild.S
 			return liteBuildIncompatible(src)
 		}
 	}
-	var formatErr *litebuild.FormatVersionError
-	if errors.As(litebuild.CheckFormatVersion(data), &formatErr) {
-		return &liteBuildIncompatibleError{src: src, format: formatErr}
+	if _, err := litebuild.Load(data, litebuild.MasterConfFile); litebuild.IsConfigError(err) {
+		return &liteBuildIncompatibleError{src: src, err: err}
 	}
 	return nil
 }
 
 // liteBuildIncompatibleError is the error of a Wendy Lite version that this
-// CLI cannot build: it has no master configuration, or one in a format
-// that this CLI does not read (format). hint says what to do instead; the
-// default names --version.
+// CLI cannot build: it has no master configuration (err is nil), or one that
+// this CLI does not load (err, a litebuild.IsConfigError error). hint says
+// what to do instead; the default names --version.
 type liteBuildIncompatibleError struct {
-	src    litebuild.Source
-	format *litebuild.FormatVersionError
-	hint   string
+	src  litebuild.Source
+	err  error
+	hint string
 }
 
 func (e *liteBuildIncompatibleError) Error() string {
@@ -659,20 +659,20 @@ func (e *liteBuildIncompatibleError) Error() string {
 	if hint == "" {
 		hint = "Specify a Wendy Lite version with --version"
 	}
-	if e.format != nil && e.format.Newer {
-		// "Update the CLI or specify a Wendy Lite version with --version"
-		return fmt.Sprintf("Wendy Lite %s needs a newer version of the CLI. Update the CLI or %s",
-			e.src, strings.ToLower(hint[:1])+hint[1:])
+	// "Update the CLI or specify a Wendy Lite version with --version"
+	orHint := strings.ToLower(hint[:1]) + hint[1:]
+	var confErr *litebuild.ConfError
+	switch {
+	case litebuild.NewerFormat(e.err):
+		return fmt.Sprintf("Wendy Lite %s needs a newer version of the CLI. Update the CLI or %s", e.src, orHint)
+	case errors.As(e.err, &confErr):
+		// The CLI cannot tell which side is older.
+		return fmt.Sprintf("Wendy Lite %s is not compatible with this version of the CLI. Verify that the CLI is up-to-date or %s", e.src, orHint)
 	}
 	return fmt.Sprintf("Wendy Lite %s is not compatible with this version of the CLI. %s", e.src, hint)
 }
 
-func (e *liteBuildIncompatibleError) Unwrap() error {
-	if e.format == nil {
-		return nil
-	}
-	return e.format
-}
+func (e *liteBuildIncompatibleError) Unwrap() error { return e.err }
 
 // liteBuildIncompatible is the error of a Wendy Lite version without master
 // configuration.
@@ -685,7 +685,7 @@ func liteBuildIncompatible(src litebuild.Source) error {
 func (o liteBuildOptions) withVersionHint(err error) error {
 	var incompatible *liteBuildIncompatibleError
 	if o.versionHint != "" && errors.As(err, &incompatible) {
-		return &liteBuildIncompatibleError{src: incompatible.src, format: incompatible.format, hint: o.versionHint}
+		return &liteBuildIncompatibleError{src: incompatible.src, err: incompatible.err, hint: o.versionHint}
 	}
 	return err
 }

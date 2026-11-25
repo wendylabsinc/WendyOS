@@ -2,6 +2,8 @@ package litebuild
 
 import (
 	"errors"
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -258,32 +260,62 @@ func TestFormatVersion(t *testing.T) {
 		t.Run(tc.line, func(t *testing.T) {
 			data := []byte(tc.line + attrs)
 			m, err := Load(data, "test")
-			check := CheckFormatVersion(data)
 			if tc.ok {
-				if err != nil || check != nil {
-					t.Fatalf("Load error %v, CheckFormatVersion %v, want none", err, check)
+				if err != nil {
+					t.Fatalf("Load error %v, want none", err)
 				}
 				if m.FormatVersion != tc.version {
 					t.Errorf("FormatVersion = %q, want %q", m.FormatVersion, tc.version)
 				}
 				return
 			}
-			for _, e := range []error{err, check} {
-				var fe *FormatVersionError
-				if !errors.As(e, &fe) {
-					t.Fatalf("error %v, want a FormatVersionError", e)
-				}
-				if fe.Version != tc.version || fe.Newer != tc.newer {
-					t.Errorf("FormatVersionError{Version: %q, Newer: %v}, want %q, %v", fe.Version, fe.Newer, tc.version, tc.newer)
-				}
+			var fe *FormatVersionError
+			if !errors.As(err, &fe) {
+				t.Fatalf("error %v, want a FormatVersionError", err)
+			}
+			if fe.Version != tc.version || fe.Newer != tc.newer {
+				t.Errorf("FormatVersionError{Version: %q, Newer: %v}, want %q, %v", fe.Version, fe.Newer, tc.version, tc.newer)
 			}
 		})
 	}
-	// Only format_version is read: the rest can be a newer format.
-	if err := CheckFormatVersion([]byte("format_version: \"1.3\"\nnew_section: {x: 1}\n")); err != nil {
-		t.Errorf("CheckFormatVersion = %v, want nil", err)
+	// The format version first: a newer format can have keys that this code
+	// does not know.
+	var fe *FormatVersionError
+	if _, err := Load([]byte("format_version: \"2.0\"\nnew_section: {x: 1}\n"), "test"); !errors.As(err, &fe) {
+		t.Errorf("newer format with a new key: %v, want a FormatVersionError", err)
 	}
-	if err := CheckFormatVersion([]byte("[1]")); err != nil {
-		t.Errorf("CheckFormatVersion(not a map) = %v, want nil", err)
+}
+
+// IsConfigError tells a master configuration that this code does not load
+// from a file that it cannot read; NewerFormat tells a newer format.
+func TestIsConfigError(t *testing.T) {
+	const attrs = "attributes:\n  net: {type: boolean}\n"
+	_, unknownKey := Load([]byte("format_version: \"1.0\"\n"+attrs+"new_section: {}\n"), "test")
+	_, syntax := Load([]byte("attributes: [\n"), "test")
+	_, older := Load([]byte("format_version: \"0.9\"\n"+attrs), "test")
+	_, newer := Load([]byte("format_version: \"2.0\"\n"+attrs), "test")
+	_, missing := LoadFile(filepath.Join(t.TempDir(), MasterConfFile))
+	for _, tc := range []struct {
+		name          string
+		err           error
+		config, newer bool
+	}{
+		{"unknown key", unknownKey, true, false},
+		{"YAML syntax", syntax, true, false},
+		{"older format", older, true, false},
+		{"newer format", newer, true, true},
+		{"missing file", missing, false, false},
+		{"wrapped newer format", fmt.Errorf("loading: %w", newer), true, true},
+		{"nil", nil, false, false},
+	} {
+		if tc.err == nil && tc.name != "nil" {
+			t.Fatalf("%s: no error", tc.name)
+		}
+		if got := IsConfigError(tc.err); got != tc.config {
+			t.Errorf("%s: IsConfigError(%v) = %v, want %v", tc.name, tc.err, got, tc.config)
+		}
+		if got := NewerFormat(tc.err); got != tc.newer {
+			t.Errorf("%s: NewerFormat(%v) = %v, want %v", tc.name, tc.err, got, tc.newer)
+		}
 	}
 }
