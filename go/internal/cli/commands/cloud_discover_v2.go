@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
 	"io"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -19,11 +20,12 @@ import (
 // v2 uses UUIDs. Keep them intact in JSON instead of converting them into the
 // numeric identifiers used by legacy sessions.
 type cloudDiscoverV2Info struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Address string `json:"address"`
-	Version string `json:"version,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Address       string `json:"address"`
+	Version       string `json:"version,omitempty"`
+	PKIDeviceName string `json:"pkiDeviceName,omitempty"`
 }
 
 func fetchCloudAssetsV2(ctx context.Context, auth *config.AuthConfig, onlineOnly bool) ([]*cloudpbv2.Asset, error) {
@@ -81,7 +83,7 @@ func fetchCloudAssetsV2(ctx context.Context, auth *config.AuthConfig, onlineOnly
 }
 
 // cloudDiscoveryDevice preserves each API's identity while sharing the display,
-// clipboard, version-probe and update paths across both generations.
+// clipboard and update paths across both generations.
 type cloudDiscoveryDevice struct {
 	cloudAssetMetadata
 	legacy *cloudpb.Asset
@@ -151,9 +153,8 @@ func (d cloudDiscoveryDevice) info(ver *agentpb.GetAgentVersionResponse) any {
 	if deviceType == "" {
 		deviceType = humanReadableOSType(d.GetOsType(), d.GetArchitecture())
 	}
-	info := cloudDiscoverV2Info{ID: d.key, Name: d.GetName(), Type: deviceType, Address: d.GetIpAddress()}
+	info := cloudDiscoverV2Info{ID: d.key, Name: d.GetName(), Type: deviceType, Address: d.GetIpAddress(), PKIDeviceName: d.v2.GetPkiDeviceName()}
 	if d.isLite() {
-		info.Type = liteDeviceType(info.Type)
 		info.Version = d.v2.GetOsVersion()
 		return info
 	}
@@ -210,7 +211,7 @@ func pickCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, name
 		m.devices = devices
 		m.hasResults = true
 		m.refreshTable()
-		final, err := tea.NewProgram(m).Run()
+		final, err := tui.RunProgram(tea.NewProgram(m))
 		if err != nil {
 			return cloudDiscoveryDevice{}, err
 		}
@@ -235,10 +236,10 @@ func pickCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, name
 		all, fetchErr := listCloudDiscoveryDevices(ctx, auth, false)
 		if fetchErr == nil {
 			if name == "" && len(all) > 0 {
-				return cloudDiscoveryDevice{}, commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline; check the agents' Cloud presence logs ('wendy cloud discover --all --json' lists enrolled devices)", len(all))
+				return cloudDiscoveryDevice{}, cloudAllDevicesOfflineError(len(all))
 			}
 			if _, e := resolveCloudDiscoveryDevice(all, name); e == nil {
-				return cloudDiscoveryDevice{}, commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline; check its Cloud presence logs", name)
+				return cloudDiscoveryDevice{}, cloudDeviceOfflineError(name)
 			}
 		}
 	}

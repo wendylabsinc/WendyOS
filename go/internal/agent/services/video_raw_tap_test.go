@@ -2,9 +2,16 @@ package services
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
+	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
@@ -662,5 +669,338 @@ func TestRawFormatPrefersDeeperSamplesOverListOrder(t *testing.T) {
 	advertise()
 	if got = rawFormatFor("/dev/video0", w, h); got != nil {
 		t.Fatalf("no formats advertised: want nil, got %v", got)
+	}
+}
+
+func TestThermalProfilesChooseCaptureAndCropOnlyPreview(t *testing.T) {
+	for _, tc := range []struct {
+		adapter string
+		height  uint32
+		crop    string
+	}{
+		{"topdon-tc001-v1", 384, "videocrop top=0 bottom=192"},
+		{"topdon-tc001-hik-v1", 392, "videocrop top=196 bottom=4"},
+	} {
+		t.Run(tc.adapter, func(t *testing.T) {
+			withYUYVModes(t, [][2]uint32{{256, 192}, {256, tc.height}, {512, 384}, {512, 484}})
+			previousProfile, previousDefault := thermalCaptureProfile, bestDefaultFrameSizeForDevice
+			thermalCaptureProfile = func(string) *agentpb.ThermalCamera {
+				return &agentpb.ThermalCamera{Adapter: tc.adapter, CaptureWidth: 256, CaptureHeight: tc.height}
+			}
+			bestDefaultFrameSizeForDevice = func(string) (uint32, uint32) { return 512, 384 }
+			t.Cleanup(func() { thermalCaptureProfile = previousProfile; bestDefaultFrameSizeForDevice = previousDefault })
+			plan := mustPlan(t, &agentpb.StreamVideoRequest{}, map[string]bool{"x264enc": true, "videocrop": true})
+			args := strings.Join(plan.args, " ")
+			if plan.raw.GetWidth() != 256 || plan.raw.GetHeight() != tc.height || !strings.Contains(args, tc.crop) {
+				t.Fatalf("wrong thermal plan: %s; raw=%v", args, plan.raw)
+			}
+			if strings.Index(args, "tee name=rawtap") > strings.Index(args, tc.crop) {
+				t.Fatal("raw measurements were cropped")
+			}
+		})
+	}
+}
+
+// --- tap pump ---
+
+type pumpTestSink struct {
+	want atomic.Bool
+	mu   sync.Mutex
+	got  [][]byte
+	// sawIdle closes the first time wantRaw answers false, and sawWant the first
+	// time it answers true. A test changes demand only once the pump has seen
+	// the state before: otherwise the pump may never see it, and the test is a
+	// race.
+	sawIdle, sawWant   chan struct{}
+	idleOnce, wantOnce sync.Once
+}
+
+func newPumpTestSink(want bool) *pumpTestSink {
+	p := &pumpTestSink{sawIdle: make(chan struct{}), sawWant: make(chan struct{})}
+	p.want.Store(want)
+	return p
+}
+
+func (p *pumpTestSink) wantRaw() bool {
+	want := p.want.Load()
+	if want {
+		p.wantOnce.Do(func() { close(p.sawWant) })
+	} else {
+		p.idleOnce.Do(func() { close(p.sawIdle) })
+	}
+	return want
+}
+
+func (p *pumpTestSink) publishRaw(d []byte, _ uint64, _ *agentpb.RawFormat) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.got = append(p.got, d)
+	return true
+}
+func (p *pumpTestSink) rawOffered(*agentpb.RawFormat) {}
+func (p *pumpTestSink) rawNotOffered(func() string)   {}
+func (p *pumpTestSink) published() [][]byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([][]byte(nil), p.got...)
+}
+
+var pumpTestFormat = &agentpb.RawFormat{Width: 4, Height: 2, Fourcc: fourccYUYV, BytesPerLine: 8}
+
+const pumpTestFrame = 16
+
+func pumpFrame(tag byte) []byte {
+	b := make([]byte, pumpTestFrame)
+	b[0] = tag
+	return b
+}
+
+// kibTapFormat is a small-frame camera: 1 KiB frames, so the pipe holds many.
+var kibTapFormat = &agentpb.RawFormat{Width: 512, Height: 1, Fourcc: fourccYUYV, BytesPerLine: 1024}
+
+const kibTapFrame = 1024
+
+// numberedFrame is a 1 KiB frame carrying a tag and a sequence number.
+func numberedFrame(tag byte, n int) []byte {
+	b := make([]byte, kibTapFrame)
+	b[0] = tag
+	binary.BigEndian.PutUint16(b[1:], uint16(n))
+	return b
+}
+
+func frameNumber(b []byte) int { return int(binary.BigEndian.Uint16(b[1:])) }
+
+// pumpTest is one pump reading a pipe the test writes to.
+type pumpTest struct {
+	w, r   *os.File
+	done   chan error
+	cancel context.CancelFunc
+	reads  atomic.Int64 // whole frames the pump has read, counted by tapFrameRead
+}
+
+func startPump(t *testing.T, sink rawSink, live *tapLiveness) *pumpTest {
+	t.Helper()
+	return startPumpFormat(t, sink, pumpTestFormat, live)
+}
+
+func startPumpFormat(t *testing.T, sink rawSink, format *agentpb.RawFormat, live *tapLiveness) *pumpTest {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &pumpTest{w: w, r: r, done: make(chan error, 1), cancel: cancel}
+	s := &VideoService{logger: zap.NewNop(), tapFrameRead: func(string) { p.reads.Add(1) }}
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		p.done <- s.pumpRawTap(ctx, r, format, sink, "test", live)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		w.Close() //nolint:errcheck
+		select {
+		case <-exited:
+		case <-time.After(5 * time.Second):
+			t.Error("pump did not return after its ctx ended and its pipe closed")
+		}
+	})
+	return p
+}
+
+func waitSignal(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func TestPumpRawTap_DrainsOneFrameEachIdlePeriodWhileNobodyWantsFrames(t *testing.T) {
+	sink := newPumpTestSink(false)
+	p := startPump(t, sink, nil)
+	for i := range 100 { // 1600 bytes: every drain finds a frame waiting
+		if _, err := p.w.Write(pumpFrame(byte(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitSignal(t, sink.sawIdle, "the pump to see that nobody wants frames")
+	time.Sleep(time.Second)
+	// One frame every tapIdleDrainEvery, the first a period after the pump went
+	// idle: four in a second. Never more than five, however the timers fall;
+	// at least three leaves a loaded runner a quarter of a second.
+	if n := p.reads.Load(); n < 3 || n > 5 {
+		t.Errorf("idle pump read %d frames in 1 s, want 3 to 5 (one every %s)", n, tapIdleDrainEvery)
+	}
+	if got := sink.published(); len(got) != 0 {
+		t.Errorf("idle pump published %d frames nobody wanted", len(got))
+	}
+}
+
+func TestPumpRawTap_DiscardsWhatThePipeHoldsWhenDemandReturns(t *testing.T) {
+	sink := newPumpTestSink(false)
+	p := startPumpFormat(t, sink, kibTapFormat, nil)
+	capacity := tapPipeCapacity(p.r)
+	if capacity < 4096 {
+		t.Fatalf("tap pipe capacity %d is implausible", capacity)
+	}
+	discard := tapResumeDiscard + (capacity+kibTapFrame-1)/kibTapFrame
+	waitSignal(t, sink.sawIdle, "the pump to see that nobody wants frames")
+	sink.want.Store(true)
+	waitSignal(t, sink.sawWant, "the pump to see that frames are wanted again")
+	// Written only now, so no idle drain can take one: the count is exact.
+	go func() {
+		for i := 1; i <= discard+8; i++ {
+			if _, err := p.w.Write(numberedFrame('f', i)); err != nil {
+				return
+			}
+		}
+	}()
+	waitUntil(t, "8 frames are published", func() bool { return len(sink.published()) >= 8 })
+	for i, frame := range sink.published() {
+		if n := frameNumber(frame); n != discard+1+i {
+			t.Fatalf("published frame %d is frame %d, want %d: a %d-byte pipe holds %d frames of %d bytes, plus %d",
+				i, n, discard+1+i, capacity, discard-tapResumeDiscard, kibTapFrame, tapResumeDiscard)
+		}
+	}
+}
+
+func TestPumpRawTap_FirstFrameAfterDemandReturnsIsFresh(t *testing.T) {
+	sink := newPumpTestSink(false)
+	p := startPumpFormat(t, sink, kibTapFormat, nil)
+	waitSignal(t, sink.sawIdle, "the pump to see that nobody wants frames")
+	held := tapPipeCapacity(p.r) / kibTapFrame
+	staleWritten, freshGo, stop := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		// One writer, so every stale frame is in the pipe ahead of every fresh one.
+		for i := 1; i <= held; i++ {
+			if _, err := p.w.Write(numberedFrame('s', i)); err != nil {
+				return
+			}
+		}
+		close(staleWritten)
+		select {
+		case <-freshGo:
+		case <-stop:
+			return
+		}
+		for i := 1; i <= tapResumeDiscard+held+8; i++ {
+			if _, err := p.w.Write(numberedFrame('f', i)); err != nil {
+				return
+			}
+		}
+	}()
+	// The pipe holds them all, on Linux and on macOS, so this does not wait long.
+	waitSignal(t, staleWritten, "a pipe full of frames from before demand returned")
+	sink.want.Store(true)
+	waitSignal(t, sink.sawWant, "the pump to see that frames are wanted again")
+	close(freshGo)
+	waitUntil(t, "a frame is published", func() bool { return len(sink.published()) > 0 })
+	if first := sink.published()[0]; first[0] != 'f' {
+		t.Fatalf("first frame published after demand returned is stale frame %d of the %d the pipe held, stamped now",
+			frameNumber(first), held)
+	}
+}
+
+func TestPumpRawTap_AloneReportsACameraThatStopped(t *testing.T) {
+	sink := newPumpTestSink(true)
+	p := startPump(t, sink, &tapLiveness{first: 2 * time.Second, idle: 100 * time.Millisecond})
+	p.w.Write(pumpFrame(1)) //nolint:errcheck
+	p.w.Write(pumpFrame(2)) //nolint:errcheck
+	select {
+	case err := <-p.done:
+		if status.Code(err) != codes.DeadlineExceeded || !strings.Contains(err.Error(), "stopped producing video") {
+			t.Errorf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pump did not report the stalled camera")
+	}
+}
+
+func TestPumpRawTap_AloneReportsACameraThatNeverStarted(t *testing.T) {
+	sink := newPumpTestSink(true)
+	p := startPump(t, sink, &tapLiveness{first: 200 * time.Millisecond, idle: 100 * time.Millisecond})
+	select {
+	case err := <-p.done:
+		if status.Code(err) != codes.DeadlineExceeded || !strings.Contains(err.Error(), "produced no video") {
+			t.Errorf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pump did not report the camera that never started")
+	}
+}
+
+func TestPumpRawTap_AloneDoesNotTimeOutWhileIdle(t *testing.T) {
+	sink := newPumpTestSink(false)
+	live := &tapLiveness{first: 100 * time.Millisecond, idle: 100 * time.Millisecond}
+	p := startPump(t, sink, live)
+	p.w.Write(pumpFrame(1)) //nolint:errcheck
+	p.w.Write(pumpFrame(2)) //nolint:errcheck
+	// Ten times first and idle: the two frames are drained, and the drain reads
+	// that find nothing after them are not a stalled camera.
+	select {
+	case err := <-p.done:
+		t.Fatalf("idle pump ended: %v", err)
+	case <-time.After(time.Second):
+	}
+	if n := p.reads.Load(); n != 2 {
+		t.Errorf("idle pump read %d frames in 1 s, want the 2 waiting drained", n)
+	}
+	if got := sink.published(); len(got) != 0 {
+		t.Errorf("idle pump published %d frames nobody wanted", len(got))
+	}
+	// Wanted again, the watchdog is back: nothing more comes, so the camera stopped.
+	sink.want.Store(true)
+	select {
+	case err := <-p.done:
+		if status.Code(err) != codes.DeadlineExceeded || !strings.Contains(err.Error(), "stopped producing video") {
+			t.Errorf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pump did not report the stalled camera once frames were wanted again")
+	}
+}
+
+func TestPumpRawTap_AloneFailsWhenTheReadDeadlineCannotBeSet(t *testing.T) {
+	// A regular file does not support deadlines (os.ErrNoDeadline).
+	f, err := os.Open(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close() //nolint:errcheck
+	sink := newPumpTestSink(true)
+	s := &VideoService{logger: zap.NewNop()}
+	done := make(chan error, 1)
+	go func() {
+		done <- s.pumpRawTap(context.Background(), f, pumpTestFormat, sink, "test",
+			&tapLiveness{first: time.Hour, idle: time.Hour})
+	}()
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.Internal || !strings.Contains(err.Error(), "read deadline") {
+			t.Errorf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pump blocked instead of reporting that it cannot watch the camera")
+	}
+}
+
+func TestPumpRawTap_ReturnsWhenContextEndsWhileIdle(t *testing.T) {
+	sink := newPumpTestSink(false)
+	p := startPump(t, sink, &tapLiveness{first: time.Hour, idle: time.Hour})
+	waitSignal(t, sink.sawIdle, "the pump to see that nobody wants frames")
+	// Past the first drain, so the pump is reading a pipe that has nothing in it.
+	time.Sleep(tapIdleDrainEvery + 2*tapIdlePoll)
+	p.cancel()
+	select {
+	case err := <-p.done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle pump did not return after ctx ended")
 	}
 }

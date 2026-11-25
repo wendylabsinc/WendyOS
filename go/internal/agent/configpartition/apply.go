@@ -2,7 +2,9 @@ package configpartition
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +29,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 )
 
 // elfMachineByArch maps GOARCH values to ELF e_machine field values (little-endian uint16).
@@ -39,6 +43,10 @@ const (
 	agentBinaryName    = "wendy-agent"
 	defaultInstallPath = "/opt/wendyos/bin/wendy-agent"
 )
+
+// localAgentMarker says the binary is a --binary build, which the user chose
+// over the image's agent.
+const localAgentMarker = "wendy-agent.local"
 
 // validateELF checks that the file at path is a 64-bit ELF binary compiled for
 // the same architecture as the running process.
@@ -142,6 +150,8 @@ func copyFile(src, dst string, perm os.FileMode) error {
 func applyBinaryUpdate(logger *zap.Logger, cfgDir, installPath string) bool {
 	src := cfgDir + "/" + agentBinaryName
 	if _, err := os.Stat(src); os.IsNotExist(err) {
+		// An older agent that installed the seed left its marker behind.
+		os.Remove(filepath.Join(cfgDir, localAgentMarker)) //nolint:errcheck
 		return false
 	}
 
@@ -178,19 +188,139 @@ func applyBinaryUpdate(logger *zap.Logger, cfgDir, installPath string) bool {
 		logger.Warn("Failed to remove config partition binary after install",
 			zap.String("path", src), zap.Error(err))
 	}
+	os.Remove(filepath.Join(cfgDir, localAgentMarker)) //nolint:errcheck
 
 	logger.Info("Installed agent binary from config partition, signalling restart",
 		zap.String("installPath", installPath))
 	return true
 }
 
-// applyWendyConf reads /config/wendy.conf, registers every `[wifi]` /
-// `[wifi.N]` profile via NetworkManager, activates the highest-priority one
-// that is in range, applies the device name from the `[device]` section if
-// present, then deletes the file regardless of outcome (bad values should
-// not be retried on every boot).
-func applyWendyConf(logger *zap.Logger, cfgDir string) {
-	confPath := cfgDir + "/wendy.conf"
+// enrollmentPending means the image agent can still redeem the baked ACME
+// credential. It lives on /config, outside the trial snapshot, so a seed that
+// enrolled and was then rejected would lose it.
+func enrollmentPending(cfgDir, configPath string) bool {
+	if _, err := os.Stat(filepath.Join(cfgDir, "acme-enrollment.json")); err != nil {
+		return false
+	}
+	for _, f := range []string{"acme-first-boot-attempt.json", "provisioning.json", "enrollment.json"} {
+		if _, err := os.Stat(filepath.Join(configPath, f)); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func seedWaiting(cfgDir, configPath string) bool {
+	if _, ok := supervisor.InboxFromEnv(); !ok {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(cfgDir, agentBinaryName)); err != nil {
+		return false
+	}
+	return !enrollmentPending(cfgDir, configPath)
+}
+
+// EnrollmentPending and SeedWaiting let the agent restart once after
+// first-boot enrollment, so the seed it held back is staged at once.
+func EnrollmentPending(configPath string) bool { return enrollmentPending(configDir, configPath) }
+func SeedWaiting(configPath string) bool       { return seedWaiting(configDir, configPath) }
+
+// supervisorStatusPath is a variable so tests can point it elsewhere.
+var supervisorStatusPath = supervisor.StatusPath
+
+// stageSeedForSupervisor hands the seed to the agent supervisor, which runs
+// it as a trial; installing it over the running binary would skip every check.
+func stageSeedForSupervisor(logger *zap.Logger, cfgDir, inbox, configPath string) bool {
+	src, marker := filepath.Join(cfgDir, agentBinaryName), filepath.Join(cfgDir, localAgentMarker)
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		os.Remove(marker) //nolint:errcheck
+		return false
+	}
+	_, err := os.Stat(marker)
+	local := err == nil
+	if reason := supervisor.PausedReason(supervisorStatusPath); reason != "" {
+		logger.Info("Keeping the config partition agent binary until updates resume", zap.String("reason", reason))
+		return false
+	}
+	if st, err := supervisor.ReadStatus(supervisorStatusPath); err == nil && st.Role != "" && st.Role != supervisor.RoleImage {
+		// An agent was chosen on /data since; the seed must not replace it.
+		logger.Info("Dropping the config partition agent binary: an agent from /data is running")
+		os.Remove(src)    //nolint:errcheck
+		os.Remove(marker) //nolint:errcheck
+		return false
+	}
+	if enrollmentPending(cfgDir, configPath) {
+		logger.Info("Keeping the config partition agent binary until first-boot enrollment is done")
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(cfgDir, "wendy.conf")); err == nil {
+		// Wi-Fi added during the seed's trial is not in its snapshot, so
+		// rejecting the seed would delete it.
+		logger.Info("Keeping the config partition agent binary until wendy.conf is applied")
+		return false
+	}
+	if err := validateELF(src); err != nil {
+		logger.Error("Config partition binary failed ELF validation, removing", zap.String("path", src), zap.Error(err))
+		os.Remove(src)    //nolint:errcheck
+		os.Remove(marker) //nolint:errcheck
+		return false
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		logger.Error("Failed to read agent binary from config partition", zap.Error(err))
+		return false
+	}
+	sum := sha256.Sum256(data)
+	sha := hex.EncodeToString(sum[:])
+	staged := filepath.Join(inbox, sha)
+	if err := copyFile(src, staged, 0o755); err != nil {
+		logger.Error("Failed to stage agent binary from config partition", zap.Error(err))
+		return false
+	}
+	// A --binary always gets its trial; a downloaded seed only when it is newer.
+	if err := supervisor.WriteIncoming(inbox, supervisor.Incoming{SHA256: sha, Seed: !local}); err != nil {
+		logger.Error("Failed to stage agent binary from config partition", zap.Error(err))
+		os.Remove(staged) //nolint:errcheck
+		return false
+	}
+	if err := os.Remove(src); err != nil {
+		// Left on /config it is staged again on every start: restarting for it
+		// would loop. The supervisor takes it at the agent's next restart.
+		logger.Error("Staged the config partition agent binary but cannot remove it", zap.Error(err))
+		return false
+	}
+	os.Remove(marker) //nolint:errcheck
+	logger.Info("Staged agent binary from config partition for the supervisor", zap.String("sha256", sha), zap.Bool("local", local))
+	return true
+}
+
+// Seams so applyWendyConf runs in tests without NetworkManager or /etc.
+var (
+	addProfileFn      = network.AddOrUpdateProfile
+	activateProfileFn = network.ActivateProfile
+	applyDeviceNameFn = applyDeviceName
+	sleepFn           = time.Sleep
+)
+
+const (
+	// wendyConfAttemptsFile lives in the agent config dir: a counter on /config
+	// would be lost with the file it counts.
+	wendyConfAttemptsFile = "wendy-conf-attempts"
+	maxWendyConfAttempts  = 5
+	// nmWaitBudget bounds the wait for NetworkManager across the whole file:
+	// Apply runs before the agent serves anything.
+	nmWaitBudget = 20 * time.Second
+	nmMaxBackoff = 5 * time.Second
+)
+
+// errInvalidDeviceName marks a name that no retry can apply.
+var errInvalidDeviceName = errors.New("invalid device name")
+
+// applyWendyConf applies the Wi-Fi networks and device name in wendy.conf. What
+// was rejected is dropped; what failed only because NetworkManager or /etc was
+// not ready is kept for a later boot.
+func applyWendyConf(logger *zap.Logger, cfgDir, configPath string) {
+	confPath := filepath.Join(cfgDir, "wendy.conf")
 	data, err := os.ReadFile(confPath)
 	if os.IsNotExist(err) {
 		return
@@ -198,41 +328,39 @@ func applyWendyConf(logger *zap.Logger, cfgDir string) {
 	if err != nil {
 		logger.Error("Failed to read wendy.conf from config partition",
 			zap.String("path", confPath), zap.Error(err))
-		if err := os.Remove(confPath); err != nil {
-			logger.Warn("Failed to remove wendy.conf after read error",
-				zap.String("path", confPath), zap.Error(err))
-		}
+		retainWendyConf(logger, confPath, configPath, nil, nil)
 		return
 	}
 
 	sections := parseINI(data)
 	creds := wendyconf.UnmarshalWiFi(sections)
+	var keptCreds []wendyconf.WifiCredential
 	if len(creds) == 0 {
 		logger.Warn("wendy.conf has no usable WiFi credentials, skipping WiFi provisioning")
 	} else {
 		ctx := context.Background()
+		var waited time.Duration
 		for _, c := range creds {
-			err := network.AddOrUpdateProfile(ctx, network.SavedCredential{
-				SSID:     c.SSID,
-				Password: c.Password,
-				Priority: c.Priority,
-				Hidden:   c.Hidden,
-				Security: c.Security,
-			})
-			if err != nil {
+			err := addProfileWaitingForNM(ctx, c, &waited)
+			switch {
+			case err == nil:
+				logger.Info("Registered WiFi profile from config partition",
+					zap.String("ssid", c.SSID),
+					zap.Int32("priority", c.Priority))
+			case network.NetworkManagerUnavailable(err):
+				logger.Warn("NetworkManager is unavailable, keeping WiFi profile for the next boot",
+					zap.String("ssid", c.SSID), zap.Error(err))
+				keptCreds = append(keptCreds, c)
+			default:
 				logger.Error("Failed to register WiFi profile from config partition",
 					zap.String("ssid", c.SSID), zap.Error(err))
-				continue
 			}
-			logger.Info("Registered WiFi profile from config partition",
-				zap.String("ssid", c.SSID),
-				zap.Int32("priority", c.Priority))
 		}
 		// Try to bring up the first (highest-priority) credential so the
 		// device is online immediately when it's in range. Lower-priority
 		// profiles stay saved for future locations.
 		for _, c := range creds {
-			if err := network.ActivateProfile(ctx, c.SSID); err != nil {
+			if err := activateProfileFn(ctx, c.SSID); err != nil {
 				logger.Warn("Could not activate WiFi profile",
 					zap.String("ssid", c.SSID), zap.Error(err))
 				continue
@@ -242,17 +370,171 @@ func applyWendyConf(logger *zap.Logger, cfgDir string) {
 		}
 	}
 
+	var keptName string
 	if name := sections["device"]["name"]; name != "" {
-		if err := applyDeviceName(logger, name); err != nil {
+		if err := applyDeviceNameFn(logger, name); err != nil {
 			logger.Error("Failed to apply device name from config partition",
 				zap.String("name", name), zap.Error(err))
+			if !errors.Is(err, errInvalidDeviceName) {
+				keptName = name
+			}
 		}
 	}
 
-	if err := os.Remove(confPath); err != nil {
+	if len(keptCreds) == 0 && keptName == "" {
+		removeWendyConf(logger, confPath, configPath)
+		return
+	}
+	retainWendyConf(logger, confPath, configPath, data, marshalWendyConf(keptCreds, keptName))
+}
+
+// addProfileWaitingForNM registers c, retrying while NetworkManager is
+// unavailable and the budget shared by the whole file (*waited) lasts.
+func addProfileWaitingForNM(ctx context.Context, c wendyconf.WifiCredential, waited *time.Duration) error {
+	cred := network.SavedCredential{
+		SSID:     c.SSID,
+		Password: c.Password,
+		Priority: c.Priority,
+		Hidden:   c.Hidden,
+		Security: c.Security,
+	}
+	for delay := time.Second; ; delay = min(2*delay, nmMaxBackoff) {
+		err := addProfileFn(ctx, cred)
+		// A missing nmcli will not appear within the budget; a later boot may still have it.
+		if err == nil || !network.NetworkManagerUnavailable(err) || errors.Is(err, network.ErrNMCLINotFound) ||
+			*waited+delay > nmWaitBudget {
+			return err
+		}
+		sleepFn(delay)
+		*waited += delay
+	}
+}
+
+// marshalWendyConf renders wendy.conf the way the CLI writes it.
+func marshalWendyConf(creds []wendyconf.WifiCredential, name string) []byte {
+	conf := wendyconf.Marshal(creds)
+	if name != "" {
+		if len(conf) > 0 {
+			conf = append(conf, '\n')
+		}
+		conf = append(conf, "[device]\nname = "+name+"\n"...)
+	}
+	return conf
+}
+
+// retainWendyConf leaves rest in wendy.conf for the next boot and counts the
+// attempt; data and rest are nil when the file could not be read.
+func retainWendyConf(logger *zap.Logger, confPath, configPath string, data, rest []byte) {
+	// The counter carries the hash of the file it counts, so one left behind by
+	// an earlier install does not shorten a new install's retries.
+	previous, sum := readWendyConfAttempts(configPath)
+	if data != nil && sum != wendyConfSum(data) {
+		previous = 0
+	}
+	attempts := previous + 1
+	if attempts >= maxWendyConfAttempts {
+		logger.Error("Giving up on wendy.conf after repeated boots could not apply it",
+			zap.String("path", confPath), zap.Int("attempts", attempts))
+		removeWendyConf(logger, confPath, configPath)
+		return
+	}
+
+	if data != nil {
+		sum = wendyConfSum(data)
+		if err := replaceWendyConf(confPath, rest); err != nil {
+			logger.Warn("Could not rewrite wendy.conf; keeping it whole for the next boot",
+				zap.String("path", confPath), zap.Error(err))
+		} else {
+			sum = wendyConfSum(rest)
+		}
+	}
+	if err := writeWendyConfAttempts(configPath, attempts, sum); err != nil {
+		// An attempt that cannot be counted could repeat on every boot.
+		logger.Error("Could not record the wendy.conf attempt, dropping wendy.conf",
+			zap.String("configPath", configPath), zap.Error(err))
+		removeWendyConf(logger, confPath, configPath)
+		return
+	}
+	logger.Warn("Kept the parts of wendy.conf that could not be applied for the next boot",
+		zap.String("path", confPath), zap.Int("attempt", attempts), zap.Int("maxAttempts", maxWendyConfAttempts))
+}
+
+// removeWendyConf deletes wendy.conf and its attempt counter; the counter goes
+// first so a crash in between re-applies the file instead of skipping it.
+func removeWendyConf(logger *zap.Logger, confPath, configPath string) {
+	counter := filepath.Join(configPath, wendyConfAttemptsFile)
+	if err := os.Remove(counter); err != nil && !os.IsNotExist(err) {
+		logger.Warn("Failed to remove the wendy.conf attempt counter",
+			zap.String("path", counter), zap.Error(err))
+	}
+	os.Remove(confPath + ".new") //nolint:errcheck
+	if err := os.Remove(confPath); err != nil && !os.IsNotExist(err) {
 		logger.Warn("Failed to remove wendy.conf after applying",
 			zap.String("path", confPath), zap.Error(err))
 	}
+}
+
+// readWendyConfAttempts returns the stored attempt count and the hash of the
+// wendy.conf it counts; a missing or malformed counter reads as zero.
+func readWendyConfAttempts(configPath string) (int, string) {
+	raw, err := os.ReadFile(filepath.Join(configPath, wendyConfAttemptsFile))
+	if err != nil {
+		return 0, ""
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) != 2 {
+		return 0, ""
+	}
+	n, err := strconv.Atoi(fields[0])
+	if err != nil || n < 0 {
+		return 0, ""
+	}
+	return n, fields[1]
+}
+
+func writeWendyConfAttempts(configPath string, attempts int, sum string) error {
+	if sum == "" {
+		sum = "-"
+	}
+	if err := os.MkdirAll(configPath, 0o700); err != nil {
+		return err
+	}
+	return atomicfile.Write(filepath.Join(configPath, wendyConfAttemptsFile),
+		[]byte(fmt.Sprintf("%d %s\n", attempts, sum)), 0o600)
+}
+
+func wendyConfSum(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// replaceWendyConf swaps in the new content by rename, so a power cut leaves
+// either the old file or the new one. No chmod: /config may be FAT.
+func replaceWendyConf(confPath string, data []byte) error {
+	tmp := confPath + ".new"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, confPath)
+	}
+	if err != nil {
+		os.Remove(tmp) //nolint:errcheck
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(confPath)); err == nil {
+		d.Sync()  //nolint:errcheck
+		d.Close() //nolint:errcheck
+	}
+	return nil
 }
 
 // maxDeviceNameLen caps the device name so the hostname this package derives as
@@ -282,13 +564,19 @@ func validDeviceName(name string) bool {
 	return name[len(name)-1] != '-'
 }
 
-func applyDeviceName(logger *zap.Logger, name string) error {
+func persistDeviceName(logger *zap.Logger, root, name string) error {
 	if !validDeviceName(name) {
-		return fmt.Errorf("invalid device name %q: must match ^[a-z][a-z0-9-]{1,53}[a-z0-9]$", name)
+		return fmt.Errorf("%w %q: must match ^[a-z][a-z0-9-]{1,53}[a-z0-9]$", errInvalidDeviceName, name)
 	}
 
-	const deviceNamePath = "/etc/wendyos/device-name"
-	if err := os.MkdirAll("/etc/wendyos", 0o755); err != nil {
+	deviceNamePath := filepath.Join(root, "etc/wendyos/device-name")
+	// Remember the stored name so a rename that fails below can put it back.
+	previous, err := os.ReadFile(deviceNamePath)
+	hadPrevious := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading previous device name: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(deviceNamePath), 0o755); err != nil {
 		return fmt.Errorf("creating /etc/wendyos: %w", err)
 	}
 	if err := os.WriteFile(deviceNamePath, []byte(name+"\n"), 0o644); err != nil {
@@ -299,13 +587,36 @@ func applyDeviceName(logger *zap.Logger, name string) error {
 	// A device-name apply is a deliberate re-identification, so clear any explicit
 	// rename — it outranks device-name (hostname.go, update-mdns-uuid.sh) and would
 	// otherwise override this name on the next boot.
-	const explicitHostnamePath = "/etc/wendy-agent/hostname"
+	explicitHostnamePath := filepath.Join(root, "etc/wendy-agent/hostname")
 	if err := os.Remove(explicitHostnamePath); err == nil {
 		logger.Info("Cleared explicit hostname so the device name takes effect",
 			zap.String("path", explicitHostnamePath))
 	} else if !os.IsNotExist(err) {
 		logger.Warn("Could not clear explicit hostname; it will keep overriding the device name",
 			zap.String("path", explicitHostnamePath), zap.Error(err))
+		// Do not publish the new device name while hostname generation still
+		// selects the old explicit value. A retry can finish once it is removable.
+		err = fmt.Errorf("clearing explicit hostname before applying device name: %w", err)
+		// Nor leave it stored, where it would take effect unannounced whenever
+		// the explicit hostname is next cleared.
+		var restoreErr error
+		if hadPrevious {
+			restoreErr = os.WriteFile(deviceNamePath, previous, 0o644)
+		} else {
+			restoreErr = os.Remove(deviceNamePath)
+		}
+		if restoreErr != nil {
+			restoreErr = fmt.Errorf("restoring previous device name: %w", restoreErr)
+		}
+		return errors.Join(err, restoreErr)
+	}
+
+	return nil
+}
+
+func applyDeviceName(logger *zap.Logger, name string) error {
+	if err := persistDeviceName(logger, "/", name); err != nil {
+		return err
 	}
 
 	// Build an env with a full system PATH so scripts can find standard
@@ -766,10 +1077,23 @@ func Apply(logger *zap.Logger, configPath string) {
 			installPath = real
 		}
 	}
+	if inbox, ok := supervisor.InboxFromEnv(); ok {
+		// The other handoffs go first: the seed's trial snapshot must already
+		// hold the Wi-Fi and enrollment they write, or rejecting it erases them.
+		applyHandoffs(logger, configPath)
+		if stageSeedForSupervisor(logger, configDir, inbox, configPath) {
+			os.Exit(0)
+		}
+		return
+	}
 	if applyBinaryUpdate(logger, configDir, installPath) {
 		os.Exit(0)
 	}
-	applyWendyConf(logger, configDir)
+	applyHandoffs(logger, configPath)
+}
+
+func applyHandoffs(logger *zap.Logger, configPath string) {
+	applyWendyConf(logger, configDir, configPath)
 	applyPreProvisioning(logger, configDir, configPath)
 	applyClockFloor(logger, configDir, configPath)
 	applyExtensions(logger, configDir)

@@ -3,7 +3,6 @@
   "language": "typescript",
   "pages": [
     "hello-world",
-    "simple-web-server",
     "generated-server",
     "web-app",
     "camera"

@@ -31,19 +31,39 @@ func TestCameraDHCPServiceValidation(t *testing.T) {
 	}
 }
 
-// Exercise the registered RPCs and real file persistence, including disabling
-// a port that is no longer present. No host network configuration is changed.
-func TestCameraDHCPServiceRoundTrip(t *testing.T) {
+// Exercise legacy startup migration, the registered RPCs, and real persistence,
+// including disabling a missing port. No host network configuration is changed.
+func TestCameraDHCPServiceMigratedRoundTrip(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root-owned configuration")
 	}
-	path := filepath.Join(t.TempDir(), "camera-dhcp-interfaces")
-	if err := os.WriteFile(path, []byte("camera-test0\ncamera-test1\n"), 0600); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "camera-dhcp-interfaces")
+	registry := ipcam.NewRegistry(filepath.Join(dir, "cameras.json"))
+	for _, cam := range []ipcam.Camera{
+		{MAC: "02:00:00:00:00:01", Link: "camera-test0", Address: "10.98.0.50"},
+		{MAC: "02:00:00:00:00:02", Link: "camera-test1", Address: "10.98.1.50"},
+	} {
+		if _, err := registry.Upsert(cam); err != nil {
+			t.Fatal(err)
+		}
+	}
+	credentials := ipcam.NewCredentialStore(filepath.Join(dir, "camera-credentials.json"))
+	for _, mac := range []string{"02:00:00:00:00:01", "02:00:00:00:00:02"} {
+		if err := credentials.Set(mac, ipcam.Credential{Username: "admin"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An ordinary client mistakenly served before must not enable another port.
+	if _, err := registry.Upsert(ipcam.Camera{MAC: "02:00:00:00:00:03", Link: "camera-test2", Address: "10.98.2.50", DHCPServed: true}); err != nil {
 		t.Fatal(err)
 	}
-	s := &VideoService{links: ipcam.NewLinkManager(nil, zap.NewNop())}
+	s := &VideoService{links: ipcam.NewLinkManager(registry, zap.NewNop()), credentials: credentials}
 	if err := s.LoadCameraDHCPAllowlist(path); err != nil {
 		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "camera-test0\ncamera-test1\n" {
+		t.Fatalf("migration must enable only credential-matched ports: %q, %v", data, err)
 	}
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
@@ -75,6 +95,14 @@ func TestCameraDHCPServiceRoundTrip(t *testing.T) {
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != "camera-test1\n" {
 		t.Fatalf("persisted configuration = %q, %v", data, err)
+	}
+	restarted := &VideoService{links: ipcam.NewLinkManager(registry, zap.NewNop()), credentials: credentials}
+	if err := restarted.LoadCameraDHCPAllowlist(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil || string(data) != "camera-test1\n" {
+		t.Fatalf("restart overrode operator disable = %q, %v", data, err)
 	}
 	if _, err := client.SetCameraDHCP(context.Background(), &agentpb.SetCameraDHCPRequest{InterfaceName: "camera-test0", Enabled: true}); status.Code(err) != codes.NotFound {
 		t.Fatalf("enable absent port: %v", err)

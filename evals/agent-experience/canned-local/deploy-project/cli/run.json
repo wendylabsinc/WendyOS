@@ -1,0 +1,8 @@
+{
+  "argv_prefix": [
+    "run"
+  ],
+  "stdout": "{\"status\": \"started\", \"app\": \"sensor-dashboard\", \"device\": \"{{device}}\", \"readiness\": \"not_checked\", \"endpoints\": []}",
+  "stderr": "Cloud app registration skipped (the deploy goes through the local agent socket).\nCreating container for service web (sensor-dashboard_web)...\nPulling image on device...\nCreating container...\nContainer sensor-dashboard_web created.\nService web started.\nAll services running in detached mode.\nRun 'wendy device logs' to stream logs (filter a service with --app sd-<service>).\n",
+  "exit_code": 0
+}

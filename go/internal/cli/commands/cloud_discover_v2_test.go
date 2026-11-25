@@ -70,7 +70,7 @@ func TestCloudDiscoverInteractiveV2(t *testing.T) {
 				t.Fatalf("unexpected view: %s", m.View())
 			}
 			id := m.devices[1].key
-			updated, _ = m.Update(cloudAssetVersionMsg{assetID: id, resp: &agentpb.GetAgentVersionResponse{Version: "9.9.9"}})
+			updated, _ = m.Update(discoverUpdateDoneMsg{cloudAssetKey: id, note: "Already at the latest release.", version: &agentpb.GetAgentVersionResponse{Version: "9.9.9"}})
 			m = updated.(cloudDiscoverModel)
 			if m.versions[m.devices[0].key] != nil || m.versions[id].GetVersion() != "9.9.9" {
 				t.Fatal("version results mixed device UUIDs")
@@ -100,7 +100,7 @@ func TestCloudDiscoverInteractiveV2(t *testing.T) {
 				t.Fatal("copy all lost devices or UUIDs")
 			}
 
-			// Subsequent refreshes must use the same version-aware fetcher.
+			// Subsequent refreshes must use the same Cloud API generation.
 			updated, _ = m.Update(m.scanCmd()())
 			m = updated.(cloudDiscoverModel)
 			if m.err != nil || len(m.devices) != 205 {
@@ -111,7 +111,51 @@ func TestCloudDiscoverInteractiveV2(t *testing.T) {
 			if _, exists := m.versions[id]; exists {
 				t.Fatal("updated device retained stale version")
 			}
+			updated, _ = m.Update(discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: wantName, version: &agentpb.GetAgentVersionResponse{Version: "10.0.0"}})
+			m = updated.(cloudDiscoverModel)
+			if m.versions[id].GetVersion() != "10.0.0" || !strings.Contains(m.View(), "10.0.0") {
+				t.Fatal("updated device did not reuse the restart probe's version")
+			}
 		})
+	}
+}
+
+// Opening a populated picker and receiving scan results must schedule only
+// another roster read, never a batch of per-device tunnel commands.
+func TestCloudDiscoverSchedulesOnlyRosterRefresh(t *testing.T) {
+	auth := discoveryV2Auth(t, 2, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	devices, err := fetchCloudDiscoveryDevices(ctx, auth, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		name string
+		msg  tea.Msg
+	}
+	results := make(chan result, 6)
+	for _, picker := range []bool{false, true} {
+		m := newCloudDiscoverModel(ctx, auth, "", false, picker, nil)
+		m.devices, m.hasResults = devices, true
+		_, refresh := m.Update(cloudScanMsg{devices: devices})
+		_, failedRefresh := m.Update(cloudScanMsg{err: errors.New("roster unavailable")})
+		for name, cmd := range map[string]tea.Cmd{"open": m.Init(), "refresh": refresh, "failed refresh": failedRefresh} {
+			go func() { results <- result{fmt.Sprintf("picker=%t/%s", picker, name), cmd()} }()
+		}
+	}
+	for range 6 {
+		select {
+		case result := <-results:
+			scan, ok := result.msg.(cloudScanMsg)
+			if !ok {
+				t.Errorf("%s scheduled %T, want only a roster refresh", result.name, result.msg)
+			} else if scan.err != nil || len(scan.devices) != 2 {
+				t.Errorf("%s roster refresh: %v, %d devices", result.name, scan.err, len(scan.devices))
+			}
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for roster refresh")
+		}
 	}
 }
 
@@ -328,6 +372,38 @@ func TestCloudDiscoverJSONV2(t *testing.T) {
 				if info.Selector != wantSelector || err != nil || !matched || selector.String() != wantSelector {
 					t.Fatalf("discovery lost scoped UUID selector: %q, %v", info.Selector, err)
 				}
+			}
+		})
+	}
+}
+
+func TestCloudDiscoveryJSONPreservesPKIDeviceBinding(t *testing.T) {
+	const assetID = "00000000-0000-4000-8000-000000000001"
+	const deviceID = "00000000-0000-4000-8000-000000000002"
+	for _, bound := range []bool{false, true} {
+		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			asset := &cloudpbv2.Asset{Id: assetID, Name: "Cloud Thor"}
+			if bound {
+				deviceName := deviceID
+				asset.PkiDeviceName = &deviceName
+			}
+			row := cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: assetID}
+			encoded, err := json.Marshal(row.info(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if fields["id"] != assetID {
+				t.Fatalf("PKI binding changed the Cloud routing ID: %s", encoded)
+			}
+			if bound && fields["pkiDeviceName"] != deviceID {
+				t.Fatalf("Cloud row lost its different PKI device identity: %s", encoded)
+			}
+			if !bound && fields["pkiDeviceName"] != nil {
+				t.Fatalf("older row invented an explicit PKI binding: %s", encoded)
 			}
 		})
 	}

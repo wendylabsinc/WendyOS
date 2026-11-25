@@ -3,8 +3,10 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
@@ -36,8 +38,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// First, before the early returns below, so every command sees one
-			// answer to "which device": --device, else WENDY_DEVICE, else the
-			// saved default.
+			// answer to "which device": --device, else WENDY_DEVICE.
 			applyDeviceEnv()
 			// Progress tips never recommend the command already running.
 			tui.SetRunningCommand(cmd.CommandPath())
@@ -67,6 +68,7 @@ func NewRootCmd() *cobra.Command {
 				return err
 			}
 			premark("  prerun: config.Load")
+			noteLegacyDefaultDevice(cmd, cfg)
 
 			firstRun = initializeCommandAnalytics(cmd, cfg, true)
 			premark("  prerun: analytics.Init")
@@ -129,7 +131,7 @@ func NewRootCmd() *cobra.Command {
 	//
 	// pflag shows the first `backticked` word of a usage string as the flag's
 	// placeholder ("--device host"), so quote commands here with '...'.
-	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device `host` (hostname, IP, or host:port); 'wendy run' accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach). Defaults to $WENDY_DEVICE, then the saved default device")
+	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device `host` (hostname, IP, or host:port); 'wendy run' accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach). Defaults to $WENDY_DEVICE")
 
 	// Render the top-level command groups in the deliberate order below rather
 	// than alphabetically, so e.g. "project" lists before "device".
@@ -160,6 +162,8 @@ func NewRootCmd() *cobra.Command {
 	projectCmd.GroupID = "manage"
 	deviceCmd := newDeviceCmd()
 	deviceCmd.GroupID = "manage"
+	netCmd := newNetCmd()
+	netCmd.GroupID = "manage"
 	dataCmd := newDataCmd()
 	dataCmd.GroupID = "manage"
 
@@ -246,7 +250,18 @@ func NewRootCmd() *cobra.Command {
 			if sessionParentLease {
 				parentLease = os.NewFile(3, "parent-lease")
 			}
-			return sessionbroker.Run(cmd.Context(), sessionSpec, sessionbroker.DefaultIdleTTL, parentLease)
+			idle := sessionbroker.DefaultIdleTTL
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			if cfg.SessionBrokerIdleTimeout != "" {
+				idle, err = time.ParseDuration(cfg.SessionBrokerIdleTimeout)
+				if err != nil || idle <= 0 {
+					return fmt.Errorf("sessionBrokerIdleTimeout must be a positive duration")
+				}
+			}
+			return sessionbroker.Run(cmd.Context(), sessionSpec, idle, parentLease)
 		},
 	}
 	sessionBrokerCmd.Flags().StringVar(&sessionSpec, "spec", "", "Encoded session connection recipe")
@@ -295,6 +310,7 @@ func NewRootCmd() *cobra.Command {
 		// Manage
 		projectCmd,
 		deviceCmd,
+		netCmd,
 		newVMCmd(),
 		dataCmd,
 		newJobCmd(),

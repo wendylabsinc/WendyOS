@@ -105,7 +105,7 @@ jobs:
 
       - name: Set up Go
         if: inputs.hostname == '' || inputs.jobs == 'all' || inputs.jobs == 'discover'
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -132,6 +132,19 @@ jobs:
         if: inputs.hostname == '' || inputs.jobs == 'all' || inputs.jobs == 'discover'
         working-directory: go
         run: make build-cli
+
+      - name: Refresh CI login before device discovery
+        if: inputs.hostname == '' || inputs.jobs == 'all' || inputs.jobs == 'discover'
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          # Match the gate's SSH login session; use this checkout's fresh CLI.
+          printf -v remote_command '%q ' env CI=true WENDY_SECRET_STORE=file \
+            python3 "$PWD/.github/scripts/refresh-gate-auth.py" --wendy "$PWD/go/bin/wendy"
+          if ! ssh -o BatchMode=yes localhost "$remote_command" </dev/null 2>/dev/null; then
+            echo "::error::CI login refresh did not complete. In the runner login session, run WENDY_SECRET_STORE=file wendy auth login as ci@wendy.sh, then WENDY_SECRET_STORE=file wendy auth use wendy."
+            exit 1
+          fi
 
       - name: Run wendy discover
         id: scan
@@ -190,7 +203,7 @@ jobs:
       - uses: ./.github/actions/check-runner-disk
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -215,6 +228,17 @@ jobs:
       - name: Build CLI
         working-directory: go
         run: make build-cli
+
+      - name: Refresh CI login before device tests
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          printf -v remote_command '%q ' env CI=true WENDY_SECRET_STORE=file \
+            python3 "$PWD/.github/scripts/refresh-gate-auth.py" --wendy "$PWD/go/bin/wendy"
+          if ! ssh -o BatchMode=yes localhost "$remote_command" </dev/null 2>/dev/null; then
+            echo "::error::CI login refresh did not complete. In the runner login session, run WENDY_SECRET_STORE=file wendy auth login as ci@wendy.sh, then WENDY_SECRET_STORE=file wendy auth use wendy."
+            exit 1
+          fi
 
       - name: Prepare Docker
         id: prepare-docker
@@ -352,7 +376,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false

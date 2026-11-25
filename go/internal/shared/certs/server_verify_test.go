@@ -59,8 +59,9 @@ func TestBuildServerVerifyConnection_OrgMismatch(t *testing.T) {
 	serverCert, chainPEM := selfSignedCert(t, "device", "urn:wendy:org:7:asset:42")
 
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:      string(chainPEM),
-		ExpectedOrgID: 5,
+		ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
+		ChainPEM:         string(chainPEM),
+		ExpectedOrgID:    5,
 	})
 	if err != nil {
 		t.Fatalf("BuildServerVerifyConnection: %v", err)
@@ -82,8 +83,9 @@ func TestBuildServerVerifyConnection_OrgMatch(t *testing.T) {
 	serverCert, chainPEM := selfSignedCert(t, "device", "urn:wendy:org:7:asset:42")
 
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:      string(chainPEM),
-		ExpectedOrgID: 7,
+		ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
+		ChainPEM:         string(chainPEM),
+		ExpectedOrgID:    7,
 	})
 	if err != nil {
 		t.Fatalf("BuildServerVerifyConnection: %v", err)
@@ -95,12 +97,13 @@ func TestBuildServerVerifyConnection_OrgMatch(t *testing.T) {
 	}
 }
 
-func TestBuildServerVerifyConnection_ZeroOrgAcceptsAny(t *testing.T) {
+func TestBuildServerVerifyConnection_ZeroOrgStillRequiresExpectedDevice(t *testing.T) {
 	serverCert, chainPEM := selfSignedCert(t, "device", "urn:wendy:org:7:asset:42")
 
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:      string(chainPEM),
-		ExpectedOrgID: 0, // accept any
+		ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
+		ChainPEM:         string(chainPEM),
+		ExpectedOrgID:    0, // exact identity still constrains org and asset
 	})
 	if err != nil {
 		t.Fatalf("BuildServerVerifyConnection: %v", err)
@@ -122,9 +125,10 @@ func TestBuildServerVerifyConnection_PinStoreCalledOnSuccess(t *testing.T) {
 	}}
 
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:      string(chainPEM),
-		ExpectedOrgID: 7,
-		PinStore:      pin,
+		ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
+		ChainPEM:         string(chainPEM),
+		ExpectedOrgID:    7,
+		PinStore:         pin,
 	})
 	if err != nil {
 		t.Fatalf("BuildServerVerifyConnection: %v", err)
@@ -162,8 +166,9 @@ func TestBuildServerVerifyConnection_OnServerIdentityFiresOnSuccess(t *testing.T
 	var got certs.WendyIdentity
 	var calls int
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:      string(chainPEM),
-		ExpectedOrgID: 7,
+		ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
+		ChainPEM:         string(chainPEM),
+		ExpectedOrgID:    7,
 		OnServerIdentity: func(id certs.WendyIdentity) {
 			got = id
 			calls++
@@ -190,6 +195,7 @@ func TestBuildServerVerifyConnection_OnServerIdentityFiresOnMismatch(t *testing.
 
 	var got certs.WendyIdentity
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
 		ChainPEM:         string(chainPEM),
 		ExpectedOrgID:    5,
 		OnServerIdentity: func(id certs.WendyIdentity) { got = id },
@@ -217,6 +223,7 @@ func TestBuildServerVerifyConnection_OnServerIdentityFiresOnChainFailure(t *test
 	var got certs.WendyIdentity
 	var calls int
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
 		ChainPEM:         string(unrelatedChain),
 		ExpectedOrgID:    9,
 		OnServerIdentity: func(id certs.WendyIdentity) { got = id; calls++ },
@@ -244,6 +251,7 @@ func TestBuildServerVerifyConnection_OnVerifiedServerIdentityFiresOnSuccess(t *t
 	var got certs.WendyIdentity
 	var calls int
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ExpectedIdentity:         &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
 		ChainPEM:                 string(chainPEM),
 		ExpectedOrgID:            7,
 		OnVerifiedServerIdentity: func(id certs.WendyIdentity) { got = id; calls++ },
@@ -274,6 +282,7 @@ func TestBuildServerVerifyConnection_OnVerifiedServerIdentitySilentOnChainFailur
 
 	var calls int
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ExpectedIdentity:         &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
 		ChainPEM:                 string(unrelatedChain),
 		ExpectedOrgID:            9,
 		OnVerifiedServerIdentity: func(id certs.WendyIdentity) { calls++ },
@@ -313,6 +322,7 @@ func TestBuildServerVerifyConnection_OnVerifiedServerIdentitySilentOnPinRejectio
 
 	var calls int
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ExpectedIdentity:         &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
 		ChainPEM:                 string(chainPEM),
 		ExpectedOrgID:            7,
 		PinStore:                 pin,
@@ -352,6 +362,7 @@ func TestBuildServerVerifyConnection_PinPersistenceFailureDoesNotBlock(t *testin
 
 	var calls int
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ExpectedIdentity:         &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
 		ChainPEM:                 string(chainPEM),
 		ExpectedOrgID:            7,
 		PinStore:                 pin,
@@ -378,6 +389,7 @@ func TestBuildServerVerifyConnection_OnVerifiedServerIdentitySilentOnOrgMismatch
 
 	var calls int
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ExpectedIdentity:         &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
 		ChainPEM:                 string(chainPEM),
 		ExpectedOrgID:            5,
 		OnVerifiedServerIdentity: func(id certs.WendyIdentity) { calls++ },
@@ -401,6 +413,7 @@ func TestBuildServerVerifyConnection_OnServerIdentitySilentWhenNoIdentity(t *tes
 
 	var calls int
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
 		ChainPEM:         string(chainPEM),
 		ExpectedOrgID:    0,
 		OnServerIdentity: func(id certs.WendyIdentity) { calls++ },
@@ -410,8 +423,8 @@ func TestBuildServerVerifyConnection_OnServerIdentitySilentWhenNoIdentity(t *tes
 	}
 
 	cs := tls.ConnectionState{PeerCertificates: []*x509.Certificate{serverCert}}
-	if err := verifyConn(cs); err != nil {
-		t.Fatalf("expected nil, got %v", err)
+	if err := verifyConn(cs); err == nil {
+		t.Fatal("certificate without device identity accepted")
 	}
 	if calls != 0 {
 		t.Errorf("OnServerIdentity calls = %d, want 0 (no Wendy identity in cert)", calls)
@@ -535,19 +548,30 @@ func TestBuildServerVerifyConnection_ExpectedPrincipal(t *testing.T) {
 	}
 }
 
-// TestBuildServerVerifyConnection_ExpectedIdentityNil locks in that
-// the new field is opt-in: with it unset, a no-URN cert still passes (grace
-// mode), which is what keeps unpinned legacy devices working.
-func TestBuildServerVerifyConnection_ExpectedIdentityNil(t *testing.T) {
-	serverCert, chainPEM := selfSignedCert(t, "device", "")
-	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:      string(chainPEM),
-		ExpectedOrgID: 7,
-	})
-	if err != nil {
-		t.Fatalf("BuildServerVerifyConnection: %v", err)
+func TestBuildServerVerifyConnection_RequiresExpectedDevice(t *testing.T) {
+	for _, expected := range []*certs.WendyIdentity{
+		nil, {},
+		{OrgID: 7, EntityType: certs.EntityUser, EntityID: "42"},
+		{OrgID: 7, EntityType: certs.EntityAsset},
+		{EntityType: certs.EntityAsset, EntityID: "42"},
+		{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42", Principal: "invalid"},
+	} {
+		verify, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ExpectedIdentity: expected})
+		if !errors.Is(err, certs.ErrExpectedDeviceIdentity) || verify != nil {
+			t.Fatalf("expected=%+v: verifier exists=%v err=%v", expected, verify != nil, err)
+		}
 	}
-	if err := verifyConn(tls.ConnectionState{PeerCertificates: []*x509.Certificate{serverCert}}); err != nil {
-		t.Fatalf("grace mode should accept a no-URN cert, got %v", err)
+}
+
+func TestBuildServerVerifyConnection_LegacyCNAndExpectationSnapshot(t *testing.T) {
+	server, chain := selfSignedCert(t, "sh/wendy/7/42", "")
+	expected := certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}
+	verify, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ChainPEM: string(chain), ExpectedIdentity: &expected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected.EntityID = "43"
+	if err := verify(tls.ConnectionState{PeerCertificates: []*x509.Certificate{server}}); err != nil {
+		t.Fatalf("matching legacy CN rejected or expectation changed: %v", err)
 	}
 }

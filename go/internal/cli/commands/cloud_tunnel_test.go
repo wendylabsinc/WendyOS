@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -522,5 +524,52 @@ func TestCloudKeepaliveProfiles(t *testing.T) {
 	}
 	if clouddefaults.KeepalivePing < agentMinTime {
 		t.Errorf("clouddefaults.KeepalivePing = %v, want >= agent MinTime %v (mtls/server.go:108) -- this is the broker/cloud-API liveness ping", clouddefaults.KeepalivePing, agentMinTime)
+	}
+}
+
+// This helper is also used by device update and legacy Cloud resume. Upload-
+// specific wording and reachability classification belong to the v2 caller.
+func TestCloudRestartFailureKeepsLegacyMessage(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := waitForCloudDeviceRestart(ctx, "test-jetson", "asset-id", func(context.Context) (*grpcclient.AgentConnection, error) {
+		t.Fatal("canceled wait must not connect")
+		return nil, nil
+	})
+	if got, want := err.Error(), "timed out waiting for test-jetson (id=asset-id) to restart"; got != want {
+		t.Fatalf("message=%q, want %q", got, want)
+	}
+	if len(NextSteps(err)) != 0 || errors.Is(err, errDeviceUnreachable) {
+		t.Fatalf("legacy restart acquired upload-specific classification/hints: %v", err)
+	}
+}
+
+func TestCloudV2ConnectionUsesIDWhenNameIsEmpty(t *testing.T) {
+	certificates, _ := liteRelayTestPKI(t)
+	auth := &config.AuthConfig{Certificates: certificates}
+	const id = "11111111-2222-3333-4444-555555555555"
+	for _, name := range []string{"jetson", "", "   "} {
+		t.Run(fmt.Sprintf("name=%q", name), func(t *testing.T) {
+			conn, err := connectCloudAssetV2(t.Context(), auth, &cloudpbv2.Asset{Id: id, Name: name}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			want := name
+			if strings.TrimSpace(want) == "" {
+				want = id
+			}
+			if conn.Host != want {
+				t.Fatalf("host=%q, want %q", conn.Host, want)
+			}
+			for _, failure := range []error{
+				cloudChunkTransferError(conn.Host, chunkPushSnapshot{}, errors.New("upload dropped"), errors.New("reconnect failed")),
+				cloudRunStartConnectionError(conn.Host, errors.New("stream dropped")),
+			} {
+				if !strings.Contains(failure.Error(), "connection to "+want+" was lost") {
+					t.Fatalf("missing device label: %v", failure)
+				}
+			}
+		})
 	}
 }

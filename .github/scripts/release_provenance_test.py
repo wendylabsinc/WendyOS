@@ -1,0 +1,169 @@
+"""The release inventory must have provenance from each producing job."""
+import copy
+import fnmatch
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+import unittest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def assert_provenance(test, workflow):
+    jobs = workflow['jobs']
+    release = jobs['release']
+    ancestors = set()
+
+    def visit(name):
+        if name in ancestors:
+            return
+        ancestors.add(name)
+        needs = jobs[name].get('needs', [])
+        for dependency in ([needs] if isinstance(needs, str) else needs):
+            visit(dependency)
+    visit('release')
+    checked = 0
+    for name, job in jobs.items():
+        previous = []
+        for step in job.get('steps', []):
+            action = step.get('uses', '').split('@')[0]
+            if action == 'actions/attest-build-provenance':
+                test.assertNotIn('if', step, f'{name}: provenance must not be optional')
+                test.assertFalse(step.get('continue-on-error', False))
+                previous += step['with']['subject-path'].splitlines()
+            if action != 'actions/upload-artifact':
+                continue
+            path = step['with']['path']
+            # The release file selector excludes the dependency cache and the
+            # unpacked app. The signed app ZIP has its own attested upload.
+            if step.get('name') in ['Upload Release build cache', 'Upload notarized app bundle']:
+                continue
+            if name == 'publish-linux-repos' and step['with'].get('name') == 'linux-repository-consumer-evidence':
+                # This contains receipts only, not a release package producer.
+                # Keep the exception exact so a later package upload cannot hide
+                # behind the evidence name or a broad JSON/SPDX glob.
+                prefix = '${{ runner.temp }}/repository-consumer-evidence/'
+                receipt_paths = {'plan.json', 'upload-receipts.json', 'result.json',
+                                 'deb-packages.json', 'rpm-packages.json', '*.log',
+                                 '*-dependencies.txt', '*-helper-hashes.txt',
+                                 '*/result.json', '*/metadata.log', '*/download.log'}
+                test.assertEqual(set(path.splitlines()), {prefix + p for p in receipt_paths} | {
+                    '${{ runner.temp }}/repository-upload-receipts.json',
+                    '${{ runner.temp }}/repository-upload-evidence/*.log'})
+                continue
+            test.assertIn(name, ancestors, f'{name}: release must wait for this producer')
+            test.assertTrue(any(fnmatch.fnmatchcase(path, pattern) for pattern in previous),
+                            f'{name}: no producing-job attestation before upload of {path}')
+            test.assertEqual(job.get('permissions', {}).get('id-token'), 'write', name)
+            test.assertEqual(job.get('permissions', {}).get('attestations'), 'write', name)
+            checked += 1
+    test.assertGreaterEqual(checked, 13, 'release producer inventory unexpectedly shrank')
+    return checked
+
+
+class ReleaseProvenanceWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = yaml.safe_load((ROOT / '.github/workflows/build.yml').read_text())
+
+    def test_every_uploaded_release_file_is_attested_at_its_producer(self):
+        assert_provenance(self, self.workflow)
+
+    def test_unattested_package_or_missing_producer_is_rejected(self):
+        for mutation in ['remove-attestation', 'remove-permission', 'remove-dependency']:
+            with self.subTest(mutation=mutation):
+                bad = copy.deepcopy(self.workflow)
+                job = bad['jobs']['package-windows']
+                if mutation == 'remove-attestation':
+                    job['steps'] = [s for s in job['steps'] if s.get('name') != 'Attest signed MSI']
+                elif mutation == 'remove-permission':
+                    del job['permissions']['id-token']
+                else:
+                    # Remove every incoming edge. SBOM generation also waits
+                    # for signing, so removing only release's direct edge still
+                    # leaves this producer in the release dependency graph.
+                    for dependent in bad['jobs'].values():
+                        needs = dependent.get('needs', [])
+                        if isinstance(needs, str):
+                            needs = [needs]
+                        if 'package-windows' in needs:
+                            dependent['needs'] = [name for name in needs if name != 'package-windows']
+                with self.assertRaises(AssertionError):
+                    assert_provenance(self, bad)
+
+    def test_repository_evidence_exception_rejects_release_files_and_broad_globs(self):
+        for path in ('candidate.rpm', 'candidate.spdx.json', '*.json', '**/*'):
+            with self.subTest(path=path):
+                bad = copy.deepcopy(self.workflow)
+                upload = next(s for s in bad['jobs']['publish-linux-repos']['steps']
+                              if s.get('with', {}).get('name') == 'linux-repository-consumer-evidence')
+                upload['with']['path'] += '\n${{ runner.temp }}/repository-consumer-evidence/' + path
+                with self.assertRaises(AssertionError):
+                    assert_provenance(self, bad)
+
+    def test_publication_uses_verified_inventory_and_commit_and_cannot_ignore_failure(self):
+        release = self.workflow['jobs']['release']
+        steps = release['steps']
+        gate = next(s for s in steps if s.get('name') == 'Tag the built commit')
+        publish = next(s for s in steps if s.get('name') == 'Create Release')
+        inventory = next(s for s in steps if s.get('name') == 'List files')
+        checkout = next(s for s in steps if s.get('name') == 'Checkout release verification')
+        self.assertLess(steps.index(inventory), steps.index(checkout))
+        self.assertLess(steps.index(checkout), steps.index(gate))
+        self.assertLess(steps.index(gate), steps.index(publish))
+        self.assertIn('FILES<<EOF', inventory['run'])
+        self.assertEqual(checkout['with']['path'], '.release-source')
+        self.assertNotIn('ref', checkout['with'])  # current built SHA, never moving main
+        self.assertEqual(gate['run'].strip(), 'python3 .release-source/.github/scripts/verify-release.py')
+        for step in [gate, publish]:
+            self.assertFalse(step.get('continue-on-error', False))
+            self.assertNotIn('if', step)  # default success(), not always()
+        self.assertEqual(publish['with']['files'], '${{ env.FILES }}')
+        self.assertEqual(publish['with']['target_commitish'], '${{ github.sha }}')
+        self.assertEqual(publish['with']['tag_name'], gate['env']['TAG'])
+        self.assertEqual(release['permissions']['attestations'], 'read')
+        self.assertFalse(any('attest-build-provenance@' in s.get('uses', '') for s in steps),
+                         'release consumer must verify upstream provenance, not mint its own')
+
+    def test_actual_inventory_selects_all_publishable_formats_and_excludes_build_cache(self):
+        release = self.workflow['jobs']['release']
+        inventory = next(s for s in release['steps'] if s.get('name') == 'List files')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            assets = ['nested/agent with spaces.tar.gz', 'cli.zip', 'cli.msi',
+                      'agent.deb', 'agent.rpm', 'source.spdx.json']
+            for name in assets + ['macos-release-build-cache.tar.zst', 'app/Contents/MacOS/agent',
+                                  'repository-consumer-evidence/plan.json',
+                                  'repository-consumer-evidence/deb-amd64/result.json',
+                                  'repository-consumer-evidence/metadata.log',
+                                  'repository-consumer-evidence/deb-helper-hashes.txt']:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('fixture')
+            output = root / 'environment'
+            result = subprocess.run(['bash', '-e', '-c', inventory['run']], cwd=root,
+                                    env=dict(os.environ, GITHUB_ENV=str(output)),
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(output.read_text().splitlines(),
+                             ['FILES<<EOF'] + sorted('./'+a for a in assets) + ['EOF'])
+
+    def test_required_ci_runs_both_fixture_suites_on_gate_and_workflow_changes(self):
+        build_events = self.workflow.get('on', self.workflow.get(True))
+        self.assertIn('.github/scripts/**', build_events['push']['paths'])
+        ci = yaml.safe_load((ROOT / '.github/workflows/go-tests.yml').read_text())
+        events = ci.get('on', ci.get(True))
+        self.assertIn('workflow_call', events)
+        self.assertNotIn('pull_request', events)
+        self.assertIn('.github/workflows/**', build_events['push']['paths'])
+        job = ci['jobs']['automation-regressions']
+        self.assertEqual(job.get('if'), '${{ !inputs.media_only }}')
+        self.assertTrue(any('run-automation-regressions.py' in s.get('run', '') for s in job['steps']))
+        driver = (ROOT / '.github/scripts/run-automation-regressions.py').read_text()
+        for suite in ['tag-built-commit_test.py', 'release_provenance_test.py']:
+            self.assertIn('"'+suite+'"', driver)
+
+
+if __name__ == '__main__':
+    unittest.main()

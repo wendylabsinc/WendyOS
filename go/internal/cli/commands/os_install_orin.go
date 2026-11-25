@@ -38,6 +38,9 @@ const (
 // Per-OS seams: pickOrinRecoveryDevice, orinStageOne, and runT234Helper
 // (os_install_orin_unix.go / os_install_orin_windows.go).
 func installOrin(ctx context.Context, opts t234InstallOptions) error {
+	if err := opts.Agent.checkArchitecture("arm64"); err != nil {
+		return err
+	}
 	cacheDir, err := osCacheDir()
 	if err != nil {
 		return fmt.Errorf("resolving cache dir: %w", err)
@@ -67,6 +70,19 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	}
 	defer os.RemoveAll(handoffDir)
 
+	if err := checkInstallConfirmable("flashing the "+opts.DeviceName, opts.Force); err != nil {
+		return err
+	}
+	// Find the board before asking for Wi-Fi, name or enrollment: USB access
+	// is only known once it is attached, and a refusal must not come last.
+	if err := confirmOrinReady(opts); err != nil {
+		return err
+	}
+	dev, err := pickOrinRecoveryDevice(opts)
+	if err != nil {
+		return err
+	}
+
 	creds, err := resolveWiFiCredentialsList(opts.WiFi)
 	if err != nil {
 		return err
@@ -79,26 +95,13 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
-
-	if err := confirmOrinReady(opts); err != nil {
+	enrolled := provJSON != nil
+	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+		target:   dev.Describe(),
+		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},
+		question: fmt.Sprintf("Flash %s?", dev.Describe()),
+	}, name, creds, enrolled, opts.Force); err != nil {
 		return err
-	}
-	dev, err := pickOrinRecoveryDevice(opts)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("\n%s %s\n", tui.Dim("Target:"), tui.Device(dev.Describe()))
-
-	if !opts.Force {
-		fmt.Println()
-		fmt.Println(tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage))))
-		ok, err := tui.ConfirmNoDefaultDanger(fmt.Sprintf("Flash %s?", dev.Describe()))
-		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
-			return ErrUserCancelled
-		}
-		if err != nil {
-			return err
-		}
 	}
 
 	if err := preAuthElevation(); err != nil {
@@ -124,6 +127,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		if lf, lerr := os.Create(logPath); lerr == nil {
 			defer lf.Close()
 			fmt.Fprintf(lf, "wendy os install — %s %s recovery — WendyOS %s\n\n", opts.DeviceType, opts.Storage, opts.Version)
+			logProvisioningSummary(lf, name, creds, &enrolled)
 			logW = lf
 			defer func() { fmt.Println(tui.Dim("Full flash log: " + logPath)) }()
 		} else {
@@ -161,7 +165,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			if err != nil {
 				return false, err
 			}
-			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail); err != nil {
+			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail, agentSeed{local: opts.Agent, nightly: opts.Nightly, arch: "arm64"}); err != nil {
 				return false, err
 			}
 			flashPlan, err = t234.LoadXMLPlan(layoutPath, workspace, fp.Manifest.RootfsDevice)
@@ -365,19 +369,21 @@ func prepareT234Workspace(fp *flashpack.Flashpack) (workspace, layoutPath string
 	return workspace, filepath.Join(workspace, layoutRel), nil
 }
 
-func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string)) error {
-	detail("downloading agent")
-	agentBinary, agentVer, _, err := resolveAgentArtifact("linux", "arm64", false)
-	if err != nil {
-		fmt.Fprintf(out, "warning: could not download wendy-agent (%v); using the agent baked into the image\n", err)
-	} else {
-		detail("agent " + agentVer)
+func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), seed agentSeed) (err error) {
+	if err := seed.local.checkArchitecture("arm64"); err != nil {
+		return err
 	}
+	agentBinary, _ := resolveSeedAgent(out, detail, seed)
+
 	d, err := diskfs.Open(imagePath)
 	if err != nil {
 		return fmt.Errorf("opening per-run config image: %w", err)
 	}
-	defer d.Close()
+	defer func() {
+		if closeErr := d.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("finishing per-run config image: %w", closeErr)
+		}
+	}()
 	fsys, err := d.GetFilesystem(0)
 	if err != nil {
 		return fmt.Errorf("reading config filesystem: %w", err)
@@ -433,18 +439,19 @@ func saveOrinDeviceLogs(out io.Writer, logPath string, st *t234.FinalStatus) {
 func confirmOrinReady(opts t234InstallOptions) error {
 	fmt.Println()
 	fmt.Println(tui.Header("Recovering " + opts.DeviceName + " with WendyOS " + opts.Version))
-	fmt.Println(orinRecoveryBriefingBox(opts))
+	recoveryDetected := installRecoveryDetected(opts.DeviceType)
+	fmt.Println(orinRecoveryBriefingBox(opts, recoveryDetected))
 	if note := orinMacFullDiskAccessNote(); note != "" {
 		fmt.Println(note)
 	}
 	if note := orinWinSetupNote(); note != "" {
 		fmt.Println(note)
 	}
-	if opts.Force {
+	if recoveryDetected || opts.Force {
 		return nil
 	}
 	fmt.Println()
-	ok, err := tui.Confirm("Is the target connected and in recovery mode?")
+	ok, err := confirmInstallStep("flashing the "+opts.DeviceName, "Is the target connected and in recovery mode?", false, opts.Force)
 	if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 		return ErrUserCancelled
 	}
@@ -489,29 +496,38 @@ func orinRecoveryHints(opts t234InstallOptions) recoveryWaitHints {
 	return hints
 }
 
-func orinRecoveryBriefingBox(opts t234InstallOptions) string {
+func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) string {
 	lines := []string{
 		briefMarker.Render("●") + " " + briefTitle.Render("Destructive full recovery"),
 		"  QSPI and " + briefKey.Render(strings.ToUpper(opts.Storage)) + " are updated together; all partitions, including /data, are erased.",
 		"",
-		briefMarker.Render("●") + " " + briefTitle.Render("USB-C cabling"),
-		"  Connect this computer to " + briefPort.Render(orinRecoveryPort(opts.DeviceType)) + ".",
-		"",
-		briefMarker.Render("●") + " " + briefTitle.Render("Entering recovery mode"),
 	}
-	if opts.DeviceType == orinNanoDeviceType {
+	if recoveryDetected {
 		lines = append(lines,
-			"    "+briefNum.Render("1.")+" Disconnect power from the devkit (it has no buttons).",
-			"    "+briefNum.Render("2.")+" Bridge "+briefKey.Render("FC REC")+" to "+briefKey.Render("GND")+" — pins 9–10 on the button header under the module — with a jumper.",
-			"    "+briefNum.Render("3.")+" Connect power; the devkit boots straight into recovery mode. The jumper can then be removed.",
-			"    "+briefNum.Render("4.")+" Keep the recovery USB-C cable attached until final SUCCESS.",
+			briefMarker.Render("●")+" "+briefTitle.Render("USB recovery detected"),
+			"  A "+opts.DeviceName+" is already in recovery mode. Keep its USB-C cable attached.",
 		)
 	} else {
 		lines = append(lines,
-			"    "+briefNum.Render("1.")+" Power off the devkit and connect power.",
-			"    "+briefNum.Render("2.")+" Hold "+briefKey.Render("Force Recovery")+", tap "+briefKey.Render("Reset/Power")+", then release Force Recovery.",
-			"    "+briefNum.Render("3.")+" Keep the recovery USB-C cable attached until final SUCCESS.",
+			briefMarker.Render("●")+" "+briefTitle.Render("USB-C cabling"),
+			"  Connect this computer to "+briefPort.Render(orinRecoveryPort(opts.DeviceType))+".",
+			"",
+			briefMarker.Render("●")+" "+briefTitle.Render("Entering recovery mode"),
 		)
+		if opts.DeviceType == orinNanoDeviceType {
+			lines = append(lines,
+				"    "+briefNum.Render("1.")+" Disconnect power from the devkit (it has no buttons).",
+				"    "+briefNum.Render("2.")+" Bridge "+briefKey.Render("FC REC")+" to "+briefKey.Render("GND")+" — pins 9–10 on the button header under the module — with a jumper.",
+				"    "+briefNum.Render("3.")+" Connect power; the devkit boots straight into recovery mode. The jumper can then be removed.",
+				"    "+briefNum.Render("4.")+" Keep the recovery USB-C cable attached until final SUCCESS.",
+			)
+		} else {
+			lines = append(lines,
+				"    "+briefNum.Render("1.")+" Power off the devkit and connect power.",
+				"    "+briefNum.Render("2.")+" Hold "+briefKey.Render("Force Recovery")+", tap "+briefKey.Render("Reset/Power")+", then release Force Recovery.",
+				"    "+briefNum.Render("3.")+" Keep the recovery USB-C cable attached until final SUCCESS.",
+			)
+		}
 	}
 	if runtime.GOOS == "darwin" {
 		lines = append(lines,
@@ -619,8 +635,10 @@ func printOrinBadStateHint(w io.Writer, opts t234InstallOptions) {
 	cmd := fmt.Sprintf("wendy os install --device-type %s --storage %s", opts.DeviceType, opts.Storage)
 	body := strings.Join([]string{
 		thorHintTitle.Render("⚠  Recovery was interrupted — the Jetson may not boot"), "",
-		"QSPI or the rootfs may be partially written. Re-enter Force Recovery mode and retry:",
-		thorHintCmd.Render(cmd),
+		"QSPI or the rootfs may be partially written. Re-enter Force Recovery mode.",
+		"Then retry with the command below.",
 	}, "\n")
 	fmt.Fprintln(w, "\n"+thorHintBorder.Render(body))
+	fmt.Fprintln(w, "\nRetry the installation:")
+	fmt.Fprintln(w, cmd)
 }

@@ -18,7 +18,7 @@ func (o *adapterBindingObjects) GetManagedObjects() (managedObjects, *dbus.Error
 }
 
 func TestSelectedAdapterSuppliesBothLocalSocketBindings(t *testing.T) {
-	address, connect := privateAdvertisementBus(t)
+	_, connect := privateAdvertisementBus(t)
 	bluez, client := connect(), connect()
 	objects := managedObjects{}
 	for _, adapter := range []struct {
@@ -62,40 +62,5 @@ func TestSelectedAdapterSuppliesBothLocalSocketBindings(t *testing.T) {
 		if _, err := localL2SocketAddress(invalid, 0); err == nil {
 			t.Fatal("invalid selected identity silently fell back to any adapter")
 		}
-	}
-	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", address)
-	leafLocal, err := leafAdapterAddress(ctx)
-	if err != nil || leafLocal.Address != "02:00:00:00:00:01" || leafLocal.Type != btAddrLEPublic {
-		t.Fatalf("leaf did not resolve the default adapter identity: %+v: %v", leafLocal, err)
-	}
-	var powered dbus.Variant
-	if err := client.Object(bluezName, "/org/bluez/hci0").CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, adapterInterface, "Powered").Store(&powered); err != nil {
-		t.Fatal(err)
-	}
-	if powered.Value() != true {
-		t.Fatal("leaf-only setup left the selected controller powered off")
-	}
-}
-
-func TestLeafAdapterPowerFailureIsSetupFailure(t *testing.T) {
-	address, connect := privateAdvertisementBus(t)
-	bluez := connect()
-	adapter := dbus.ObjectPath("/org/bluez/hci0")
-	objects := managedObjects{adapter: {adapterInterface: {}, advertManagerInterface: {}}}
-	if _, err := prop.Export(bluez, adapter, map[string]map[string]*prop.Prop{adapterInterface: {
-		"Address": {Value: "02:00:00:00:00:01"}, "AddressType": {Value: "public"},
-		"Powered": {Value: false}, // BlueZ refuses changing this controller.
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := bluez.Export(&adapterBindingObjects{objects: objects}, "/", "org.freedesktop.DBus.ObjectManager"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := bluez.RequestName(bluezName, dbus.NameFlagDoNotQueue); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", address)
-	if _, err := leafAdapterAddress(context.Background()); err == nil {
-		t.Fatal("leaf setup succeeded without powering the selected controller")
 	}
 }

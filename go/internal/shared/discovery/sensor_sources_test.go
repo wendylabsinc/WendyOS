@@ -11,6 +11,39 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
+func TestMergeSensorSourcesWithMeshKeepsSignedMetadataAndLANHints(t *testing.T) {
+	const tenant = "11111111-2222-4333-8444-555555555555"
+	principal := "spiffe://wendy.sh/tenant/" + tenant + "/device/44444444-4444-4444-8444-444444444444"
+	signed := models.LANDevice{ID: "signed-id", DisplayName: "Signed camera", IPAddress: "fd45:b891:567f::5", Port: 5055,
+		PrincipalURI: principal, TenantUUID: tenant, IsMTLS: true, WendyLite: true, Sensorlink: true, Caps: []string{"sensors", "camera"}}
+	lan := models.LANDevice{ID: "lan-id", DisplayName: "LAN name", Hostname: "board.local", IPAddress: "192.0.2.10",
+		Addresses: []string{"192.0.2.10", "192.0.2.11"}, Port: 5054, AssetID: 7, OrgID: 8,
+		PrincipalURI: principal, TenantUUID: tenant, IsMTLS: true, WendyLite: true, Sensorlink: true, Caps: []string{"camera", "sensors"}}
+	other := lan
+	other.PrincipalURI = "spiffe://wendy.sh/tenant/" + tenant + "/device/44444444-4444-4444-8444-444444444445"
+	other.ID = "other"
+	got := MergeSensorSourcesWithMesh([]models.LANDevice{lan, other}, []models.LANDevice{signed})
+	if len(got) != 2 || got[0].PrincipalURI != other.PrincipalURI {
+		t.Fatalf("distinct source lost: %+v", got)
+	}
+	d := got[1]
+	if d.ID != signed.ID || d.DisplayName != signed.DisplayName || d.Hostname != "" || d.Port != 5055 || d.AssetID != 0 || d.OrgID != 0 ||
+		!d.IsMTLS || !d.WendyLite || !d.Sensorlink || !slices.Equal(d.Caps, signed.Caps) || d.IPAddress != signed.IPAddress {
+		t.Fatalf("LAN metadata replaced signed source: %+v", d)
+	}
+	if !slices.Equal(d.Addresses, []string{signed.IPAddress, "192.0.2.10", "192.0.2.11"}) {
+		t.Fatalf("address hints not retained: %+v", d)
+	}
+	d.Caps[0] = "changed"
+	if signed.Caps[0] != "sensors" || len(signed.Addresses) != 0 || lan.DisplayName != "LAN name" {
+		t.Fatal("merge mutated its input")
+	}
+	// LAN-only/legacy policy stays conservative about conflicting descriptions.
+	if got := MergeSensorSourcesWithMesh([]models.LANDevice{lan, other}, nil); len(got) != 2 {
+		t.Fatalf("LAN-only sources changed: %+v", got)
+	}
+}
+
 // scriptedBackend emits svcs once, then stays browsing until ctx ends.
 func scriptedBackend(svcs ...MDNSService) func(context.Context, string, func(MDNSService)) error {
 	return func(ctx context.Context, _ string, emit func(MDNSService)) error {

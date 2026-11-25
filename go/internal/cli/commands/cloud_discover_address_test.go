@@ -14,17 +14,17 @@ func TestCloudDiscoverTableRows_OmitsAddress(t *testing.T) {
 		t.Fatalf("rows = %d; want 1", len(rows))
 	}
 	row := rows[0]
-	// Columns are: marker, Name, Type, Version — no Address.
-	if len(row) != 4 {
-		t.Fatalf("row has %d cells; want 4 (marker, Name, Type, Version): %v", len(row), row)
+	// Columns are: Name, Type, Version — no Address.
+	if len(row) != 3 {
+		t.Fatalf("row has %d cells; want 3 (Name, Type, Version): %v", len(row), row)
 	}
 	for _, cell := range row {
 		if cell == "192.168.1.50" {
 			t.Fatalf("address must be omitted from the cloud discover row: %v", row)
 		}
 	}
-	if row[1] != "alpha" {
-		t.Errorf("name cell = %q; want alpha", row[1])
+	if row[0] != "alpha" {
+		t.Errorf("name cell = %q; want alpha", row[0])
 	}
 }
 

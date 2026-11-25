@@ -117,6 +117,7 @@ $attemptDirs | ForEach-Object { Write-Output "    Attempt:    $($_.FullName)" }
 $runDirs | ForEach-Object { Write-Output "    Run:        $_" }
 
 $status = 0
+$failedReviews = @{}
 
 if ($Stage -in @('aggregate', 'all')) {
     Push-Location $PackageDir
@@ -135,14 +136,19 @@ if ($Stage -in @('review', 'all')) {
     foreach ($runDir in $runDirs) {
         & (Join-Path $ScriptDir 'E2EReview.ps1') --run-dir $runDir @reviewArgs
         $reviewStatus = $LASTEXITCODE
+        if ($reviewStatus -ne 0) { $failedReviews[$runDir] = $true }
         if ($status -eq 0 -and $reviewStatus -ne 0) { $status = $reviewStatus }
     }
 }
 
 if ($Stage -in @('report', 'all')) {
     foreach ($runDir in $runDirs) {
+        $inheritedOutcome = $env:WENDY_E2E_REVIEW_OUTCOME
+        # Otherwise the report reads a review that never finished as a clean result.
+        if ($failedReviews[$runDir]) { $env:WENDY_E2E_REVIEW_OUTCOME = 'failure' }
         & (Join-Path $ScriptDir 'E2EReport.ps1') --run-dir $runDir
         $reportStatus = $LASTEXITCODE
+        $env:WENDY_E2E_REVIEW_OUTCOME = $inheritedOutcome
         if ($status -eq 0 -and $reportStatus -ne 0) { $status = $reportStatus }
     }
 

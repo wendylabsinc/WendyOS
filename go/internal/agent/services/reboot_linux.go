@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
@@ -22,22 +23,46 @@ func newRebooter(logger *zap.Logger) rebooter {
 		logger:    logger,
 		sync:      unix.Sync,
 		immediate: func() error { return syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART) },
-		clean:     systemctlReboot,
+		clean:     func() error { return systemctlReboot("") },
 		grace:     rebootGrace,
 		sleep:     time.Sleep,
 	}
 }
 
-// systemctlReboot asks systemd for an orderly shutdown, which unmounts mounted
-// filesystems on the way down.
-//
-// --no-block is required, not merely an optimisation: without it systemctl waits
-// for the shutdown transaction to finish, and the caller is a unit that the very
-// same transaction is stopping, so the call would block until it is killed.
-func systemctlReboot() error {
-	out, err := exec.Command("systemctl", "--no-block", "reboot").CombinedOutput()
+// newArgumentRebooter is newRebooter with both restart paths handing argument
+// to the kernel, whose board drivers act on it: "forced-recovery" makes a
+// Jetson boot into USB recovery mode. It is what `reboot ARG` does.
+func newArgumentRebooter(logger *zap.Logger, argument string) rebooter {
+	r := newRebooter(logger)
+	r.immediate = func() error { return restartWithArgument(argument) }
+	r.clean = func() error { return systemctlReboot(argument) }
+	return r
+}
+
+// restartWithArgument restarts the kernel now, like LINUX_REBOOT_CMD_RESTART,
+// and hands argument to the restart handlers (LINUX_REBOOT_CMD_RESTART2).
+// x/sys/unix exports only the argument-less reboot(2).
+func restartWithArgument(argument string) error {
+	arg, err := unix.BytePtrFromString(argument)
 	if err != nil {
-		return fmt.Errorf("systemctl --no-block reboot: %w (%s)", err, strings.TrimSpace(string(out)))
+		return err
+	}
+	_, _, errno := unix.Syscall6(unix.SYS_REBOOT,
+		unix.LINUX_REBOOT_MAGIC1, unix.LINUX_REBOOT_MAGIC2, unix.LINUX_REBOOT_CMD_RESTART2,
+		uintptr(unsafe.Pointer(arg)), 0, 0)
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+// systemctlReboot asks systemd for an orderly shutdown, which unmounts mounted
+// filesystems on the way down, passing argument to the final restart.
+func systemctlReboot(argument string) error {
+	args := systemctlRebootArgs(argument)
+	out, err := exec.Command("systemctl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

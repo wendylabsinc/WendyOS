@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -24,10 +25,11 @@ import (
 // Mirrors commands.cloudDiscoveryDevice, reimplemented because mcp cannot
 // import cli/commands.
 type mcpCloudDevice struct {
-	name     string
-	legacyID int32  // valid only when isV2 is false
-	key      string // int32-as-string (v1) or asset UUID (v2)
-	isV2     bool
+	name          string
+	legacyID      int32  // valid only when isV2 is false
+	key           string // int32-as-string (v1) or asset UUID (v2)
+	isV2          bool
+	pkiDeviceName string // authoritative enrollment binding from Cloud inventory
 }
 
 func (d mcpCloudDevice) GetName() string { return d.name }
@@ -45,13 +47,31 @@ func (s *mcpServer) resolveCloudDevice(ctx context.Context, auth *config.AuthCon
 		if err != nil {
 			return mcpCloudDevice{}, err
 		}
-		return mcpCloudDevice{name: a.GetName(), key: a.GetId(), isV2: true}, nil
+		return mcpCloudDevice{name: a.GetName(), key: a.GetId(), isV2: true, pkiDeviceName: a.GetPkiDeviceName()}, nil
 	}
 	a, err := s.pickCloudAsset(ctx, auth, deviceName)
 	if err != nil {
 		return mcpCloudDevice{}, err
 	}
 	return mcpCloudDevice{name: a.GetName(), legacyID: a.GetId(), key: fmt.Sprint(a.GetId())}, nil
+}
+
+// expectedIdentity derives the peer binding from authenticated inventory, never
+// from the certificate or an unauthenticated discovery advertisement.
+func (d mcpCloudDevice) expectedIdentity(cert config.CertificateInfo) certs.WendyIdentity {
+	id := certs.WendyIdentity{OrgID: int32(cert.OrganizationID), EntityType: certs.EntityAsset}
+	if d.legacyID > 0 {
+		id.EntityID = fmt.Sprint(d.legacyID)
+	}
+	if d.isV2 {
+		id.EntityID = d.pkiDeviceName
+		if id.EntityID == "" {
+			id.EntityID = d.key
+		}
+		id.TenantUUID = cert.TenantUUID()
+		id.Principal = certs.DeviceSPIFFEURI(id.TenantUUID, id.EntityID)
+	}
+	return id
 }
 
 // openTunnel dials the device's remotePort. Legacy sessions use the v1 broker

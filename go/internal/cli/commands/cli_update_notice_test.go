@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -144,7 +145,7 @@ func TestCLIUpdateDeclineSnoozesWithoutLosingReleaseOrConfig(t *testing.T) {
 	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
 		prompts++
 		err := config.Update(func(cfg *config.Config) (bool, error) {
-			cfg.DefaultDevice = "chosen-while-prompt-open"
+			cfg.DefaultBuildHost = "chosen-while-prompt-open"
 			return true, nil
 		})
 		if err != nil {
@@ -159,7 +160,7 @@ func TestCLIUpdateDeclineSnoozesWithoutLosingReleaseOrConfig(t *testing.T) {
 		t.Fatal("snoozed prompt repeated")
 	}
 	cfg, _ := config.Load()
-	if cfg.LatestCLIRelease != "2026.10.05-134249" || cfg.DefaultDevice != "chosen-while-prompt-open" {
+	if cfg.LatestCLIRelease != "2026.10.05-134249" || cfg.DefaultBuildHost != "chosen-while-prompt-open" {
 		t.Fatal("prompt lost release or concurrent config")
 	}
 	cfg.CLIUpdatePromptedAt = time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339)
@@ -350,6 +351,89 @@ func TestVerifiedCLIUpdateInformsAnOlderMCPProcess(t *testing.T) {
 	}
 }
 
+// runUpdateNotice poses as the binary at exe, records the release
+// 2026.02.01-000000 over a 2026.01.01-000000 CLI, and returns whether
+// notifyCLIUpdate showed a notice and what it printed. Detection reports a
+// supported Homebrew install, and an update popup fails the test.
+func runUpdateNotice(t *testing.T, exe string, interactive bool) (bool, string) {
+	t.Helper()
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	t.Setenv("WENDY_ANALYTICS", "false")
+	t.Setenv("SUDO_UID", "")
+	oldJSON, oldVersion := jsonOutput, version.Version
+	jsonOutput, version.Version = false, "2026.01.01-000000"
+	oldExe, oldDetect, oldConfirm := cliExecutable, detectCLIUpdate, confirmCLIUpdate
+	cliExecutable = func() (string, error) { return exe, nil }
+	detectCLIUpdate = func(context.Context) (cliupdate.Plan, error) {
+		return cliupdate.Plan{Method: "brew", Channel: "stable", Supported: true}, nil
+	}
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
+		t.Error("the notice opened an update popup")
+		return false, nil
+	}
+	t.Cleanup(func() {
+		jsonOutput, version.Version = oldJSON, oldVersion
+		cliExecutable, detectCLIUpdate, confirmCLIUpdate = oldExe, oldDetect, oldConfirm
+	})
+	if interactive {
+		stubInteractive(t)
+	} else {
+		stubNonInteractive(t)
+	}
+	setAvailableCLIUpdate(t, "2026.02.01-000000")
+	return runNotifyCLIUpdate(t)
+}
+
+func TestNotifyCLIUpdate_PluginManagedCLI(t *testing.T) {
+	home := isolateAIToolHome(t)
+	managed := filepath.Join(home, ".wendy", "cli", "2026.01.01-000000", "wendy")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// wendy update recognizes no updater for the launcher's copy, so even an
+	// interactive terminal gets advice rather than a prompt. The plugin pins
+	// its CLI version, which can trail the latest release, and its launcher
+	// runs an installed wendy ahead of its own copy: the notice names both
+	// ways to update and promises no version from the plugin.
+	shown, out := runUpdateNotice(t, managed, true)
+	if !shown || !strings.Contains(out, cliupdate.PluginAdvice(runtime.GOOS)) {
+		t.Errorf("notice lacks the plugin advice: shown=%v\n%s", shown, out)
+	}
+	if strings.Contains(out, "Update with:") || strings.Contains(out, "to get 2026.02.01-000000") {
+		t.Errorf("notice points at wendy update or promises the new version from the plugin:\n%s", out)
+	}
+
+	// It does not repeat straight away, and comes back a day later.
+	if shown, again := runUpdateNotice(t, managed, true); shown || again != "" {
+		t.Errorf("second run repeated the plugin notice: shown=%v out=%q", shown, again)
+	}
+	setCLIUpdateNoticeAge(t, 25*time.Hour)
+	if shown, again := runUpdateNotice(t, managed, true); !shown || !strings.Contains(again, cliupdate.PluginAdvice(runtime.GOOS)) {
+		t.Errorf("a day later the plugin notice did not come back: shown=%v out=%q", shown, again)
+	}
+}
+
+// WENDY_PLUGIN alone does not make a CLI plugin-managed: a user whose PATH
+// wendy (Homebrew) is new enough runs that binary under the plugin, and
+// wendy update still updates it.
+func TestNotifyCLIUpdate_HomebrewCLIUnderPluginKeepsUpdateAdvice(t *testing.T) {
+	home := isolateAIToolHome(t)
+	t.Setenv(pluginmode.EnvVar, "claude")
+	brew := filepath.Join(home, "homebrew", "bin", "wendy")
+
+	_, out := runUpdateNotice(t, brew, false)
+	if strings.Contains(out, "came with the Wendy plugin") {
+		t.Errorf("a Homebrew CLI was reported as plugin-managed:\n%s", out)
+	}
+	if !strings.Contains(out, "Update with: wendy update") {
+		t.Errorf("notice lost its wendy update advice:\n%s", out)
+	}
+}
+
 func TestCLIUpdateSnoozeIncludesNewReleases(t *testing.T) {
 	setupInteractiveCLIUpdate(t)
 	previous := confirmCLIUpdate
@@ -445,5 +529,195 @@ func TestCLIUpdateJSONNeverPrompts(t *testing.T) {
 	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) { t.Fatal("JSON opened popup"); return false, nil }
 	if shown, out := runNotifyCLIUpdate(t); !shown || !strings.Contains(out, "wendy update") {
 		t.Fatal("JSON mode lost its noninteractive guidance")
+	}
+}
+
+// noPopupNoticeRunners are the ways a person at a terminal gets the plain
+// update notice instead of the popup. Each returns whether a notice was shown
+// and what was printed.
+func noPopupNoticeRunners() map[string]func(*testing.T) (bool, string) {
+	withDetect := func(plan cliupdate.Plan, err error) func(*testing.T) (bool, string) {
+		return func(t *testing.T) (bool, string) {
+			detectCLIUpdate = func(context.Context) (cliupdate.Plan, error) { return plan, err }
+			return runNotifyCLIUpdate(t)
+		}
+	}
+	return map[string]func(*testing.T) (bool, string){
+		"installation wendy update cannot update": withDetect(cliupdate.Plan{Method: "direct", Channel: "stable"}, nil),
+		"installation not identified in time":     withDetect(cliupdate.Plan{}, context.DeadlineExceeded),
+		"failed command": func(t *testing.T) (bool, string) {
+			cmd := &cobra.Command{}
+			cmd.SetContext(context.WithValue(context.Background(), cliUpdateNoticeEligible{}, true))
+			var stderr bytes.Buffer
+			cmd.SetErr(&stderr)
+			FinishInvocation(cmd, errors.New("command failed"))
+			return stderr.Len() > 0, stderr.String()
+		},
+	}
+}
+
+// failOnCLIUpdatePopup fails the test if the update popup opens.
+func failOnCLIUpdatePopup(t *testing.T) {
+	t.Helper()
+	previous := confirmCLIUpdate
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
+		t.Error("the notice opened an update popup")
+		return false, nil
+	}
+	t.Cleanup(func() { confirmCLIUpdate = previous })
+}
+
+// setCLIUpdateNoticeAge moves the last plain notice age into the past.
+func setCLIUpdateNoticeAge(t *testing.T, age time.Duration) {
+	t.Helper()
+	if err := config.Update(func(cfg *config.Config) (bool, error) {
+		cfg.CLIUpdateNoticeShownAt = time.Now().Add(-age).UTC().Format(time.RFC3339)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A person at a terminal whose update popup cannot open used to get one plain
+// line per release and then nothing, however long they stayed on the old
+// version. The line now comes back once a day until they update.
+func TestCLIUpdateNoticeRepeatsDailyInTerminal(t *testing.T) {
+	for name, run := range noPopupNoticeRunners() {
+		t.Run(name, func(t *testing.T) {
+			setupInteractiveCLIUpdate(t)
+			failOnCLIUpdatePopup(t)
+			if shown, out := run(t); !shown || !strings.Contains(out, "2026.10.05-134249") || !strings.Contains(out, "wendy update") {
+				t.Fatalf("first run: shown=%v out=%q, want the notice", shown, out)
+			}
+			if shown, out := run(t); shown || out != "" {
+				t.Fatalf("the notice repeated straight away: shown=%v out=%q", shown, out)
+			}
+			setCLIUpdateNoticeAge(t, 23*time.Hour)
+			if shown, out := run(t); shown || out != "" {
+				t.Fatalf("the notice repeated within a day: shown=%v out=%q", shown, out)
+			}
+			setCLIUpdateNoticeAge(t, 25*time.Hour)
+			if shown, out := run(t); !shown || !strings.Contains(out, "2026.10.05-134249") {
+				t.Fatalf("a day later: shown=%v out=%q, want the notice again", shown, out)
+			}
+			if shown, out := run(t); shown || out != "" {
+				t.Fatalf("the notice repeated twice in a day: shown=%v out=%q", shown, out)
+			}
+		})
+	}
+}
+
+// Scripts, agents and --json runs keep one notice per release: a day passing
+// does not bring it back.
+func TestCLIUpdateNoticeStaysOncePerReleaseWithoutAPerson(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		terminal bool
+		json     bool
+	}{
+		{name: "no terminal"},
+		{name: "JSON output in a terminal", terminal: true, json: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupInteractiveCLIUpdate(t)
+			failOnCLIUpdatePopup(t)
+			if !tc.terminal {
+				stubNonInteractive(t)
+			}
+			jsonOutput = tc.json
+			if shown, out := runNotifyCLIUpdate(t); !shown || !strings.Contains(out, "2026.10.05-134249") {
+				t.Fatalf("first run: shown=%v out=%q, want the notice", shown, out)
+			}
+			setCLIUpdateNoticeAge(t, 25*time.Hour)
+			if shown, out := runNotifyCLIUpdate(t); shown || out != "" {
+				t.Fatalf("the notice repeated a day later: shown=%v out=%q", shown, out)
+			}
+		})
+	}
+}
+
+// "Ask again later" promises a day without reminders. The plain notice after a
+// failed command keeps that promise too.
+func TestCLIUpdateSnoozeCoversTheTerminalNotice(t *testing.T) {
+	setupInteractiveCLIUpdate(t)
+	previous := confirmCLIUpdate
+	t.Cleanup(func() { confirmCLIUpdate = previous })
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) { return false, nil }
+	if shown, _ := runNotifyCLIUpdate(t); !shown {
+		t.Fatal("first prompt missing")
+	}
+	failed := noPopupNoticeRunners()["failed command"]
+	if shown, out := failed(t); shown {
+		t.Fatalf("a snoozed reminder came back after a failed command: %q", out)
+	}
+	if err := config.Update(func(cfg *config.Config) (bool, error) {
+		cfg.CLIUpdatePromptedAt = time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if shown, out := failed(t); !shown || !strings.Contains(out, "wendy update") {
+		t.Fatalf("after the snooze: shown=%v out=%q, want the notice", shown, out)
+	}
+}
+
+// The popup used to open only when the installation was identified within one
+// second. "brew info" alone takes about half a second on a fast Mac and longer
+// on a slower one, and those people got one plain line per release instead.
+func TestCLIUpdatePopupSurvivesASlowInstallationLookup(t *testing.T) {
+	setupInteractiveCLIUpdate(t)
+	const lookup = 2 * time.Second // what Homebrew can take to answer
+	detectCLIUpdate = func(ctx context.Context) (cliupdate.Plan, error) {
+		deadline, bounded := ctx.Deadline()
+		if !bounded {
+			t.Error("the installation lookup has no time limit")
+		}
+		if time.Until(deadline) < lookup {
+			return cliupdate.Plan{}, context.DeadlineExceeded
+		}
+		return cliupdate.Plan{Method: "brew", Channel: "stable", Supported: true}, nil
+	}
+	previous := confirmCLIUpdate
+	t.Cleanup(func() { confirmCLIUpdate = previous })
+	prompts := 0
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
+		prompts++
+		return false, nil
+	}
+	if shown, out := runNotifyCLIUpdate(t); !shown || prompts != 1 {
+		t.Fatalf("shown=%v popups=%d, want the popup: %q", shown, prompts, out)
+	}
+}
+
+// A package manager too slow even for the long wait must not hold up every
+// later command: once the plain notice has told the person, the lookup gets
+// only the short wait again until the next day's reminder is due.
+func TestCLIUpdateSlowInstallationLookupWaitsLongOnlyOncePerDay(t *testing.T) {
+	setupInteractiveCLIUpdate(t)
+	failOnCLIUpdatePopup(t)
+	var waits []time.Duration
+	detectCLIUpdate = func(ctx context.Context) (cliupdate.Plan, error) {
+		deadline, _ := ctx.Deadline()
+		waits = append(waits, time.Until(deadline))
+		return cliupdate.Plan{}, context.DeadlineExceeded // never answers in time
+	}
+	if shown, _ := runNotifyCLIUpdate(t); !shown {
+		t.Fatal("first run: want the plain notice")
+	}
+	if shown, _ := runNotifyCLIUpdate(t); shown {
+		t.Fatal("the notice repeated straight away")
+	}
+	setCLIUpdateNoticeAge(t, 25*time.Hour)
+	if shown, _ := runNotifyCLIUpdate(t); !shown {
+		t.Fatal("a day later: want the plain notice again")
+	}
+	if len(waits) != 3 {
+		t.Fatalf("installation lookups = %d, want 3", len(waits))
+	}
+	if waits[0] < 2*time.Second || waits[2] < 2*time.Second {
+		t.Fatalf("waits = %v: the day's first lookup must get the long wait", waits)
+	}
+	if waits[1] > cliUpdateExitWait {
+		t.Fatalf("waits = %v: a lookup that already failed today held up another command", waits)
 	}
 }

@@ -234,7 +234,7 @@ struct ContainerServiceSupervisorTests {
         try writeSupervisorSleepScript(appsBase: appsBase, appID: appID, name: "sleep.sh")
 
         let service = makeService(appsBase: appsBase)
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .no
         try await createNativeApp(
             service: service,
@@ -901,7 +901,7 @@ struct ContainerServiceSupervisorTests {
         // `.no` policy isolates the adoption decision: the restart loop can't
         // relaunch the app, so the status afterwards reflects only whether it
         // was adopted.
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .no
         let service = makeService(appsBase: appsBase)
         try await createNativeApp(
@@ -930,7 +930,7 @@ struct ContainerServiceSupervisorTests {
         let appID = "sh.wendy.tests.OnFailureCleanExit"
         try writeSupervisorCrashScript(appsBase: appsBase, appID: appID, name: "exit.sh", code: 0)
 
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .onFailure
         let service = makeService(appsBase: appsBase, restartFloor: .zero)
         try await createNativeApp(
@@ -960,7 +960,7 @@ struct ContainerServiceSupervisorTests {
         let appID = "sh.wendy.tests.OnFailureRetries"
         try writeSupervisorCrashScript(appsBase: appsBase, appID: appID, name: "crash.sh", code: 9)
 
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .onFailure
         policy.onFailureMaxRetries = 2
         let service = makeService(appsBase: appsBase, restartFloor: .zero)
@@ -1177,7 +1177,7 @@ struct ContainerServiceSupervisorTests {
         let appID = "sh.wendy.tests.SurvivorNoRestart"
         try writeSupervisorSleepScript(appsBase: appsBase, appID: appID, name: "sleep.sh")
 
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .no
         let service = makeService(appsBase: appsBase)
         try await createNativeApp(
@@ -1299,7 +1299,7 @@ private func createNativeApp(
     service: ContainerService,
     appID: String,
     cmd: String,
-    restartPolicy: RestartPolicy? = nil,
+    restartPolicy: Wendy_Agent_Services_V1_RestartPolicy? = nil,
     brewfile: String? = nil
 ) async throws {
     var request = Wendy_Agent_Services_V1_CreateContainerRequest()
@@ -1329,7 +1329,7 @@ private func createNativeApp(
 private func createLinuxApp(
     service: ContainerService,
     appID: String,
-    restartPolicy: RestartPolicy? = nil
+    restartPolicy: Wendy_Agent_Services_V1_RestartPolicy? = nil
 ) async throws {
     let config = WendyAppConfig(
         appId: appID,
@@ -1388,7 +1388,9 @@ private func stopNativeApp(service: ContainerService, appID: String) async throw
     )
 }
 
-private func listSupervisorContainers(service: ContainerService) async throws -> [AppContainer] {
+private func listSupervisorContainers(
+    service: ContainerService
+) async throws -> [Wendy_Agent_Services_V1_AppContainer] {
     let response = try await service.listContainers(
         request: ServerRequest(
             metadata: [:],

@@ -77,6 +77,9 @@ a terminal, or with `--json`, `wendy device pair` needs `--list`, `--sensorlink`
 
 Select a camera and press Enter to save its login. Replace the suggested `admin`
 username with your camera's account and enter its password. Passwords are masked.
+Saving a login pairs the camera. This list includes cameras without one, which
+may belong to someone else on a shared network. Apps and `wendy device camera list`
+show a network camera only once it is paired, unless you pass `--all` to the list.
 Inside the form, Tab switches fields, Enter advances or saves, and Esc cancels.
 Press `f` to forget a camera and remove its saved login, including when offline.
 

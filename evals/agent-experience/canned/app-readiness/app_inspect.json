@@ -1,0 +1,76 @@
+{
+  "tool": "app_inspect",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"app_name\": \"{{args.app_name}}\", \"readiness\": {\"checks\": [{\"forward_address\": \"127.0.0.1:8080\", \"kind\": \"tcp_socket\", \"port\": 8080, \"reason\": \"verified simulator forward; a local TCP accept does not prove the guest application is ready\", \"status\": \"unknown\"}], \"configuration_source\": \"local_project\", \"deployed_configuration_verified\": false, \"scope\": \"declared TCP connectivity only\", \"status\": \"unknown\"}, \"recent_logs\": {\"batches_collected\": 0, \"collected\": 0, \"collection_limited\": true, \"min_severity\": 13, \"omitted\": 0, \"reason\": \"no warning/error records observed in this bounded collection\", \"records\": [], \"status\": \"unknown\"}, \"state\": {\"all_services_running\": true, \"declared_http_port\": 8080, \"failure_count\": 0, \"last_exit\": {\"status\": \"unknown\"}, \"running_state\": \"RUNNING\", \"services\": [{\"container_name\": \"sensor-dashboard_web\", \"name\": \"web\", \"running_state\": \"RUNNING\"}], \"version\": \"latest\"}, \"usage\": {\"containers\": [{\"container_name\": \"sensor-dashboard_web\", \"cpu_usage_nanos\": 4907368000, \"image_content_bytes\": 21423636, \"memory_bytes\": 14946304, \"status\": \"reported\"}], \"note\": \"Zero counters are unknown because the agent also uses zero when measurements are unavailable; CPU is cumulative nanoseconds.\", \"warnings\": []}}"
+        }
+      ],
+      "structuredContent": {
+        "app_name": "{{args.app_name}}",
+        "readiness": {
+          "checks": [
+            {
+              "forward_address": "127.0.0.1:8080",
+              "kind": "tcp_socket",
+              "port": 8080,
+              "reason": "verified simulator forward; a local TCP accept does not prove the guest application is ready",
+              "status": "unknown"
+            }
+          ],
+          "configuration_source": "local_project",
+          "deployed_configuration_verified": false,
+          "scope": "declared TCP connectivity only",
+          "status": "unknown"
+        },
+        "recent_logs": {
+          "batches_collected": 0,
+          "collected": 0,
+          "collection_limited": true,
+          "min_severity": 13,
+          "omitted": 0,
+          "reason": "no warning/error records observed in this bounded collection",
+          "records": [],
+          "status": "unknown"
+        },
+        "state": {
+          "all_services_running": true,
+          "declared_http_port": 8080,
+          "failure_count": 0,
+          "last_exit": {
+            "status": "unknown"
+          },
+          "running_state": "RUNNING",
+          "services": [
+            {
+              "container_name": "sensor-dashboard_web",
+              "name": "web",
+              "running_state": "RUNNING"
+            }
+          ],
+          "version": "latest"
+        },
+        "usage": {
+          "containers": [
+            {
+              "container_name": "sensor-dashboard_web",
+              "cpu_usage_nanos": 4907368000,
+              "image_content_bytes": 21423636,
+              "memory_bytes": 14946304,
+              "status": "reported"
+            }
+          ],
+          "note": "Zero counters are unknown because the agent also uses zero when measurements are unavailable; CPU is cumulative nanoseconds.",
+          "warnings": []
+        }
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  }
+}

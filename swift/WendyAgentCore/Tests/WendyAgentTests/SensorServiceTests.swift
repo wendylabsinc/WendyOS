@@ -28,10 +28,10 @@ private struct FakeAudio: AudioManaging {
 }
 
 private struct FakeCamera: CameraCapturing {
-    var descriptorValue: Wendy_Lite_Sensorlink_SensorDescriptor?
+    var descriptorValue: Wendylite_V1_SensorDescriptor?
     var frameList: [CameraFrame] = []
 
-    func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor? { descriptorValue }
+    func descriptor() -> Wendylite_V1_SensorDescriptor? { descriptorValue }
 
     func frames() -> AsyncThrowingStream<CameraFrame, any Error> {
         let frames = frameList
@@ -42,11 +42,11 @@ private struct FakeCamera: CameraCapturing {
     }
 }
 
-private func cameraDescriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor {
-    var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
+private func cameraDescriptor() -> Wendylite_V1_SensorDescriptor {
+    var descriptor = Wendylite_V1_SensorDescriptor()
     descriptor.channelID = CameraCapture.channel
     descriptor.name = "cam0"
-    var video = Wendy_Lite_Sensorlink_VideoFormat()
+    var video = Wendylite_V1_VideoFormat()
     video.codec = .h264
     video.width = 1920
     video.height = 1080
@@ -55,12 +55,12 @@ private func cameraDescriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor {
     return descriptor
 }
 
-private func isMicrophone(_ descriptor: Wendy_Lite_Sensorlink_SensorDescriptor) -> Bool {
+private func isMicrophone(_ descriptor: Wendylite_V1_SensorDescriptor) -> Bool {
     if case .audio = descriptor.format { return true }
     return false
 }
 
-private func isCamera(_ descriptor: Wendy_Lite_Sensorlink_SensorDescriptor) -> Bool {
+private func isCamera(_ descriptor: Wendylite_V1_SensorDescriptor) -> Bool {
     if case .video = descriptor.format { return true }
     return false
 }
@@ -96,7 +96,7 @@ private func makeServerContext(method: String) -> ServerContext {
 
 @Test func manifestReportsMicAndStreamYieldsPCMFrames() async throws {
     // Inject a no-op camera so this test never touches real capture hardware.
-    let svc = SensorService(audio: FakeAudio(), camera: FakeCamera())
+    let svc = SensorService(audio: FakeAudio(), camera: FakeCamera(), micAuthorized: { true })
 
     let manifestResponse = try await svc.getSensorManifest(
         request: ServerRequest(
@@ -120,7 +120,7 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "StreamSensors")
     )
     let contents = try streamResponse.accepted.get()
-    let writer = CollectingWriter<Wendy_Lite_Sensorlink_SensorData>()
+    let writer = CollectingWriter<Wendylite_V1_SensorData>()
     _ = try await contents.producer(RPCWriter(wrapping: writer))
 
     let frames = writer.snapshot()
@@ -136,7 +136,7 @@ private func makeServerContext(method: String) -> ServerContext {
     let keyframe = CameraFrame(annexB: Data([0, 0, 0, 1, 0x67]), isKeyframe: true)
     let delta = CameraFrame(annexB: Data([0, 0, 0, 1, 0x41]), isKeyframe: false)
     let camera = FakeCamera(descriptorValue: cameraDescriptor(), frameList: [keyframe, delta])
-    let svc = SensorService(audio: FakeAudio(), camera: camera)
+    let svc = SensorService(audio: FakeAudio(), camera: camera, micAuthorized: { false })
 
     let manifestResponse = try await svc.getSensorManifest(
         request: ServerRequest(
@@ -159,7 +159,7 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "StreamSensors")
     )
     let contents = try streamResponse.accepted.get()
-    let writer = CollectingWriter<Wendy_Lite_Sensorlink_SensorData>()
+    let writer = CollectingWriter<Wendylite_V1_SensorData>()
     _ = try await contents.producer(RPCWriter(wrapping: writer))
 
     let frames = writer.snapshot()
@@ -176,7 +176,7 @@ private func makeServerContext(method: String) -> ServerContext {
 @Test func manifestListsBothChannelsAndBothFanInThroughOneWriter() async throws {
     let keyframe = CameraFrame(annexB: Data([0, 0, 0, 1, 0x67]), isKeyframe: true)
     let camera = FakeCamera(descriptorValue: cameraDescriptor(), frameList: [keyframe])
-    let svc = SensorService(audio: FakeAudio(), camera: camera)
+    let svc = SensorService(audio: FakeAudio(), camera: camera, micAuthorized: { true })
 
     let manifestResponse = try await svc.getSensorManifest(
         request: ServerRequest(
@@ -196,7 +196,7 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "StreamSensors")
     )
     let contents = try streamResponse.accepted.get()
-    let writer = CollectingWriter<Wendy_Lite_Sensorlink_SensorData>()
+    let writer = CollectingWriter<Wendylite_V1_SensorData>()
     _ = try await contents.producer(RPCWriter(wrapping: writer))
 
     // Both producers funnel through the one SerializedFrameWriter actor: assert

@@ -57,7 +57,7 @@ func foundWendyTargets(c *models.DevicesCollection) bool {
 	if c == nil {
 		return false
 	}
-	if len(c.USBDevices)+len(c.LANDevices)+len(c.BluetoothDevices)+len(c.EthernetInterfaces)+len(c.Simulators) > 0 {
+	if len(c.MeshDevices)+len(c.USBDevices)+len(c.LANDevices)+len(c.BluetoothDevices)+len(c.EthernetInterfaces)+len(c.Simulators) > 0 {
 		return true
 	}
 	for _, d := range c.ExternalDevices {

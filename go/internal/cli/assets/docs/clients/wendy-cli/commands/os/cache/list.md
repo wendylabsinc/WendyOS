@@ -10,7 +10,7 @@ wendy os cache list [--json]
 
 ## Description
 
-`wendy os cache list` shows OS image files that have been downloaded to the local cache by `wendy install` or `wendy os download`. Cached images are reused on subsequent installs to avoid re-downloading.
+`wendy os cache list` shows OS image files and Jetson flashpacks that have been downloaded to the local cache by `wendy install` or `wendy os download`. A flashpack is listed with the total size of its extracted files. Cached images are reused on subsequent installs to avoid re-downloading.
 
 Pass `--json` to receive a JSON array on stdout instead of the human-readable output described below.
 
@@ -33,7 +33,7 @@ No cached OS images.
 
 ## JSON output (`--json`)
 
-Each element of the returned array represents one cached OS image file:
+Each element of the returned array represents one cached OS image file or Jetson flashpack:
 
 ```json
 [
@@ -47,7 +47,7 @@ Each element of the returned array represents one cached OS image file:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Filename of the cached OS image |
+| `name` | string | Filename of the cached OS image, or the flashpack directory name |
 | `sizeBytes` | integer | Size in bytes |
 | `size` | string | Human-readable size string |
 

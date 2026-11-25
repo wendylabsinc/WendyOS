@@ -93,14 +93,13 @@ func (o driverManifestOptions) label(osVersion string) string {
 var driverIconStale = lipgloss.NewStyle().Foreground(tui.ColorNotice).Render("!")
 
 // driverServiceErr rewrites the transport's Unimplemented into advice that fits.
-// WendyDriverService is registered only on the mTLS server, so an unenrolled
-// device answers Unimplemented however new its agent is, and the CLI's generic
-// "update the agent" hint would send the operator down the wrong path.
+// Older agents may lack driver support entirely or expose it only after
+// enrollment. Non-Linux agents do not register the service.
 func driverServiceErr(err error) error {
 	if status.Code(err) != codes.Unimplemented {
 		return err
 	}
-	return errors.New("this device does not serve driver add-ons. They are reachable only on an enrolled device (`wendy device enroll`); an agent predating driver support answers the same way")
+	return errors.New("this device does not serve driver add-ons. Driver add-ons require Linux and a recent agent; update the device's agent to use them without enrollment")
 }
 
 // driverStale reports whether an installed add-on will not load as it stands:

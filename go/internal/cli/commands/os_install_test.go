@@ -28,7 +28,7 @@ func TestNewOSInstallCmd_Flags(t *testing.T) {
 		t.Errorf("Use = %q; want %q", cmd.Use, "install [image] [drive]")
 	}
 
-	expectedFlags := []string{"nightly", "force", "yes-overwrite-internal", "device-type", "version", "drive", "wifi-ssid", "wifi-password", "wifi", "no-wifi", "device-name", "storage", "no-bmap", "pr"}
+	expectedFlags := []string{"nightly", "force", "yes-overwrite-internal", "device-type", "version", "drive", "wifi-ssid", "wifi-password", "wifi", "no-wifi", "device-name", "storage", "no-bmap", "pr", "binary"}
 	for _, name := range expectedFlags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("missing flag %q", name)

@@ -184,7 +184,15 @@ samples**: the SDK expects trailing `PathPoint[10] path_point` absent from ROS.
 `tools/prepare_unitree.py` verifies all 37 pinned ROS input files before copying
 them to `ros_ws/generated_unitree/`. This separate, authored compatibility overlay
 appends `PathPoint[10] path_point` to `SportModeState.msg` and changes Response's
-binary sequence to `uint8[]`. Every other input byte is preserved. The generated
+binary sequence to `uint8[]`. It also applies the ARM64 ROS Humble library-lookup
+workaround from [Unitree ROS 2 PR #9](https://github.com/unitreerobotics/unitree_ros2/pull/9)
+to `unitree_api/CMakeLists.txt` and `unitree_go/CMakeLists.txt`. Before loading
+ament dependencies, these packages explicitly locate
+`builtin_interfaces__rosidl_generator_c` in `/opt/ros/$ROS_DISTRO/lib`, bypassing
+CMake's default and root-path searches. This avoids a missing-library error when
+building ARM64 images under emulation on x86 hosts; see also the originating
+[RTAB-Map issue #1288](https://github.com/introlab/rtabmap_ros/issues/1288).
+Every other input byte is preserved. The generated
 `wendy-compatibility.json` records both source commits and every output hash.
 `--check` verifies the inputs and exact derived output offline. The fetcher's
 independent `--check` continues to validate the original sources and archives.
@@ -233,12 +241,17 @@ SDK and stock ROS interoperability results.
 Physics always loads the original verified meshes. The default `balanced`
 visual model shared by the browser and robot camera sensor uses meshes
 generated with `fast-simplification==0.1.12` and `numpy==1.26.4`. `visuals.lock.json` records
-every input/output hash and the generator hash. Generation runs on Linux ARM64
-in the pinned container because floating-point simplification differs between
-platforms; offline `--check` works on other hosts. Material boundaries and
-60-degree normal creases are retained. A two-millimetre bounds guard keeps the
-front lens mesh at full detail. Instanced visual triangles decrease from
-398,432 to 120,417. Collision geometry, inertia, contacts and policy inputs
+every input/output hash and the generator hash. Floating-point simplification
+differs between platforms, so the lock holds one section per build platform,
+`Linux/aarch64` and `Linux/x86_64`, and generation in the pinned container is
+checked against the section for the platform it runs on. The x86-64 section
+holds on CPUs with AVX2 and FMA; older x86 CPUs produce different output and
+fail the check. An intentional generator change means running `--update-lock`
+on both platforms, since it rewrites only the current platform's section.
+Offline `--check` works on other hosts. Material boundaries and 60-degree
+normal creases are retained. A two-millimetre bounds guard keeps the front lens
+mesh at full detail. Instanced visual triangles decrease from 398,432 to
+120,417 on Linux ARM64 and to 120,419 on Linux x86-64. Collision geometry, inertia, contacts and policy inputs
 are unchanged. `GO2_VISUAL_DETAIL=full` selects the original visual meshes for
 both browser and robot camera sensor rendering.
 

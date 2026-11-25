@@ -351,7 +351,7 @@ func TestMTLSCandidateRaceParentCancellationDrainsAndCloses(t *testing.T) {
 	}
 }
 
-func TestLadderWaitsForRacingCandidatesBeforePlaintext(t *testing.T) {
+func TestLadderWaitsForRacingCandidatesBeforeReportingAuthenticationFailure(t *testing.T) {
 	setTempConfig(t, &config.Config{})
 	setPinCache(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -378,7 +378,7 @@ func TestLadderWaitsForRacingCandidatesBeforePlaintext(t *testing.T) {
 		plaintextCalled <- addr
 		return plaintext, nil
 	}
-	target := dialTarget{Addr: "192.0.2.1:50051", Candidates: []string{"192.0.2.1:50051", "[fd00::1]:50051"}}
+	target := dialTarget{Expected: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, Addr: "192.0.2.1:50051", Candidates: []string{"192.0.2.1:50051", "[fd00::1]:50051"}}
 	results := make(chan dialRaceOutcome, 1)
 	go func() {
 		conn, _, err := dialAgentLadderWithCerts(ctx, target, []config.CertificateInfo{{}})
@@ -392,11 +392,13 @@ func TestLadderWaitsForRacingCandidatesBeforePlaintext(t *testing.T) {
 	}
 	close(finishBackup)
 	result := awaitDialRaceOutcome(t, results)
-	if result.conn != plaintext || result.err != nil {
-		t.Fatalf("ladder = (%v, %v), want plaintext after all authenticated candidates failed", result.conn, result.err)
+	if result.conn != nil || !errors.Is(result.err, errNoAuthenticatedEndpoint) {
+		t.Fatalf("ladder = (%v, %v), want authentication failure after all candidates finish", result.conn, result.err)
 	}
-	if got := <-plaintextCalled; got != target.Addr {
-		t.Fatalf("plaintext address = %q, want primary %q", got, target.Addr)
+	select {
+	case <-plaintextCalled:
+		t.Fatal("an expected device identity was downgraded to plaintext")
+	default:
 	}
 }
 
@@ -443,7 +445,7 @@ func TestLadderRaceCancellationSkipsPlaintext(t *testing.T) {
 		plaintextCalls++
 		return grpcclient.NewFromConn(nil), nil
 	}
-	target := dialTarget{Addr: "192.0.2.1:50051", Candidates: []string{"192.0.2.1:50051", "[fd00::1]:50051"}}
+	target := dialTarget{Expected: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, Addr: "192.0.2.1:50051", Candidates: []string{"192.0.2.1:50051", "[fd00::1]:50051"}}
 	conn, _, err := dialAgentLadderWithCerts(ctx, target, []config.CertificateInfo{{}})
 	if conn != nil || !errors.Is(err, context.Canceled) || plaintextCalls != 0 {
 		t.Fatalf("ladder = (%v, %v), plaintext calls=%d; want cancellation without fallback", conn, err, plaintextCalls)

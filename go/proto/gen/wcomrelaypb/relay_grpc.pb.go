@@ -37,6 +37,9 @@ type WendyComRelayServiceClient interface {
 	// compact grant as the first application record after mutual TLS, then sends
 	// established only after the device acknowledges successful verification.
 	// Client half-close closes TCP output only; device output continues draining.
+	// Every authorization refusal (unknown asset, other organization, tenant
+	// mismatch, missing role, device access) is the same PERMISSION_DENIED
+	// "permission denied"; the real reason is audited, never returned.
 	WendyComRelay(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WendyComRelayMessage, WendyComRelayMessage], error)
 }
 
@@ -76,6 +79,9 @@ type WendyComRelayServiceServer interface {
 	// compact grant as the first application record after mutual TLS, then sends
 	// established only after the device acknowledges successful verification.
 	// Client half-close closes TCP output only; device output continues draining.
+	// Every authorization refusal (unknown asset, other organization, tenant
+	// mismatch, missing role, device access) is the same PERMISSION_DENIED
+	// "permission denied"; the real reason is audited, never returned.
 	WendyComRelay(grpc.BidiStreamingServer[WendyComRelayMessage, WendyComRelayMessage]) error
 	mustEmbedUnimplementedWendyComRelayServiceServer()
 }
@@ -146,7 +152,8 @@ const (
 //
 // Cloud API discovery only. TCP ownership, admission and relay run in TunnelBroker.
 type WendyComRelayDiscoveryServiceClient interface {
-	// Authorizes tunnel:connect before disclosing a live broker endpoint.
+	// Authorizes tunnel:connect before disclosing a live broker endpoint. Refusals
+	// follow WendyComRelay: one generic PERMISSION_DENIED, the reason audited.
 	Resolve(ctx context.Context, in *ResolveRequest, opts ...grpc.CallOption) (*WendyComRelayRoute, error)
 }
 
@@ -174,7 +181,8 @@ func (c *wendyComRelayDiscoveryServiceClient) Resolve(ctx context.Context, in *R
 //
 // Cloud API discovery only. TCP ownership, admission and relay run in TunnelBroker.
 type WendyComRelayDiscoveryServiceServer interface {
-	// Authorizes tunnel:connect before disclosing a live broker endpoint.
+	// Authorizes tunnel:connect before disclosing a live broker endpoint. Refusals
+	// follow WendyComRelay: one generic PERMISSION_DENIED, the reason audited.
 	Resolve(context.Context, *ResolveRequest) (*WendyComRelayRoute, error)
 	mustEmbedUnimplementedWendyComRelayDiscoveryServiceServer()
 }

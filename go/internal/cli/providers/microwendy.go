@@ -93,16 +93,20 @@ func (p *MicroWendyProvider) DiscoverDevices(ctx context.Context) ([]models.Exte
 		}
 		devices = append(devices, p.mdnsExternalDevice(svc))
 	}
+	usable := len(devices)
 	for _, dev := range sd.WaitForIdle(serialCtx) {
+		if !dev.Busy {
+			usable++
+		}
 		devices = append(devices, p.serialExternalDevice(dev))
 	}
 
-	// An empty result here is ambiguous: it's indistinguishable from "nothing
-	// plugged in" even when a board is connected but its port is held open by
-	// something else (see ContendedPorts) — the exact shape of WDY-2319.
-	// Surface that distinctly instead of falling through to the generic "no
-	// Wendy Lite devices found".
-	if len(devices) == 0 {
+	// With nothing usable, a board that is connected but whose port is held
+	// open by something else (see ContendedPorts) is the whole story — the
+	// exact shape of WDY-2319. Say so, rather than hand a one-shot caller a
+	// lone busy row to auto-select. Next to usable devices the busy board
+	// stays in the list as its own row.
+	if usable == 0 {
 		if ports := sd.ContendedPorts(); len(ports) > 0 {
 			return nil, contendedPortsError(ports)
 		}
@@ -189,7 +193,7 @@ func (p *MicroWendyProvider) mdnsExternalDevice(svc discovery.MDNSService) model
 
 // connectableLiteMDNSService rejects incomplete/stale DNS-SD records. The
 // Wendy Lite LAN connector requires both an IP and a port; presenting a row
-// without them creates a blank-address "LAN (Lite)" device that can never be
+// without them creates a blank-address "LAN" device that can never be
 // selected successfully (commonly an offline device lingering in the macOS
 // mDNSResponder cache).
 func connectableLiteMDNSService(svc discovery.MDNSService) bool {
@@ -202,7 +206,25 @@ func connectableLiteMDNSService(svc discovery.MDNSService) bool {
 // is installed yet — is still surfaced rather than dropped, marked with
 // ConnectionInfo["needsInstall"] so `wendy run` can offer to flash Wendy Lite
 // onto it instead of silently ignoring the board.
+//
+// A busy device — its port is held by another process — is surfaced too, but
+// with ConnectionInfo["busy"] instead: nothing is known about its firmware, so
+// it must not be offered an install. Connecting to it retries the port and
+// reports who might be holding it (see connectSerialWithRetry).
 func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) models.ExternalDevice {
+	if dev.Busy {
+		return models.ExternalDevice{
+			ID:          fmt.Sprintf("wendy-lite:%s", dev.Port),
+			DisplayName: fmt.Sprintf("ESP32 (in use by another process) — %s", dev.Port),
+			ProviderKey: p.Key(),
+			ConnectionInfo: map[string]string{
+				"type":       "USB",
+				"serialPort": dev.Port,
+				"busy":       "true",
+			},
+			IsWendyDevice: true,
+		}
+	}
 	if !dev.Responsive {
 		return models.ExternalDevice{
 			ID:          fmt.Sprintf("wendy-lite:%s", dev.Port),
@@ -229,6 +251,7 @@ func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) mo
 			// enrolled UUID is what lets this row meet the board's LAN and BLE
 			// rows (see ExternalDevice.LiteDedupID).
 			"enrolledDeviceId": dev.EnrolledDeviceID,
+			"tenantId":         dev.TenantID,
 		},
 		IsWendyDevice: true,
 	}
@@ -716,11 +739,9 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 	// a post-reboot connection that this defer must close instead.
 	defer func() { client.Close() }()
 
-	if bc.AppType == liteclient.AppTypeWasm {
-		if err := client.StopApp(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: app stop: %v\n", err)
-		}
-	}
+	// For WASM, PushBegin stops execution without unloading the old instance.
+	// An explicit StopApp here would prevent firmware from retaining its linear
+	// memory mapping when StartApp installs the replacement.
 
 	if detach {
 		if err := client.PushApp(bc.AppPath, bc.AppType, nil); err != nil {
@@ -744,7 +765,7 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 			})
 			pp.Send(tui.ProgressDoneMsg{Err: pushErr})
 		}()
-		finalModel, err := pp.Run()
+		finalModel, err := tui.RunProgram(pp)
 		if err != nil {
 			return fmt.Errorf("progress TUI: %w", err)
 		}
@@ -935,6 +956,14 @@ func (p *MicroWendyProvider) ConnectSensorLink(device models.ExternalDevice) (*l
 	return p.connectClient(context.Background(), device)
 }
 
+// ConnectSensorLinkContext opens a cancellable authenticated WendyCom connection.
+func (p *MicroWendyProvider) ConnectSensorLinkContext(ctx context.Context, device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+	if device.ConnectionInfo["needsInstall"] == "true" {
+		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "Wendy Lite firmware (none installed)"}
+	}
+	return p.connectClient(ctx, device)
+}
+
 // ConnectEnrollment opens a physical USB serial connection for enrollment and
 // status checks. Enrollment credentials and trust bundles must stay off network
 // transports, even if a peer claims to support enrollment.
@@ -977,6 +1006,10 @@ func (p *MicroWendyProvider) connectClient(ctx context.Context, device models.Ex
 	}
 	client := liteclient.NewWendyLiteClient()
 	switch device.ConnectionInfo["type"] {
+	case "Mesh":
+		if err := connectMeshLite(ctx, client, device); err != nil {
+			return nil, fmt.Errorf("connect to mesh Wendy Lite: %w", err)
+		}
 	case "USB":
 		serialPort := device.ConnectionInfo["serialPort"]
 		if serialPort == "" {
@@ -1166,6 +1199,12 @@ func connectWithLegacyCLIIdentities(ctx context.Context, orgID int32, connect fu
 }
 
 func connectWithScopedCLIIdentities(ctx context.Context, advertisedTenant string, legacyOrg int32, connect func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error) error {
+	return connectWithScopedCLIPrincipal(ctx, advertisedTenant, legacyOrg, "", connect)
+}
+
+// A mesh dial uses the selected primary context, rather than trying unrelated
+// saved logins in the same tenant as physical discovery historically permits.
+func connectWithScopedCLIPrincipal(ctx context.Context, advertisedTenant string, legacyOrg int32, primary string, connect func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1175,6 +1214,13 @@ func connectWithScopedCLIIdentities(ctx context.Context, advertisedTenant string
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("wendy-lite provider: loading operator sessions: %w", err)
+	}
+	if primary != "" {
+		auth, err := config.ResolveAuth(cfg, "", nil)
+		if err != nil {
+			return err
+		}
+		cfg.Auth = []config.AuthConfig{*auth}
 	}
 	var connectErrs []error
 	for i := range cfg.Auth {
@@ -1198,6 +1244,9 @@ func connectWithScopedCLIIdentities(ctx context.Context, advertisedTenant string
 				continue
 			}
 		} else if identity.TenantUUID == "" || !strings.HasPrefix(identity.Principal, "spiffe://wendy.sh/tenant/"+identity.TenantUUID+"/operator/") {
+			continue
+		}
+		if primary != "" && identity.Principal != primary {
 			continue
 		}
 		// Discovery is only a selection hint. The TLS verifier still checks the

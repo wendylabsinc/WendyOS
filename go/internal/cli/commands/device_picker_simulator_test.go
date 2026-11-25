@@ -3,10 +3,8 @@ package commands
 import (
 	"context"
 	"errors"
-	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -165,21 +163,6 @@ func TestDevicePickerChoiceIsEmptyWhenQuittingToLogIn(t *testing.T) {
 	m.hasChosen, m.action = true, devicePickerLogin
 	if _, ok := m.choice(); ok {
 		t.Error("choice() reported a selection while quitting to log in")
-	}
-}
-
-func TestSimulatorBootTimeoutScalesWithAcceleration(t *testing.T) {
-	// An emulated boot takes minutes, so the budget must not be a
-	// hardware-sized one; an accelerated host should not wait that long.
-	got := simulatorBootTimeout()
-	if vm.AccelFor(runtime.GOOS, runtime.GOARCH) == vm.AccelTCG {
-		if got < 2*time.Minute {
-			t.Errorf("simulatorBootTimeout() = %v, too short for an emulated boot", got)
-		}
-		return
-	}
-	if got > time.Minute+30*time.Second {
-		t.Errorf("simulatorBootTimeout() = %v, longer than an accelerated boot needs", got)
 	}
 }
 
@@ -395,12 +378,12 @@ func TestRunPickerStartSelectsTheVM(t *testing.T) {
 
 func TestSimulatorPickerHintNamesTheNewKeys(t *testing.T) {
 	_, view := simulatorViewFor(t, stoppedVM("sim", ""))
-	for _, want := range []string{"s start", "x stop", "r remove", "c create", "d toggle default"} {
+	for _, want := range []string{"s start", "x stop", "r remove", "c create"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("simulator hint = %q, want %q", view, want)
 		}
 	}
-	for _, gone := range []string{"x clear default", "s stop"} {
+	for _, gone := range []string{"d toggle default", "x clear default", "s stop"} {
 		if strings.Contains(view, gone) {
 			t.Errorf("simulator hint = %q still has %q", view, gone)
 		}

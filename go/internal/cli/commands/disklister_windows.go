@@ -436,36 +436,23 @@ func openLockedDisk(d drive) (*lockedDisk, error) {
 	return ld, nil
 }
 
-// handleWriterAt adapts a Windows disk handle to io.WriterAt by seeking to off
-// then writing. applyBmap calls WriteAt sequentially, so the shared file
-// pointer is safe.
-type handleWriterAt struct{ h syscall.Handle }
-
-func (hw handleWriterAt) WriteAt(p []byte, off int64) (int, error) {
-	if _, err := syscall.Seek(hw.h, off, 0 /* FILE_BEGIN */); err != nil {
-		return 0, err
-	}
-	// Raw physical-drive writes must be a multiple of the sector size. Pad the
-	// final sub-sector chunk with zeros (matches writeImageToDisk's behavior).
-	const sector = 512
-	buf := p
-	if rem := len(p) % sector; rem != 0 {
-		padded := make([]byte, len(p)+(sector-rem))
-		copy(padded, p)
-		buf = padded
-	}
-	var done uint32
-	if err := syscall.WriteFile(hw.h, buf, &done, nil); err != nil {
-		return 0, err
-	}
-	if int(done) < len(buf) {
-		return 0, fmt.Errorf("short write at offset %d: wrote %d of %d bytes", off, done, len(buf))
-	}
-	// Report only the caller's requested byte count, not the padding.
-	if len(p) < int(done) {
-		return len(p), nil
-	}
-	return int(done), nil
+// handleWriterAt adapts the locked disk handle h to io.WriterAt. Each write
+// carries its own offset rather than seeking the handle's shared file pointer
+// first (see sectorWriterAt), so the concurrent writers applyBmapSeekable
+// runs on NVMe drives can share the handle.
+func handleWriterAt(h syscall.Handle) io.WriterAt {
+	return sectorWriterAt{pwrite: func(p []byte, off int64) (int, error) {
+		// h is a synchronous handle (no FILE_FLAG_OVERLAPPED). Given an
+		// OVERLAPPED, WriteFile writes at its offset instead of the file
+		// pointer and returns once the write is done, as os.File.WriteAt
+		// does on such a handle. Windows still runs one I/O at a time on a
+		// synchronous handle, so the writers do not deepen the drive's
+		// queue; this only keeps each chunk at its own offset.
+		ov := syscall.Overlapped{Offset: uint32(off), OffsetHigh: uint32(off >> 32)}
+		var done uint32
+		err := syscall.WriteFile(h, p, &done, &ov)
+		return int(done), err
+	}}
 }
 
 // writeImageWithBmap flashes the image to d using the block map. It acquires
@@ -487,7 +474,7 @@ func writeImageWithBmap(r io.Reader, totalSize int64, d drive, bmapPath string, 
 	}
 	defer ld.close()
 
-	if err := applyBmap(r, clipWrites(handleWriterAt{h: ld.handle}, fit.writeLimit), b, progressFn); err != nil {
+	if err := applyBmap(r, clipWrites(handleWriterAt(ld.handle), fit.writeLimit), b, progressFn); err != nil {
 		return err
 	}
 	_ = totalSize
@@ -522,7 +509,7 @@ func writeImageWithBmapSeekable(sourcePath, bmapPath string, d drive, fit imageF
 	// concurrency directly from the storage type: parallel for NVMe, sequential
 	// for SD/USB media whose FTL is hurt by scattered concurrent writes.
 	bmapWriteConcurrency = writersForStorage(d.StorageType)
-	if err := applyBmapSeekable(si, clipWrites(handleWriterAt{h: ld.handle}, fit.writeLimit), b, progressFn); err != nil {
+	if err := applyBmapSeekable(si, clipWrites(handleWriterAt(ld.handle), fit.writeLimit), b, progressFn); err != nil {
 		return err
 	}
 	return finishLockedImageWrite(ld, d, fit)

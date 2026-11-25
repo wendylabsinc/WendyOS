@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/camerashare"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -67,8 +68,15 @@ func cameraWhere(d *agentpb.VideoDevice) string {
 }
 
 // cameraStatus flags the two states that stop a stream before it starts. Local
-// cameras have neither, so they are always ready.
-func cameraStatus(d *agentpb.VideoDevice) string {
+// cameras have neither, so they are always ready. A local camera that apps
+// share says so, from the agent's share properties keyed by device path.
+func cameraStatus(d *agentpb.VideoDevice, shares map[string]map[string]string) string {
+	if p := shares[d.GetPath()]; d.GetPath() != "" && p[camerashare.KeyWith] != "" {
+		if state := p[camerashare.KeyState]; state != "" {
+			return "shared: " + state
+		}
+		return "shared: " + p[camerashare.KeyWith]
+	}
 	if d.GetTransport() != agentpb.VideoTransport_VIDEO_TRANSPORT_IP {
 		return "ready"
 	}
@@ -111,7 +119,7 @@ func cameraPickerColumns() []tui.PickerColumn {
 		}},
 		{Title: "Status", MinWidth: 11, Value: func(it tui.PickerItem) string {
 			if d := devOf(it); d != nil {
-				return cameraStatus(d)
+				return cameraStatus(d, nil)
 			}
 			return ""
 		}},
@@ -129,7 +137,7 @@ func pickCamera(candidates []*agentpb.VideoDevice) (uint32, error) {
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return 0, fmt.Errorf("camera picker: %w", err)
 	}

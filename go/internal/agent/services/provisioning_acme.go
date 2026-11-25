@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/acmeenroll"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -37,7 +38,7 @@ func (s *ProvisioningServiceV2) StartACMEProvisioning(ctx context.Context, req *
 		return nil, status.Error(codes.FailedPrecondition, "explicit local recovery required before enrollment")
 	}
 	if svc.resetCleanupErr != nil {
-		return nil, status.Error(codes.FailedPrecondition, "reset resource cleanup must finish before enrollment")
+		return nil, resetcleanup.Refusal(codes.FailedPrecondition, "reset resource cleanup must finish before enrollment", svc.resetCleanupErr)
 	}
 	if svc.resetRestartPending {
 		return nil, status.Error(codes.FailedPrecondition, "agent must restart after reset before enrollment")

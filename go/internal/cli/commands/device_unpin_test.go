@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,18 +94,11 @@ func TestDeviceUnpinClearsBothStores(t *testing.T) {
 	}
 }
 
-// TestDeviceUnpinClearsAPinFoundUnderAnAlias is the dead end this closes.
-//
-// `wendy cloud discover` seeds pins under the name the cloud roster carries
-// (the asset name, which is the discovery cache's display name), while dials
-// name the device by its mDNS hostname. lookupPin already reconciles the two —
-// so a dial to "wendyos-calm-zinnia" is governed, and refused, by the pin filed
-// under "calm-zinnia" — but unpin cleared only the key it was handed. The
-// refusal named a key nothing was filed under, unpinning it removed nothing,
-// and the very next dial refused identically. Forever.
-func TestDeviceUnpinClearsAPinFoundUnderAnAlias(t *testing.T) {
+// Verified bindings for the same device may be removed together.
+func TestDeviceUnpinClearsVerifiedAliases(t *testing.T) {
 	readPins := writePinTestConfig(t, map[string]config.DevicePin{
-		"calm-zinnia": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42", Source: config.PinSourceCloud},
+		"wendyos-calm-zinnia": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42", Source: config.PinSourceLAN},
+		"calm-zinnia":         {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42", Source: config.PinSourceCloud},
 	})
 	setPinCache(t, discoverycache.Entry{
 		ID:          "dev-1",
@@ -157,28 +151,6 @@ func TestDeviceUnpinClearsSPKIPinWithNoConfigPin(t *testing.T) {
 	}
 }
 
-// TestClearDevicePinForRepinClearsSPKIStore holds set-default to the claim
-// pki/README.md already makes for it — that naming a device has "the same
-// clearing effect" as unpin. Leaving the SPKI half behind made that false for
-// the one refusal that has no other way out: set-default would clear the config
-// pin, reconnect, and be rejected again by the pin store it never touched.
-func TestClearDevicePinForRepinClearsSPKIStore(t *testing.T) {
-	readPins := writePinTestConfig(t, map[string]config.DevicePin{
-		"wendy-thor": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42"},
-	})
-	setPinCache(t) // empty cache: exactly the single-key legacy shape
-	seedSPKIPin(t, "urn:wendy:org:7:asset:42")
-
-	clearDevicePinForRepin("wendy-thor.local")
-
-	if pin, ok := readPins()["wendy-thor"]; ok {
-		t.Errorf("config pin survived clearDevicePinForRepin: %+v", pin)
-	}
-	if _, ok := readSPKIPins(t)["urn:wendy:org:7:asset:42"]; ok {
-		t.Error("SPKI pin survived clearDevicePinForRepin: set-default cannot re-pin a device whose key rotated, though the docs say it can")
-	}
-}
-
 // TestDeviceUnpinUnknownHostIsNotAnError is the ambiguity ruling from the
 // design: the command's contract is "this host ends up unpinned", which is
 // already true for a host that was never pinned, so there is nothing to
@@ -192,8 +164,7 @@ func TestDeviceUnpinUnknownHostIsNotAnError(t *testing.T) {
 	}
 }
 
-// TestDeviceUnpinAcceptsHostPortAddress covers the exact bug fixed in
-// set-default during Task 6: a pin recorded for a `--device
+// TestDeviceUnpinAcceptsHostPortAddress: a pin recorded for a `--device
 // wendy-thor.local:50051` connection files under "wendy-thor.local" (the port
 // stripped by pinKeyForAddr), so unpinning must strip the port the same way —
 // passing the raw argument through would clear a key nothing was ever filed
@@ -267,11 +238,9 @@ func TestDeviceUnpinAcceptsAnIdentityURN(t *testing.T) {
 	}
 }
 
-// TestSPKIRefusalNamesAnArgumentUnpinCanActOn is the round trip the two halves
-// of Finding A only make sense together: the exact string spkiRefusal tells the
-// user to run must clear the entry that caused the refusal. Asserting the
-// message text and the command's behaviour separately would let them drift.
-func TestSPKIRefusalNamesAnArgumentUnpinCanActOn(t *testing.T) {
+// TestSPKIRefusalAcceptClearsTheEntry is the round trip: accepting the new key
+// must clear the store entry that caused the refusal.
+func TestSPKIRefusalAcceptClearsTheEntry(t *testing.T) {
 	writePinTestConfig(t, nil)
 	setPinCache(t)
 	seedSPKIPin(t, "urn:wendy:org:7:asset:42")
@@ -282,25 +251,18 @@ func TestSPKIRefusalNamesAnArgumentUnpinCanActOn(t *testing.T) {
 		Want: "sha256:aaa", Got: "sha256:bbb",
 	})
 
-	arg := unpinArgumentFrom(t, err.Error())
-	runUnpin(t, arg)
-
+	// Accepting the new key at the prompt must clear the entry that caused the
+	// refusal, or the next dial refuses identically.
+	var refusal *deviceIdentityRefusalError
+	if !errors.As(err, &refusal) || refusal.accept == nil {
+		t.Fatalf("refusal %v cannot be accepted", err)
+	}
+	if acceptErr := refusal.accept(); acceptErr != nil {
+		t.Fatal(acceptErr)
+	}
 	if _, ok := readSPKIPins(t)["urn:wendy:org:7:asset:42"]; ok {
-		t.Errorf("running the refusal's own suggested command (%q) cleared nothing; the refusal is a dead end", arg)
+		t.Error("accepting the new key cleared nothing; the refusal is a dead end")
 	}
-}
-
-// unpinArgumentFrom extracts the argument a refusal told the user to pass to
-// `wendy device unpin`.
-func unpinArgumentFrom(t *testing.T, msg string) string {
-	t.Helper()
-	const marker = "wendy device unpin "
-	i := strings.Index(msg, marker)
-	if i < 0 {
-		t.Fatalf("refusal %q names no unpin command at all", msg)
-	}
-	rest := msg[i+len(marker):]
-	return strings.TrimRight(strings.Fields(rest)[0], "'\"")
 }
 
 // TestDeviceUnpinLeavesAnotherDevicesPinsAlone is the adversarial case for the

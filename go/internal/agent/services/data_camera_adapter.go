@@ -51,13 +51,12 @@ func (a *cameraDataAdapter) Discover(ctx context.Context) []data.Source {
 	out := make([]data.Source, 0, len(devices))
 	for _, dev := range devices {
 		if dev.GetTransport() == agentpb.VideoTransport_VIDEO_TRANSPORT_IP {
-			healthy := dev.GetOnline() && dev.GetHasCredentials()
+			// listCameras lists only paired network cameras, which have a
+			// stored login, so being offline is the one reason left to report.
+			healthy := dev.GetOnline()
 			detail := strings.TrimSpace(dev.GetName() + " " + dev.GetAddress())
 			reason := ""
-			if !dev.GetHasCredentials() {
-				detail += " (credentials required)"
-				reason = "no login stored"
-			} else if !dev.GetOnline() {
+			if !healthy {
 				detail += " (offline)"
 				reason = "camera offline"
 			}
@@ -486,6 +485,13 @@ type cameraCapture struct {
 	runErr             error
 	lastSequence       uint32
 	haveSequence       bool
+	// lastSampleID is the hub identity of the previous VP8 frame this capture
+	// handled, written or not; a jump in it is a loss (see sampleGap).
+	// webmResync is set from such a loss until the next segment opens, and
+	// webmBreaks counts the segments ended that way.
+	lastSampleID uint64
+	webmResync   bool
+	webmBreaks   int
 	// sawSequence records that this capture observed at least one frame carrying
 	// a valid producer sequence number, at any point in its life. Unlike
 	// haveSequence it is never reset by a producer restart: it decides which of
@@ -963,15 +969,20 @@ func (c *cameraCapture) canonicalTime(frame *videoFrame) (canonical, uncertainty
 
 // frameRandomAccess reports whether a frame can start decoding on its own, and
 // the byte offset of the decodable unit. H.264 requires an SPS/PPS/IDR access
-// unit; VP8 marks keyframes in the frame tag (bit 0 of the first byte is zero
-// for keyframes). Other codecs are treated as independently decodable per
-// frame, matching how the segmenter already treats them.
+// unit. A VP8 frame is a pipe read of one WebM container, so its own bytes say
+// nothing: the unit is a Cluster opening on a key frame, which the hub found
+// (see webmJoins), and it decodes only behind that join point's prefix. Other
+// codecs are treated as independently decodable per frame, matching how the
+// segmenter already treats them.
 func frameRandomAccess(frame *videoFrame) (int, bool) {
 	switch frame.codec {
 	case agentpb.VideoCodec_VIDEO_CODEC_H264:
 		return h264RandomAccessOffset(frame.data)
 	case agentpb.VideoCodec_VIDEO_CODEC_VP8:
-		return 0, len(frame.data) > 0 && frame.data[0]&0x01 == 0
+		if frame.webmJoin == nil {
+			return 0, false
+		}
+		return frame.webmJoin.offset, true
 	default:
 		return 0, len(frame.data) > 0
 	}
@@ -1083,7 +1094,20 @@ func (c *cameraCapture) writeBufferedFrame(bf bufferedCameraFrame) error {
 // CLOCK_BOOTTIME episode time (negative for pre-roll); newStream forces a fresh
 // segment before the write so a producer restart never splices two sequence
 // parameter sets into one file.
+//
+// A VP8 segment also ends wherever frames were lost on the way here. The stream
+// is one WebM container, so the bytes after a loss cannot be appended: the file
+// would carry a hole in the middle of a Cluster, which matroskademux does not
+// get past. The frames that follow are discarded until ensureSegment can open
+// the next file at a join point, and count as lost with the ones before them.
 func (c *cameraCapture) writeEncodedFrame(frame *videoFrame, canonical, uncertainty int64, mappingID string, receipt int64, newStream bool) error {
+	if frame.codec == agentpb.VideoCodec_VIDEO_CODEC_VP8 {
+		if c.segment != nil && sampleGap(c.lastSampleID, frame.sampleID) {
+			newStream, c.webmResync = true, true
+			c.webmBreaks++
+		}
+		c.lastSampleID = frame.sampleID
+	}
 	if newStream && c.segment != nil {
 		if err := c.segment.Sync(); err != nil {
 			return err
@@ -1094,10 +1118,14 @@ func (c *cameraCapture) writeEncodedFrame(frame *videoFrame, canonical, uncertai
 		c.segment = nil
 		c.haveSequence = false
 	}
-	trim, err := c.ensureSegment(frame.codec, canonical, frame.data)
+	trim, err := c.ensureSegment(frame, canonical)
 	if err != nil {
+		if c.webmResync && errors.Is(err, errAwaitCameraRandomAccess) {
+			c.carriedDrops++
+		}
 		return err
 	}
+	c.webmResync = false
 	payload := frame.data[trim:]
 	offset := c.segmentOffset
 	n, err := c.segment.Write(payload)
@@ -1140,9 +1168,10 @@ func (c *cameraCapture) writeEncodedFrame(frame *videoFrame, canonical, uncertai
 // per buffer — byte-chunked transports degrade to continuous recording), and
 // frameRandomAccess then verifies the unit carries its own SPS/PPS/IDR trio.
 // Together they guarantee a written still is a complete, self-contained
-// access unit; a keyframe whose parameter sets the camera firmware did not
-// inline is skipped and its interval is reported as missed rather than filled
-// with an undecodable file.
+// access unit; a keyframe that still lacks parameter sets (the camera did not
+// inline them and the producer had none to add, see h264ParameterSets) is
+// skipped and its interval is reported as missed rather than filled with an
+// undecodable file.
 //
 // Between intervals the capture stays subscribed and discards frames instead
 // of unsubscribing: receiving and dropping a shared frame pointer is a channel
@@ -1252,14 +1281,29 @@ func (c *cameraCapture) finishResultDetail(end int64) {
 		}
 		c.notes = append(c.notes, note)
 	}
+	if c.webmBreaks > 0 {
+		c.notes = append(c.notes, fmt.Sprintf("reads of the WebM stream were lost before reaching this capture %d time(s); a WebM file cannot continue across missing bytes, so each time the recording resumed in a new segment at the next key frame, and the reads discarded on the way are counted as drops", c.webmBreaks))
+	}
 	if len(c.notes) > 0 {
 		c.result.SourceDetail = strings.TrimSpace(c.source.Detail + " (" + strings.Join(c.notes, "; ") + ")")
 	}
 }
 
-func (c *cameraCapture) ensureSegment(codec agentpb.VideoCodec, canonical int64, payload []byte) (int, error) {
-	randomAccessOffset, randomAccess := h264RandomAccessOffset(payload)
-	if codec == agentpb.VideoCodec_VIDEO_CODEC_H264 && c.segment == nil && !randomAccess {
+// ensureSegment makes sure a segment file is open for the frame about to be
+// written, and returns how many of the frame's leading bytes to leave out. A
+// segment only opens on a random-access unit, so every file decodes from its
+// first byte, and H.264 rotates on one every cameraSegmentDuration.
+//
+// A VP8 segment opens at a join point: the join prefix (the stream's
+// initialization, and any of the Cluster's opening bytes from earlier reads)
+// is written first, so the file is a WebM file whether or not the capture saw
+// the stream begin. Those bytes belong to no sample and no index entry covers
+// them; the opening frame's entry starts after them. VP8 does not rotate.
+func (c *cameraCapture) ensureSegment(frame *videoFrame, canonical int64) (int, error) {
+	codec := frame.codec
+	gated := codec == agentpb.VideoCodec_VIDEO_CODEC_H264 || codec == agentpb.VideoCodec_VIDEO_CODEC_VP8
+	randomAccessOffset, randomAccess := frameRandomAccess(frame)
+	if gated && c.segment == nil && !randomAccess {
 		return 0, errAwaitCameraRandomAccess
 	}
 	rotate := c.segment == nil || (codec == agentpb.VideoCodec_VIDEO_CODEC_H264 && canonical-c.segmentStart >= int64(cameraSegmentDuration) && randomAccess)
@@ -1286,7 +1330,14 @@ func (c *cameraCapture) ensureSegment(codec agentpb.VideoCodec, canonical int64,
 	}
 	c.segment, c.segmentRel = f, filepath.ToSlash(filepath.Join("cameras", safeCaptureName(c.source.ID), name))
 	c.segmentStart, c.segmentOffset = canonical, 0
-	if codec == agentpb.VideoCodec_VIDEO_CODEC_H264 {
+	if codec == agentpb.VideoCodec_VIDEO_CODEC_VP8 {
+		n, err := f.Write(frame.webmJoin.prefix)
+		if err != nil {
+			return 0, err
+		}
+		c.segmentOffset = int64(n)
+	}
+	if gated {
 		return randomAccessOffset, nil
 	}
 	return 0, nil
@@ -1294,44 +1345,55 @@ func (c *cameraCapture) ensureSegment(codec agentpb.VideoCodec, canonical int64,
 
 // h264RandomAccessOffset reports an Annex-B payload position where SPS, PPS,
 // and IDR NALs appear in order. The GStreamer pipelines emit this trio at
-// every keyframe (h264parse config-interval=-1) and UVC H.264 firmware
-// commonly inlines it too, so starting segments only here makes each file
-// begin independently decodable. Note this inspects only the bytes it is
-// given: on a byte-chunked transport a reported unit may still be truncated
-// at the payload's end, which is why snapshot stills additionally require an
-// access-unit-aligned frame (see handleFrame).
+// every keyframe (h264parse config-interval=-1) and the native V4L2 path
+// completes it for a camera that does not (h264ParameterSets), so starting
+// segments only here makes each file begin independently decodable. Note this
+// inspects only the bytes it is given: on a byte-chunked transport a reported
+// unit may still be truncated at the payload's end, which is why snapshot
+// stills additionally require an access-unit-aligned frame (see handleFrame).
 func h264RandomAccessOffset(payload []byte) (offset int, found bool) {
 	spsOffset, ppsOffset := -1, -1
-	for i := 0; i+3 < len(payload); {
-		start, prefix := -1, 0
-		for ; i+3 < len(payload); i++ {
-			if payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 1 {
-				start, prefix = i, 3
-				break
-			}
-			if i+4 < len(payload) && payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 0 && payload[i+3] == 1 {
-				start, prefix = i, 4
-				break
-			}
-		}
-		if start < 0 || start+prefix >= len(payload) {
-			break
-		}
-		switch payload[start+prefix] & 0x1f {
-		case 5:
+	for start, header, ok := h264NextNAL(payload, 0); ok; start, header, ok = h264NextNAL(payload, header+1) {
+		switch payload[header] & 0x1f {
+		case h264NALIDR:
 			if spsOffset >= 0 && ppsOffset >= spsOffset {
 				offset, found = spsOffset, true
 			}
-		case 7:
+		case h264NALSPS:
 			spsOffset, ppsOffset = start, -1
-		case 8:
+		case h264NALPPS:
 			if spsOffset >= 0 {
 				ppsOffset = start
 			}
 		}
-		i = start + prefix + 1
 	}
 	return offset, found
+}
+
+// The H.264 NAL unit types (nal_unit_type, the low five bits of the header
+// byte) that the agent tells apart.
+const (
+	h264NALIDR = 5 // coded slice of an IDR picture
+	h264NALSPS = 7 // sequence parameter set
+	h264NALPPS = 8 // picture parameter set
+	h264NALAUD = 9 // access unit delimiter
+)
+
+// h264NextNAL finds the next NAL unit of an Annex-B payload at or after from.
+// start is the offset of its start code, three bytes or four, and header that
+// of the NAL header byte behind it; a start code with nothing after it is not
+// a unit. The unit runs to the start of the following one, or to the end of
+// the payload.
+func h264NextNAL(payload []byte, from int) (start, header int, ok bool) {
+	for i := from; i+3 < len(payload); i++ {
+		if payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 1 {
+			return i, i + 3, true
+		}
+		if i+4 < len(payload) && payload[i] == 0 && payload[i+1] == 0 && payload[i+2] == 0 && payload[i+3] == 1 {
+			return i, i + 4, true
+		}
+	}
+	return 0, 0, false
 }
 
 func (c *cameraCapture) sampleMapping(receipt int64) error {

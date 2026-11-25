@@ -1,10 +1,10 @@
 ---
-title: Camera Feed in C++
-description: Start a live camera feed app on WendyOS using the C++ camera template
+title: Camera feed in C++
+description: Start a live camera feed app using the C++ camera template
 language: cpp
 ---
 
-## Live Camera Feed with C++
+## Live camera feed with C++
 
 Use the Wendy camera template when you want a browser-viewable camera stream without wiring the project from scratch. The template includes `wendy.json`, camera entitlements, a Dockerfile, C++ backend code, and the browser UI.
 
@@ -13,11 +13,11 @@ Use the Wendy camera template when you want a browser-viewable camera stream wit
 - Wendy CLI installed on your development machine
 - A WendyOS device with a USB camera connected
 
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     ```bash
     wendy init cpp-camera --target wendyos --language cpp --template camera-feed --var APP_ID=cpp-camera --var PORT=7003 --assistant skip --git-init no
@@ -42,9 +42,11 @@ Use the Wendy camera template when you want a browser-viewable camera stream wit
   </Step>
 </Steps>
 
-## Code Breakdown
+Open the app URL from the Wendy run output to view the stream.
 
-### Generated Project
+## Code breakdown
+
+### Generated project
 
 The template creates a small Drogon service with GStreamer camera capture:
 
@@ -67,7 +69,7 @@ cpp-camera/
 - `readiness.tcpSocket` so `wendy run` waits until the HTTP server is reachable
 - a `postStart` hook that opens the app URL from the Wendy CLI when possible
 
-### C++ Backend
+### C++ backend
 
 `main.cpp` starts a Drogon HTTP server and a singleton `MJPEGCamera` that owns the GStreamer pipeline. The camera starts lazily when the first WebSocket client connects and stops after the last client disconnects, so the app does not hold camera resources when nobody is watching.
 
@@ -83,7 +85,7 @@ v4l2src device=/dev/video0
 
 `max-buffers=2` and `drop=true` keep latency low by dropping stale frames if the browser cannot keep up.
 
-### Routes and Streaming
+### Routes and streaming
 
 The generated server exposes:
 
@@ -97,4 +99,7 @@ When the browser sends a message like `{"switch_camera": "/dev/video2"}`, the We
 
 `index.html` connects to `/stream`, receives binary JPEG frames, converts each frame to a data URL, and updates the full-screen image element. It also calls `/cameras` to populate the camera picker, shows connection state, displays FPS, and provides a fullscreen button.
 
-Open the app URL from the Wendy run output to view the stream.
+## Next steps
+
+- Read [hardware access](/docs/hardware) to give an app cameras, microphones, speakers, Bluetooth, or a GPU.
+- Try the [tutorials in other languages](/docs/guides/tutorials).

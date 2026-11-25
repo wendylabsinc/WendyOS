@@ -137,13 +137,15 @@ const (
 	// recipient key per device or browser; recipient = the user's SPIFFE URI,
 	// recipient_key_id = that device's key.
 	RecipientKind_RECIPIENT_KIND_USER RecipientKind = 2
-	// Wendy break-glass key; clients pin its public key per environment. Dev =
-	// generated key pair; prod = 2-of-3 Shamir, same officers as the platform
-	// root, separate key, no cloud-KMS second recipient in v1 (Q9). The ceremony
-	// and the accepted custodian key ids are config, not wire. The registry
-	// refuses a release or deployment with no CUSTODIAN wrap.
-	// TODO(Q9): the prod custodian ceremony is defined before the registry goes
-	// to prod (sem 2026-10-18 14:28).
+	// Wendy break-glass key; clients pin its public key per environment. The
+	// custodian is a Cloud KMS KEY_ENCAPSULATION key with algorithm KEM_XWING
+	// (this file's MLKEM768-X25519 suite), one per environment; the pin is its
+	// version's xwing-raw-bytes public key. KMS never encapsulates: clients seal
+	// to the pinned key. Decapsulate is granted to named humans only, never a
+	// service account, so no service and no CI can open a custodian wrap; every
+	// call is audit-logged and alerts (sem 2026-10-23, WDY-4007). The accepted
+	// custodian key ids are config, not wire. The registry refuses a release or
+	// deployment with no CUSTODIAN wrap.
 	RecipientKind_RECIPIENT_KIND_CUSTODIAN RecipientKind = 3
 )
 

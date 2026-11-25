@@ -2,11 +2,13 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/termenv"
 )
 
 func stepConfirm(t *testing.T, m ConfirmModel, key string) ConfirmModel {
@@ -157,5 +159,24 @@ func TestConfirmCompactDefaultNoCancellation(t *testing.T) {
 				t.Fatalf("ConfirmDefaultNo() = %v, %v; want false, ErrCancelled", confirmed, err)
 			}
 		})
+	}
+}
+
+func TestConfirmShowsTheChoiceWithoutColour(t *testing.T) {
+	withColor(t, termenv.Ascii)
+	if got, want := NewConfirm("Flash?").View(), "Flash?   Yes  [No]  (y/n)\n"; got != want {
+		t.Errorf("default No: %q, want %q", got, want)
+	}
+	if got, want := NewConfirmDefaultYes("Flash?").View(), "Flash?  [Yes]  No   (y/n)\n"; got != want {
+		t.Errorf("default Yes: %q, want %q", got, want)
+	}
+}
+
+func TestConfirmColouredViewIsUnchanged(t *testing.T) {
+	withColor(t, termenv.TrueColor)
+	want := fmt.Sprintf("%s  %s %s  %s\n", confirmQuestion.Render("Flash?"),
+		confirmActive.Render("Yes"), confirmInactive.Render("No"), confirmHint.Render("(y/n)"))
+	if got := NewConfirmDefaultYes("Flash?").View(); got != want || strings.Contains(got, "[Yes]") {
+		t.Fatalf("coloured view %q; want %q", got, want)
 	}
 }

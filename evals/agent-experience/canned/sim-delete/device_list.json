@@ -1,0 +1,51 @@
+{
+  "tool": "device_list",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"devices\": [{\"address\": \"vm:old-bench\", \"device\": \"vm:old-bench\", \"name\": \"old-bench\", \"profile\": \"generic\", \"source\": \"simulator\", \"state\": \"stopped\", \"type\": \"simulator\"}]}"
+        }
+      ],
+      "structuredContent": {
+        "devices": [
+          {
+            "address": "vm:old-bench",
+            "device": "vm:old-bench",
+            "name": "old-bench",
+            "profile": "generic",
+            "source": "simulator",
+            "state": "stopped",
+            "type": "simulator"
+          }
+        ]
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  },
+  "after": {
+    "actions": [
+      "tool:simulator_delete",
+      "cli:vm rm",
+      "cli:vm remove"
+    ],
+    "replies": [
+      {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"devices\": []}"
+          }
+        ],
+        "structuredContent": {
+          "devices": []
+        }
+      }
+    ]
+  }
+}

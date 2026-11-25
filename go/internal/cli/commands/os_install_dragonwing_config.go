@@ -37,21 +37,25 @@ func writeDragonwingZeros(dir string) (string, error) {
 	return path, nil
 }
 
-// resolveSeedAgent fetches the agent to seed: best-effort, and the latest stable
-// one whatever image is being flashed, as every other board does. It is the only
-// network step in a flash, so an offline re-flash must still seed wifi and
-// enrollment. The warning it returns is for the caller to surface — a step's own
-// output only reaches the screen when that step fails.
-func resolveSeedAgent(out io.Writer, detail func(string)) ([]byte, string) {
+// resolveSeedAgent uses the validated local binary when provided. Otherwise it
+// downloads the latest agent for the image's channel, allowing an offline flash
+// to fall back to the image's bundled agent. The returned warning lets callers
+// surface download failures after the flash UI finishes.
+func resolveSeedAgent(out io.Writer, detail func(string), seed agentSeed) (configAgent, string) {
+	if local := seed.local; local != nil {
+		detail("local agent " + local.path)
+		fmt.Fprintf(out, "Using local wendy-agent %s (%s)\n", local.path, local.arch)
+		return configAgent{data: local.data, local: true}, ""
+	}
 	detail("downloading agent")
-	agent, version, _, err := resolveAgentArtifact("linux", "arm64", false)
+	agent, version, err := seedAgent(seed)
 	if err != nil {
 		// Written to out as well, so the flash log keeps it for a post-mortem.
 		fmt.Fprintf(out, "warning: could not download wendy-agent (%v)\n", err)
-		return nil, fmt.Sprintf("could not download wendy-agent (%v); the board keeps the agent baked into its image", err)
+		return configAgent{}, fmt.Sprintf("could not download wendy-agent (%v); the board keeps the agent baked into its image", err)
 	}
 	detail("agent " + version)
-	return agent, ""
+	return configAgent{data: agent}, ""
 }
 
 // newConfigFS creates and formats a bare FAT32 config image. The caller closes
@@ -81,7 +85,7 @@ func newConfigFS(path string, size int64, sectorSize int64) (*disk.Disk, filesys
 // returns its path. The Dragonwing bundle ships no config image to inject into —
 // its descriptor declares the partition with an empty filename — so unlike Thor
 // and Orin the host has to make one.
-func buildDragonwingConfigImage(dir string, plan *qdl.FlashPlan, agent []byte,
+func buildDragonwingConfigImage(dir string, plan *qdl.FlashPlan, agent configAgent,
 	creds []wendyconf.WifiCredential, deviceName string, provJSON []byte) (string, error) {
 	declared, err := plan.Declared(dragonwingConfigLabel)
 	if err != nil {

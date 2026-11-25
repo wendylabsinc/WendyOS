@@ -8,6 +8,14 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 )
 
+// UnsupportedServiceError means Cloud predates this service descriptor. It is
+// distinct from an authorization refusal, which must not trigger a fallback.
+type UnsupportedServiceError struct{ Service string }
+
+func (e *UnsupportedServiceError) Error() string {
+	return fmt.Sprintf("Cloud does not offer tunnel service %q; port tunnels need a Cloud release with WDY-3955", e.Service)
+}
+
 // PortService names a device-loopback port in Cloud's signed service vocabulary.
 // Keep the existing TCP names so agent/SSH connections also work with older Cloud.
 func PortService(protocol string, port uint32) (string, error) {

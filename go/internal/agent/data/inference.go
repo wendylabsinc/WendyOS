@@ -15,6 +15,7 @@ import (
 // Accelerator chooses the hardware that runs the model, which Backend does not:
 // Backend is the kind of model, Accelerator the engine that scores it.
 type CampaignInference struct {
+	Task        string   `json:"task,omitempty" yaml:"task,omitempty"`
 	Backend     string   `json:"backend,omitempty" yaml:"backend,omitempty"`
 	ModelFile   string   `json:"model_file,omitempty" yaml:"model_file,omitempty"`
 	Accelerator string   `json:"accelerator,omitempty" yaml:"accelerator,omitempty"`
@@ -67,6 +68,12 @@ var inferenceEventRE = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 func (i *CampaignInference) validate() error {
 	if i == nil {
 		return nil
+	}
+	if i.Task != "" && i.Task != "object-detection" && i.Task != "image-classification" {
+		return fmt.Errorf("inference.task must be object-detection or image-classification")
+	}
+	if i.Task == "image-classification" && i.Backend == "yolo_onnx" {
+		return fmt.Errorf("image classification requires the transformers backend")
 	}
 	if strings.HasPrefix(i.Model, "https://huggingface.co/") {
 		u, err := url.Parse(i.Model)
@@ -143,6 +150,8 @@ type InferenceStatus struct {
 	Accelerator *AcceleratorStatus `json:"accelerator,omitempty"`
 	// Stats are the model process's recent throughput and latency.
 	Stats *InferenceStats `json:"stats,omitempty"`
+	// Throughput compares Stats with the rate the campaign asks for.
+	Throughput *InferenceThroughput `json:"throughput,omitempty"`
 }
 
 // AcceleratorStatus is the engine a campaign's model actually runs on, as the
@@ -221,6 +230,22 @@ type InferenceStats struct {
 	InferMsP50   float64 `json:"infer_ms_p50"`
 	InferMsP95   float64 `json:"infer_ms_p95"`
 	FramesScored uint64  `json:"frames_scored"`
+}
+
+// InferenceThroughput compares what the model scores with the campaign's
+// rate. The rate is an upper bound: a model slower than it scores as fast as
+// it can, and this says so.
+type InferenceThroughput struct {
+	// RequestedFPS is the campaign's rate, for every camera being scored.
+	// AchievedFPS is Stats.FPS: what the model process scored lately.
+	RequestedFPS float64 `json:"requested_fps"`
+	AchievedFPS  float64 `json:"achieved_fps"`
+	// ModelTooSlow is true while the model, and not the cameras, keeps
+	// AchievedFPS below RequestedFPS: scoring one frame takes it longer than
+	// the rate allows.
+	ModelTooSlow bool `json:"model_too_slow,omitempty"`
+	// Summary says the same in words, with the model's typical time per frame.
+	Summary string `json:"summary"`
 }
 
 // InferenceDirectory is outside the episode quota and upload tree. It is

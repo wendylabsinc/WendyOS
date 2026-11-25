@@ -71,7 +71,7 @@ func TestCredentialsExpiryUsesVerifiedPath(t *testing.T) {
 		t.Run(selected.name, func(t *testing.T) {
 			own := mint("own long leaf", testPrincipal(testTenantUUID, testDeviceAID), now.Add(3*time.Hour), &selected.issuer)
 			for _, trust := range []string{selected.trust, own.pem + selected.trust} {
-				credentials, err := NewCredentials(own.pem, trust, own.keyPEM)
+				credentials, err := newTestCredentials(own.pem, trust, own.keyPEM)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -98,7 +98,7 @@ func TestCredentialsExpiryUsesVerifiedPath(t *testing.T) {
 				trust += parent.pem
 			}
 			for _, bundle := range []string{trust, own.pem + trust} {
-				if _, err := NewCredentials(own.pem, bundle, own.keyPEM); err == nil {
+				if _, err := newTestCredentials(own.pem, bundle, own.keyPEM); err == nil {
 					t.Fatal("own expired issuer accepted at startup")
 				}
 			}
@@ -122,7 +122,7 @@ func TestCredentialsExpiryUsesVerifiedPath(t *testing.T) {
 			} else {
 				chain = append(chain, unused.parsed.Raw)
 			}
-			credentials, err := NewCredentials(self.pem, trust, self.keyPEM)
+			credentials, err := newTestCredentials(self.pem, trust, self.keyPEM)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,7 +153,7 @@ func TestCredentialsExpiryUsesVerifiedPath(t *testing.T) {
 			}
 			newRoot := mint("replacement trust", "", now.Add(time.Hour), nil)
 			newSelf := mint("new self", testPrincipal(testTenantUUID, testDeviceAID), now.Add(time.Hour), &newRoot)
-			replacement, err := NewCredentials(newSelf.pem, newRoot.pem, newSelf.keyPEM)
+			replacement, err := newTestCredentials(newSelf.pem, newRoot.pem, newSelf.keyPEM)
 			if err != nil {
 				t.Fatal(err)
 			}

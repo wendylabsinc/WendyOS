@@ -1,0 +1,10 @@
+{
+  "argv_prefix": [
+    "device",
+    "apps",
+    "remove"
+  ],
+  "stdout": "{\"app\": \"sensor-dashboard\", \"action\": \"remove\", \"status\": \"removed\", \"deleteImage\": true}",
+  "stderr": "Connecting to simulator {{vm_name}}...\n",
+  "exit_code": 0
+}

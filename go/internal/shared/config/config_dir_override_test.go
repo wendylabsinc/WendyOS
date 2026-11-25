@@ -17,11 +17,11 @@ func TestConfigDirOverride(t *testing.T) {
 	if err != nil || !info.IsDir() {
 		t.Fatalf("isolated directory was not created: %v", err)
 	}
-	if err := Save(&Config{DefaultDevice: "only-this-trial"}); err != nil {
+	if err := Save(&Config{DefaultBuildHost: "only-this-trial"}); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := Load()
-	if err != nil || loaded.DefaultDevice != "only-this-trial" {
+	if err != nil || loaded.DefaultBuildHost != "only-this-trial" {
 		t.Fatalf("configuration did not stay in the isolated directory: %+v, %v", loaded, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {

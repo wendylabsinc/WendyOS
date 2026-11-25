@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -11,12 +12,12 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
-	listDesc := "List configured devices, local simulators (vm:NAME; device_connect boots a stopped one) and online cloud devices; scan=true adds LAN discovery. Pass a returned device selector to device_connect or run. Cloud and simulator failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."
+	listDesc := "List configured devices, local simulators (vm:NAME; device_connect boots a stopped one) and online cloud devices, plus mesh devices reachable through an already connected local Wendy Net router; scan=true adds ordinary LAN discovery without enabling Wendy Net. Pass a returned device selector to device_connect or run. Cloud and simulator failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."
 	if s.relay {
 		listDesc = "List configured and online cloud devices; scan=true adds LAN discovery. Pass a returned device selector to device_connect or run. Cloud failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."
 	}
@@ -31,15 +32,15 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("device_list", listOpts...), s.handleDeviceList)
 
 	connectOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Connect to a LAN, simulator, or cloud device using its discovery selector."),
-		mcpgo.WithString("device", mcpgo.Required(), mcpgo.Description("device from device_list, a host:port, or vm:name")),
+		mcpgo.WithDescription("Connect to a WendyOS device over LAN, Wendy Net, a simulator, or Cloud using its discovery selector. Mesh selectors choose the destination; nearby mesh routers are discovered automatically."),
+		mcpgo.WithString("device", mcpgo.Required(), mcpgo.Description("device from device_list, a host:port, mesh://TENANT_UUID/DEVICE_UUID, vm:name, or cloud:// selector")),
 	}
 	connectOpts = append(connectOpts, mutating()...)
 	connectOpts = append(connectOpts, idempotent()...)
 	connectOpts = append(connectOpts, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("device_connect", connectOpts...), s.handleDeviceConnect)
 
-	disconnectOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Disconnect from the currently connected device")}
+	disconnectOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Disconnect MCP from the selected device; this does not stop the local Wendy Net background router")}
 	disconnectOpts = append(disconnectOpts, mutating()...)
 	disconnectOpts = append(disconnectOpts, idempotent()...)
 	disconnectOpts = append(disconnectOpts, localOnly()...)
@@ -51,9 +52,11 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("device_info", infoOpts...), s.handleDeviceInfo)
 
 	setDefaultOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Save an address as the default device in ~/.wendy/config.json, replacing the current default"),
-		mcpgo.WithString("address", mcpgo.Required(), mcpgo.Description("Device address to save as default, e.g. mydevice.local:50051")),
+		mcpgo.WithDescription("Removed: Wendy no longer saves a default device. Pass the device to device_connect or run instead."),
+		mcpgo.WithString("address", mcpgo.Required(), mcpgo.Description("Ignored; the tool always fails")),
 	}
+	// Kept only so Cloud relay catalogs that still list this tool stay
+	// pairable (see manifests/README.md). Retire it with the next catalog.
 	setDefaultOpts = append(setDefaultOpts, destructive()...)
 	setDefaultOpts = append(setDefaultOpts, idempotent()...)
 	setDefaultOpts = append(setDefaultOpts, localOnly()...)
@@ -80,12 +83,13 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 	}()
 
 	var devices []map[string]any
-	if s.cfg.DefaultDevice != "" {
+
+	if inDeviceContainer() && !s.relay {
 		devices = append(devices, map[string]any{
-			"device":  s.cfg.DefaultDevice,
-			"address": s.cfg.DefaultDevice,
-			"type":    "default",
-			"source":  "config",
+			"device":  localDeviceSelector,
+			"address": localDeviceSelector,
+			"type":    "local",
+			"source":  "agent-socket",
 		})
 	}
 
@@ -117,11 +121,29 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 		}
 	}
 
+	var meshState any
+	if !s.relay && os.Getenv("WENDY_AGENT_SOCKET") == "" && s.meshDirectoryFn != nil {
+		bounded, cancel := context.WithTimeout(ctx, time.Second)
+		mesh, _ := s.meshDirectoryFn(bounded)
+		cancel()
+		meshState = map[string]any{"sourceResponseBytes": mesh.SourceResponseBytes, "pollIntervalMillis": mesh.PollIntervalMillis, "heartbeatMillis": mesh.HeartbeatMillis, "state": mesh.State, "source": mesh.Source, "capturedAtUnixMs": mesh.Captured, "truncated": mesh.Truncated}
+		if mesh.State == "ready" && time.Now().UnixMilli()-mesh.Captured <= 10000 && mesh.Captured <= time.Now().Add(time.Second).UnixMilli() {
+			for _, d := range mesh.Devices {
+				if d.Expires <= time.Now().UnixMilli() {
+					continue
+				}
+				devices = append(devices, map[string]any{"device": d.Selector, "address": d.Selector, "type": "mesh", "source": "authenticated-router-observation", "name": d.Name, "principal": d.Principal, "tenant": d.Tenant, "platform": d.Platform, "transport": d.Transport, "caps": d.Caps, "metric": d.Metric, "nextHopPrincipal": d.NextHop, "expiresAtUnixMs": d.Expires})
+			}
+		}
+	}
 	simulators, simulatorErr := s.listSimulatorDevices(ctx)
 	cloud := <-cloudResults
 	devices = append(devices, cloud.devices...)
 	devices = append(devices, simulators...)
 	out := map[string]any{}
+	if meshState != nil {
+		out["meshDiscovery"] = meshState
+	}
 	var warnings []map[string]any
 	if cloud.err != nil {
 		warning := map[string]any{
@@ -225,8 +247,15 @@ func (s *mcpServer) handleDeviceConnect(ctx context.Context, req mcpgo.CallToolR
 	if strings.TrimSpace(address) == "" {
 		return errResult(errCodeInvalidArgument, "device is required (legacy address is also accepted)"), nil
 	}
+	if inDeviceContainer() && !isLocalSelector(address) {
+		return errResultf(errCodeUnsupported, "inside a device container only the local device is reachable (the agent socket overrides %q); connect to %q", address, localDeviceSelector), nil
+	}
 	if err := s.ConnectTo(ctx, address); err != nil {
-		return errResultf(errCodeDeviceUnreachable, "connecting to %s: %s", address, err.Error()), nil
+		hint := ""
+		if errors.Is(err, certs.ErrExpectedDeviceIdentity) {
+			hint = "; for first-boot Wi-Fi setup of an unenrolled device, pass this selector as device to the Wi-Fi tools instead"
+		}
+		return errResultf(errCodeDeviceUnreachable, "connecting to %s: %s%s", address, err.Error(), hint), nil
 	}
 	return okText(fmt.Sprintf("connected to %s", address)), nil
 }
@@ -329,20 +358,6 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	return okResult(info), nil
 }
 
-func (s *mcpServer) handleDeviceSetDefault(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	address := stringParam(req, "address")
-	if address == "" {
-		return errResult(errCodeInvalidArgument, "address is required"), nil
-	}
-	// Change only this field of the config as it is on disk now. Saving the
-	// startup snapshot would undo any login, pin or default another wendy
-	// process wrote since this server started.
-	if err := config.Update(func(cfg *config.Config) (bool, error) {
-		cfg.DefaultDevice = address
-		return true, nil
-	}); err != nil {
-		return errResultf(errCodeInternal, "saving config: %s", err.Error()), nil
-	}
-	s.cfg.DefaultDevice = address
-	return okText(fmt.Sprintf("default device set to %s", address)), nil
+func (s *mcpServer) handleDeviceSetDefault(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return errResult(errCodeUnsupported, "Wendy no longer saves a default device; pass the device to device_connect or run instead"), nil
 }

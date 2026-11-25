@@ -466,7 +466,7 @@ for test_name in "${TESTS[@]}"; do
             case "$DEVICE_TYPE" in
                 dragonwing-iq-8275|dragonwing-iq-9075|arduino-uno-q) loopback_scope="video-audio" ;;
                 jetson-orin-nano|jetson-agx-orin|jetson-agx-orin-emmc|jetson-agx-thor) loopback_scope="video" ;;
-                raspberry-pi-3|raspberry-pi-4|raspberry-pi-5|generic-x86-64|vm-arm64|vm-x86-64|qemu-arm64)
+                raspberry-pi-3|raspberry-pi-4|raspberry-pi-5|generic-x86-64|vm-arm64|vm-x86-64)
                     skip_test "$test_name" "no loopback image contract for $DEVICE_TYPE"
                     continue
                     ;;

@@ -4,8 +4,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"math/big"
 	"net/netip"
 	"net/url"
@@ -38,7 +38,7 @@ func signRouteTestManifest(t *testing.T, m Manifest, chain [][]byte, key ed25519
 // a valid signature produced by a malicious enrolled origin.
 func rawRouteManifest(t *testing.T, m Manifest, device meshid.Device, key ed25519.PrivateKey) SignedManifest {
 	t.Helper()
-	body, err := json.Marshal(m)
+	body, err := netwire.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestRouteAuthorizationBindsOriginAndSequence(t *testing.T) {
 				forged.Signature[0] ^= 1
 			}
 			var err error
-			forged.Body, err = json.Marshal(body)
+			forged.Body, err = netwire.Marshal(body)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,89 +156,75 @@ func TestRouteAuthorizationBindsOriginAndSequence(t *testing.T) {
 }
 
 func TestRouteAuthorizationLeaseReplayAndClockRollback(t *testing.T) {
-	d, chain, key, device, now := directoryFixture(t)
+	d, chain, key, device, now, clock := monotonicDirectoryFixture(t)
 	m := routeManifest(device, now)
 	w := signRouteTestManifest(t, m, chain, key, now)
 	if _, err := d.Accept(w, now); err != nil {
 		t.Fatal(err)
 	}
-	if changed, err := d.Accept(w, now.Add(50*time.Second)); err != nil || changed {
-		t.Fatalf("duplicate: %v %v", changed, err)
+	clock.advance(50 * time.Second)
+	if changed, err := d.Accept(w, now.Add(-598*time.Second)); err != nil || changed {
+		t.Fatal(changed, err)
 	}
-	if len(d.RouteAuthorizations(now.Add(time.Minute))) != 0 || len(d.Records(now.Add(time.Minute))) != 0 {
-		t.Fatal("duplicate delivery extended the signed lease")
+	clock.advance(10 * time.Second)
+	d.Sweep(now)
+	if len(d.RouteAuthorizations(now)) != 0 || len(d.Records(now)) != 0 || len(d.entries) != 0 {
+		t.Fatal("duplicate or wall rollback extended local lease")
 	}
-	// Observed expiration is permanent for this revision, even if the wall clock
-	// subsequently moves backwards or a duplicate arrives under the old time.
-	if _, err := d.Accept(w, now.Add(30*time.Second)); !errors.Is(err, ErrExpiredManifest) {
-		t.Fatalf("expired replay after rollback: %v", err)
-	}
-	if len(d.RouteAuthorizations(now.Add(30*time.Second))) != 0 || len(d.Snapshot(now.Add(30*time.Second))) != 0 {
-		t.Fatal("clock rollback resurrected expired authorization")
+	if _, err := d.Accept(w, now); !errors.Is(err, ErrStaleManifest) {
+		t.Fatal("expired same-body replay renewed route", err)
 	}
 }
 
-func TestRouteAuthorizationClockRollbackAfterPruning(t *testing.T) {
-	d, chain, key, device, now := directoryFixture(t)
+func TestRouteAuthorizationWatermarkExpiryAllowsFirstLearning(t *testing.T) {
+	d, chain, key, device, now, clock := monotonicDirectoryFixture(t)
 	m := routeManifest(device, now)
 	w := signRouteTestManifest(t, m, chain, key, now)
 	if _, err := d.Accept(w, now); err != nil {
 		t.Fatal(err)
 	}
-	// Accept another origin after the first lease and its replay tombstone have
-	// both expired, so neither the entry's expiry latch nor revision can help.
-	later := now.Add(MaxLease + 6*time.Second)
-	other := testDevice(t, testPrincipal(testTenantUUID, testDeviceBID))
-	otherChain, otherKey := addRouteTestIdentity(t, d, other, later)
-	otherManifest := routeManifest(other, later)
-	if _, err := d.Accept(signRouteTestManifest(t, otherManifest, otherChain, otherKey, later), later); err != nil {
-		t.Fatal(err)
+	clock.advance(10 * time.Minute)
+	d.Sweep(now)
+	if len(d.entries) != 0 || len(d.history) != 0 {
+		t.Fatal("local retention did not release payload and metadata")
 	}
-	if _, ok := d.entries[device.Principal()]; ok {
-		t.Fatal("test did not prune the expired entry")
+	// Once the receiver intentionally forgets the compact watermark, an old
+	// still-authenticated record may establish one new local duration.
+	if changed, err := d.Accept(w, now); err != nil || !changed {
+		t.Fatal(changed, err)
 	}
-	if _, ok := d.history[device.Principal()]; ok {
-		t.Fatal("test did not prune the expired receipt")
-	}
-	// The signed proof appears unexpired under the rolled-back clock, but the
-	// process has already observed wall time beyond its signed expiration.
-	rolledBack := now.Add(30 * time.Second)
-	if _, err := d.Accept(w, rolledBack); !errors.Is(err, ErrExpiredManifest) {
-		t.Fatalf("pruned proof revived after clock rollback: %v", err)
-	}
-	if d.RouteAuthorizations(rolledBack)[*m.Route] {
-		t.Fatal("pruned proof authorized routing after clock rollback")
+	if !d.RouteAuthorizations(now)[*m.Route] {
+		t.Fatal("first-learned exact route missing")
 	}
 }
 
 func TestRouteAuthorizationNewLeaseAfterClockRollback(t *testing.T) {
-	d, chain, key, device, now := directoryFixture(t)
+	d, chain, key, device, now, clock := monotonicDirectoryFixture(t)
 	m := routeManifest(device, now)
 	m.Expires = now.Add(2 * time.Minute).UnixMilli()
 	w := signRouteTestManifest(t, m, chain, key, now)
-	d.RouteAuthorizations(now.Add(90 * time.Second))
-	rolledBack := now.Add(30 * time.Second)
+	clock.advance(90 * time.Second)
+	rolledBack := now.Add(-598 * time.Second)
 	if _, err := d.Accept(w, rolledBack); err != nil {
 		t.Fatal(err)
 	}
-	if receipt := d.history[device.Principal()]; receipt.Until.Before(d.wallHighWater.Add(MaxLease + 5*time.Second)) {
-		t.Fatal("clock rollback shortened durable replay protection")
+	if !d.history[device.Key()].Until.Equal(clock.now.Add(20 * time.Minute)) {
+		t.Fatal("watermark is not ten receive-local durations")
 	}
+	clock.advance(119 * time.Second)
 	if !d.RouteAuthorizations(rolledBack)[*m.Route] {
-		t.Fatal("proof with remaining lifetime was rejected")
+		t.Fatal("wallclock shortened receive-local lease")
 	}
-	if len(d.RouteAuthorizations(rolledBack.Add(30*time.Second))) != 0 {
-		t.Fatal("clock rollback extended a newly admitted lease beyond its known remaining lifetime")
+	clock.advance(time.Second)
+	if len(d.RouteAuthorizations(rolledBack)) != 0 {
+		t.Fatal("local two-minute lease did not expire")
 	}
 }
 
 func TestRouteAuthorizationRestartAndWithdrawal(t *testing.T) {
 	d, chain, key, device, now := directoryFixture(t)
-	var saved []DirectoryReceipt
-	persist := func(receipts []DirectoryReceipt) error {
-		saved = append([]DirectoryReceipt(nil), receipts...)
-		return nil
-	}
+	saves := 0
+	persist := func([]DirectoryReceipt) error { saves++; return nil }
 	if err := d.SetPersistence(nil, persist, now); err != nil {
 		t.Fatal(err)
 	}
@@ -247,42 +233,32 @@ func TestRouteAuthorizationRestartAndWithdrawal(t *testing.T) {
 	if _, err := d.Accept(w, now); err != nil {
 		t.Fatal(err)
 	}
-	until := saved[0].Until
+	m.Revision++
+	m.Withdraw = true
+	if _, err := d.Accept(signRouteTestManifest(t, m, chain, key, now), now); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.RouteAuthorizations(now)) != 0 {
+		t.Fatal("withdrawn route remained authorized")
+	}
+	if _, err := d.Accept(w, now); !errors.Is(err, ErrStaleManifest) {
+		t.Fatal("in-process withdrawal floor lost", err)
+	}
 	restored, err := NewDirectory(testTenant(t), 10, d.cache)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := restored.SetPersistence(saved, persist, now.Add(30*time.Second)); err != nil {
+	if err := restored.SetPersistence(nil, persist, now); err != nil {
 		t.Fatal(err)
 	}
-	if len(restored.RouteAuthorizations(now.Add(30*time.Second))) != 0 {
-		t.Fatal("receipt alone restored a route")
+	if len(restored.RouteAuthorizations(now)) != 0 {
+		t.Fatal("restart restored route without network evidence")
 	}
-	if _, err := restored.Accept(w, now.Add(30*time.Second)); err != nil {
-		t.Fatal(err)
+	if changed, err := restored.Accept(w, now); err != nil || !changed {
+		t.Fatal("fresh process did not first-learn one local TTL", changed, err)
 	}
-	if !saved[0].Until.Equal(until) || len(restored.RouteAuthorizations(now.Add(time.Minute))) != 0 {
-		t.Fatal("restart replay extended receipt or authorization")
-	}
-	m.Revision++
-	m.Withdraw = true
-	m.Expires = now.Add(40 * time.Second).UnixMilli()
-	withdrawal := signRouteTestManifest(t, m, chain, key, now)
-	if _, err := d.Accept(withdrawal, now.Add(30*time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if len(d.RouteAuthorizations(now.Add(30*time.Second))) != 0 {
-		t.Fatal("withdrawn route remained authorized")
-	}
-	restored, err = NewDirectory(testTenant(t), 10, d.cache)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := restored.SetPersistence(saved, persist, now.Add(45*time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := restored.Accept(w, now.Add(45*time.Second)); !errors.Is(err, ErrStaleManifest) {
-		t.Fatalf("restart forgot withdrawal: %v", err)
+	if saves != 0 {
+		t.Fatal("foreign receive-local deadline written to legacy persistent state")
 	}
 }
 

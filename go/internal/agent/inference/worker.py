@@ -241,11 +241,12 @@ def load_pinned(config, load):
 class Detector:
     def __init__(self, config):
         import torch
-        from transformers import AutoConfig, AutoImageProcessor, AutoModelForObjectDetection
+        from transformers import AutoConfig, AutoImageProcessor, AutoModelForObjectDetection, AutoModelForImageClassification
 
         self.torch = torch
         self.threshold = config["threshold"]
         self.labels = set(config["labels"])
+        self.classification = config.get("task") == "image-classification"
 
         def load(local_files_only):
             options = {"revision": config["revision"], "trust_remote_code": False,
@@ -254,14 +255,15 @@ class Detector:
             model_config = AutoConfig.from_pretrained(config["model"], **options)
             if hasattr(model_config, "use_pretrained_backbone"):
                 model_config.use_pretrained_backbone = False
-            model = AutoModelForObjectDetection.from_pretrained(
+            factory = AutoModelForImageClassification if self.classification else AutoModelForObjectDetection
+            model = factory.from_pretrained(
                 config["model"], config=model_config, use_safetensors=True, **options).eval()
             return processor, model
 
         self.processor, self.model = load_pinned(config, load)
         if not self.labels.issubset(set(self.model.config.id2label.values())):
             raise ValueError("inference.labels contains labels absent from the model")
-        if not hasattr(self.processor, "post_process_object_detection"):
+        if not self.classification and not hasattr(self.processor, "post_process_object_detection"):
             raise ValueError("model processor does not support object detection")
         # The agent offers this backend the CPU alone (inference/accelerator.go).
         import accelerator
@@ -276,11 +278,23 @@ class Detector:
         with self.torch.inference_mode():
             outputs = self.model(**inputs)
         self.provenance["infer_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        if self.classification:
+            logits = outputs.logits[0]
+            scores = logits.sigmoid() if self.model.config.problem_type == "multi_label_classification" else logits.softmax(dim=-1)
+            return classification_predictions(scores.tolist(), self.model.config.id2label, self.labels, self.threshold)
         result = self.processor.post_process_object_detection(
             outputs, target_sizes=[(image.height, image.width)], threshold=self.threshold)[0]
         return [{"label": self.model.config.id2label[int(label)], "score": float(score), "box": box.tolist()}
                 for label, score, box in zip(result["labels"], result["scores"], result["boxes"])
                 if self.model.config.id2label[int(label)] in self.labels][:100]
+
+
+def classification_predictions(scores, id2label, selected, threshold):
+    # Classification describes the whole image. No object box is invented.
+    return sorted([{"label": id2label[index], "score": float(score)}
+                   for index, score in enumerate(scores)
+                   if id2label.get(index) in selected and threshold <= score <= 1],
+                  key=lambda item: -item["score"])[:100]
 
 
 class YOLODetector:
@@ -444,7 +458,45 @@ def yolo_detections(output, names, labels, threshold, scale, dx, dy, width, heig
     return detections
 
 
+# How far back the scoring loop's frames per second look.
+THROUGHPUT_SECONDS = 30
+
+
+class Throughput:
+    """What the scoring loop achieved, timed around the detector, so that any
+    detector has it: frames per second over the recent frames, how long a
+    frame took to score, and how many were scored."""
+
+    def __init__(self):
+        # When each frame finished, and the milliseconds it took.
+        self.scored = deque(maxlen=512)
+        self.count = 0
+
+    def record(self, milliseconds, now=None):
+        self.scored.append((time.monotonic() if now is None else now, milliseconds))
+        self.count += 1
+
+    def stats(self, now=None):
+        now = time.monotonic() if now is None else now
+        # The last THROUGHPUT_SECONDS, or three frames of a model slower than
+        # that, which would otherwise have one frame in sight and no rate.
+        window = THROUGHPUT_SECONDS
+        if len(self.scored) > 1:
+            window = max(window, 3 * (self.scored[-1][0] - self.scored[-2][0]))
+        recent = [(finished, milliseconds) for finished, milliseconds in self.scored if now - finished <= window]
+        span = recent[-1][0] - recent[0][0] if len(recent) > 1 else 0
+        latencies = sorted(milliseconds for _, milliseconds in recent)
+
+        def percentile(fraction):
+            if not latencies:
+                return 0.0
+            return round(latencies[min(len(latencies) - 1, int(fraction * len(latencies)))], 2)
+        return {"fps": round((len(recent) - 1) / span, 3) if span > 0 else 0.0,
+                "infer_ms_p50": percentile(0.5), "infer_ms_p95": percentile(0.95), "frames_scored": self.count}
+
+
 def run(config, detector):
+    import accelerator
     lock = threading.Lock()
     decoders = {}
     stopped = threading.Event()
@@ -496,14 +548,26 @@ def run(config, detector):
 
     threading.Thread(target=receive, daemon=True).start()
     recent = deque(maxlen=FAILURE_WINDOW)
+    # The YOLO detector's accelerator reports its engine's throughput
+    # (accelerator.py). A detector without one reported none, so a model
+    # slower than its rate was silent about it. The loop measures and reports
+    # for such a detector, in the accelerator's message and as often, so that
+    # one detector never has two sources of the same figures.
+    throughput = Throughput() if getattr(detector, "accelerator", None) is None else None
+    report_at = time.monotonic() + accelerator.STATUS_SECONDS
     try:
         while not stopped.is_set():
+            if throughput is not None and time.monotonic() >= report_at:
+                report_at = time.monotonic() + accelerator.STATUS_SECONDS
+                emit({"type": "accelerator", "accelerator": getattr(detector, "accelerator_status", None),
+                      "stats": throughput.stats()})
             with lock:
                 current = list(decoders.values())
             for decoder in current:
                 frame = decoder.take(time.monotonic(), 1 / config["rate"])
                 if frame is None:
                     continue
+                started = time.perf_counter()
                 try:
                     detections = detector(frame)
                 except Exception as exc:
@@ -520,6 +584,8 @@ def run(config, detector):
                 if detections is None:
                     # No engine is serving yet. Not a failure, and no result.
                     continue
+                if throughput is not None:
+                    throughput.record((time.perf_counter() - started) * 1000)
                 recent.append(True)
                 with lock:
                     # A source reset while inference ran invalidates the result.

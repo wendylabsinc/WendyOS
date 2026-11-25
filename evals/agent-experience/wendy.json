@@ -1,0 +1,15 @@
+{
+  "appId": "sh.wendy.evals.model-tool-report",
+  "version": "1.0.0",
+  "platform": "linux",
+  "restartPolicy": "unless-stopped",
+  "entitlements": [
+    { "type": "gpu" },
+    { "type": "admin" },
+    { "type": "build" },
+    { "type": "network", "mode": "host" },
+    { "type": "persist", "name": "model-tool-report-models", "path": "/models" },
+    { "type": "persist", "name": "model-tool-report-results", "path": "/results" },
+    { "type": "persist", "name": "model-tool-report-buildkit", "path": "/var/lib/buildkit" }
+  ]
+}

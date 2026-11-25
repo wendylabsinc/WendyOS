@@ -4,9 +4,12 @@ description: Explore the TypeScript source, Dockerfile, and Wendy app configurat
 language: typescript
 ---
 
-First [build and run the server](/docs/guides/tutorials/typescript/simple-web-server). The template owns the exact generated file contents; the examples below explain their roles.
+Use the project you deployed in [Deploy your first app](/docs/getting-started/app)
+or [Hello world in TypeScript](/docs/guides/tutorials/typescript/hello-world).
+If you have not created one yet, start there. The examples below explain its
+files. If you chose a different app name or port, your files show those values.
 
-## Code Breakdown
+## Code breakdown
 
 <Steps>
   <Step>
@@ -16,7 +19,7 @@ First [build and run the server](/docs/guides/tutorials/typescript/simple-web-se
 
     ```json
     {
-      "name": "simple-server",
+      "name": "hello-wendy",
       "version": "0.1.0",
       "type": "module",
       "scripts": {
@@ -66,7 +69,7 @@ First [build and run the server](/docs/guides/tutorials/typescript/simple-web-se
   </Step>
 
   <Step>
-    ### Generated Web Server
+    ### Generated web server
 
     The generated `src/index.ts` contains the server logic:
 
@@ -74,7 +77,7 @@ First [build and run the server](/docs/guides/tutorials/typescript/simple-web-se
     import express, { Request, Response } from "express";
 
     const app = express();
-    const port = 3000;
+    const port = 5001;
     const hostname = process.env.WENDY_HOSTNAME || "0.0.0.0";
 
     app.use(express.json());
@@ -147,7 +150,7 @@ First [build and run the server](/docs/guides/tutorials/typescript/simple-web-se
     COPY --from=builder /app/dist ./dist
     COPY --from=builder /app/node_modules ./node_modules
 
-    EXPOSE 3000
+    EXPOSE 5001
 
     CMD ["node", "dist/index.js"]
     ```
@@ -160,7 +163,7 @@ First [build and run the server](/docs/guides/tutorials/typescript/simple-web-se
 
     ```json
     {
-        "appId": "simple-server",
+        "appId": "hello-wendy",
         "platform": "linux",
         "version": "0.1.0",
         "entitlements": [
@@ -169,15 +172,19 @@ First [build and run the server](/docs/guides/tutorials/typescript/simple-web-se
             }
         ],
         "readiness": {
-            "tcpSocket": { "port": 3000 },
+            "tcpSocket": { "port": 5001 },
             "timeoutSeconds": 30
         },
         "hooks": {
             "postStart": {
-                "cli": "wendy utils open-browser http://${WENDY_HOSTNAME}:3000"
+                "cli": "wendy utils open-browser http://${WENDY_HOSTNAME}:5001"
             }
         }
     }
     ```
   </Step>
 </Steps>
+
+## Next steps
+
+Continue with [Full-stack web app](/docs/guides/tutorials/typescript/web-app) to serve a React frontend from an Express backend.

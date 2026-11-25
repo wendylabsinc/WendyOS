@@ -21,6 +21,7 @@ var outcomeCases = []struct {
 	{"auth_required", 3, false},
 	{"auth_session_ambiguous", 3, false},
 	{"auth_certificate_failed", 3, false},
+	{"auth_login_expired", 3, false},
 	{"device_auth_required", 3, false},
 	{"registry_auth", 3, false},
 	{"grpc_unauthenticated", 3, false},

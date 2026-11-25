@@ -230,6 +230,19 @@ func TestProxiedResultSizerMatchesWireJSON(t *testing.T) {
 		},
 	}
 
+	// The SDK preserves raw structuredContent and adds modern protocol fields.
+	for _, wire := range []string{
+		`{"content":[],"structuredContent": { "html": "<tag>&", "number": 1234567890123456789, "escaped": "\\\"" }}`,
+		"{\"content\":[],\"structuredContent\":{\"text\":\"\u2028\u2029\"}}",
+		`{"content":[{"type":"tool_result","toolUseId":"nested","content":[],"structuredContent": {"html":"<nested>"}}],"resultType":"tools/call","requestState":"resume-state"}`,
+	} {
+		var result mcpgo.CallToolResult
+		if err := json.Unmarshal([]byte(wire), &result); err != nil {
+			t.Fatal(err)
+		}
+		results = append(results, &result)
+	}
+
 	for i, result := range results {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			b, err := json.Marshal(result)
@@ -237,7 +250,9 @@ func TestProxiedResultSizerMatchesWireJSON(t *testing.T) {
 				t.Fatalf("marshal result: %v", err)
 			}
 			if proxiedResultExceedsMaxBytes(result, len(b)) {
-				t.Fatalf("exact-size result reported over limit: size=%d", len(b))
+				sizer := boundedJSONSizer{maxBytes: len(b)}
+				err := sizer.callToolResult(result)
+				t.Fatalf("exact-size result reported over limit: size=%d, measured=%d, error=%v", len(b), sizer.bytes, err)
 			}
 			if !proxiedResultExceedsMaxBytes(result, len(b)-1) {
 				t.Fatalf("result not reported over one-byte-short limit: size=%d", len(b))

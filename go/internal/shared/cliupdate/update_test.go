@@ -2,13 +2,115 @@ package cliupdate
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// brewInfoWendy is the verbatim output of brew info --json=v2 wendy from
+// Homebrew 7.0.11, for a wendy keg installed from wendylabsinc/tap.
+//
+//go:embed testdata/brew-info-wendy.json
+var brewInfoWendy []byte
+
+// fakeBrew answers brew info --json=v2 the way Homebrew does: a bare name
+// reports the tap its installed keg came from, a tap-qualified name reports
+// the tap it names, and --installed ignores names and prints every installed
+// formula. Output goes through the same capture buffer as a real subprocess.
+type fakeBrew struct {
+	installed map[string]string // formula -> tap its keg was installed from
+	kegs      int               // installed versions of each formula, kept when cleanup is off
+}
+
+// newFakeBrew installs name from tap among a typical set of 276 core formulae.
+func newFakeBrew(name, tap string) *fakeBrew {
+	b := &fakeBrew{installed: map[string]string{name: tap}, kegs: 1}
+	for i := range 276 {
+		b.installed[fmt.Sprintf("core-formula-%03d", i)] = "homebrew/core"
+	}
+	return b
+}
+
+func (b *fakeBrew) output(_ context.Context, _ string, args ...string) ([]byte, error) {
+	data, err := b.info(args...)
+	if err != nil {
+		return nil, err
+	}
+	var out boundedOutput
+	_, _ = out.Write(data)
+	return out.Bytes(), nil
+}
+
+func (b *fakeBrew) info(args ...string) ([]byte, error) {
+	if len(args) < 2 || args[0] != "info" || args[1] != "--json=v2" {
+		return nil, fmt.Errorf("unexpected brew %v", args)
+	}
+	var names []string
+	if slices.Contains(args, "--installed") {
+		names = slices.Sorted(maps.Keys(b.installed))
+	} else {
+		names = args[2:]
+	}
+	formulae := []map[string]any{}
+	for _, arg := range names {
+		name, tap := arg, b.installed[arg]
+		if i := strings.LastIndex(arg, "/"); i >= 0 {
+			name, tap = arg[i+1:], arg[:i]
+		}
+		if tap == "" { // brew: No available formula
+			return nil, errors.New("exit status 1")
+		}
+		formulae = append(formulae, b.formula(name, tap))
+	}
+	return json.MarshalIndent(map[string]any{"formulae": formulae, "casks": []any{}}, "", "  ")
+}
+
+func (b *fakeBrew) formula(name, tap string) map[string]any {
+	var fixture struct{ Formulae []map[string]any }
+	if err := json.Unmarshal(brewInfoWendy, &fixture); err != nil || len(fixture.Formulae) != 1 {
+		panic(fmt.Sprintf("bad brew fixture: %v", err))
+	}
+	f := fixture.Formulae[0]
+	f["name"], f["tap"], f["full_name"] = name, tap, tap+"/"+name
+	if tap == "homebrew/core" {
+		f["full_name"] = name
+	}
+	keg := f["installed"].([]any)[0].(map[string]any)
+	kegs := []any{}
+	if _, ok := b.installed[name]; ok {
+		for i := range b.kegs {
+			k := maps.Clone(keg)
+			if i > 0 {
+				k["version"] = fmt.Sprintf("2026.01.01-%06d", i)
+			}
+			kegs = append(kegs, k)
+		}
+	}
+	f["installed"] = kegs
+	return f
+}
+
+func TestFakeBrewMatchesHomebrew(t *testing.T) {
+	brew := newFakeBrew("wendy", "wendylabsinc/tap")
+	got, err := brew.info("info", "--json=v2", "wendy")
+	var gotJSON, wantJSON any
+	if err != nil || json.Unmarshal(got, &gotJSON) != nil || json.Unmarshal(brewInfoWendy, &wantJSON) != nil || !reflect.DeepEqual(gotJSON, wantJSON) {
+		t.Fatalf("fake brew differs from Homebrew: err=%v\n%s", err, got)
+	}
+	// Homebrew 7.0.11 printed 277 formulae (1.4 MB) here on a developer Mac.
+	all, err := brew.info("info", "--json=v2", "--installed", "wendy")
+	var installed struct{ Formulae []struct{ Name string } }
+	if err != nil || json.Unmarshal(all, &installed) != nil || len(installed.Formulae) != 277 || len(all) < 1<<20 {
+		t.Fatalf("--installed must list every installed formula: err=%v formulae=%d bytes=%d", err, len(installed.Formulae), len(all))
+	}
+}
 
 func fakeDependencies(path string) dependencies {
 	return dependencies{goos: "darwin", geteuid: func() int { return 0 }, interactive: func() bool { return false }, ownsMSIExecutable: func(string) bool { return false }, executable: func() (string, error) { return path, nil },
@@ -61,9 +163,7 @@ func TestDetectPackageMethod(t *testing.T) {
 			d := fakeDependencies(tt.path)
 			d.goos = tt.goos
 			if tt.method == "brew" {
-				d.output = func(_ context.Context, _ string, args ...string) ([]byte, error) {
-					return []byte(fmt.Sprintf(`{"formulae":[{"name":%q,"tap":"wendylabsinc/tap"}]}`, args[len(args)-1])), nil
-				}
+				d.output = newFakeBrew(strings.TrimPrefix(tt.command, "wendylabsinc/tap/"), "wendylabsinc/tap").output
 			}
 			p, err := detect(context.Background(), d)
 			if err != nil || p.Method != tt.method || p.Channel != tt.channel || p.Supported != tt.supported {
@@ -177,12 +277,24 @@ func TestDetectShadowedRunningExecutable(t *testing.T) {
 }
 
 func TestDetectDoesNotSwitchHomebrewTap(t *testing.T) {
+	// A tap-qualified query would report wendylabsinc/tap here and pass.
 	d := fakeDependencies("/opt/homebrew/Cellar/wendy/2026.09.16/bin/wendy")
-	d.output = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(`{"formulae":[{"name":"wendy","tap":"another/vendor"}]}`), nil
-	}
+	d.output = newFakeBrew("wendy", "another/vendor").output
 	p, err := detect(context.Background(), d)
 	if err != nil || p.Supported || len(p.Commands) != 0 || !strings.Contains(p.Guidance, "ownership") {
+		t.Fatalf("plan=%+v err=%v", p, err)
+	}
+}
+
+func TestDetectHomebrewFormulaWithManyKegs(t *testing.T) {
+	// With cleanup off, every upgrade leaves a keg in the formula's JSON;
+	// 200 kegs is about 180 KB.
+	brew := newFakeBrew("wendy-nightly", "wendylabsinc/tap")
+	brew.kegs = 200
+	d := fakeDependencies("/opt/homebrew/Cellar/wendy-nightly/2026.10.06/bin/wendy")
+	d.output = brew.output
+	p, err := detect(context.Background(), d)
+	if err != nil || !p.Supported || p.Channel != "nightly" {
 		t.Fatalf("plan=%+v err=%v", p, err)
 	}
 }
@@ -195,9 +307,7 @@ func TestDetectResolvesHomebrewSymlink(t *testing.T) {
 		}
 		return path, nil
 	}
-	d.output = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(`{"formulae":[{"name":"wendy","tap":"wendylabsinc/tap"}]}`), nil
-	}
+	d.output = newFakeBrew("wendy", "wendylabsinc/tap").output
 	p, err := detect(context.Background(), d)
 	if err != nil || !p.Supported || p.Method != "brew" {
 		t.Fatalf("plan=%+v err=%v", p, err)

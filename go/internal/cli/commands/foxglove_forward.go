@@ -17,21 +17,27 @@ import (
 // already selected agent connection. Non-TTY exec preserves WebSocket bytes
 // and keeps socat's diagnostics separate from the connection's data.
 func openFoxgloveConnection(ctx context.Context, client agentpb.WendyContainerServiceClient) (net.Conn, error) {
+	return openContainerConnection(ctx, client, foxgloveAppID, []string{"socat", "STDIO", "TCP:127.0.0.1:8765"}, "Foxglove relay")
+}
+
+// openContainerConnection adapts non-TTY exec stdin/stdout to a byte stream.
+// Callers supply a fixed command; stderr never enters the forwarded protocol.
+func openContainerConnection(ctx context.Context, client agentpb.WendyContainerServiceClient, app string, command []string, label string) (net.Conn, error) {
 	execCtx, cancel := context.WithCancel(ctx)
 	stream, err := client.ExecContainer(execCtx)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("opening Foxglove relay: %w", err)
+		return nil, fmt.Errorf("opening %s: %w", label, err)
 	}
 	if err := stream.Send(&agentpb.ExecContainerRequest{
 		RequestType: &agentpb.ExecContainerRequest_Start{Start: &agentpb.ExecContainerRequest_ExecStart{
-			AppName: foxgloveAppID,
-			Command: []string{"socat", "STDIO", "TCP:127.0.0.1:8765"},
+			AppName: app,
+			Command: command,
 			Tty:     false,
 		}},
 	}); err != nil {
 		cancel()
-		return nil, fmt.Errorf("starting Foxglove relay: %w", err)
+		return nil, fmt.Errorf("starting %s: %w", label, err)
 	}
 
 	// Only the receive pump accesses stderr. Retain a bounded tail so a failed
@@ -40,9 +46,9 @@ func openFoxgloveConnection(ctx context.Context, client agentpb.WendyContainerSe
 	var stderr []byte
 	relayError := func(err error) error {
 		if detail := strings.TrimSpace(string(stderr)); detail != "" {
-			return fmt.Errorf("Foxglove relay: %w: %s", err, detail)
+			return fmt.Errorf("%s: %w: %s", label, err, detail)
 		}
-		return fmt.Errorf("Foxglove relay: %w", err)
+		return fmt.Errorf("%s: %w", label, err)
 	}
 	tunnel := pipeBrokerTunnel(func() ([]byte, bool, error) {
 		for {

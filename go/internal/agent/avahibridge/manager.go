@@ -79,6 +79,9 @@ func missingBinaries() []string {
 
 // StateDir returns the host state directory for a container.
 func (m *Manager) stateDir(containerName string) string {
+	if dir, ok := m.restoredDirs.Load(containerName); ok {
+		return dir.(string)
+	}
 	return filepath.Join(m.baseDir, stateKey(containerName))
 }
 
@@ -99,16 +102,54 @@ func (m *Manager) proxyDir(containerName string) string {
 	return filepath.Join(m.stateDir(containerName), "proxy")
 }
 
-// ProxySocketDir returns the directory this manager's Prepare will provide.
-// It does not create the directory or start a private bus. Call Prepare before
-// using the directory as a container mount.
+// ProxySocketDir plans the bounded directory for a new container. A recovered
+// container may still use its persisted legacy directory until Stop; replacing
+// it must plan the current path before retiring the old stack. When replacing,
+// call Stop before Prepare; preparation must precede the new container mount.
 func (m *Manager) ProxySocketDir(containerName string) string {
-	return m.proxyDir(containerName)
+	return filepath.Join(m.baseDir, stateKey(containerName), "proxy")
 }
 
 // ProxySocketDir returns the production proxy directory to mount at /var/run/dbus.
 func ProxySocketDir(containerName string) string {
 	return filepath.Join(StateDir(containerName), "proxy")
+}
+
+// IsProxySocketDir recognizes this container's current or pre-hash persisted
+// mount. Existing tasks keep their directory inode across agent upgrades.
+func IsProxySocketDir(containerName, dir string) bool {
+	return isProxySocketDir(defaultBaseDir, containerName, dir)
+}
+
+func isProxySocketDir(base, containerName, dir string) bool {
+	dir = filepath.Clean(dir)
+	if dir == filepath.Join(base, stateKey(containerName), "proxy") {
+		return true
+	}
+	if containerName == "." || containerName == ".." || filepath.Base(containerName) != containerName {
+		return false
+	}
+	legacy := filepath.Join(base, containerName, "proxy")
+	// Recognition follows the persisted mount, not the socket limit of the
+	// agent host: Linux accepts legacy paths longer than macOS does. Prepare
+	// reports any actual socket creation failure for this platform.
+	return dir == legacy
+}
+
+// RestoreProxySocketDir adopts the exact persisted OCI mount before Prepare.
+// Newly created containers continue to use the bounded hashed path.
+func (m *Manager) RestoreProxySocketDir(containerName, dir string) error {
+	dir = filepath.Clean(dir)
+	if !isProxySocketDir(m.baseDir, containerName, dir) {
+		return fmt.Errorf("avahi persisted proxy does not match container %q", containerName)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.instances[containerName]; exists && m.proxyDir(containerName) != dir {
+		return fmt.Errorf("avahi proxy already active at another path for %q", containerName)
+	}
+	m.restoredDirs.Store(containerName, filepath.Dir(dir))
+	return nil
 }
 
 // busConfig admits the root agent/proxy and Avahi's service identity. Apps
@@ -181,12 +222,13 @@ type instance struct {
 
 // Manager tracks one avahi stack per container name.
 type Manager struct {
-	logger    *zap.Logger
-	mu        sync.Mutex
-	baseDir   string
-	instances map[string]*instance
-	ready     func(context.Context, string) error
-	identity  func() (int, int, error)
+	logger       *zap.Logger
+	mu           sync.Mutex
+	baseDir      string
+	instances    map[string]*instance
+	ready        func(context.Context, string) error
+	identity     func() (int, int, error)
+	restoredDirs sync.Map // container name -> exact persisted state directory
 }
 
 // NewManager creates an avahi bridge manager.
@@ -568,6 +610,7 @@ func (m *Manager) stopInstance(containerName string, inst *instance, preserveDir
 	}
 	if !preserveDirs {
 		_ = os.RemoveAll(m.stateDir(containerName))
+		m.restoredDirs.Delete(containerName)
 	}
 }
 
@@ -589,6 +632,12 @@ func (m *Manager) stop(containerName string, preserveDirs bool) error {
 	m.mu.Lock()
 	inst, ok := m.instances[containerName]
 	if !ok {
+		// Failed preparation and preserving cleanup can leave an adopted path
+		// without an instance. An explicit stop still retires that adoption so
+		// a later replacement uses the new-container path.
+		if !preserveDirs {
+			m.restoredDirs.Delete(containerName)
+		}
 		m.mu.Unlock()
 		return nil
 	}

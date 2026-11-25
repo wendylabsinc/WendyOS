@@ -23,6 +23,8 @@ type teleopFixtureLink struct {
 	mu         sync.Mutex
 	calls      []string
 	failMove   bool
+	failStop   bool
+	failAvoid  bool
 	helloDelay time.Duration
 	messages   chan unitree.TopicMessage
 	video      chan unitree.VideoFrame
@@ -58,7 +60,28 @@ func (l *teleopFixtureLink) Move(ctx context.Context, f, s, y float64) error {
 	}
 	return nil
 }
-func (l *teleopFixtureLink) Stop(context.Context) error    { l.record("stop"); return nil }
+func (l *teleopFixtureLink) Stop(context.Context) error {
+	l.record("stop")
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.failStop {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+func (l *teleopFixtureLink) SetObstacleAvoidance(_ context.Context, enabled bool) error {
+	if enabled {
+		l.record("avoid-on")
+	} else {
+		l.record("avoid-off")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.failAvoid {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
 func (l *teleopFixtureLink) StandUp(context.Context) error { l.record("stand"); return nil }
 func (l *teleopFixtureLink) LieDown(context.Context) error { l.record("lie"); return nil }
 func (l *teleopFixtureLink) Hello(ctx context.Context) error {
@@ -309,5 +332,33 @@ func TestUnitreeRobotStreamRejectsBadRequests(t *testing.T) {
 		if status.Code(err) != tc.code {
 			t.Fatalf("%v: %v", tc.req, err)
 		}
+	}
+}
+
+func TestAvoidanceModeStopsFirst(t *testing.T) {
+	for _, fault := range []string{"none", "stop", "avoid"} {
+		t.Run(fault, func(t *testing.T) {
+			client, link, _ := teleopFixture(t, true, time.Second)
+			link.failStop = fault == "stop"
+			link.failAvoid = fault == "avoid"
+			_, err := client.Command(context.Background(), &pb.UnitreeCommandRequest{
+				Serial: "GO2TEST1", Command: pb.UnitreeCommand_UNITREE_COMMAND_SET_OBSTACLE_AVOIDANCE,
+				ObstacleAvoidanceEnabled: false,
+			})
+			if (err != nil) != (fault != "none") {
+				t.Fatalf("fault %s: %v", fault, err)
+			}
+			calls := link.log()
+			if len(calls) == 0 || calls[0] != "stop" {
+				t.Fatalf("did not stop first: %v", calls)
+			}
+			if fault == "stop" {
+				if len(calls) != 1 {
+					t.Fatalf("changed mode after failed stop: %v", calls)
+				}
+			} else if len(calls) != 2 || calls[1] != "avoid-off" {
+				t.Fatalf("wrong mode commands: %v", calls)
+			}
+		})
 	}
 }

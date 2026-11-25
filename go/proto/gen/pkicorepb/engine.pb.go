@@ -159,33 +159,47 @@ const (
 	// (tenant="system"); CA_ROLE_TENANT_CODE_SIGNING is tenant-tier.
 	CARole_CA_ROLE_TENANT_CODE_SIGNING CARole = 8 // "tenant_code_signing"
 	CARole_CA_ROLE_CODE_SIGNING_ACTIVE CARole = 9 // "code_signing_active"
+	// The tenant's P-256 Lite Operator Authority (lite-relay-v1 § Operator
+	// dual-key), signed by the tenant Intermediate. Never an operator trust anchor except on the Lite
+	// lane opt-in; consumers selecting CA_ROLE_TENANT_OPERATOR_AUTHORITY never
+	// see it.
+	CARole_CA_ROLE_TENANT_LITE_OPERATOR_AUTHORITY CARole = 10 // "tenant_lite_operator_authority"
+	// The tenant's P-256 Lite Device CA: a sibling of the Device Identity CA
+	// under the tenant Intermediate, issuing device-tier-c leaves. Tier-C
+	// callers receive its classical self-signed twin; consumers selecting
+	// CA_ROLE_TENANT_DEVICE_IDENTITY never see it.
+	CARole_CA_ROLE_TENANT_LITE_DEVICE_IDENTITY CARole = 11 // "tenant_lite_device_identity"
 )
 
 // Enum value maps for CARole.
 var (
 	CARole_name = map[int32]string{
-		0: "CA_ROLE_UNSPECIFIED",
-		1: "CA_ROLE_TENANT_INTERMEDIATE",
-		2: "CA_ROLE_TENANT_DEVICE_IDENTITY",
-		3: "CA_ROLE_TENANT_OPERATOR_AUTHORITY",
-		4: "CA_ROLE_ROOT",
-		5: "CA_ROLE_CUSTOMER_INTERMEDIATE",
-		6: "CA_ROLE_CODE_SIGNING_CA",
-		7: "CA_ROLE_TSA",
-		8: "CA_ROLE_TENANT_CODE_SIGNING",
-		9: "CA_ROLE_CODE_SIGNING_ACTIVE",
+		0:  "CA_ROLE_UNSPECIFIED",
+		1:  "CA_ROLE_TENANT_INTERMEDIATE",
+		2:  "CA_ROLE_TENANT_DEVICE_IDENTITY",
+		3:  "CA_ROLE_TENANT_OPERATOR_AUTHORITY",
+		4:  "CA_ROLE_ROOT",
+		5:  "CA_ROLE_CUSTOMER_INTERMEDIATE",
+		6:  "CA_ROLE_CODE_SIGNING_CA",
+		7:  "CA_ROLE_TSA",
+		8:  "CA_ROLE_TENANT_CODE_SIGNING",
+		9:  "CA_ROLE_CODE_SIGNING_ACTIVE",
+		10: "CA_ROLE_TENANT_LITE_OPERATOR_AUTHORITY",
+		11: "CA_ROLE_TENANT_LITE_DEVICE_IDENTITY",
 	}
 	CARole_value = map[string]int32{
-		"CA_ROLE_UNSPECIFIED":               0,
-		"CA_ROLE_TENANT_INTERMEDIATE":       1,
-		"CA_ROLE_TENANT_DEVICE_IDENTITY":    2,
-		"CA_ROLE_TENANT_OPERATOR_AUTHORITY": 3,
-		"CA_ROLE_ROOT":                      4,
-		"CA_ROLE_CUSTOMER_INTERMEDIATE":     5,
-		"CA_ROLE_CODE_SIGNING_CA":           6,
-		"CA_ROLE_TSA":                       7,
-		"CA_ROLE_TENANT_CODE_SIGNING":       8,
-		"CA_ROLE_CODE_SIGNING_ACTIVE":       9,
+		"CA_ROLE_UNSPECIFIED":                    0,
+		"CA_ROLE_TENANT_INTERMEDIATE":            1,
+		"CA_ROLE_TENANT_DEVICE_IDENTITY":         2,
+		"CA_ROLE_TENANT_OPERATOR_AUTHORITY":      3,
+		"CA_ROLE_ROOT":                           4,
+		"CA_ROLE_CUSTOMER_INTERMEDIATE":          5,
+		"CA_ROLE_CODE_SIGNING_CA":                6,
+		"CA_ROLE_TSA":                            7,
+		"CA_ROLE_TENANT_CODE_SIGNING":            8,
+		"CA_ROLE_CODE_SIGNING_ACTIVE":            9,
+		"CA_ROLE_TENANT_LITE_OPERATOR_AUTHORITY": 10,
+		"CA_ROLE_TENANT_LITE_DEVICE_IDENTITY":    11,
 	}
 )
 
@@ -344,9 +358,17 @@ type IssueCertificateRequest struct {
 	// W9: raw cloud-signed authorization grant (compact JWS, kind
 	// "cloud-grant+jws"). When present, the engine re-verifies it (D7) and mints
 	// an entitlement-bearing cert gated by the grant. Empty => ordinary issuance.
-	Grant         []byte `protobuf:"bytes,7,opt,name=grant,proto3" json:"grant,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Grant []byte `protobuf:"bytes,7,opt,name=grant,proto3" json:"grant,omitempty"`
+	// Optional, relay-for-issuance only: the serialized wendycloud.v2.SignedRequest
+	// the operator sent cloud for this grant (RequestEntitledCertificate), relayed
+	// verbatim; its JWS must carry the operator leaf in x5c. When present, pki-core's
+	// fabric verifies it against the tenant's Operator Authority CA and refuses unless
+	// signer SPIFFE == grant principal == CSR URI SAN, target.tenant == envelope
+	// tenant, body_sha256 matches, and the signed csr_pem is this CSR. Never
+	// forwarded to the engine.
+	OperatorSignedRequest []byte `protobuf:"bytes,8,opt,name=operator_signed_request,json=operatorSignedRequest,proto3" json:"operator_signed_request,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *IssueCertificateRequest) Reset() {
@@ -428,13 +450,25 @@ func (x *IssueCertificateRequest) GetGrant() []byte {
 	return nil
 }
 
+func (x *IssueCertificateRequest) GetOperatorSignedRequest() []byte {
+	if x != nil {
+		return x.OperatorSignedRequest
+	}
+	return nil
+}
+
 type IssueCertificateResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Certificate   []byte                 `protobuf:"bytes,1,opt,name=certificate,proto3" json:"certificate,omitempty"`                 // DER leaf
-	Chain         []byte                 `protobuf:"bytes,2,opt,name=chain,proto3" json:"chain,omitempty"`                             // DER intermediates (not root)
-	OcspStaple    []byte                 `protobuf:"bytes,3,opt,name=ocsp_staple,json=ocspStaple,proto3" json:"ocsp_staple,omitempty"` // pre-generated OCSP response for offline carry
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Certificate []byte                 `protobuf:"bytes,1,opt,name=certificate,proto3" json:"certificate,omitempty"`                 // DER leaf
+	Chain       []byte                 `protobuf:"bytes,2,opt,name=chain,proto3" json:"chain,omitempty"`                             // DER intermediates (not root)
+	OcspStaple  []byte                 `protobuf:"bytes,3,opt,name=ocsp_staple,json=ocspStaple,proto3" json:"ocsp_staple,omitempty"` // pre-generated OCSP response for offline carry
+	// DER of the tenant's Lite Operator Authority on a device-tier-c leaf of a
+	// non-system tenant (absent on a renewal that could not attach it); the
+	// EST/CSR/renew frontends relay it as the device's operator anchor
+	// (docs/lite-relay-v1.md § Operator dual-key, Anchor delivery).
+	LiteOperatorAuthority []byte `protobuf:"bytes,4,opt,name=lite_operator_authority,json=liteOperatorAuthority,proto3" json:"lite_operator_authority,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *IssueCertificateResponse) Reset() {
@@ -484,6 +518,13 @@ func (x *IssueCertificateResponse) GetChain() []byte {
 func (x *IssueCertificateResponse) GetOcspStaple() []byte {
 	if x != nil {
 		return x.OcspStaple
+	}
+	return nil
+}
+
+func (x *IssueCertificateResponse) GetLiteOperatorAuthority() []byte {
+	if x != nil {
+		return x.LiteOperatorAuthority
 	}
 	return nil
 }
@@ -1900,7 +1941,18 @@ func (x *GetAuditLogRequest) GetOrder() AuditLogOrder {
 // GetCACerts returns all active CA certificates for the authenticated tenant.
 // Tenant is taken from x-tenant-id gRPC metadata. Used by the EST cacerts endpoint.
 type GetCACertsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Empty preserves the tenant's normal chain. ECDSA_P256 returns only the
+	// classical self-signed twin of the tenant's Lite Device CA (same key and
+	// subject as the CA the tenant Intermediate signs) for Tier-C firmware
+	// without ML-DSA support; empty until an operator-signed token mint has
+	// created that CA.
+	ChainAlgorithm string `protobuf:"bytes,1,opt,name=chain_algorithm,json=chainAlgorithm,proto3" json:"chain_algorithm,omitempty"`
+	// With chain_algorithm ECDSA_P256 only: return instead, for ML-capable
+	// verifiers, the Lite Device CA as signed by the tenant Intermediate plus
+	// its ancestors below the platform Root (tenant Intermediate, Customer
+	// Intermediate); never the twin. Invalid without chain_algorithm.
+	FullChain     bool `protobuf:"varint,2,opt,name=full_chain,json=fullChain,proto3" json:"full_chain,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1933,6 +1985,20 @@ func (x *GetCACertsRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetCACertsRequest.ProtoReflect.Descriptor instead.
 func (*GetCACertsRequest) Descriptor() ([]byte, []int) {
 	return file_pkicore_v1_engine_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *GetCACertsRequest) GetChainAlgorithm() string {
+	if x != nil {
+		return x.ChainAlgorithm
+	}
+	return ""
+}
+
+func (x *GetCACertsRequest) GetFullChain() bool {
+	if x != nil {
+		return x.FullChain
+	}
+	return false
 }
 
 type GetCACertsResponse struct {
@@ -2054,8 +2120,10 @@ type VerifyEABSignatureResponse struct {
 	Profile             string                 `protobuf:"bytes,3,opt,name=profile,proto3" json:"profile,omitempty"`
 	AttestationRequired bool                   `protobuf:"varint,4,opt,name=attestation_required,json=attestationRequired,proto3" json:"attestation_required,omitempty"`
 	DeviceId            string                 `protobuf:"bytes,5,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Persist on the ACME account and carry in AuthContext on every finalize.
+	EnrollmentEpoch int64 `protobuf:"varint,6,opt,name=enrollment_epoch,json=enrollmentEpoch,proto3" json:"enrollment_epoch,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *VerifyEABSignatureResponse) Reset() {
@@ -2121,6 +2189,13 @@ func (x *VerifyEABSignatureResponse) GetDeviceId() string {
 		return x.DeviceId
 	}
 	return ""
+}
+
+func (x *VerifyEABSignatureResponse) GetEnrollmentEpoch() int64 {
+	if x != nil {
+		return x.EnrollmentEpoch
+	}
+	return 0
 }
 
 type SetTenantPolicyRequest struct {
@@ -3094,9 +3169,13 @@ type CreateEnrollmentTokenRequest struct {
 	// W18: originating enrollment-request jti; when set the engine enforces single-use of the signed request (empty on the admin path => no replay check).
 	SourceJti string `protobuf:"bytes,6,opt,name=source_jti,json=sourceJti,proto3" json:"source_jti,omitempty"`
 	// WDY-3541: optional display name; same rules as CreateEABKeyRequest.label.
-	Label         string `protobuf:"bytes,7,opt,name=label,proto3" json:"label,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Label string `protobuf:"bytes,7,opt,name=label,proto3" json:"label,omitempty"`
+	// Empty preserves ca_id. ECDSA_P256 selects the tenant's Lite Device CA
+	// (created here on first use, under the tenant Intermediate), permitted
+	// only for device-tier-c.
+	ChainAlgorithm string `protobuf:"bytes,8,opt,name=chain_algorithm,json=chainAlgorithm,proto3" json:"chain_algorithm,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CreateEnrollmentTokenRequest) Reset() {
@@ -3174,6 +3253,13 @@ func (x *CreateEnrollmentTokenRequest) GetSourceJti() string {
 func (x *CreateEnrollmentTokenRequest) GetLabel() string {
 	if x != nil {
 		return x.Label
+	}
+	return ""
+}
+
+func (x *CreateEnrollmentTokenRequest) GetChainAlgorithm() string {
+	if x != nil {
+		return x.ChainAlgorithm
 	}
 	return ""
 }
@@ -3586,8 +3672,15 @@ type IssueOperatorCertRequest struct {
 	// with issuance (first-seen-wins) against the dpop_replay cache. Empty =>
 	// no replay check (e.g. the admin/CLI path with no DPoP proof). dpop_exp is
 	// the proof's expiry (unix seconds), bounding the replay-cache row's TTL.
-	DpopJti       string `protobuf:"bytes,10,opt,name=dpop_jti,json=dpopJti,proto3" json:"dpop_jti,omitempty"`
-	DpopExp       int64  `protobuf:"varint,11,opt,name=dpop_exp,json=dpopExp,proto3" json:"dpop_exp,omitempty"`
+	DpopJti string `protobuf:"bytes,10,opt,name=dpop_jti,json=dpopJti,proto3" json:"dpop_jti,omitempty"`
+	DpopExp int64  `protobuf:"varint,11,opt,name=dpop_exp,json=dpopExp,proto3" json:"dpop_exp,omitempty"`
+	// Lite operator leaf (lite-relay-v1 § Operator dual-key): the token's
+	// cnf.jkt (RFC 7638 thumbprint of the session key), which the identity
+	// frontend verified as the DPoP proof key. Set only when the CSR key differs
+	// from it (a P-256 Lite CSR over an ML-DSA session); the engine then requires
+	// it to be the key of an active, unrevoked ML-DSA primary leaf of the same
+	// principal. Empty => CSR key == session key, as before.
+	SessionJkt    string `protobuf:"bytes,12,opt,name=session_jkt,json=sessionJkt,proto3" json:"session_jkt,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3698,6 +3791,13 @@ func (x *IssueOperatorCertRequest) GetDpopExp() int64 {
 		return x.DpopExp
 	}
 	return 0
+}
+
+func (x *IssueOperatorCertRequest) GetSessionJkt() string {
+	if x != nil {
+		return x.SessionJkt
+	}
+	return ""
 }
 
 type IssueOperatorCertResponse struct {
@@ -6544,6 +6644,8 @@ type CheckACMEAccountRequest struct {
 	Serial              []byte                 `protobuf:"bytes,3,opt,name=serial,proto3" json:"serial,omitempty"`                                                       // the account's latest issued leaf; empty before its first issuance
 	DeviceId            string                 `protobuf:"bytes,4,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`                                   // the account's device_id (EAB-bound); empty for non-device accounts
 	AttestationRequired bool                   `protobuf:"varint,5,opt,name=attestation_required,json=attestationRequired,proto3" json:"attestation_required,omitempty"` // the account re-attests every order, so expiry alone does not end its lineage
+	EnrollmentEpoch     int64                  `protobuf:"varint,6,opt,name=enrollment_epoch,json=enrollmentEpoch,proto3" json:"enrollment_epoch,omitempty"`             // EAB-bound generation, including before first issuance
+	EabKeyId            string                 `protobuf:"bytes,7,opt,name=eab_key_id,json=eabKeyId,proto3" json:"eab_key_id,omitempty"`                                 // the EAB key the account registered with; a leafless account rests on this key alone (empty: account predates the binding)
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -6611,6 +6713,20 @@ func (x *CheckACMEAccountRequest) GetAttestationRequired() bool {
 		return x.AttestationRequired
 	}
 	return false
+}
+
+func (x *CheckACMEAccountRequest) GetEnrollmentEpoch() int64 {
+	if x != nil {
+		return x.EnrollmentEpoch
+	}
+	return 0
+}
+
+func (x *CheckACMEAccountRequest) GetEabKeyId() string {
+	if x != nil {
+		return x.EabKeyId
+	}
+	return ""
 }
 
 type CheckACMEAccountResponse struct {
@@ -6877,17 +6993,21 @@ func (*RecordTenantDeletedResponse) Descriptor() ([]byte, []int) {
 }
 
 // RecordTenantLifecycleRequest carries the fact extracted from a verified
-// system-realm-signed tenant-disabled / tenant-enabled SET (WDY-3543). The raw
-// SET is never relayed, persisted or logged.
+// system-realm-signed tenant-disabled / tenant-enabled (WDY-3543) or
+// tenant-renamed (WDY-3876) SET. The raw SET is never relayed, persisted or
+// logged.
 type RecordTenantLifecycleRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                   // injected from gRPC metadata x-tenant-id (from the verified SET sub_id)
-	EventType     string                 `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`                // short form: "tenant-disabled" | "tenant-enabled"
-	SourceJti     string                 `protobuf:"bytes,3,opt,name=source_jti,json=sourceJti,proto3" json:"source_jti,omitempty"`                // the SET jti — idempotency key for the replay cache
-	SetExpUnix    int64                  `protobuf:"varint,4,opt,name=set_exp_unix,json=setExpUnix,proto3" json:"set_exp_unix,omitempty"`          // the SET exp (unix seconds) — bounds the replay-cache row TTL
-	EventTimeUnix int64                  `protobuf:"varint,5,opt,name=event_time_unix,json=eventTimeUnix,proto3" json:"event_time_unix,omitempty"` // the event's event_timestamp — orders disable/enable (strictly increasing per tenant; the fabric refuses one later than iat + skew)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	TenantId         string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                            // injected from gRPC metadata x-tenant-id (from the verified SET sub_id)
+	EventType        string                 `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`                         // short form: "tenant-disabled" | "tenant-enabled" | "tenant-renamed"
+	SourceJti        string                 `protobuf:"bytes,3,opt,name=source_jti,json=sourceJti,proto3" json:"source_jti,omitempty"`                         // the SET jti — idempotency key for the replay cache
+	SetExpUnix       int64                  `protobuf:"varint,4,opt,name=set_exp_unix,json=setExpUnix,proto3" json:"set_exp_unix,omitempty"`                   // the SET exp (unix seconds) — bounds the replay-cache row TTL
+	EventTimeUnix    int64                  `protobuf:"varint,5,opt,name=event_time_unix,json=eventTimeUnix,proto3" json:"event_time_unix,omitempty"`          // the event's event_timestamp — orders disable/enable, and separately renames (the fabric refuses one later than iat + skew)
+	OldSlug          string                 `protobuf:"bytes,6,opt,name=old_slug,json=oldSlug,proto3" json:"old_slug,omitempty"`                               // tenant-renamed only: the slug the realm was renamed away from
+	NewSlug          string                 `protobuf:"bytes,7,opt,name=new_slug,json=newSlug,proto3" json:"new_slug,omitempty"`                               // tenant-renamed only: the realm's slug after the rename
+	AliasExpiresUnix int64                  `protobuf:"varint,8,opt,name=alias_expires_unix,json=aliasExpiresUnix,proto3" json:"alias_expires_unix,omitempty"` // tenant-renamed only: until when old_slug still names this tenant (wendy-auth's alias grace)
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RecordTenantLifecycleRequest) Reset() {
@@ -6951,6 +7071,27 @@ func (x *RecordTenantLifecycleRequest) GetSetExpUnix() int64 {
 func (x *RecordTenantLifecycleRequest) GetEventTimeUnix() int64 {
 	if x != nil {
 		return x.EventTimeUnix
+	}
+	return 0
+}
+
+func (x *RecordTenantLifecycleRequest) GetOldSlug() string {
+	if x != nil {
+		return x.OldSlug
+	}
+	return ""
+}
+
+func (x *RecordTenantLifecycleRequest) GetNewSlug() string {
+	if x != nil {
+		return x.NewSlug
+	}
+	return ""
+}
+
+func (x *RecordTenantLifecycleRequest) GetAliasExpiresUnix() int64 {
+	if x != nil {
+		return x.AliasExpiresUnix
 	}
 	return 0
 }
@@ -7641,12 +7782,10 @@ type RenewCertificateRequest struct {
 	// with or without a grant (WDY-3437). Device lineages do not use it.
 	// JWS Compact signed with presented_cert's key (alg per the key: ML-DSA-44/
 	// 65/87, ES256, ES384, EdDSA), payload JSON, no other members:
-	//
-	//	{"op":"renew",
-	//	 "cert_sha256":"<base64url, no padding, SHA-256 of presented_cert>",
-	//	 "csr_sha256":"<base64url, no padding, SHA-256 of csr>",
-	//	 "jti":"<unique, at most 128 bytes>","iat":<unix seconds>}
-	//
+	//   {"op":"renew",
+	//    "cert_sha256":"<base64url, no padding, SHA-256 of presented_cert>",
+	//    "csr_sha256":"<base64url, no padding, SHA-256 of csr>",
+	//    "jti":"<unique, at most 128 bytes>","iat":<unix seconds>}
 	// iat must be within the last 5 minutes (60s future skew); jti is single-use
 	// per tenant.
 	PossessionProof []byte `protobuf:"bytes,6,opt,name=possession_proof,json=possessionProof,proto3" json:"possession_proof,omitempty"`
@@ -7727,15 +7866,16 @@ func (x *RenewCertificateRequest) GetPossessionProof() []byte {
 }
 
 type RenewCertificateResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Outcome       RenewOutcome           `protobuf:"varint,1,opt,name=outcome,proto3,enum=pkicore.v1.RenewOutcome" json:"outcome,omitempty"`
-	Certificate   []byte                 `protobuf:"bytes,2,opt,name=certificate,proto3" json:"certificate,omitempty"`                 // DER leaf; set iff outcome == RENEWED
-	Chain         []byte                 `protobuf:"bytes,3,opt,name=chain,proto3" json:"chain,omitempty"`                             // DER intermediates (not root)
-	OcspStaple    []byte                 `protobuf:"bytes,4,opt,name=ocsp_staple,json=ocspStaple,proto3" json:"ocsp_staple,omitempty"` // pre-generated OCSP response for offline carry
-	CorrelationId string                 `protobuf:"bytes,5,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
-	Detail        string                 `protobuf:"bytes,6,opt,name=detail,proto3" json:"detail,omitempty"` // human-readable reason for DENIED / NEEDS_GRANT
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Outcome               RenewOutcome           `protobuf:"varint,1,opt,name=outcome,proto3,enum=pkicore.v1.RenewOutcome" json:"outcome,omitempty"`
+	Certificate           []byte                 `protobuf:"bytes,2,opt,name=certificate,proto3" json:"certificate,omitempty"`                 // DER leaf; set iff outcome == RENEWED
+	Chain                 []byte                 `protobuf:"bytes,3,opt,name=chain,proto3" json:"chain,omitempty"`                             // DER intermediates (not root)
+	OcspStaple            []byte                 `protobuf:"bytes,4,opt,name=ocsp_staple,json=ocspStaple,proto3" json:"ocsp_staple,omitempty"` // pre-generated OCSP response for offline carry
+	CorrelationId         string                 `protobuf:"bytes,5,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
+	Detail                string                 `protobuf:"bytes,6,opt,name=detail,proto3" json:"detail,omitempty"`                                                              // human-readable reason for DENIED / NEEDS_GRANT
+	LiteOperatorAuthority []byte                 `protobuf:"bytes,7,opt,name=lite_operator_authority,json=liteOperatorAuthority,proto3" json:"lite_operator_authority,omitempty"` // as IssueCertificateResponse.lite_operator_authority
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *RenewCertificateResponse) Reset() {
@@ -7808,6 +7948,13 @@ func (x *RenewCertificateResponse) GetDetail() string {
 		return x.Detail
 	}
 	return ""
+}
+
+func (x *RenewCertificateResponse) GetLiteOperatorAuthority() []byte {
+	if x != nil {
+		return x.LiteOperatorAuthority
+	}
+	return nil
 }
 
 type RequestOverDurationIssuanceRequest struct {
@@ -8131,9 +8278,8 @@ type PickupOverDurationCertificateRequest struct {
 	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`    // RequestOverDurationIssuanceResponse.collection_id
 	PresentedCert []byte                 `protobuf:"bytes,2,opt,name=presented_cert,json=presentedCert,proto3" json:"presented_cert,omitempty"` // DER of the collecting operator's leaf
 	// Operator-signed JWS (compact) whose payload is the pickup descriptor:
-	//
-	//	{"op":"over_duration_pickup","tenant":<uuid>,"collection_id":<handle>,
-	//	 "iat":<unix>,"exp":<unix>,"jti":<unique>}
+	//   {"op":"over_duration_pickup","tenant":<uuid>,"collection_id":<handle>,
+	//    "iat":<unix>,"exp":<unix>,"jti":<unique>}
 	//
 	// REQUIRED (WDY-2691). Without it the presented certificate proves only
 	// POSSESSION of a key, never INTENT to collect: any earlier JWS from that
@@ -8628,10 +8774,22 @@ type RevokeByPrincipalRequest struct {
 	// fields above must match.
 	SignedRequest []byte `protobuf:"bytes,4,opt,name=signed_request,json=signedRequest,proto3" json:"signed_request,omitempty"`
 	// Cloud-signed rights attestation that the signing operator holds
-	// pki:cert-revoke now. Same shape as RevokeCertificateRequest.signed_rights.
-	SignedRights  []byte `protobuf:"bytes,5,opt,name=signed_rights,json=signedRights,proto3" json:"signed_rights,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// pki:cert-revoke (or device:delete for a fence) now. Same shape as
+	// RevokeCertificateRequest.signed_rights.
+	SignedRights []byte `protobuf:"bytes,5,opt,name=signed_rights,json=signedRights,proto3" json:"signed_rights,omitempty"`
+	// Cloud's pending enrollment request, scoped by the signed device principal.
+	// Block this JTI even if its relay has not reached PKI yet. This annotation
+	// cannot revoke enrollment requests for any other tenant or device.
+	EnrollmentRequestJti string `protobuf:"bytes,6,opt,name=enrollment_request_jti,json=enrollmentRequestJti,proto3" json:"enrollment_request_jti,omitempty"`
+	// Device unenrollment additionally requires device:delete authority, bound
+	// to the same signed request. False preserves certificate-only revocation.
+	// The fence is per (tenant_id, device UUID), the UUID being the device
+	// segment of principal; it advances pki-core's own enrollment epoch. A
+	// deleted device is gone from records: nothing reserves its UUID. A
+	// deliberate re-enroll mints a new UUID, so no replacement guard is needed.
+	FenceDeviceEnrollment bool `protobuf:"varint,7,opt,name=fence_device_enrollment,json=fenceDeviceEnrollment,proto3" json:"fence_device_enrollment,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *RevokeByPrincipalRequest) Reset() {
@@ -8699,11 +8857,32 @@ func (x *RevokeByPrincipalRequest) GetSignedRights() []byte {
 	return nil
 }
 
+func (x *RevokeByPrincipalRequest) GetEnrollmentRequestJti() string {
+	if x != nil {
+		return x.EnrollmentRequestJti
+	}
+	return ""
+}
+
+func (x *RevokeByPrincipalRequest) GetFenceDeviceEnrollment() bool {
+	if x != nil {
+		return x.FenceDeviceEnrollment
+	}
+	return false
+}
+
 type RevokeByPrincipalResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RevokedCount  int32                  `protobuf:"varint,1,opt,name=revoked_count,json=revokedCount,proto3" json:"revoked_count,omitempty"` // 0 is success: nothing live to revoke
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	RevokedCount int32                  `protobuf:"varint,1,opt,name=revoked_count,json=revokedCount,proto3" json:"revoked_count,omitempty"` // 0 is success: nothing live to revoke
+	// True only for a device principal after its generation was advanced,
+	// bootstrap credentials revoked, pending request blocked and certificate
+	// revocation committed atomically. Old implementations default to false.
+	DeviceEnrollmentFenced bool `protobuf:"varint,2,opt,name=device_enrollment_fenced,json=deviceEnrollmentFenced,proto3" json:"device_enrollment_fenced,omitempty"`
+	// Echo of the pending request actually blocked by the engine. Cloud checks
+	// this so an older fabric that drops the request annotation fails closed.
+	FencedEnrollmentRequestJti string `protobuf:"bytes,3,opt,name=fenced_enrollment_request_jti,json=fencedEnrollmentRequestJti,proto3" json:"fenced_enrollment_request_jti,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *RevokeByPrincipalResponse) Reset() {
@@ -8741,6 +8920,20 @@ func (x *RevokeByPrincipalResponse) GetRevokedCount() int32 {
 		return x.RevokedCount
 	}
 	return 0
+}
+
+func (x *RevokeByPrincipalResponse) GetDeviceEnrollmentFenced() bool {
+	if x != nil {
+		return x.DeviceEnrollmentFenced
+	}
+	return false
+}
+
+func (x *RevokeByPrincipalResponse) GetFencedEnrollmentRequestJti() string {
+	if x != nil {
+		return x.FencedEnrollmentRequestJti
+	}
+	return ""
 }
 
 type GetPendingOverDurationRequestResponse struct {
@@ -8914,11 +9107,15 @@ type ValidateOperatorCertificateRequest struct {
 	// The leaf by reference (WDY-3463): base64url, unpadded, of SHA-256 over the
 	// leaf DER (the RFC 7515 x5t#S256 value; the `kid` of a SignedRequest JWS).
 	// pki-core looks the leaf up in the authenticated tenant's
-	// certificate_ledger rows and runs the same checks on the stored DER. No row
-	// in that tenant, including a leaf of another tenant, is "not_issued".
-	// A ledger row without a stored DER (an operator leaf minted before pki-core
-	// stored leaf DER) is the gRPC error FAILED_PRECONDITION "leaf not stored;
-	// present the certificate", not a verdict: ask again with certificate.
+	// certificate_ledger rows and answers from the row (WDY-3647): issuing CA in
+	// the tenant's live Operator-Authority pool, ML-DSA non-Lite key, operator
+	// principal of the tenant, validity window, revocation, disabled principal.
+	// No row in that tenant, including a leaf of another tenant, is
+	// "not_issued". The ledger keeps no leaf DER, so the answer is a verdict
+	// only: the caller verifies signatures with the leaf it hashed. An operator
+	// row minted before pki-core recorded the key algorithm (WDY-3648) is the
+	// gRPC error FAILED_PRECONDITION "leaf not stored; present the certificate",
+	// not a verdict: ask again with certificate.
 	LeafSha256    string `protobuf:"bytes,2,opt,name=leaf_sha256,json=leafSha256,proto3" json:"leaf_sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -8976,21 +9173,23 @@ type ValidateOperatorCertificateResponse struct {
 	// principal has no disabled_principals record.
 	Valid bool `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
 	// Machine-readable cause when !valid — the FIRST failure in check order:
-	//
-	//	"malformed"          — leaf does not parse as an X.509 certificate
-	//	"untrusted"          — does not chain to the tenant's Operator-Authority
-	//	                       CA (also covers a leaf of a DIFFERENT tenant:
-	//	                       anchors are strictly per-tenant)
-	//	"not_operator"       — chains, but the SPIFFE SAN is not an operator
-	//	                       principal of the tenant
-	//	"not_yet_valid"      — NotBefore is in the future
-	//	"expired"            — NotAfter has passed (no roll-forward: an expired
-	//	                       operator re-onboards via wendy-auth)
-	//	"not_issued"         — no certificate_ledger row: pki-core never minted
-	//	                       this leaf (definite refusal, not a lookup miss)
-	//	"revoked"            — certificate_ledger revoked_at is set
-	//	"principal_disabled" — sticky SSF-driven disabled_principals kill switch
-	//
+	//   "malformed"          — leaf does not parse as an X.509 certificate
+	//   "untrusted"          — does not chain to the tenant's Operator-Authority
+	//                          CA (also covers a leaf of a DIFFERENT tenant:
+	//                          anchors are strictly per-tenant; a Lite operator
+	//                          leaf never chains here)
+	//   "operator_class"     — chains, but is not an ML-DSA operator leaf (a
+	//                          non-ML-DSA key or the Lite marker; lite-relay-v1
+	//                          § Operator dual-key). This RPC has no Lite opt-in.
+	//   "not_operator"       — chains, but the SPIFFE SAN is not an operator
+	//                          principal of the tenant
+	//   "not_yet_valid"      — NotBefore is in the future
+	//   "expired"            — NotAfter has passed (no roll-forward: an expired
+	//                          operator re-onboards via wendy-auth)
+	//   "not_issued"         — no certificate_ledger row: pki-core never minted
+	//                          this leaf (definite refusal, not a lookup miss)
+	//   "revoked"            — certificate_ledger revoked_at is set
+	//   "principal_disabled" — sticky SSF-driven disabled_principals kill switch
 	// Empty when valid.
 	Reason string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	// Server-derived SPIFFE URI of the operator principal, set only when valid.
@@ -9000,8 +9199,9 @@ type ValidateOperatorCertificateResponse struct {
 	// RFC3339 leaf NotAfter, set only when valid. Hard upper bound for any
 	// caller-side caching of this verdict.
 	NotAfter string `protobuf:"bytes,4,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`
-	// The ledger's leaf DER, set only when valid and the request named the leaf
-	// by leaf_sha256: the caller needs its public key to verify the signature.
+	// Deprecated (WDY-3647): never populated. pki-core #254 returned the stored
+	// leaf DER here for leaf_sha256 lookups; pki-core stopped storing leaf DER
+	// with WDY-3648 and leaves this empty. Do not read it; never reuse field 5.
 	Certificate   []byte `protobuf:"bytes,5,opt,name=certificate,proto3" json:"certificate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -9077,7 +9277,7 @@ var File_pkicore_v1_engine_proto protoreflect.FileDescriptor
 const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\n" +
 	"\x17pkicore/v1/engine.proto\x12\n" +
-	"pkicore.v1\x1a\x16pkicore/v1/types.proto\"\x9e\x02\n" +
+	"pkicore.v1\x1a\x16pkicore/v1/types.proto\"\xd6\x02\n" +
 	"\x17IssueCertificateRequest\x12\x13\n" +
 	"\x05ca_id\x18\x01 \x01(\tR\x04caId\x12\x10\n" +
 	"\x03csr\x18\x02 \x01(\fR\x03csr\x12\x18\n" +
@@ -9085,13 +9285,15 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\x04auth\x18\x04 \x01(\v2\x17.pkicore.v1.AuthContextR\x04auth\x12@\n" +
 	"\x10extra_extensions\x18\x05 \x03(\v2\x15.pkicore.v1.ExtensionR\x0fextraExtensions\x12*\n" +
 	"\x0eleaf_algorithm\x18\x06 \x01(\tH\x00R\rleafAlgorithm\x88\x01\x01\x12\x14\n" +
-	"\x05grant\x18\a \x01(\fR\x05grantB\x11\n" +
-	"\x0f_leaf_algorithm\"s\n" +
+	"\x05grant\x18\a \x01(\fR\x05grant\x126\n" +
+	"\x17operator_signed_request\x18\b \x01(\fR\x15operatorSignedRequestB\x11\n" +
+	"\x0f_leaf_algorithm\"\xab\x01\n" +
 	"\x18IssueCertificateResponse\x12 \n" +
 	"\vcertificate\x18\x01 \x01(\fR\vcertificate\x12\x14\n" +
 	"\x05chain\x18\x02 \x01(\fR\x05chain\x12\x1f\n" +
 	"\vocsp_staple\x18\x03 \x01(\fR\n" +
-	"ocspStaple\"\xab\x01\n" +
+	"ocspStaple\x126\n" +
+	"\x17lite_operator_authority\x18\x04 \x01(\fR\x15liteOperatorAuthority\"\xab\x01\n" +
 	"\x18RevokeCertificateRequest\x12\x13\n" +
 	"\x05ca_id\x18\x01 \x01(\tR\x04caId\x12\x16\n" +
 	"\x06serial\x18\x02 \x01(\fR\x06serial\x12\x16\n" +
@@ -9201,21 +9403,25 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\n" +
 	"source_jti\x18\x06 \x01(\tR\tsourceJti\x12\x1b\n" +
 	"\tbefore_id\x18\a \x01(\x03R\bbeforeId\x12/\n" +
-	"\x05order\x18\b \x01(\x0e2\x19.pkicore.v1.AuditLogOrderR\x05order\"\x13\n" +
-	"\x11GetCACertsRequest\"*\n" +
+	"\x05order\x18\b \x01(\x0e2\x19.pkicore.v1.AuditLogOrderR\x05order\"[\n" +
+	"\x11GetCACertsRequest\x12'\n" +
+	"\x0fchain_algorithm\x18\x01 \x01(\tR\x0echainAlgorithm\x12\x1d\n" +
+	"\n" +
+	"full_chain\x18\x02 \x01(\bR\tfullChain\"*\n" +
 	"\x12GetCACertsResponse\x12\x14\n" +
 	"\x05certs\x18\x01 \x03(\fR\x05certs\"{\n" +
 	"\x19VerifyEABSignatureRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06key_id\x18\x02 \x01(\tR\x05keyId\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\fR\amessage\x12\x10\n" +
-	"\x03mac\x18\x04 \x01(\fR\x03mac\"\xb1\x01\n" +
+	"\x03mac\x18\x04 \x01(\fR\x03mac\"\xdc\x01\n" +
 	"\x1aVerifyEABSignatureResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x13\n" +
 	"\x05ca_id\x18\x02 \x01(\tR\x04caId\x12\x18\n" +
 	"\aprofile\x18\x03 \x01(\tR\aprofile\x121\n" +
 	"\x14attestation_required\x18\x04 \x01(\bR\x13attestationRequired\x12\x1b\n" +
-	"\tdevice_id\x18\x05 \x01(\tR\bdeviceId\"l\n" +
+	"\tdevice_id\x18\x05 \x01(\tR\bdeviceId\x12)\n" +
+	"\x10enrollment_epoch\x18\x06 \x01(\x03R\x0fenrollmentEpoch\"l\n" +
 	"\x16SetTenantPolicyRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06policy\x18\x02 \x01(\fR\x06policy\x12\x1d\n" +
@@ -9287,7 +9493,7 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\x13RevokeEABKeyRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x15\n" +
 	"\x06key_id\x18\x02 \x01(\tR\x05keyId\"\x16\n" +
-	"\x14RevokeEABKeyResponse\"\xdd\x01\n" +
+	"\x14RevokeEABKeyResponse\"\x86\x02\n" +
 	"\x1cCreateEnrollmentTokenRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x13\n" +
 	"\x05ca_id\x18\x02 \x01(\tR\x04caId\x12\x1b\n" +
@@ -9297,7 +9503,8 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"ttlSeconds\x12\x1d\n" +
 	"\n" +
 	"source_jti\x18\x06 \x01(\tR\tsourceJti\x12\x14\n" +
-	"\x05label\x18\a \x01(\tR\x05label\"z\n" +
+	"\x05label\x18\a \x01(\tR\x05label\x12'\n" +
+	"\x0fchain_algorithm\x18\b \x01(\tR\x0echainAlgorithm\"z\n" +
 	"\x1dCreateEnrollmentTokenResponse\x12\x19\n" +
 	"\btoken_id\x18\x01 \x01(\tR\atokenId\x12\x1f\n" +
 	"\vtoken_value\x18\x02 \x01(\tR\n" +
@@ -9330,7 +9537,7 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\x1cRevokeEnrollmentTokenRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x19\n" +
 	"\btoken_id\x18\x02 \x01(\tR\atokenId\"\x1f\n" +
-	"\x1dRevokeEnrollmentTokenResponse\"\xed\x02\n" +
+	"\x1dRevokeEnrollmentTokenResponse\"\x8e\x03\n" +
 	"\x18IssueOperatorCertRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
@@ -9348,7 +9555,9 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"spiffeKind\x12\x19\n" +
 	"\bdpop_jti\x18\n" +
 	" \x01(\tR\adpopJti\x12\x19\n" +
-	"\bdpop_exp\x18\v \x01(\x03R\adpopExp\"\x87\x01\n" +
+	"\bdpop_exp\x18\v \x01(\x03R\adpopExp\x12\x1f\n" +
+	"\vsession_jkt\x18\f \x01(\tR\n" +
+	"sessionJkt\"\x87\x01\n" +
 	"\x19IssueOperatorCertResponse\x12 \n" +
 	"\vcertificate\x18\x01 \x01(\fR\vcertificate\x12\x14\n" +
 	"\x05chain\x18\x02 \x01(\fR\x05chain\x12\x1f\n" +
@@ -9571,14 +9780,17 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x04 \x01(\tR\trequestId\x12\x1a\n" +
 	"\bendpoint\x18\x05 \x01(\tR\bendpoint\"\x1e\n" +
-	"\x1cRecordCodeSignDenialResponse\"\xbd\x01\n" +
+	"\x1cRecordCodeSignDenialResponse\"\x86\x02\n" +
 	"\x17CheckACMEAccountRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x02 \x01(\tR\taccountId\x12\x16\n" +
 	"\x06serial\x18\x03 \x01(\fR\x06serial\x12\x1b\n" +
 	"\tdevice_id\x18\x04 \x01(\tR\bdeviceId\x121\n" +
-	"\x14attestation_required\x18\x05 \x01(\bR\x13attestationRequired\"4\n" +
+	"\x14attestation_required\x18\x05 \x01(\bR\x13attestationRequired\x12)\n" +
+	"\x10enrollment_epoch\x18\x06 \x01(\x03R\x0fenrollmentEpoch\x12\x1c\n" +
+	"\n" +
+	"eab_key_id\x18\a \x01(\tR\beabKeyId\"4\n" +
 	"\x18CheckACMEAccountResponse\x12\x18\n" +
 	"\arevoked\x18\x01 \x01(\bR\arevoked\"\xc1\x01\n" +
 	"\x1dRecordPrincipalDisableRequest\x12\x1b\n" +
@@ -9597,7 +9809,7 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"source_jti\x18\x02 \x01(\tR\tsourceJti\x12 \n" +
 	"\fset_exp_unix\x18\x03 \x01(\x03R\n" +
 	"setExpUnix\"\x1d\n" +
-	"\x1bRecordTenantDeletedResponse\"\xc3\x01\n" +
+	"\x1bRecordTenantDeletedResponse\"\xa7\x02\n" +
 	"\x1cRecordTenantLifecycleRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
@@ -9606,7 +9818,10 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"source_jti\x18\x03 \x01(\tR\tsourceJti\x12 \n" +
 	"\fset_exp_unix\x18\x04 \x01(\x03R\n" +
 	"setExpUnix\x12&\n" +
-	"\x0fevent_time_unix\x18\x05 \x01(\x03R\reventTimeUnix\"\x1f\n" +
+	"\x0fevent_time_unix\x18\x05 \x01(\x03R\reventTimeUnix\x12\x19\n" +
+	"\bold_slug\x18\x06 \x01(\tR\aoldSlug\x12\x19\n" +
+	"\bnew_slug\x18\a \x01(\tR\anewSlug\x12,\n" +
+	"\x12alias_expires_unix\x18\b \x01(\x03R\x10aliasExpiresUnix\"\x1f\n" +
 	"\x1dRecordTenantLifecycleResponse\"\xb9\x01\n" +
 	"\"RecordEnrollmentTokenRevokeRequest\x12\x1d\n" +
 	"\n" +
@@ -9660,7 +9875,7 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\x05grant\x18\x03 \x01(\fR\x05grant\x12\x14\n" +
 	"\x05actor\x18\x04 \x01(\tR\x05actor\x12%\n" +
 	"\x0ecorrelation_id\x18\x05 \x01(\tR\rcorrelationId\x12)\n" +
-	"\x10possession_proof\x18\x06 \x01(\fR\x0fpossessionProof\"\xe6\x01\n" +
+	"\x10possession_proof\x18\x06 \x01(\fR\x0fpossessionProof\"\x9e\x02\n" +
 	"\x18RenewCertificateResponse\x122\n" +
 	"\aoutcome\x18\x01 \x01(\x0e2\x18.pkicore.v1.RenewOutcomeR\aoutcome\x12 \n" +
 	"\vcertificate\x18\x02 \x01(\fR\vcertificate\x12\x14\n" +
@@ -9668,7 +9883,8 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\vocsp_staple\x18\x04 \x01(\fR\n" +
 	"ocspStaple\x12%\n" +
 	"\x0ecorrelation_id\x18\x05 \x01(\tR\rcorrelationId\x12\x16\n" +
-	"\x06detail\x18\x06 \x01(\tR\x06detail\"t\n" +
+	"\x06detail\x18\x06 \x01(\tR\x06detail\x126\n" +
+	"\x17lite_operator_authority\x18\a \x01(\fR\x15liteOperatorAuthority\"t\n" +
 	"\"RequestOverDurationIssuanceRequest\x12%\n" +
 	"\x0esigned_request\x18\x01 \x01(\fR\rsignedRequest\x12'\n" +
 	"\x0ftimestamp_token\x18\x02 \x01(\fR\x0etimestampToken\"\xc6\x02\n" +
@@ -9721,15 +9937,19 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"source_jti\x18\x02 \x01(\tR\tsourceJti\x12#\n" +
 	"\rsigned_rights\x18\x03 \x01(\fR\fsignedRights\x12%\n" +
 	"\x0esigned_request\x18\x04 \x01(\fR\rsignedRequest\"\"\n" +
-	" DenyOverDurationIssuanceResponse\"\xb9\x01\n" +
+	" DenyOverDurationIssuanceResponse\"\xa7\x02\n" +
 	"\x18RevokeByPrincipalRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1c\n" +
 	"\tprincipal\x18\x02 \x01(\tR\tprincipal\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\x05R\x06reason\x12%\n" +
 	"\x0esigned_request\x18\x04 \x01(\fR\rsignedRequest\x12#\n" +
-	"\rsigned_rights\x18\x05 \x01(\fR\fsignedRights\"@\n" +
+	"\rsigned_rights\x18\x05 \x01(\fR\fsignedRights\x124\n" +
+	"\x16enrollment_request_jti\x18\x06 \x01(\tR\x14enrollmentRequestJti\x126\n" +
+	"\x17fence_device_enrollment\x18\a \x01(\bR\x15fenceDeviceEnrollment\"\xbd\x01\n" +
 	"\x19RevokeByPrincipalResponse\x12#\n" +
-	"\rrevoked_count\x18\x01 \x01(\x05R\frevokedCount\"i\n" +
+	"\rrevoked_count\x18\x01 \x01(\x05R\frevokedCount\x128\n" +
+	"\x18device_enrollment_fenced\x18\x02 \x01(\bR\x16deviceEnrollmentFenced\x12A\n" +
+	"\x1dfenced_enrollment_request_jti\x18\x03 \x01(\tR\x1afencedEnrollmentRequestJti\"i\n" +
 	"%GetPendingOverDurationRequestResponse\x12@\n" +
 	"\arequest\x18\x01 \x01(\v2&.pkicore.v1.PendingOverDurationRequestR\arequest\"A\n" +
 	"\x1dCheckOperatorAuthorityRequest\x12 \n" +
@@ -9755,7 +9975,7 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\rAuditLogOrder\x12\x1f\n" +
 	"\x1bAUDIT_LOG_ORDER_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13AUDIT_LOG_ORDER_ASC\x10\x01\x12\x18\n" +
-	"\x14AUDIT_LOG_ORDER_DESC\x10\x02*\xb2\x02\n" +
+	"\x14AUDIT_LOG_ORDER_DESC\x10\x02*\x87\x03\n" +
 	"\x06CARole\x12\x17\n" +
 	"\x13CA_ROLE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCA_ROLE_TENANT_INTERMEDIATE\x10\x01\x12\"\n" +
@@ -9766,7 +9986,10 @@ const file_pkicore_v1_engine_proto_rawDesc = "" +
 	"\x17CA_ROLE_CODE_SIGNING_CA\x10\x06\x12\x0f\n" +
 	"\vCA_ROLE_TSA\x10\a\x12\x1f\n" +
 	"\x1bCA_ROLE_TENANT_CODE_SIGNING\x10\b\x12\x1f\n" +
-	"\x1bCA_ROLE_CODE_SIGNING_ACTIVE\x10\t*W\n" +
+	"\x1bCA_ROLE_CODE_SIGNING_ACTIVE\x10\t\x12*\n" +
+	"&CA_ROLE_TENANT_LITE_OPERATOR_AUTHORITY\x10\n" +
+	"\x12'\n" +
+	"#CA_ROLE_TENANT_LITE_DEVICE_IDENTITY\x10\v*W\n" +
 	"\fRenewOutcome\x12\x1d\n" +
 	"\x19RENEW_OUTCOME_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aRENEWED\x10\x01\x12\n" +

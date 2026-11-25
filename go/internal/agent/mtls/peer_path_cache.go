@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"sync"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 )
 
 const (
@@ -38,6 +40,7 @@ type peerPathEntry struct {
 	bytes                       int
 	verifiedWall, verifiedClock time.Time
 	verifiedEffective, expires  time.Time
+	notBefore                   time.Time
 }
 
 // Separate fields let tests move wall time backwards while monotonic time
@@ -134,6 +137,14 @@ func (entry peerPathEntry) current(now peerPathClockSample) bool {
 // proof or extend its fixed monotonic lifetime. Actual clock rollback disables
 // reuse independently of snapshot ordering.
 func (c *peerPathCache) verify(chain [][]byte, wall, effective time.Time, verify func([][]byte, time.Time) (time.Time, error)) (time.Time, error) {
+	window, err := c.verifyWindow(chain, wall, effective, func(chain [][]byte, now time.Time) (certs.CertificateWindow, error) {
+		expires, err := verify(chain, now)
+		return certs.CertificateWindow{NotAfter: expires}, err
+	})
+	return window.NotAfter, err
+}
+
+func (c *peerPathCache) verifyWindow(chain [][]byte, wall, effective time.Time, verify func([][]byte, time.Time) (certs.CertificateWindow, error)) (certs.CertificateWindow, error) {
 	wall, effective = wall.Round(0), effective.Round(0)
 	key, size, cacheable := peerChainKey(chain, c.maxBytes)
 	cacheable = cacheable && c.maxEntries > 0
@@ -148,7 +159,7 @@ func (c *peerPathCache) verify(chain [][]byte, wall, effective time.Time, verify
 			wall.Before(entry.expires) && effective.Before(entry.expires) && samePeerChain(chain, entry.chain) {
 			c.recency.MoveToFront(element)
 			c.mu.Unlock()
-			return entry.expires, nil
+			return certs.CertificateWindow{NotBefore: entry.notBefore, NotAfter: entry.expires}, nil
 		}
 	}
 	c.mu.Unlock()
@@ -161,9 +172,10 @@ func (c *peerPathCache) verify(chain [][]byte, wall, effective time.Time, verify
 	for i, der := range chain {
 		copyChain[i] = bytes.Clone(der)
 	}
-	expires, err := verify(copyChain, wall)
+	window, err := verify(copyChain, wall)
+	expires := window.NotAfter
 	if err != nil {
-		return time.Time{}, err
+		return certs.CertificateWindow{}, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -171,21 +183,21 @@ func (c *peerPathCache) verify(chain [][]byte, wall, effective time.Time, verify
 	age := finished.monotonic.Sub(started.monotonic)
 	if !canReuse || !stillCurrent || generation != c.generation || !finished.wall.Before(expires) ||
 		!wall.Before(expires) || !effective.Before(expires) || age < 0 || age >= peerPathCacheAge {
-		return expires, nil
+		return window, nil
 	}
 	if previous := c.entries[key]; previous != nil {
 		if previous.Value.(peerPathEntry).current(finished) {
 			// A concurrent verification already installed a current proof. Keep
 			// its time bounds and deadline, regardless of completion ordering.
-			return expires, nil
+			return window, nil
 		}
 		c.remove(previous)
 	}
 	for c.recency.Len() >= c.maxEntries || c.bytes+size > c.maxBytes {
 		c.remove(c.recency.Back())
 	}
-	entry := peerPathEntry{key: key, chain: copyChain, bytes: size, verifiedWall: wall, verifiedClock: started.monotonic, verifiedEffective: effective, expires: expires}
+	entry := peerPathEntry{key: key, chain: copyChain, bytes: size, verifiedWall: wall, verifiedClock: started.monotonic, verifiedEffective: effective, expires: expires, notBefore: window.NotBefore}
 	c.entries[key] = c.recency.PushFront(entry)
 	c.bytes += size
-	return expires, nil
+	return window, nil
 }

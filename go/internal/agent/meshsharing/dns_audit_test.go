@@ -26,6 +26,7 @@ func TestDNSAuditTransitionsAndRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	flushDiagnostics(t)
 	if logs.Len() != 1 {
 		t.Fatalf("unchanged policy emitted %d logs", logs.Len())
 	}
@@ -49,6 +50,7 @@ func TestDNSAuditTransitionsAndRecovery(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}
+	flushDiagnostics(t)
 	entries := logs.All()
 	if len(entries) != 7 {
 		t.Fatalf("got %d audit entries", len(entries))
@@ -99,6 +101,7 @@ func TestDNSAuditFailedRemovalIsRetried(t *testing.T) {
 	if err := c.reconcile(ctx, Decision{}); err != nil {
 		t.Fatal(err)
 	}
+	flushDiagnostics(t)
 	entries := logs.All()
 	if len(entries) != 3 || entries[1].ContextMap()["outcome"] != "failed" || entries[2].ContextMap()["outcome"] != "applied" || entries[2].ContextMap()["gateway_principal"] != policyDonorDevice(t).Principal() {
 		t.Fatalf("removal/recovery audit: %+v", entries)
@@ -121,6 +124,7 @@ func TestDNSAuditCloseReportsSuccessfulCleanupRetry(t *testing.T) {
 	if err := c.Close(); err == nil {
 		t.Fatal("transient removal failure was hidden")
 	}
+	flushDiagnostics(t)
 	entries := logs.All()
 	if len(entries) != 3 || entries[1].ContextMap()["outcome"] != "failed" || entries[2].ContextMap()["outcome"] != "applied" || entries[2].ContextMap()["action"] != "remove" {
 		t.Fatalf("cleanup retry audit: %+v", entries)

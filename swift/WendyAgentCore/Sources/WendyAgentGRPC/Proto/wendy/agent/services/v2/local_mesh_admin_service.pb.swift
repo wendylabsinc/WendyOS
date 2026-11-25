@@ -119,6 +119,10 @@ public nonisolated struct Wendy_Agent_Services_V2_GetLocalMeshTopologyRequest: S
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Optional public service descriptions from the same verified manifests.
+  /// Omitted for normal device discovery to keep recurring observations small.
+  public var includeServices: Bool = false
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -190,6 +194,12 @@ public nonisolated struct Wendy_Agent_Services_V2_LocalMeshTopology: @unchecked 
   public var truncated: Bool {
     get {_storage._truncated}
     set {_uniqueStorage()._truncated = newValue}
+  }
+
+  /// True only when this reporter implements and handled include_services.
+  public var servicesIncluded: Bool {
+    get {_storage._servicesIncluded}
+    set {_uniqueStorage()._servicesIncluded = newValue}
   }
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -287,6 +297,44 @@ public nonisolated struct Wendy_Agent_Services_V2_LocalMeshAnnouncement: Sendabl
   /// verified-at-snapshot: signature and certificate trust were accepted when
   /// the node captured this entry. No current/global trust assertion is made.
   public var trustState: String = String()
+
+  /// Public agent hints from the same verified announcement. The caller must
+  /// authenticate the destination independently; these do not grant identity.
+  public var agentPort: UInt32 = 0
+
+  public var agentTransport: String = String()
+
+  public var platform: String = String()
+
+  public var caps: [String] = []
+
+  /// Inherits this announcement's device identity, revision and expiry.
+  /// Populated only on request and bounded across the response.
+  public var services: [Wendy_Agent_Services_V2_LocalMeshService] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V2_LocalMeshService: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var mesh: String = String()
+
+  public var appID: String = String()
+
+  public var serviceID: String = String()
+
+  public var type: String = String()
+
+  public var instance: String = String()
+
+  public var port: UInt32 = 0
+
+  public var txt: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -442,18 +490,29 @@ nonisolated extension Wendy_Agent_Services_V2_GetLocalMeshStatusRequest: SwiftPr
 
 nonisolated extension Wendy_Agent_Services_V2_GetLocalMeshTopologyRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetLocalMeshTopologyRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}include_services\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    // Load everything into unknown fields
-    while try decoder.nextFieldNumber() != nil {}
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBoolField(value: &self.includeServices) }()
+      default: break
+      }
+    }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.includeServices != false {
+      try visitor.visitSingularBoolField(value: self.includeServices, fieldNumber: 1)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V2_GetLocalMeshTopologyRequest, rhs: Wendy_Agent_Services_V2_GetLocalMeshTopologyRequest) -> Bool {
+    if lhs.includeServices != rhs.includeServices {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -461,7 +520,7 @@ nonisolated extension Wendy_Agent_Services_V2_GetLocalMeshTopologyRequest: Swift
 
 nonisolated extension Wendy_Agent_Services_V2_LocalMeshTopology: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".LocalMeshTopology"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}self_principal\0\u{3}self_tenant_id\0\u{3}self_device_id\0\u{3}self_mesh_address\0\u{3}captured_at_unix_ms\0\u{3}runtime_available\0\u{1}status\0\u{1}peers\0\u{1}routes\0\u{1}announcements\0\u{1}truncated\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}self_principal\0\u{3}self_tenant_id\0\u{3}self_device_id\0\u{3}self_mesh_address\0\u{3}captured_at_unix_ms\0\u{3}runtime_available\0\u{1}status\0\u{1}peers\0\u{1}routes\0\u{1}announcements\0\u{1}truncated\0\u{3}services_included\0")
 
   fileprivate class _StorageClass {
     var _selfPrincipal: String = String()
@@ -475,6 +534,7 @@ nonisolated extension Wendy_Agent_Services_V2_LocalMeshTopology: SwiftProtobuf.M
     var _routes: [Wendy_Agent_Services_V2_LocalMeshRoute] = []
     var _announcements: [Wendy_Agent_Services_V2_LocalMeshAnnouncement] = []
     var _truncated: Bool = false
+    var _servicesIncluded: Bool = false
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -496,6 +556,7 @@ nonisolated extension Wendy_Agent_Services_V2_LocalMeshTopology: SwiftProtobuf.M
       _routes = source._routes
       _announcements = source._announcements
       _truncated = source._truncated
+      _servicesIncluded = source._servicesIncluded
     }
   }
 
@@ -525,6 +586,7 @@ nonisolated extension Wendy_Agent_Services_V2_LocalMeshTopology: SwiftProtobuf.M
         case 9: try { try decoder.decodeRepeatedMessageField(value: &_storage._routes) }()
         case 10: try { try decoder.decodeRepeatedMessageField(value: &_storage._announcements) }()
         case 11: try { try decoder.decodeSingularBoolField(value: &_storage._truncated) }()
+        case 12: try { try decoder.decodeSingularBoolField(value: &_storage._servicesIncluded) }()
         default: break
         }
       }
@@ -570,6 +632,9 @@ nonisolated extension Wendy_Agent_Services_V2_LocalMeshTopology: SwiftProtobuf.M
       if _storage._truncated != false {
         try visitor.visitSingularBoolField(value: _storage._truncated, fieldNumber: 11)
       }
+      if _storage._servicesIncluded != false {
+        try visitor.visitSingularBoolField(value: _storage._servicesIncluded, fieldNumber: 12)
+      }
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -590,6 +655,7 @@ nonisolated extension Wendy_Agent_Services_V2_LocalMeshTopology: SwiftProtobuf.M
         if _storage._routes != rhs_storage._routes {return false}
         if _storage._announcements != rhs_storage._announcements {return false}
         if _storage._truncated != rhs_storage._truncated {return false}
+        if _storage._servicesIncluded != rhs_storage._servicesIncluded {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -741,7 +807,7 @@ nonisolated extension Wendy_Agent_Services_V2_LocalMeshRoute: SwiftProtobuf.Mess
 
 nonisolated extension Wendy_Agent_Services_V2_LocalMeshAnnouncement: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".LocalMeshAnnouncement"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}principal\0\u{3}device_id\0\u{1}name\0\u{3}issued_at_unix_ms\0\u{3}expires_at_unix_ms\0\u{1}revision\0\u{1}prefix\0\u{3}origin_router_id\0\u{3}sequence_number\0\u{3}trust_state\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}principal\0\u{3}device_id\0\u{1}name\0\u{3}issued_at_unix_ms\0\u{3}expires_at_unix_ms\0\u{1}revision\0\u{1}prefix\0\u{3}origin_router_id\0\u{3}sequence_number\0\u{3}trust_state\0\u{3}agent_port\0\u{3}agent_transport\0\u{1}platform\0\u{1}caps\0\u{1}services\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -759,6 +825,11 @@ nonisolated extension Wendy_Agent_Services_V2_LocalMeshAnnouncement: SwiftProtob
       case 8: try { try decoder.decodeSingularUInt64Field(value: &self.originRouterID) }()
       case 9: try { try decoder.decodeSingularUInt32Field(value: &self.sequenceNumber) }()
       case 10: try { try decoder.decodeSingularStringField(value: &self.trustState) }()
+      case 11: try { try decoder.decodeSingularUInt32Field(value: &self.agentPort) }()
+      case 12: try { try decoder.decodeSingularStringField(value: &self.agentTransport) }()
+      case 13: try { try decoder.decodeSingularStringField(value: &self.platform) }()
+      case 14: try { try decoder.decodeRepeatedStringField(value: &self.caps) }()
+      case 15: try { try decoder.decodeRepeatedMessageField(value: &self.services) }()
       default: break
       }
     }
@@ -795,6 +866,21 @@ nonisolated extension Wendy_Agent_Services_V2_LocalMeshAnnouncement: SwiftProtob
     if !self.trustState.isEmpty {
       try visitor.visitSingularStringField(value: self.trustState, fieldNumber: 10)
     }
+    if self.agentPort != 0 {
+      try visitor.visitSingularUInt32Field(value: self.agentPort, fieldNumber: 11)
+    }
+    if !self.agentTransport.isEmpty {
+      try visitor.visitSingularStringField(value: self.agentTransport, fieldNumber: 12)
+    }
+    if !self.platform.isEmpty {
+      try visitor.visitSingularStringField(value: self.platform, fieldNumber: 13)
+    }
+    if !self.caps.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.caps, fieldNumber: 14)
+    }
+    if !self.services.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.services, fieldNumber: 15)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -809,6 +895,71 @@ nonisolated extension Wendy_Agent_Services_V2_LocalMeshAnnouncement: SwiftProtob
     if lhs.originRouterID != rhs.originRouterID {return false}
     if lhs.sequenceNumber != rhs.sequenceNumber {return false}
     if lhs.trustState != rhs.trustState {return false}
+    if lhs.agentPort != rhs.agentPort {return false}
+    if lhs.agentTransport != rhs.agentTransport {return false}
+    if lhs.platform != rhs.platform {return false}
+    if lhs.caps != rhs.caps {return false}
+    if lhs.services != rhs.services {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V2_LocalMeshService: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".LocalMeshService"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}mesh\0\u{3}app_id\0\u{3}service_id\0\u{1}type\0\u{1}instance\0\u{1}port\0\u{1}txt\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.mesh) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.appID) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.serviceID) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.type) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.instance) }()
+      case 6: try { try decoder.decodeSingularUInt32Field(value: &self.port) }()
+      case 7: try { try decoder.decodeRepeatedStringField(value: &self.txt) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.mesh.isEmpty {
+      try visitor.visitSingularStringField(value: self.mesh, fieldNumber: 1)
+    }
+    if !self.appID.isEmpty {
+      try visitor.visitSingularStringField(value: self.appID, fieldNumber: 2)
+    }
+    if !self.serviceID.isEmpty {
+      try visitor.visitSingularStringField(value: self.serviceID, fieldNumber: 3)
+    }
+    if !self.type.isEmpty {
+      try visitor.visitSingularStringField(value: self.type, fieldNumber: 4)
+    }
+    if !self.instance.isEmpty {
+      try visitor.visitSingularStringField(value: self.instance, fieldNumber: 5)
+    }
+    if self.port != 0 {
+      try visitor.visitSingularUInt32Field(value: self.port, fieldNumber: 6)
+    }
+    if !self.txt.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.txt, fieldNumber: 7)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V2_LocalMeshService, rhs: Wendy_Agent_Services_V2_LocalMeshService) -> Bool {
+    if lhs.mesh != rhs.mesh {return false}
+    if lhs.appID != rhs.appID {return false}
+    if lhs.serviceID != rhs.serviceID {return false}
+    if lhs.type != rhs.type {return false}
+    if lhs.instance != rhs.instance {return false}
+    if lhs.port != rhs.port {return false}
+    if lhs.txt != rhs.txt {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

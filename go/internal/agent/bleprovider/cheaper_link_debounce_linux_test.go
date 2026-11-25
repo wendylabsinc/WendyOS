@@ -36,9 +36,8 @@ func (c *closeFlagConn) SetDeadline(time.Time) error      { return nil }
 func (c *closeFlagConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *closeFlagConn) SetWriteDeadline(time.Time) error { return nil }
 
-// vetoFixture drives AllowRadio deterministically: while vetoed the snapshot
-// holds a cheaper LAN link to the same peer, so
-// AllowRadio returns false; clearing the snapshot lifts the veto.
+// vetoFixture varies cheaper local forwarding evidence. Such evidence alone
+// no longer closes a spare-capacity BLE standby.
 type vetoFixture struct {
 	mu       sync.Mutex
 	snapshot localmesh.NodeSnapshot
@@ -49,7 +48,7 @@ func newVetoFixture(vetoed bool) *vetoFixture {
 	f := &vetoFixture{}
 	if vetoed {
 		f.snapshot = localmesh.NodeSnapshot{Links: []localmesh.PeerLink{
-			{Device: numberedBLEDevice(358), Cost: 64},
+			{Device: numberedBLEDevice(358), Cost: 64, ForwardingReady: true},
 		}}
 	}
 	f.sel = localmesh.NewPeerSelection(func() localmesh.NodeSnapshot {
@@ -65,7 +64,7 @@ func (f *vetoFixture) setVeto(vetoed bool) {
 	defer f.mu.Unlock()
 	if vetoed {
 		f.snapshot = localmesh.NodeSnapshot{Links: []localmesh.PeerLink{
-			{Device: numberedBLEDevice(358), Cost: 64},
+			{Device: numberedBLEDevice(358), Cost: 64, ForwardingReady: true},
 		}}
 	} else {
 		f.snapshot = localmesh.NodeSnapshot{}
@@ -97,8 +96,8 @@ func TestCheaperLinkDebounceRidesTransientVeto(t *testing.T) {
 	stop := r.watchCheaperLink(ctx, numberedBLEDevice(358), conn)
 	defer stop()
 	// Sanity: the fixture really vetoes before we lift it.
-	if r.hasCheaperLink(numberedBLEDevice(358)) != true {
-		t.Fatal("fixture does not veto; test setup wrong")
+	if r.hasCheaperLink(numberedBLEDevice(358)) {
+		t.Fatal("cheaper forwarding alone vetoed a spare BLE standby")
 	}
 	time.Sleep(1500 * time.Millisecond)
 	f.setVeto(false)
@@ -111,9 +110,9 @@ func TestCheaperLinkDebounceRidesTransientVeto(t *testing.T) {
 	}
 }
 
-// A veto that persists through re-verify must still shed the link (~1s
-// ticker + 3s re-verify; allow generous headroom for loaded CI).
-func TestCheaperLinkDebounceStillShedsPersistentVeto(t *testing.T) {
+// Repeated watcher ticks must retain a spare-capacity standby even after
+// cheaper forwarding remains continuously ready.
+func TestCheaperLinkWatcherRetainsStandbyWithPersistentLAN(t *testing.T) {
 	f := newVetoFixture(true)
 	if testing.Short() {
 		t.Skip("debounce timing test needs real time")
@@ -124,7 +123,10 @@ func TestCheaperLinkDebounceStillShedsPersistentVeto(t *testing.T) {
 	conn := &closeFlagConn{}
 	stop := r.watchCheaperLink(ctx, numberedBLEDevice(358), conn)
 	defer stop()
-	waitForClosed(t, conn, true, 10*time.Second)
+	time.Sleep(4500 * time.Millisecond)
+	if conn.closed.Load() {
+		t.Fatal("periodic cheaper-link watcher pruned spare BLE standby")
+	}
 }
 
 func TestAdmitDialPacesDeviceWide(t *testing.T) {

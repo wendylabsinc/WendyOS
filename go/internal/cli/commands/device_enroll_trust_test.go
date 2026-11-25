@@ -88,10 +88,7 @@ func TestEnrollmentTrustAcceptUsesCapturedCandidates(t *testing.T) {
 	confirmed := false
 	confirmEnrollmentTrustFn = func() (bool, error) {
 		confirmed = true
-		return true, config.Update(func(cfg *config.Config) (bool, error) {
-			cfg.DefaultDevice = "other.local"
-			return true, nil
-		})
+		return true, nil
 	}
 	failed, failedProbe, failedClose := enrollmentTrustConnection(errors.New("connection refused"))
 	live, liveProbe, liveClose := enrollmentTrustConnection(nil)
@@ -115,6 +112,7 @@ func TestEnrollmentTrustAcceptUsesCapturedCandidates(t *testing.T) {
 		}
 	}
 	connectCalls, enrollCalls := 0, 0
+	savedAfterCleanup := false
 	err := runWithEnrollmentTarget(context.Background(), func() (*SelectedDevice, error) {
 		connectCalls++
 		return nil, fmt.Errorf("selecting device: %w", failure)
@@ -135,8 +133,18 @@ func TestEnrollmentTrustAcceptUsesCapturedCandidates(t *testing.T) {
 		if liveClose.calls != 0 {
 			t.Fatal("live connection was closed before enrollment")
 		}
+		target.recordEnrollmentBinding(func() error {
+			if _, ok := readPins()["thor"]; ok {
+				t.Fatal("replacement binding saved before old identity cleanup")
+			}
+			savedAfterCleanup = true
+			return nil
+		})
 		return nil
 	})
+	if !savedAfterCleanup {
+		t.Fatal("verified replacement binding was not saved after successful cleanup")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

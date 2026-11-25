@@ -10,6 +10,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/prop"
+	"github.com/wendylabsinc/wendy/go/internal/agent/btradio"
 	"go.uber.org/zap"
 )
 
@@ -79,6 +80,13 @@ type advertisement struct{}
 func (a *advertisement) Release() *dbus.Error { return nil }
 
 func startAdvertising(ctx context.Context, logger *zap.Logger) error {
+	return startServiceAdvertising(ctx, logger, "management", wendyServiceUUID, advObjectPath)
+}
+
+// startServiceAdvertising registers one Wendy-owned advertisement. policyName
+// keys its radio-policy subscription and power report, so each concurrent
+// advertisement needs a distinct name.
+func startServiceAdvertising(ctx context.Context, logger *zap.Logger, policyName, serviceUUID string, objectPath dbus.ObjectPath) error {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		return fmt.Errorf("connect system bus: %w", err)
@@ -90,7 +98,7 @@ func startAdvertising(ctx context.Context, logger *zap.Logger) error {
 	}
 
 	// Export the LEAdvertisement1 object.
-	if err := conn.Export(&advertisement{}, advObjectPath, advIface); err != nil {
+	if err := conn.Export(&advertisement{}, objectPath, advIface); err != nil {
 		conn.Close()
 		return fmt.Errorf("export advertisement object: %w", err)
 	}
@@ -102,11 +110,11 @@ func startAdvertising(ctx context.Context, logger *zap.Logger) error {
 	propsSpec := map[string]map[string]*prop.Prop{
 		advIface: {
 			"Type":         {Value: "peripheral", Writable: false, Emit: prop.EmitFalse},
-			"ServiceUUIDs": {Value: []string{wendyServiceUUID}, Writable: false, Emit: prop.EmitFalse},
+			"ServiceUUIDs": {Value: []string{serviceUUID}, Writable: false, Emit: prop.EmitFalse},
 			"LocalName":    {Value: hostname, Writable: false, Emit: prop.EmitFalse},
 		},
 	}
-	if _, err := prop.Export(conn, advObjectPath, propsSpec); err != nil {
+	if _, err := prop.Export(conn, objectPath, propsSpec); err != nil {
 		conn.Close()
 		return fmt.Errorf("export advertisement properties: %w", err)
 	}
@@ -126,50 +134,59 @@ func startAdvertising(ctx context.Context, logger *zap.Logger) error {
 	// Defensive unregister: if a previous run crashed without unregistering, the
 	// slot may still be held in BlueZ. Ignore the error — it just means it wasn't
 	// registered, which is the normal case.
-	hci.Call(advManagerIface+".UnregisterAdvertisement", 0, advObjectPath)
+	hci.Call(advManagerIface+".UnregisterAdvertisement", 0, objectPath)
 
 	// Register advertisement with BlueZ. Retry for up to 30 seconds: BlueZ may
 	// need time to finish adapter initialisation after power-on, and some
 	// controllers need a moment to settle after clearing stale connections.
-	opts := map[string]dbus.Variant{}
 	var regErr error
+	var unsubscribe func()
 	for i := range 30 {
-		call := hci.Call(advManagerIface+".RegisterAdvertisement", 0, advObjectPath, opts)
-		if call.Err == nil {
+		nextUnsubscribe, applyErr := btradio.Register(ctx, policyName, func(applyCtx context.Context) error {
+			return btradio.ApplyAdvertisement(applyCtx, conn, dbus.ObjectPath(adapterPath), objectPath, advIface, policyName, propsSpec[advIface])
+		})
+		if nextUnsubscribe != nil {
+			unsubscribe = nextUnsubscribe
+		}
+		if applyErr == nil {
 			regErr = nil
 			break
 		}
-		regErr = call.Err
+		regErr = applyErr
 		// Log the D-Bus error name on the first attempt so the operator can see
 		// the exact BlueZ error (e.g. org.bluez.Error.Failed vs NotPermitted).
 		if i == 0 {
-			if name, _, ok := dbusErrorInfo(call.Err); ok {
+			if name, _, ok := dbusErrorInfo(applyErr); ok {
 				logger.Debug("BLE advertisement registration attempt failed",
 					zap.String("dbus_error", name),
-					zap.Error(call.Err))
+					zap.Error(applyErr))
 			}
 		}
 		select {
 		case <-ctx.Done():
+			if unsubscribe != nil {
+				unsubscribe()
+			}
 			conn.Close()
 			return ctx.Err()
 		case <-time.After(time.Second):
 		}
 	}
 	if regErr != nil {
-		conn.Close()
-		return fmt.Errorf("register advertisement: %w", regErr)
+		// Retain the live subscription so correcting an unsupported saved policy
+		// can recover advertising without an agent restart.
+		logger.Warn("BLE advertisement inactive; radio policy changes can retry it", zap.Error(regErr))
+	} else {
+		logger.Info("BLE advertisement registered", zap.String("adapter", adapterPath),
+			zap.String("uuid", serviceUUID), zap.String("name", hostname))
 	}
-
-	logger.Info("BLE advertisement registered",
-		zap.String("adapter", adapterPath),
-		zap.String("uuid", wendyServiceUUID),
-		zap.String("name", hostname))
-
 	// Wait for context cancellation, then unregister.
 	go func() {
 		<-ctx.Done()
-		if call := hci.Call(advManagerIface+".UnregisterAdvertisement", 0, advObjectPath); call.Err != nil {
+		if unsubscribe != nil {
+			unsubscribe()
+		}
+		if call := hci.Call(advManagerIface+".UnregisterAdvertisement", 0, objectPath); call.Err != nil {
 			logger.Warn("unregister advertisement failed", zap.Error(call.Err))
 		}
 		conn.Close()

@@ -1,6 +1,6 @@
 ---
-title: Hello World in Mojo 1.0
-description: Compile a Mojo 1.0 program in a container and run it on a WendyOS device
+title: Hello world in Mojo 1.0
+description: Compile a Mojo 1.0 program in a container and run it on your device
 language: mojo
 ---
 
@@ -10,21 +10,19 @@ The Dockerfile pins **Mojo 1.0.0** and installs the compiler inside the build co
 
 ## Prerequisites
 
-1. Install the [Wendy CLI](/docs/#1-install-the-wendy-cli) on your development machine.
+1. Install the [Wendy CLI](/docs/installation/cli) on your development machine.
 2. Install and start Docker on your development machine.
 3. Connect a 64-bit ARM WendyOS device, such as an NVIDIA Jetson Orin Nano, over USB or your network.
 4. Ensure the build machine has internet access to download the base image and packages.
 
 This tutorial uses the CPU. It does not require a GPU entitlement or MAX.
 
-## Choose a default device
+## Choose your device
 
-Run `wendy discover`, highlight your device with the arrow keys, and press `d` to make it the default. Press Ctrl+C to leave discovery. Wendy remembers this choice for subsequent commands.
-
-If you already know the hostname, you can set it directly in one line:
+Run `wendy discover` to find your device's hostname, then press Ctrl+C to leave discovery. Point this terminal at the device so the commands below use it:
 
 ```bash
-wendy device set-default <hostname>
+export WENDY_DEVICE=<hostname>
 ```
 
 ## Write the program
@@ -121,5 +119,5 @@ If an older agent stalls while diffing image layers, cancel the deployment and r
 
 ## Next steps
 
-- Build a [Simple Web Server](/docs/guides/tutorials/mojo/simple-web-server) that stays running and calls Python from Mojo.
-- Run a [MAX Graph](/docs/guides/tutorials/mojo/max-graph) on your device's CPU.
+- Build a [simple web server](/docs/guides/tutorials/mojo/simple-web-server) that stays running and calls Python from Mojo.
+- Run a [MAX graph](/docs/guides/tutorials/mojo/max-graph) on your device's CPU.

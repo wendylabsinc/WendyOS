@@ -1,0 +1,173 @@
+---
+title: Offline Protocol
+description: Offline Protocol is the coordination layer for physical systems. Add it to WendyOS so boards, robots and the apps on them find each other, verify identity, share data and call each other's services directly, end-to-end encrypted.
+---
+
+## What is Offline Protocol?
+
+[Offline Protocol](https://www.offlineprotocol.com) is the coordination layer for
+physical systems. Devices, apps, and AI agents use it to find each other, verify
+who they are talking to, exchange data, and call the services running on nearby
+machines, over whatever path is available: the local network, Bluetooth LE, a
+device in between, a gateway, or the cloud.
+
+Every device gets its own cryptographic identity, and every session and group is
+end-to-end encrypted with MLS ([RFC 9420](https://www.rfc-editor.org/rfc/rfc9420)).
+Messages for a device that is away are held and delivered when it returns, and a
+device in the middle can carry traffic it cannot read. The same protocol runs on
+Linux boards, servers, desktops, and phones, with SDKs for Python, Rust, C,
+Swift, Kotlin, Java, React Native, and Flutter.
+
+Teams use it to coordinate robot and drone fleets, industrial and energy sites,
+logistics yards, and field operations: anywhere many machines work together in
+one place and need to keep working when connectivity is poor or absent.
+
+## Offline Protocol on WendyOS
+
+WendyOS gets your app onto every board, runs it, and keeps it updated. Offline
+Protocol connects those boards, so the apps on them coordinate directly with each
+other instead of routing every exchange through the cloud.
+
+Watch [Three computers, no internet](https://www.youtube.com/watch?v=6Bbxldoz3w4)
+to see a Qualcomm Dragonwing IQ9, a Raspberry Pi 5, and an NVIDIA Jetson Orin
+Nano find each other, keep messages for a board that is unplugged, and relay
+through a middle board, all with no internet connection.
+
+## Why it matters
+
+Most machine-to-machine work happens on the same site, often in the same room,
+yet it usually travels through the cloud to get there. Offline Protocol keeps
+that work local.
+
+- **Faster coordination.** A call between two devices is a hop over the local
+  network or Bluetooth LE, answered in about a second, instead of a round trip
+  through a distant server.
+- **No networking code in your apps.** Every app that can make an HTTP request
+  is already integrated. Teams ship features instead of building and
+  maintaining a device mesh.
+- **Lower connectivity costs.** Devices reach each other directly, so a site
+  needs one internet uplink, not a data plan per device, and nothing between
+  devices is billed as cloud traffic.
+- **Work that keeps moving.** When the uplink drops, devices keep calling each
+  other and keep their records. Anything addressed to a device that is away is
+  delivered the moment it returns.
+- **Secure by default.** Each device has its own identity, and everything it
+  sends is end-to-end encrypted, including traffic relayed through other
+  devices.
+
+## What you can build
+
+- **Fleets that coordinate locally**, discovering which board offers which
+  service and calling it, with no central server.
+- **Apps that call each other across devices** with ordinary HTTP requests,
+  from any language.
+- **A site hub** that collects readings and events from every device around it
+  and reconciles them with the cloud when the uplink is available.
+- **A gateway** in which one box carries the internet connection for every
+  device on site.
+- **Operator tools** where a phone or tablet joins the fleet over Bluetooth LE
+  to check on or command the machine in front of it.
+
+## How it works
+
+Offline Protocol runs on WendyOS in one of two ways:
+
+- **Inside your app.** A Python app installs `offline-protocol-sdk` from PyPI
+  and runs the protocol in its own process. The
+  [three-board tutorial](/docs/guides/tutorials/python/offline-protocol-three-boards) takes this path.
+- **As a service, one per device.** The published `offline-protocol-service`
+  image runs as its own Wendy app and owns the device's identity, encrypted
+  sessions, held messages, and links. Apps on the device call it over plain
+  HTTP on `127.0.0.1:8080`, or use its local API for groups, files, and
+  replicated documents. See [services between devices](/docs/guides/offline-protocol-services).
+
+```
+Device A                                  Device B
+your app                                  provider app
+   | HTTP on loopback                        ^ HTTP on loopback
+   v                                         |
+Offline Protocol   <-- local network -->  Offline Protocol
+service            <-- Bluetooth LE  -->  service
+                   <-- any device in between -->
+```
+
+Between devices, the protocol uses every link available at once: TCP peer
+streams on the local network (discovered over DNS-SD), Bluetooth LE, multi-hop
+delivery through other devices, and an internet relay for devices on other
+networks. Two devices with no direct link still reach each other through any
+device in between, and that device cannot read what it carries.
+
+## Capabilities
+
+The same protocol runs on WendyOS devices, phones, servers, and desktops, so
+everything below works across all of them.
+
+| Capability | What it does |
+| --- | --- |
+| Every link from one service | Local network, Bluetooth LE, multi-hop through nearby devices, Wi-Fi Direct between Android phones, and an internet relay, all managed for you. |
+| End-to-end encryption | MLS (RFC 9420) for every session and group. Sessions form automatically between devices that meet, including through a device in between. |
+| Store, carry, and forward | Messages for a device that is away wait, travel with other devices, and are delivered when a path appears. |
+| Services over HTTP | Register any HTTP server as a service, discover providers across the mesh, and call them with a normal request. |
+| Encrypted groups | Group messaging across devices and phones, with membership managed by MLS. |
+| Replicated documents | Shared state (CRDTs) that every device edits locally and that merges cleanly after a network split. |
+| File transfer | Files and media sent device to device. |
+| Presence and delivery | Which devices are reachable now, and confirmation when each message is delivered. |
+| Device identity | A key generated on the device, sealed on disk under a store key you control. |
+| Every platform | Python, Rust, React Native, Swift, Kotlin, Java, Flutter, and C bindings over one engine. |
+
+## Proven on WendyOS
+
+The service runs on Raspberry Pi 4 boards running WendyOS, with a laptop and an
+Android phone as additional peers and no internet connection anywhere:
+
+| Scenario | Result |
+| --- | --- |
+| Call through a middle device (A to laptop to B) | 5 of 5 HTTP calls answered, in 0.7 to 1.4 s each |
+| Called device offline for 45 s | The call waited and was answered 64 s after it was sent, inside the caller's 90 s timeout |
+| Bluetooth LE only, no local network | Calls answered in about 1 s |
+| Encrypted group across every device | Every member sent and received, including the phone over Bluetooth LE |
+
+The [three-board tutorial](/docs/guides/tutorials/python/offline-protocol-three-boards) runs on a Qualcomm Dragonwing IQ9, a Raspberry
+Pi 5, and an NVIDIA Jetson Orin Nano with no internet connection: the boards
+discover each other, form encrypted sessions, hold messages for a board that is
+unplugged, and relay through a middle board.
+
+## Get started
+
+| Goal | Start here |
+| --- | --- |
+| Build a Python app that runs on three boards with no internet | [Connect three boards with no internet](/docs/guides/tutorials/python/offline-protocol-three-boards) |
+| Call services on other devices over HTTP, Bluetooth LE, groups, files, and documents | [Services between devices with Offline Protocol](/docs/guides/offline-protocol-services) |
+
+## Security
+
+- **End-to-end encryption.** Every session and group uses MLS (RFC 9420), and
+  a device that relays a message cannot read it.
+- **Device identity.** Each device generates its own key, and its address is
+  derived from that key. Everything on disk is sealed under a store key you
+  control.
+- **Loopback only.** The service's HTTP front listens on `127.0.0.1` and
+  refuses browser requests that carry an `Origin` header.
+- **Caller authorization.** Every request a provider receives names the
+  calling device, authenticated by the encrypted session, so a provider can
+  serve only the devices it trusts.
+- **Clock sync.** Encryption checks the current time. Run
+  `wendy device sync-time` on networks without a time server.
+
+## Licensing
+
+The Offline Protocol SDK is open source under AGPL-3.0. A commercial license is
+available from Offline Protocol for products that need other terms; see
+[pricing and licensing](https://www.offlineprotocol.com/pricing) or
+[contact the team](https://www.offlineprotocol.com/contact).
+
+## Resources
+
+- [Offline Protocol documentation](https://www.offlineprotocol.com/docs)
+- [Python and Linux guide](https://www.offlineprotocol.com/docs/mesh-sdk/python)
+- [Offline Protocol SDK on GitHub](https://github.com/Offline-Protocol/offline-protocol-sdk)
+- [`offline-protocol-sdk` on PyPI](https://pypi.org/project/offline-protocol-sdk/)
+- [Three computers, no internet](https://wendy.dev/blog/offline-protocol-on-wendyos)
+  on the Wendy blog, and the [video walkthrough](https://www.youtube.com/watch?v=6Bbxldoz3w4)
+- [Wendy Net](/docs/guides/wendy-net): put the devices in your organization on
+  one private network

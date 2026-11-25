@@ -26,7 +26,12 @@ const (
 	JobCompleted     = "completed"
 )
 
-type StartOptions struct{ Options }
+// StartOptions carries Provisioning beside Options because Options is echoed in
+// results and the job file, and Provisioning holds Wi-Fi passwords.
+type StartOptions struct {
+	Options
+	Provisioning *Provisioning `json:"-"`
+}
 
 type ResumeOptions struct {
 	JobID           string `json:"job_id"`
@@ -53,23 +58,24 @@ type Target struct {
 }
 
 type Job struct {
-	AnalyticsAttemptID string        `json:"analytics_attempt_id,omitempty"`
-	ID                 string        `json:"id"`
-	State              string        `json:"state"`
-	Phase              string        `json:"phase"`
-	Options            Options       `json:"options"`
-	Plan               *Plan         `json:"plan"`
-	Target             *Target       `json:"target,omitempty"`
-	Instructions       []string      `json:"instructions"`
-	Error              string        `json:"error,omitempty"`
-	LogPath            string        `json:"log_path"`
-	StorePath          string        `json:"store_path"`
-	CreatedAt          time.Time     `json:"created_at"`
-	UpdatedAt          time.Time     `json:"updated_at"`
-	EraseAuthorizedAt  *time.Time    `json:"erase_authorized_at,omitempty"`
-	WriteStartedAt     *time.Time    `json:"write_started_at,omitempty"`
-	WriteCompletedAt   *time.Time    `json:"write_completed_at,omitempty"`
-	Verification       *Verification `json:"verification,omitempty"`
+	AnalyticsAttemptID string               `json:"analytics_attempt_id,omitempty"`
+	ID                 string               `json:"id"`
+	State              string               `json:"state"`
+	Phase              string               `json:"phase"`
+	Options            Options              `json:"options"`
+	Provisioning       *ProvisioningSummary `json:"provisioning,omitempty"`
+	Plan               *Plan                `json:"plan"`
+	Target             *Target              `json:"target,omitempty"`
+	Instructions       []string             `json:"instructions"`
+	Error              string               `json:"error,omitempty"`
+	LogPath            string               `json:"log_path"`
+	StorePath          string               `json:"store_path"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
+	EraseAuthorizedAt  *time.Time           `json:"erase_authorized_at,omitempty"`
+	WriteStartedAt     *time.Time           `json:"write_started_at,omitempty"`
+	WriteCompletedAt   *time.Time           `json:"write_completed_at,omitempty"`
+	Verification       *Verification        `json:"verification,omitempty"`
 }
 
 // JobHooks separate durable transitions from platform-specific probes and writes.
@@ -85,7 +91,9 @@ type JobHooks struct {
 
 type JobStore struct{ Root string }
 
-var jobIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+// Jobs carrying first-boot input get longer IDs, which older wendy builds
+// reject instead of resuming them and dropping the input they do not know.
+var jobIDPattern = regexp.MustCompile(`^[a-f0-9]{32}([a-f0-9]{8})?$`)
 
 var ErrJobUnsupported = errors.New("installation job method unsupported")
 
@@ -157,7 +165,11 @@ func (s JobStore) save(j *Job) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(s.Root, ".job-*")
+	return s.writeAtomic(path, b, ".job-*")
+}
+
+func (s JobStore) writeAtomic(path string, b []byte, tmpPattern string) error {
+	f, err := os.CreateTemp(s.Root, tmpPattern)
 	if err != nil {
 		return err
 	}
@@ -194,6 +206,10 @@ func (s JobStore) save(j *Job) error {
 }
 
 func (s JobStore) Start(ctx context.Context, opts StartOptions, h JobHooks) (*Job, error) {
+	prov, err := normalizeProvisioning(opts.Provisioning)
+	if err != nil {
+		return nil, err
+	}
 	if h.Plan == nil {
 		return nil, fmt.Errorf("installation planner is unavailable")
 	}
@@ -219,16 +235,20 @@ func (s JobStore) Start(ctx context.Context, opts StartOptions, h JobHooks) (*Jo
 	if err := os.MkdirAll(s.Root, 0700); err != nil {
 		return nil, err
 	}
+	s.sweepProvisioning(time.Now())
 	id := make([]byte, 16)
+	if prov.summary().Requested() {
+		id = make([]byte, 20)
+	}
 	if _, err := rand.Read(id); err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
 	// Pin the resolved release and storage, not a mutable "latest" request.
 	opts.Options.Version, opts.Options.Storage = p.Version, p.Storage
-	j := &Job{AnalyticsAttemptID: analytics.AttemptID(ctx), ID: hex.EncodeToString(id), State: JobWaitingTarget, Phase: "connect_target", Options: opts.Options, Plan: p, StorePath: s.Root, CreatedAt: now}
+	j := &Job{AnalyticsAttemptID: analytics.AttemptID(ctx), ID: hex.EncodeToString(id), State: JobWaitingTarget, Phase: "connect_target", Options: opts.Options, Provisioning: prov.summary(), Plan: p, StorePath: s.Root, CreatedAt: now}
 	j.LogPath = filepath.Join(s.Root, j.ID+".log")
-	j.Instructions = targetInstructions(p)
+	j.Instructions = targetInstructions(j)
 	log, err := os.OpenFile(j.LogPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, err
@@ -236,15 +256,22 @@ func (s JobStore) Start(ctx context.Context, opts StartOptions, h JobHooks) (*Jo
 	if err := log.Close(); err != nil {
 		return nil, err
 	}
+	if j.Provisioning.Requested() {
+		if err := s.writeProvisioning(j.ID, prov); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.save(j); err != nil {
+		s.removeProvisioning(j.ID)
 		return nil, err
 	}
 	return j, nil
 }
 
-func targetInstructions(p *Plan) []string {
+func targetInstructions(j *Job) []string {
+	p := j.Plan
 	if p.Method != "usb-recovery" {
-		return []string{"Attach the selected media to this host and check its path, model and capacity. Resume to probe the target; no write occurs during this probe.", "Use Ethernet for first boot. These jobs do not pre-seed Wi-Fi or cloud enrollment."}
+		return []string{"Attach the selected media to this host and check its path, model and capacity. Resume to probe the target; no write occurs during this probe.", firstBootLine(j.Provisioning)}
 	}
 	button := "Use the developer kit's Force Recovery button or header while applying power/reset, then release Force Recovery."
 	if p.DeviceType == "jetson-agx-thor" {
@@ -253,7 +280,7 @@ func targetInstructions(p *Plan) []string {
 	if p.DeviceType == "jetson-orin-nano" {
 		button = "Disconnect power. Bridge FC REC to GND, pins 9 and 10 on the button header under the module, with a jumper. Connect power to enter recovery, then remove the jumper. This developer kit has no recovery buttons."
 	}
-	steps := []string{"Disconnect other recovery-mode Jetsons. Attach a USB data cable to the selected developer kit's recovery port and keep it connected until the write finishes.", button, "Resume to probe the board. No flash occurs until the observed target is returned and explicitly authorized.", "Use Ethernet for first boot. These jobs do not pre-seed Wi-Fi or cloud enrollment.", "Jobs pin the recovery chip ID before booting the flash payload, then require the flashing gadget at the same USB path. A USB speed change that changes that path requires inspection and the interactive installer; the job will not select a different port automatically."}
+	steps := []string{"Disconnect other recovery-mode Jetsons. Attach a USB data cable to the selected developer kit's recovery port and keep it connected until the write finishes.", button, "Resume to probe the board. No flash occurs until the observed target is returned and explicitly authorized.", firstBootLine(j.Provisioning), "Jobs pin the recovery chip ID before booting the flash payload, then require the flashing gadget at the same USB path. A USB speed change that changes that path requires inspection and the interactive installer; the job will not select a different port automatically."}
 	if p.HostOS == "darwin" {
 		steps = append(steps, "If macOS says the attached disk is unreadable, choose Ignore. Do not initialize or eject the flashing disk.")
 	}
@@ -276,7 +303,16 @@ func bootInstructions(j *Job) []string {
 	} else {
 		steps = append(steps, "Safely eject the media, insert it into the intended board, and power the board on.")
 	}
-	return append(steps, "Connect Ethernet and allow first boot to finish. Discover and identify this device, then resume with its explicit address to verify the installed version and board. Include a known public key if available.")
+	return append(steps, bootWaitLine(j.Provisioning)+" "+discoverLine(j.Provisioning))
+}
+
+// retryInstructions follow a failure before any write. A worker run consumes
+// the job's first-boot input, so such a job cannot run again.
+func (s JobStore) retryInstructions(j *Job) []string {
+	if j.Provisioning.Requested() && !s.hasProvisioning(j.ID) {
+		return []string{"This job's first-boot input (device name and Wi-Fi) was discarded after the attempt. Create a new installation job with the same choices, then probe and authorize its target."}
+	}
+	return targetInstructions(j)
 }
 
 // reconcile only recovers work when the per-job worker lock proves no worker is
@@ -300,6 +336,10 @@ func (s JobStore) reconcile(j *Job) error {
 		return nil
 	}
 	defer l.Unlock()
+	if j.WriteStartedAt != nil {
+		// A job past its write boundary never runs again.
+		s.removeProvisioning(j.ID)
+	}
 	if j.WriteCompletedAt != nil {
 		j.State = JobAwaitingBoot
 		j.Instructions = bootInstructions(j)
@@ -311,7 +351,7 @@ func (s JobStore) reconcile(j *Job) error {
 		j.State = JobWaitingTarget
 		j.Error = "The worker stopped before a persistent write. Reconnect the target and resume to probe and authorize it again."
 		j.EraseAuthorizedAt = nil
-		j.Instructions = targetInstructions(j.Plan)
+		j.Instructions = s.retryInstructions(j)
 	}
 	return s.save(j)
 }
@@ -333,6 +373,7 @@ func (s JobStore) Status(_ context.Context, id string) (*Job, error) {
 }
 
 func (s JobStore) Resume(ctx context.Context, opts ResumeOptions, h JobHooks) (*Job, error) {
+	s.sweepProvisioning(time.Now())
 	l, err := s.lock(opts.JobID)
 	if err != nil {
 		return nil, err
@@ -368,6 +409,9 @@ func (s JobStore) Resume(ctx context.Context, opts ResumeOptions, h JobHooks) (*
 			j.Instructions = []string{"The expected agent, OS version and board responded. Check cloud enrollment and application readiness separately."}
 		}
 	case JobWaitingTarget:
+		if err := s.checkProvisioning(j); err != nil {
+			return nil, err
+		}
 		if h.Probe == nil {
 			return nil, fmt.Errorf("target probe unavailable")
 		}
@@ -383,10 +427,13 @@ func (s JobStore) Resume(ctx context.Context, opts ResumeOptions, h JobHooks) (*
 		j.State = JobAwaitingErase
 		j.Phase = "confirm_erase"
 		j.Error = ""
-		j.Instructions = []string{j.Plan.EraseScope, "Confirm this exact observed target with confirm_erase=true and target_id set to its fingerprint. Non-removable host media also requires confirm_internal=true."}
+		j.Instructions = []string{j.Plan.EraseScope, firstBootLine(j.Provisioning), "Confirm this exact observed target with confirm_erase=true and target_id set to its fingerprint. Non-removable host media also requires confirm_internal=true."}
 	case JobAwaitingErase:
 		if !opts.ConfirmErase || j.Target == nil || opts.TargetID != j.Target.Fingerprint {
 			return nil, fmt.Errorf("explicit erase confirmation and the observed target fingerprint are required")
+		}
+		if err := s.checkProvisioning(j); err != nil {
+			return nil, err
 		}
 		if j.Plan.Method != "usb-recovery" && !j.Target.Removable && !opts.ConfirmInternal {
 			return nil, fmt.Errorf("this host drive is non-removable; explicit confirm_internal is required")
@@ -454,6 +501,8 @@ func (s JobStore) Run(ctx context.Context, id string, execute func(context.Conte
 		return fmt.Errorf("installation worker already running")
 	}
 	defer worker.Unlock()
+	// Each worker run consumes the first-boot input, whatever its outcome.
+	defer s.removeProvisioning(id)
 	// One host flash at a time also protects helpers and shared artifact caches.
 	host, err := s.newLock(filepath.Join(s.Root, "host-install.lock"))
 	if err != nil {
@@ -464,7 +513,7 @@ func (s JobStore) Run(ctx context.Context, id string, execute func(context.Conte
 		return err
 	}
 	if !ok {
-		return s.failQueued(id, fmt.Errorf("another installation is running on this host; wait for it to finish, then probe and authorize this job again"))
+		return s.failQueued(id, fmt.Errorf("another installation is running on this host; wait for it to finish, then follow this job's instructions"))
 	}
 	defer host.Unlock()
 	l, err := s.lock(id)
@@ -504,13 +553,19 @@ func (s JobStore) Run(ctx context.Context, id string, execute func(context.Conte
 	defer l.Unlock()
 	if err != nil {
 		j.Error = err.Error()
-		if j.WriteStartedAt != nil {
+		var provErr *ProvisioningError
+		switch {
+		case j.WriteStartedAt != nil && errors.As(err, &provErr):
+			j.State = JobInterrupted
+			j.Instructions = provisioningFailureInstructions(j, provErr)
+		case j.WriteStartedAt != nil:
 			j.State = JobInterrupted
 			j.Instructions = []string{"A write began and did not report success. Do not repeat this job. Inspect the log and target; verify an explicit address if it booted, or create a new recovery job after inspection."}
-		} else {
+		default:
+			s.removeProvisioning(id)
 			j.State = JobWaitingTarget
 			j.EraseAuthorizedAt = nil
-			j.Instructions = targetInstructions(j.Plan)
+			j.Instructions = s.retryInstructions(j)
 		}
 	} else {
 		if j.WriteStartedAt == nil {
@@ -537,10 +592,11 @@ func (s JobStore) failQueued(id string, cause error) error {
 		return errors.Join(cause, err)
 	}
 	if j.State == JobQueued && j.WriteStartedAt == nil {
+		s.removeProvisioning(id)
 		j.State = JobWaitingTarget
 		j.EraseAuthorizedAt = nil
 		j.Error = cause.Error()
-		j.Instructions = targetInstructions(j.Plan)
+		j.Instructions = s.retryInstructions(j)
 		return errors.Join(cause, s.save(j))
 	}
 	return cause

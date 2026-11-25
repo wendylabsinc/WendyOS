@@ -14,7 +14,26 @@ Declare them in the `entitlements` array of your `wendy.json`, or add one with `
 }
 ```
 
-> **Complete reference:** for every entitlement type, its options, and security notes, see [wendy.json → Entitlements](../apps/wendy.json.md#entitlements-1). This page is a guide to the common ones and how to choose between similar options.
+> **Complete reference:** for every entitlement type, its options, and security notes, see [wendy.json → Entitlements](/docs/reference/app-configuration#entitlements-1). This page is a guide to the common ones and how to choose between similar options.
+
+A device's agent ignores an entitlement type it does not know, and starts the app without that access. When the agent reports the types it supports, `wendy run` checks your `wendy.json` against them before building and stops on a type the agent does not support, suggesting `wendy device update`. Agents that predate this report are not checked.
+
+## Generic SensorLink readings
+
+Use `{ "type": "sensor-read" }` to read generic samples from paired SensorLink
+sources through `WENDY_SENSOR_SOCKET`. This mounts `/run/wendy/sensors` read-only
+and grants the app API socket group so non-root applications can connect.
+The dedicated server implements only `WendySensorService.GetSensorManifest` and
+`StreamSensors`; it cannot pair devices, read credentials, or manage containers.
+It grants access to all paired generic channels, not a per-source allowlist.
+
+Refresh the manifest after reconnecting: channel IDs belong to the current
+source connection and may change. Disconnects end affected subscriptions; slow
+readers are disconnected when their bounded queue fills. No old samples are
+replayed on subscription. This requires an agent and CLI supporting `sensor-read`;
+do not substitute `admin` when an older agent lacks the read API. See
+[Read generic SensorLink samples](/docs/advanced/device/sensor-read) for source identity, API usage
+and forwarding limits.
 
 ## Notifications
 
@@ -91,12 +110,16 @@ still accepted.
 
 ## Network
 
-The network entitlement allows the container to access the device's network. If the device is connected to WiFi, Ethernet or otherwise, the container will have access to make TCP and UDP connections to the internet.
+The network entitlement selects the container's network access. Host and bridge
+modes can use the device's Internet connection. Mesh mode grants Wendy Net
+service access without an Internet default route.
 
 A "network" type entitlement can have the following values:
 
 - **mode**: `host` shares the device's network for LAN access; `bridge` provides
-  outbound DNS/downloads through NAT without LAN port publishing; `none` provides
+  outbound DNS/downloads through NAT without LAN port publishing; `mesh` provides
+  isolated Wendy Net service access; `host-admin` adds host network administration;
+  `none` provides
   only loopback. Declare a mode explicitly. Omitting the entire entitlement gives
   an ordinary container only loopback, and `wendy run` warns before building.
   In a shared-network group, secondaries inherit the primary service's namespace.
@@ -138,9 +161,14 @@ server:
 ]
 ```
 
+With host networking, two apps cannot serve the same port. The device refuses
+to start an app whose `http` or `mcp` port another app or process already
+uses, and names the holder; `wendy run` stops before the build when it can
+confirm the clash.
+
 Ordinary detached agent deployments include HTTP URLs in their
 [endpoint report](../clients/wendy-cli/commands/run.md#detached-output), without
-checking application health. See the [full `http` reference](../apps/wendy.json.md#http)
+checking application health. See the [full `http` reference](/docs/reference/app-configuration#http)
 for discovery and attached-run behavior.
 
 ## Wi-Fi Aware
@@ -152,7 +180,7 @@ For an app that sends IP traffic over those direct connections, also add
 
 This grants direct radio control to a trusted app. Wi-Fi Aware shares the device's
 radio with other apps and Wendy Net, so avoid radio-wide start, stop, or reset
-commands. See the [configuration reference](../apps/wendy.json.md#nan) for the
+commands. See the [configuration reference](/docs/reference/app-configuration#nan) for the
 app's control socket, interface, and reply-directory settings.
 
 ## Input
@@ -248,6 +276,34 @@ Use `serial` for serial ports and `usb` for raw USB protocols — they expose di
 
 > **Security note:** the cgroup rule is scoped to the named device's exact `major:minor`, so — unlike a whole-major grant — it never exposes other devices that share the major (e.g. other `ttyACM*`/`ttyUSB*` adapters on the host). The entitlement is USB-only, so it can never reach an on-board console UART. See *Replug behavior* above for why a reconnect needs a redeploy.
 
+## Arduino UNO Q microcontroller
+
+The UNO Q's STM32 runs an Arduino sketch next to WendyOS. Two `wendy.json` entries cover it:
+
+- **[`mcu`](/docs/apps/wendy.json#mcu)** names the sketch folder. `wendy run` compiles it with a pinned `arduino-cli`, then flashes it before the container deploy. If the compile or the flash fails, the app is not deployed.
+- **`arduino-bridge`** lets the app talk to the sketch through Arduino's router, the same Bridge that Arduino App Lab uses. Modulino modules sit on the microcontroller's Qwiic bus, so Linux reaches them only this way.
+
+```json
+{
+    "mcu": { "sketch": "sketch" },
+    "entitlements": [{ "type": "arduino-bridge" }]
+}
+```
+
+The container receives:
+- A bind mount of the host directory `/run/arduino-router`, which holds the router's socket. It is the directory, not the socket, so a router restart doesn't break the app.
+- The router's `arduino-router` group.
+- `APP_SOCKET=unix:///run/arduino-router/router.sock`, unless the app's `env` sets it.
+
+> The router starts at boot and tells the microcontroller that Linux is ready, so a sketch built with Arduino's default "wait for Linux" option starts after every reboot.
+
+> One Bridge message holds about 235 bytes (the buffer of Arduino_RPClite on the microcontroller). Send larger data in pieces.
+
+**Troubleshooting**
+- *"microcontroller is busy with another flash"*: another flash is still running after a 3-minute wait. Run again when it finishes.
+- *"cannot drive BOOT0 (GPIO 37) low"*: another app holds the microcontroller's GPIO lines, for example an old OpenOCD flasher app. Stop it and run again.
+- *"Warning: Arduino router is not running"*: the sketch was flashed, but it starts only once `wendyos-arduino-router` runs on the device.
+
 ## SPI
 
 The SPI entitlement grants a container access to the host's SPI buses so it can talk to SPI peripherals (displays, ADCs, sensors, radios) through the `spidev` user-space interface at `/dev/spidev<bus>.<chipselect>`.
@@ -302,6 +358,14 @@ spi.close()
 ```
 
 > **Security note:** unlike `serial` and `i2c` — which are scoped to a single named node's exact `major:minor` — `spi` is a **whole-major** grant. An app that declares it can open **every** SPI bus on the host, not just one. This is deliberate: the entitlement exposes the SPI subsystem rather than an individual bus, and a host can present many `spidev*.*` nodes whose minors are not known ahead of time. Grant it only to apps you trust with all of the device's SPI buses.
+
+## Camera
+
+Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares.
+
+```json
+{ "type": "camera", "mode": "direct" }
+```
 
 ## Audio
 

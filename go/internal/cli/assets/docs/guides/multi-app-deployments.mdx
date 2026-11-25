@@ -1,63 +1,44 @@
 ---
-title: Multi-App Deployments
+title: Multi-app deployments
 description: Run several services on one WendyOS device using a services map or Docker Compose
 ---
 
-This guide runs several services on one device. To deploy one image to several devices, follow [Build Once, Deploy to Several Devices](/docs/guides/fleet-deployment).
+This guide runs several services on one device. To deploy one image to several devices, follow [Build once, deploy to several devices](/docs/guides/fleet-deployment).
 
-## Run a multi-container stack as one deployment
+A robotics stack often has a publisher, a processing service, and a subscriber or dashboard. This example runs a ROS 2 talker and listener as one Wendy app, then explains how their configuration connects them.
 
-Some projects are naturally split into cooperating containers. This is common for ROS 2 systems: one service publishes sensor data, another runs planning or inference, and a third exposes a dashboard or bridge.
-
-The recommended way to ship a stack like this is a **single `wendy.json` at the project root**. It is your one source of truth for the deployment: which services exist, how they build, their start order, and their device entitlements. `wendy run` (no extra flags) detects the `services` map and orchestrates the whole stack.
-
-You can shape that `wendy.json` two ways:
-
-- **One Dockerfile per service.** Declare a `services` map directly in `wendy.json`, with each service pointing at its own build context. This is the default and gives you full access to Wendy-specific configuration (entitlements, isolation, frameworks).
-- **A companion to `docker-compose.yml`.** If you already have, or prefer, a `docker-compose.yml`, keep it and add a small companion `wendy.json` that layers Wendy-specific settings (such as GPU or network entitlements) on top of the services Compose already defines.
-
-Both shapes deploy with the same command:
-
-```bash
-wendy run
-```
-
-<Callout type="info">
-Wendy auto-detects the project shape, so you do not need a build-type flag. A `wendy.json` with a `services` map takes the multi-service path; a `docker-compose.yml` is detected as a Compose project (and a companion `wendy.json` is merged in when present).
-</Callout>
-
-### Prerequisites
+## Before you start
 
 - Wendy CLI installed on your development machine
 - A WendyOS device reachable over USB, LAN, or Wendy Cloud
 - Docker installed locally so Wendy can build service images
-- A project directory with either a `services` map in `wendy.json` or a Compose file (`docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`)
+- Git to get the complete example below, and internet access for its first build
 
-## How Wendy runs compose projects
+A service `context` is a directory relative to the root `wendy.json`. `"context": "api"` points to `./api/`, where that service's Dockerfile and source live. Run commands from the project root. See the [folder layout](/docs/advanced/apps/wendy-services) before adapting the examples. Dockerfiles remain supported for every service; Stagefiles are optional.
 
-When you run `wendy run` in a directory with a compose file, Wendy auto-detects the compose project and uses the compose path before the single-Dockerfile path.
+## Run the talker and listener
 
-For a WendyOS device target, Wendy:
+Start with the complete talker/listener example. It includes both build files and the root manifest. Use `wendy discover` to find your Linux Wendy target and replace `my-device.local` with its hostname, address, or `vm:name` selector:
 
-1. Reads the compose file from the project root.
-2. Builds each service that has a `build:` directive for the target device platform.
-3. Pushes built images to the device's embedded registry.
-4. Uses declared `image:` references directly for services without `build:`.
-5. Groups the services under one device app named after the project folder, with one container per service (`<project>_<service>`). A single-service compose project without a companion `wendy.json` keeps the legacy `<project>-<service>` app ID instead; a companion's `appId` always takes over.
-6. Creates service containers in `depends_on` order.
-7. Starts all services and streams logs with a `[service]` prefix.
+```bash
+git clone --depth 1 https://github.com/wendylabsinc/WendyOS.git
+cd WendyOS/Examples/ROS2
+wendy project validate .
+WENDY_TARGET=my-device.local
+wendy run --device "$WENDY_TARGET"
+```
 
-<Callout type="info">
-For ROS 2, set `network_mode: host` on every service that needs DDS discovery, multicast, or direct host-network communication. Wendy converts that field into a host-network entitlement for the generated service app.
-</Callout>
+If you already have the checkout, enter its `Examples/ROS2` directory instead of cloning again. Expect alternating publisher and subscriber messages, such as `[talker] Publishing: 'Hello World: 1'` and `[listener] I heard: [Hello World: 1]`. Sequence numbers advance; they need not start at 1 by the time you see them. Press **Ctrl-C** to leave the run, then explicitly stop the stack:
 
-<Callout type="warning">
-Multi-service projects target Linux/WendyOS devices. Headless Mac does not run multi-container stacks; `wendy run` rejects them before any build when the selected target is a Mac.
-</Callout>
+```bash
+wendy device apps stop sh.wendy.examples.ros2 --device "$WENDY_TARGET"
+```
 
-## Recommended: one `wendy.json`, one build descriptor per service
+An interrupted multi-service run can leave services running. Keep the same `WENDY_TARGET` for the commands below.
 
-Keep one folder per service, each with its own build descriptor, and describe the stack in `wendy.json`:
+## How the two services connect
+
+The root `wendy.json` groups both services into one deployment. Each service has its own build directory. The files below explain the checked-out project; to recreate it yourself, use this layout:
 
 ```text
 ros2-stack/
@@ -68,7 +49,7 @@ ros2-stack/
     build.stagefile.yaml
 ```
 
-Each service can use the same shape. For a ROS 2 demo graph — this is `Examples/ROS2/talker/build.stagefile.yaml` verbatim:
+Save this as `talker/build.stagefile.yaml`:
 
 ```yaml
 version: 1
@@ -89,7 +70,17 @@ stages:
     user: root
 ```
 
-A plain `Dockerfile` per service works the same way; the equivalent is `FROM ros:humble`, an `apt-get` layer, and `CMD ["bash","-lc","source /opt/ros/humble/setup.bash && exec ros2 run demo_nodes_cpp talker"]`. See [`wendy build`](/clients/wendy-cli/commands/build) for how detection picks between them.
+Create `listener/build.stagefile.yaml` with the same contents, changing `name: talker` to `name: listener` and the final entrypoint argument from `talker` to `listener`:
+
+```yaml
+    entrypoint:
+      source: /opt/ros/humble/setup.bash
+      exec: [ros2, run, demo_nodes_cpp, listener]
+```
+
+The listener is a different executable. Copying the talker unchanged would produce two publishers and no subscriber.
+
+A plain `Dockerfile` per service works the same way; the equivalent is `FROM ros:humble`, an `apt-get` layer, and `CMD ["bash","-lc","source /opt/ros/humble/setup.bash && exec ros2 run demo_nodes_cpp talker"]`. See [`wendy run`](/docs/advanced/clients/wendy-cli/commands/run) for build selection.
 
 The `wendy.json` declares both services, the start order, and, for ROS 2, the framework and isolation settings the stack needs:
 
@@ -114,15 +105,15 @@ The `wendy.json` declares both services, the start order, and, for ROS 2, the fr
 
 What this gives you:
 
-- **`frameworks.ros2`** auto-injects `ROS_DOMAIN_ID`, `RMW_IMPLEMENTATION`, and `ROS_LOCALHOST_ONLY=1` by default into every service container, so you do not hand-set ROS environment variables per service. Omit `domainId` and each app gets a stable domain derived from its `appId`, so unrelated apps never share a domain by accident. Set `scope` to `network` only for tools that need to inspect ROS 2 beyond the device, or to `peripherals` for apps that talk to hardware attached to it.
+- **`frameworks.ros2`** auto-injects `ROS_DOMAIN_ID`, `RMW_IMPLEMENTATION`, and `ROS_LOCALHOST_ONLY=1` by default into every service container, so you do not hand-set ROS environment variables per service. Omit `domainId` and Wendy derives a stable default domain from the `appId`. Different app IDs can hash to the same domain; select explicit domains when separation matters. Set `scope` to `network` only for tools that need to inspect ROS 2 beyond the device, or to `peripherals` for apps that talk to hardware attached to it.
 - **`isolation: "shared-ipc"`** shares the network and IPC namespaces plus `/dev/shm` across all services. With DDS pinned to localhost, a shared network namespace is what lets the services discover each other, and the shared `/dev/shm` is required for Fast DDS shared-memory transport. (CycloneDDS on WendyOS currently runs over loopback with its shared-memory transport disabled.)
 - **`dependsOn`** starts services in dependency order.
 
-Run the stack from the project root:
+Run from the directory containing the root `wendy.json`, either your own `ros2-stack` or the checked-out `Examples/ROS2`:
 
 ```bash
-cd ros2-stack
-wendy run
+wendy project validate .
+wendy run --device "$WENDY_TARGET"
 ```
 
 <CliShot flow="run" step="deploy" alt="The Wendy CLI building and deploying a multi-service stack to a WendyOS device" />
@@ -134,13 +125,37 @@ Attached mode streams logs from all services, each line prefixed with the servic
 [listener]  I heard: [Hello World: 1]
 ```
 
-Press **Ctrl-C** to stop the stack. Wendy stops services in reverse dependency order.
+The matching text proves that messages cross the service boundary. If both services print `Publishing`, check the listener entrypoint. If only the talker prints messages, check that both services run and retain the shared isolation and ROS configuration above. `dependsOn` orders startup; it does not prove that a subscriber has received data.
+
+After each run, press **Ctrl-C**, then repeat the explicit `wendy device apps stop sh.wendy.examples.ros2 --device "$WENDY_TARGET"` command above.
 
 <Callout type="info">
-Build and run only one service and its dependencies with `wendy run --service listener`. Wendy resolves the named service through its `dependsOn` graph and skips everything else.
+Build and run only one service and its dependencies with `wendy run --device "$WENDY_TARGET" --service listener`. Wendy resolves the named service through its `dependsOn` graph and skips everything else.
 </Callout>
 
 For the full `services` schema, including per-service entitlements, `frameworks`, and validation rules, see [Multi-Service Apps with `wendy.json`](/docs/advanced/apps/wendy-services).
+
+## How Wendy runs compose projects
+
+When you run `wendy run` in a directory with a compose file, Wendy auto-detects the compose project and uses the compose path before the single-Dockerfile path.
+
+For a WendyOS device target, Wendy:
+
+1. Reads the compose file from the project root.
+2. Builds each service that has a `build:` directive for the target device platform.
+3. Pushes built images to the device's embedded registry.
+4. Uses declared `image:` references directly for services without `build:`.
+5. Groups the services under one device app named after the project folder, with one container per service (`<project>_<service>`). A single-service compose project without a companion `wendy.json` keeps the legacy `<project>-<service>` app ID instead; a companion's `appId` always takes over.
+6. Creates service containers in `depends_on` order.
+7. Starts all services and streams logs with a `[service]` prefix.
+
+<Callout type="info">
+For ROS 2, set `network_mode: host` on every service that needs DDS discovery, multicast, or direct host-network communication. Wendy converts that field into a host-network entitlement for the generated service app.
+</Callout>
+
+<Callout type="warning">
+Multi-service projects target Linux/WendyOS devices. Headless Mac does not run multi-container stacks; `wendy run` rejects them before any build when the selected target is a Mac.
+</Callout>
 
 ## Alternative: a companion `wendy.json` over `docker-compose.yml`
 
@@ -190,7 +205,7 @@ The companion `wendy.json` references the same service names but omits build con
 Deploy it the same way. Wendy detects the Compose project and merges the companion:
 
 ```bash
-wendy run
+wendy run --device "$WENDY_TARGET"
 ```
 
 Wendy maps a focused subset of Compose into device runtime configuration:
@@ -257,15 +272,15 @@ Avoid host bind mounts such as `./bags:/bags` for device deployments. Wendy skip
 For long-running robot stacks, start the services without attaching logs:
 
 ```bash
-wendy run --detach
+wendy run --device "$WENDY_TARGET" --detach
 ```
 
 The whole stack is one app on the device, named by its `appId` (for the ROS 2 example above, `sh.wendy.examples.ros2`), with one container per service. `wendy device apps list` shows the app as a group with a row per service, and app-level commands act on every service at once:
 
 ```bash
-wendy device apps list
-wendy device logs sh.wendy.examples.ros2 --service talker
-wendy device apps stop sh.wendy.examples.ros2
+wendy device apps list --device "$WENDY_TARGET"
+wendy device logs sh.wendy.examples.ros2 --service talker --device "$WENDY_TARGET"
+wendy device apps stop sh.wendy.examples.ros2 --device "$WENDY_TARGET"
 ```
 
 A compose project without a companion `wendy.json` is grouped the same way under the project folder name, except a single-service compose project, which keeps the legacy `<project>-<service>` app ID.

@@ -376,6 +376,27 @@ func pushLayersByChunksWithPrepareModeAndCache(ctx context.Context, cs agentpb.W
 		}
 		toPush = append(toPush, i)
 	}
+	// Check the layers the device lacks against its free space before any of
+	// them is chunked or sent.
+	if storage, ok := deviceStorageFor(ctx); ok {
+		missing := make([]localLayer, 0, len(toPush))
+		for _, i := range toPush {
+			missing = append(missing, layers[i])
+		}
+		need := totalCompressedLayerBytes(missing)
+		if err := deviceImageSpaceError(storage, need); err != nil {
+			return nil, err
+		}
+		if warning := deviceImageSpaceWarning(storage, need); warning != "" {
+			// A live progress display prints the warning once it is done
+			// (pushLayersWithProgress); writing it now would garble the display.
+			if prog != nil {
+				prog.Warn(warning)
+			} else {
+				chunkPushLogln(output, "Warning: %s", warning)
+			}
+		}
+	}
 	// Interactive mode already renders this same reused-layer count live, via
 	// the progress bar's ticker (chunkPushSnapshot.Line(), fed by
 	// SetLayerCounts below) and again in its post-exit Summary() — printing it
@@ -490,6 +511,13 @@ func pushLayersByChunksWithPrepareModeAndCache(ctx context.Context, cs agentpb.W
 			// reports its own cancellation as a bare Canceled status, which
 			// must not stand in for — and hide — the real ErrStalled cause.
 			if prepareErr := <-prepareDone; strictPrepare && prepareErr != nil && !errors.Is(uploadErr, chunkupload.ErrStalled) {
+				var cloudPrepare *cloudImagePrepareError
+				if errors.As(prepareErr, &cloudPrepare) &&
+					(errors.Is(prepareErr, context.Canceled) || status.Code(prepareErr) == codes.Canceled || status.Code(prepareErr) == codes.Unavailable) && retryableTunnelError(uploadErr) {
+					// A dropped connection can also cancel preparation or make
+					// it unavailable. Keep the independently failed upload's cause.
+					return nil, uploadErr
+				}
 				return nil, prepareErr
 			}
 		}

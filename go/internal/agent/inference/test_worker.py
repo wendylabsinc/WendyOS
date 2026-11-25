@@ -306,6 +306,83 @@ class DetectorFailureTests(unittest.TestCase):
         self.assertEqual(detection_error(KeyError()), "inference: KeyError")
 
 
+class ThroughputTests(unittest.TestCase):
+    """Every detector reports what its scoring loop achieved. Before, only the
+    YOLO detector's accelerator did, so a Transformers model that scored one
+    frame every 9 s at rate 1 said nothing about it."""
+
+    run_with_detector = DetectorFailureTests.run_with_detector
+
+    def test_stats_cover_the_recent_frames(self):
+        from worker import Throughput
+        throughput = Throughput()
+        for second in range(5):
+            throughput.record(100.0 + second, now=10 + second)
+        self.assertEqual(throughput.stats(now=14.5), {
+            "fps": 1.0, "infer_ms_p50": 102.0, "infer_ms_p95": 104.0, "frames_scored": 5})
+
+    def test_model_slower_than_the_window_still_has_a_rate(self):
+        from worker import Throughput
+        throughput = Throughput()
+        for frame in range(4):
+            throughput.record(40000.0, now=40 * frame)
+        self.assertEqual(throughput.stats(now=125), {
+            "fps": 0.025, "infer_ms_p50": 40000.0, "infer_ms_p95": 40000.0, "frames_scored": 4})
+
+    def test_no_rate_once_scoring_has_stopped(self):
+        from worker import Throughput
+        throughput = Throughput()
+        self.assertEqual(throughput.stats(now=1), {
+            "fps": 0.0, "infer_ms_p50": 0.0, "infer_ms_p95": 0.0, "frames_scored": 0})
+        for second in range(5):
+            throughput.record(100.0, now=second)
+        self.assertEqual(throughput.stats(now=100), {
+            "fps": 0.0, "infer_ms_p50": 0.0, "infer_ms_p95": 0.0, "frames_scored": 5})
+
+    def test_loop_reports_for_a_detector_without_an_accelerator(self):
+        from unittest import mock
+
+        class Detector:
+            accelerator_status = {"requested": "auto", "active": "cpu", "runtime": "PyTorch"}
+
+            def __call__(self, frame):
+                if frame == 1:
+                    return None  # No engine yet: not a scored frame.
+                if frame == 2:
+                    raise ValueError("bad frame")
+                time.sleep(0.03)
+                return []
+
+        with mock.patch("accelerator.STATUS_SECONDS", 0.2):
+            emitted, _ = self.run_with_detector(Detector(), frame_count=10, wait=1.5)
+        reports = [item for item in emitted if item["type"] == "accelerator"]
+        self.assertGreaterEqual(len(reports), 2)
+        self.assertEqual(reports[-1]["accelerator"], Detector.accelerator_status)
+        stats = reports[-1]["stats"]
+        self.assertEqual(stats["frames_scored"], 8)
+        self.assertGreater(stats["fps"], 0)
+        # The whole scoring step, timed around the detector.
+        self.assertGreaterEqual(stats["infer_ms_p50"], 30)
+        self.assertGreaterEqual(stats["infer_ms_p95"], stats["infer_ms_p50"])
+
+    def test_loop_leaves_the_report_to_a_detectors_accelerator(self):
+        # The YOLO detector's accelerator reports its engine's throughput in
+        # the same message. Two sources would overwrite each other's figures.
+        from unittest import mock
+
+        class Detector:
+            accelerator = object()
+            accelerator_status = {"requested": "auto", "active": "cpu"}
+
+            def __call__(self, frame):
+                return []
+
+        with mock.patch("accelerator.STATUS_SECONDS", 0.2):
+            emitted, _ = self.run_with_detector(Detector(), frame_count=10, wait=1)
+        self.assertEqual({item["type"] for item in emitted}, {"prediction"})
+        self.assertEqual(len(emitted), 10)
+
+
 class OfflineStartTests(unittest.TestCase):
     """A pinned model already on the device starts with no network call, and
     one that is missing while the network is down fails with a plain reason."""
@@ -670,6 +747,8 @@ class Accelerator(accelerator.Accelerator):
         return None
 
     def run_builder(self, job, timeout):
+        if len(sys.argv) > 4 and sys.argv[4] == "cache-only":
+            raise AssertionError("cached restart unexpectedly launched a builder")
         accelerator.EngineCache(job["engine_dir"]).store(job["key"], job["fields"], b"plan", 1)
         return "done", ""
 
@@ -738,6 +817,93 @@ print("python print while importing")
         self.assertIn("[TRT] [W] C stdio to stdout while importing", stderr)
         self.assertIn("python print while importing", stderr)
 
+    def test_fresh_workers_reuse_persisted_engine_without_corrupting_protocol(self):
+        """Exercise disk cache and fd ownership across real process boundaries.
+
+        GPU calls remain scripted here. The physical rehearsal verifies the
+        installed TensorRT/CUDA stack after Agent and board restart.
+        """
+        import hashlib
+        import json
+        import pathlib
+        import subprocess
+        import sys
+        import tempfile
+        here = str(pathlib.Path(__file__).resolve().parent)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            package = root / "bindings" / "tensorrt"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text(self.NOISY_TENSORRT)
+            engines = root / "engines"
+            original = None
+            for attempt, mode in enumerate(("build", "cache-only", "cache-only")):
+                with self.subTest(attempt=attempt):
+                    process = subprocess.run(
+                        [sys.executable, "-u", "-c", self.LAZY_SCRIPT, here,
+                         str(package.parent), str(engines), mode],
+                        input=json.dumps({"backend": "yolo_onnx", "rate": 2}).encode() + b"\n",
+                        capture_output=True, timeout=60)
+                    self.assertEqual(process.returncode, 0, process.stderr.decode(errors="replace"))
+                    messages = [json.loads(line) for line in process.stdout.decode().splitlines()]
+                    self.assertEqual(messages[0]["type"], "ready")
+                    self.assertEqual({m["type"] for m in messages[1:]}, {"accelerator"})
+                    status = messages[-1]["accelerator"]
+                    self.assertEqual(status["active"], "tensorrt")
+                    self.assertEqual(status["engine"]["state"], "ready")
+                    self.assertEqual(status["engine"]["cached"], attempt > 0)
+                    self.assertTrue(status["parity"]["passed"])
+                    self.assertGreater(status["parity"]["frames"], 0)
+                    if attempt:
+                        self.assertFalse(any(m.get("accelerator", {}).get("engine", {}).get("state")
+                                             in ("scheduled", "queued", "building") for m in messages))
+                    for noise in ("write(2) to fd 1", "C stdio to stdout", "python print"):
+                        self.assertIn(noise, process.stderr.decode())
+                    files = sorted(engines.glob("*/engine.*"))
+                    self.assertEqual({p.name for p in files}, {"engine.json", "engine.plan"})
+                    snapshot = {str(p.relative_to(engines)): (hashlib.sha256(p.read_bytes()).hexdigest(),
+                                                           p.stat().st_mtime_ns) for p in files}
+                    if original is None:
+                        original = snapshot
+                    else:
+                        self.assertEqual(snapshot, original, "restart rewrote the persisted engine")
+
 
 if __name__ == "__main__":
     unittest.main()
+
+class ClassificationTests(unittest.TestCase):
+    def test_whole_image_labels_threshold_and_no_boxes(self):
+        from worker import classification_predictions
+        result = classification_predictions([.7, .95, .2, float('nan')],
+                                            {0: 'cat, tabby', 1: 'dog', 2: 'bird', 3: 'bad'},
+                                            {'cat, tabby', 'dog', 'bird', 'bad'}, .5)
+        self.assertEqual(result, [{'label': 'dog', 'score': .95}, {'label': 'cat, tabby', 'score': .7}])
+        self.assertTrue(all('box' not in item for item in result))
+
+    def test_classifier_uses_safe_loader_and_probability_output(self):
+        import contextlib
+        import types
+        from unittest.mock import MagicMock, patch
+        from worker import Detector
+        model = MagicMock()
+        model.eval.return_value = model
+        model.config = types.SimpleNamespace(id2label={0: 'cat', 1: 'dog'}, problem_type=None)
+        model.return_value.logits.__getitem__.return_value.softmax.return_value.tolist.return_value = [.9, .1]
+        processor = MagicMock(return_value={'pixels': object()})
+        transformers = types.SimpleNamespace(
+            AutoConfig=MagicMock(), AutoImageProcessor=MagicMock(),
+            AutoModelForObjectDetection=MagicMock(), AutoModelForImageClassification=MagicMock())
+        transformers.AutoConfig.from_pretrained.return_value = model.config
+        transformers.AutoImageProcessor.from_pretrained.return_value = processor
+        transformers.AutoModelForImageClassification.from_pretrained.return_value = model
+        torch = types.SimpleNamespace(inference_mode=contextlib.nullcontext, __version__="test")
+        with patch.dict('sys.modules', {'torch': torch, 'transformers': transformers}):
+            detector = Detector({'task': 'image-classification', 'model': 'google/test',
+                                 'revision': 'a' * 40, 'labels': ['cat'], 'threshold': .5})
+            self.assertEqual(detector(MagicMock()), [{'label': 'cat', 'score': .9}])
+        transformers.AutoModelForObjectDetection.from_pretrained.assert_not_called()
+        args = transformers.AutoModelForImageClassification.from_pretrained.call_args.kwargs
+        self.assertEqual(args['revision'], 'a' * 40)
+        self.assertTrue(args['use_safetensors'])
+        self.assertFalse(args['trust_remote_code'])

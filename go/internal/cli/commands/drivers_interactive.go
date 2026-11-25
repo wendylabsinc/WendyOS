@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
@@ -43,7 +44,7 @@ func runDriversInteractive(ctx context.Context, source driverManifestOptions) er
 		cliLogln("Installed drivers can still be removed.")
 		exts = nil
 	}
-	return runDriversScreen(ctx, target.Agent.DriverService, dl, exts, source)
+	return runDriversScreen(ctx, target.Agent, dl, exts, source)
 }
 
 // driverPickerItems includes installed-only drivers so local, stale and
@@ -94,7 +95,7 @@ func driverPickerItems(dl *agentpbv2.ListDriversResponse, exts []extensionEntry)
 	return items
 }
 
-func runDriversScreen(ctx context.Context, client agentpbv2.WendyDriverServiceClient, dl *agentpbv2.ListDriversResponse, exts []extensionEntry, source driverManifestOptions) error {
+func runDriversScreen(ctx context.Context, conn *grpcclient.AgentConnection, dl *agentpbv2.ListDriversResponse, exts []extensionEntry, source driverManifestOptions) error {
 	items := driverPickerItems(dl, exts)
 	if len(items) == 0 {
 		cliLogln("No driver add-ons installed or published for this kernel.")
@@ -137,7 +138,7 @@ func runDriversScreen(ctx context.Context, client agentpbv2.WendyDriverServiceCl
 		if err != nil {
 			return err
 		}
-		return installDriver(ctx, client, spec, "")
+		return installDriver(ctx, conn, spec, "")
 	case "remove":
 		if !installed {
 			return fmt.Errorf("driver %q is not installed", name)
@@ -150,7 +151,7 @@ func runDriversScreen(ctx context.Context, client agentpbv2.WendyDriverServiceCl
 			return err
 		}
 		if confirmed {
-			return removeDriver(ctx, client, name)
+			return removeDriver(ctx, conn.DriverService, name)
 		}
 	case "cancel":
 	default:

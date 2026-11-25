@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,6 +116,70 @@ func TestPinnedUnreachableDoesNotBlameThePin(t *testing.T) {
 	}
 }
 
+// A saved device and no stored login at all (WDY-4295): the ladder has no
+// certificate to present, so it attempts nothing. It used to report that as "a
+// reachability problem" and send the user to check the agent and DNS, with no
+// sign-in step. Nothing is known about the device's reachability; the missing
+// login is the one fact there is.
+func TestPinnedDeviceWithoutALoginIsToldToSignIn(t *testing.T) {
+	setTempConfig(t, &config.Config{DevicePins: map[string]config.DevicePin{
+		"orin": {OrgID: 7, CloudGRPC: "grpc.wendy.dev:443", AssetID: "42", Source: config.PinSourceLAN},
+	}})
+	setPinCache(t)
+	origPlaintext := plaintextConnectFn
+	plaintextConnectFn = func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		t.Error("a pinned host was dialled in plaintext")
+		return nil, errors.New("plaintext forbidden")
+	}
+	t.Cleanup(func() { plaintextConnectFn = origPlaintext })
+
+	addr := deadAgentAddr(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := dialAgentLadderWithCerts(ctx, newDialTarget("orin.local", addr), nil)
+	if conn != nil {
+		conn.Close()
+		t.Fatal("a pinned device was connected to without a certificate")
+	}
+
+	const step = "Run 'wendy auth login' with an account that can access the device's organization, then retry."
+	want := "Not signed in: this CLI has no client certificates, so it could not attempt an authenticated connection to device \"orin.local\".\n" +
+		"The saved pin is intact; unpinning the device is not the fix.\n  " + step
+	if err == nil || err.Error() != want {
+		t.Fatalf("message:\n%v\nwant:\n%s", err, want)
+	}
+	// The step is listed once, and JSON mode reports it apart from the message.
+	if steps := NextSteps(err); !reflect.DeepEqual(steps, []string{step}) {
+		t.Errorf("next steps = %q, want the sign-in step alone", steps)
+	}
+	if got := messageWithoutNextSteps(err); strings.Contains(got, "wendy auth login") || !strings.HasSuffix(got, "is not the fix.") {
+		t.Errorf("message without its steps = %q", got)
+	}
+	if got := ErrorClass(err); got != "auth_required" {
+		t.Errorf("ErrorClass = %q, want auth_required: no login is stored, and nothing was dialled", got)
+	}
+	if got := ExecutionErrorClass(newDeviceDialError(addr, err)); got != "auth_required" {
+		t.Errorf("ExecutionErrorClass of the dial error = %q, want auth_required", got)
+	}
+
+	// Still the pinned refusal to every caller that branches on it.
+	if !errors.Is(err, errNoAuthenticatedEndpoint) || errors.Is(err, errDeviceIdentityRefused) || !blocksUnauthenticatedFallback(err) {
+		t.Errorf("err = %v changed type; only its wording and class may change", err)
+	}
+	var failure *noAuthenticatedEndpointError
+	if !errors.As(err, &failure) || failure.certSeen || failure.pinKey != "orin.local" || failure.pinnedKey != "orin.local" ||
+		!reflect.DeepEqual(failure.candidates, []string{addr}) {
+		t.Errorf("refusal = %+v; enrollment trust recovery depends on its target", failure)
+	}
+	// The recovery ladder treats it as it did before: no clock proof, no
+	// certificate refresh, no retry, and the same branch as any pinned refusal
+	// in connectToAgentDirect and resolveTargetInner.
+	if stopConnectionRecovery(err) || errors.Is(err, errProvisionedAgentUnauthorized) || isClockSkewSuspectError(err) ||
+		isCertRefreshableError(err) || isReachabilityTimeoutError(err) || isTLSCertificateError(err) {
+		t.Errorf("err = %v would take a different recovery path than the pinned refusal it wraps", err)
+	}
+}
+
 // TestPinnedUnprovisionedDeviceIsToldHowToUnpin is WDY-3974 end to end. The
 // device was reset to unprovisioned (unenrolled, reflashed, factory reset): its
 // plaintext port answers and its mTLS port is closed. The ladder's TLS probe of
@@ -162,10 +227,9 @@ func TestPinnedUnprovisionedDeviceIsToldHowToUnpin(t *testing.T) {
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		"answers unprovisioned",
-		"wendy device unpin orin",
-		"If you intentionally unenrolled, reset, reflashed",
-		"keep the pin and verify the device first",
+		"now answers as a device that is not enrolled",
+		"reinstalled or reset",
+		changedIdentityStep,
 		addr + " answered without TLS",
 		fmt.Sprintf("%s (port %d: answered without TLS; port %d: connection refused)", host, port, port+1),
 	} {
@@ -183,7 +247,7 @@ func TestPinnedUnprovisionedDeviceIsToldHowToUnpin(t *testing.T) {
 		error
 		CLIMessage() string
 	}
-	if !errors.As(err, &styled) || !strings.Contains(styled.CLIMessage(), "wendy device unpin orin") {
+	if !errors.As(err, &styled) || !strings.Contains(styled.CLIMessage(), changedIdentityStep) {
 		t.Errorf("styled rendering lost the recovery command:\n%v", err)
 	}
 	// Still the same refusal to every caller that branches on it: enrollment's
@@ -255,8 +319,8 @@ func TestPinnedRefusalOffersUnpinOnlyWhenTheDeviceAnsweredWithoutTLS(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			failure := pinnedHostNoAuthenticatedEndpointError("wendyos-hack-device-7.local", candidates, tc.attempts, tc.certSeen)
 			msg := failure.Error()
-			if got := strings.Contains(msg, "wendy device unpin wendyos-hack-device-7.local"); got != tc.wantUnpin {
-				t.Errorf("offers unpin = %v, want %v:\n%s", got, tc.wantUnpin, msg)
+			if got := strings.Contains(msg, changedIdentityStep) && failure.accept != nil; got != tc.wantUnpin {
+				t.Errorf("offers confirmation = %v, want %v:\n%s", got, tc.wantUnpin, msg)
 			}
 			// Only the unprovisioned refusal carries a styled rendering: the CLI
 			// entry point restyles anything in the chain that has one, and a
@@ -343,11 +407,13 @@ func TestLadderWalksEveryCandidateAddress(t *testing.T) {
 // which is a same-CA-host redirect with extra steps. The refusal must outrank
 // the walk.
 func TestLadderStopsAtIdentityRefusalWithoutTryingMoreAddresses(t *testing.T) {
-	setTempConfig(t, &config.Config{}) // unpinned, so only the abort can refuse
+	setTempConfig(t, &config.Config{}) // expected identity is supplied by the caller
 	setPinCache(t)
 
+	var identityChecks atomic.Int32
 	origMismatch := identityMismatchFn
 	identityMismatchFn = func(*grpcclient.AgentConnection) (*certs.IdentityMismatchError, bool) {
+		identityChecks.Add(1)
 		return &certs.IdentityMismatchError{WantOrg: 7, WantAsset: "42", GotOrg: 7, GotAsset: "43"}, true
 	}
 	plaintextCalls := 0
@@ -366,16 +432,16 @@ func TestLadderStopsAtIdentityRefusalWithoutTryingMoreAddresses(t *testing.T) {
 	// followed by two more the walk must never reach.
 	candidates := []string{
 		live,
-		unroutableAddr(t, "fdc5:7daa::1", 50051),
-		unroutableAddr(t, "fdc5:7daa::2", 50051),
+		deadLoopbackAddr(t, "127.0.0.1"),
+		deadLoopbackAddr(t, "127.0.0.1"),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	conn, _, err := dialAgentLadderWithCerts(ctx,
-		newDialTargetCandidates("orin.local", candidates),
-		[]config.CertificateInfo{selfSignedCLICert(t, 7)})
+	target := newDialTargetCandidates("orin.local", candidates)
+	target.Expected = &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}
+	conn, _, err := dialAgentLadderWithCerts(ctx, target, []config.CertificateInfo{selfSignedCLICert(t, 7)})
 	if conn != nil {
 		conn.Close()
 	}
@@ -386,21 +452,23 @@ func TestLadderStopsAtIdentityRefusalWithoutTryingMoreAddresses(t *testing.T) {
 	if !errors.Is(err, errDeviceIdentityRefused) {
 		t.Fatalf("err = %v, want an identity refusal", err)
 	}
+	if got := identityChecks.Load(); got != 1 {
+		t.Errorf("identity checked %d times, want only the first candidate", got)
+	}
 	if plaintextCalls != 0 {
 		t.Errorf("plaintext rung attempted %d times after a wrong-device abort", plaintextCalls)
 	}
 	// The abort happened at the first address, so the later ones must be absent
 	// from the diagnosis entirely.
 	for _, cand := range candidates[1:] {
-		host, _, _ := net.SplitHostPort(cand)
-		if strings.Contains(err.Error(), host) {
-			t.Errorf("the walk continued to %s after a wrong-device abort:\n  %s", host, err.Error())
+		if strings.Contains(err.Error(), cand) {
+			t.Errorf("the walk continued to %s after a wrong-device abort:\n  %s", cand, err.Error())
 		}
 	}
-	// A genuine mismatch keeps the unpin escape hatch — here the identity really
-	// was compared and really did not match.
-	if !strings.Contains(err.Error(), "device unpin") {
-		t.Errorf("a real mismatch must still name the unpin escape hatch:\n  %s", err.Error())
+	// A genuine mismatch can be confirmed interactively — here the identity
+	// really was compared and really did not match.
+	if !strings.Contains(err.Error(), changedIdentityStep) {
+		t.Errorf("a real mismatch must say how to accept the new identity:\n  %s", err.Error())
 	}
 }
 
@@ -668,7 +736,7 @@ func TestDialAddrScopesBucketsToThePrimary(t *testing.T) {
 	dead := deadLoopbackAddr(t, "127.0.0.1")
 	newWalk := func() *mtlsWalk {
 		return &mtlsWalk{
-			target:     newDialTarget("orin.local", dead),
+			target:     dialTarget{Addr: dead, Expected: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}},
 			allCerts:   []config.CertificateInfo{selfSignedCLICert(t, 7)},
 			probeOrder: []int{0},
 		}
@@ -709,16 +777,12 @@ func TestDialAddrScopesBucketsToThePrimary(t *testing.T) {
 	}
 }
 
-// An extra unreachable candidate must not change what happens at the primary.
-//
-// The primary here is a live plaintext-only agent, which legitimately earns the
-// plaintext rung: its mTLS probes fail as plain unreachability, not as cert
-// rejections. Appending a black-holed address must leave that untouched. When
-// the suppression buckets were walk-wide, the black-holed candidate's own-port
-// TLS handshake timed out, isCertRejectionError counted that as a rejection, and
-// the rung was suppressed — breaking a connect that worked before.
-func TestExtraDeadCandidateDoesNotSuppressThePlaintextRung(t *testing.T) {
-	setTempConfig(t, &config.Config{}) // unpinned: the rung is allowed
+// A reachable plaintext agent and an extra dead candidate cannot authorize a
+// downgrade: with no saved identity the plaintext answer must prove it is an
+// unenrolled device, and an expected identity still forbids plaintext when no
+// candidate authenticates it.
+func TestExtraDeadCandidateDoesNotEnablePlaintextFallback(t *testing.T) {
+	setTempConfig(t, &config.Config{})
 	setPinCache(t)
 
 	live := startPlaintextVersionAgent(t)
@@ -731,25 +795,41 @@ func TestExtraDeadCandidateDoesNotSuppressThePlaintextRung(t *testing.T) {
 	}
 	t.Cleanup(func() { plaintextConnectFn = origPlaintext })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	candidates := []string{live, unroutableAddr(t, "fdc5:7daa::1", 50051)}
-	conn, _, err := dialAgentLadderWithCerts(ctx,
-		newDialTargetCandidates("orin.local", candidates),
-		[]config.CertificateInfo{selfSignedCLICert(t, 7)})
-	if conn != nil {
-		conn.Close()
-	}
-	if err != nil {
-		t.Fatalf("err = %v, want the plaintext rung to be reached for an unpinned host", err)
-	}
-	if len(plaintextAddrs) != 1 {
-		t.Fatalf("plaintext rung dialled %v, want exactly one attempt", plaintextAddrs)
-	}
-	// And it must dial the PRIMARY, not whichever candidate happened to be last.
-	if plaintextAddrs[0] != live {
-		t.Errorf("plaintext rung dialled %q, want the primary address %q", plaintextAddrs[0], live)
+	candidates := []string{live, deadLoopbackAddr(t, "127.0.0.1")}
+	clientCerts := []config.CertificateInfo{selfSignedCLICert(t, 7)}
+	for _, tc := range []struct {
+		name     string
+		expected *certs.WendyIdentity
+		wantErr  error
+	}{
+		{"missing identity", nil, nil},
+		{"expected identity", &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, errNoAuthenticatedEndpoint},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plaintextAddrs = nil
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			target := newDialTargetCandidates("orin.local", candidates)
+			target.Expected = tc.expected
+			conn, _, err := dialAgentLadderWithCerts(ctx, target, clientCerts)
+			if conn != nil {
+				conn.Close()
+				t.Fatal("connected without an authenticated device identity")
+			}
+			if tc.wantErr == nil {
+				// The fake plaintext connection cannot report NotProvisioned.
+				if err == nil {
+					t.Fatal("unproven plaintext answer was accepted")
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) || !blocksUnauthenticatedFallback(err) {
+				t.Fatalf("err = %v, want %v blocking unauthenticated fallback", err, tc.wantErr)
+			}
+			if len(plaintextAddrs) != 0 {
+				t.Fatalf("plaintext rung dialled %v, want no attempts", plaintextAddrs)
+			}
+		})
 	}
 }
 

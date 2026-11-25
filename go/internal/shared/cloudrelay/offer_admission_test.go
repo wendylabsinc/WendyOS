@@ -276,6 +276,7 @@ func TestRejectedOfferKeepsPresence(t *testing.T) {
 			t.Fatalf("refused offer %q was retained (stat err = %v)", o.OfferId, err)
 		}
 	}
+	flushCloudDiagnostics(t)
 	refused := map[string]int{}
 	for _, entry := range logs.FilterMessage("refused cloud relay offer").All() {
 		refused[entry.ContextMap()["offer_id"].(string)]++

@@ -6,7 +6,7 @@
 // Source: wendy/agent/services/v1/wendy_agent_v1_service.proto
 //
 // For information on using the generated types, please see the documentation:
-//   https://github.com/grpc/grpc-swift-2
+//   https://github.com/grpc/grpc-swift
 
 public import GRPCCore
 public import GRPCProtobuf
@@ -349,9 +349,8 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
     /// This protocol is the lowest-level of the service protocols generated for this service
     /// giving you the most flexibility over the implementation of your service. This comes at
     /// the cost of more verbose and less strict APIs. Each RPC requires you to implement it in
-    /// terms of a request stream and response stream. Where the RPC expects only a single
-    /// request or response message, you are responsible for ensuring your implementation
-    /// maintains this invariant.
+    /// terms of a request stream and response stream. Where only a single request or response
+    /// message is expected, you are responsible for enforcing this invariant is maintained.
     ///
     /// Where possible, prefer using the stricter, less-verbose ``ServiceProtocol``
     /// or ``SimpleServiceProtocol`` instead.
@@ -2333,9 +2332,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_RunContainerRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_RunContainerResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func runContainer<Result>(
             request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_RunContainerRequest>,
@@ -2352,9 +2351,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_UpdateAgentRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_UpdateAgentResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func updateAgent<Result>(
             request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_UpdateAgentRequest>,
@@ -2371,9 +2370,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetAgentVersionRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetAgentVersionResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func getAgentVersion<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetAgentVersionRequest>,
@@ -2394,9 +2393,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListWiFiNetworksRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListWiFiNetworksResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func listWiFiNetworks<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListWiFiNetworksRequest>,
@@ -2417,9 +2416,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ConnectToWiFiRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ConnectToWiFiResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func connectToWiFi<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectToWiFiRequest>,
@@ -2440,9 +2439,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetWiFiStatusRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetWiFiStatusResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func getWiFiStatus<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetWiFiStatusRequest>,
@@ -2463,9 +2462,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DisconnectWiFiRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DisconnectWiFiResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func disconnectWiFi<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectWiFiRequest>,
@@ -2486,9 +2485,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func listKnownWiFiNetworks<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
@@ -2509,9 +2508,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func setWiFiNetworkPriority<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
@@ -2532,9 +2531,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func reorderKnownWiFiNetworks<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
@@ -2555,9 +2554,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func forgetWiFiNetwork<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
@@ -2578,9 +2577,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func listHardwareCapabilities<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>,
@@ -2597,9 +2596,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func scanBluetoothPeripherals<Result>(
             request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
@@ -2616,9 +2615,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func connectBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
@@ -2635,9 +2634,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func disconnectBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
@@ -2654,9 +2653,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func forgetBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
@@ -2677,9 +2676,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_UpdateOSRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_UpdateOSResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func updateOS<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_UpdateOSRequest>,
@@ -2706,9 +2705,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DumpKernelLogRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DumpKernelLogResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func dumpKernelLog<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DumpKernelLogRequest>,
@@ -2731,9 +2730,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetOSUpdateStatusRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetOSUpdateStatusResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func getOSUpdateStatus<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetOSUpdateStatusRequest>,
@@ -2756,9 +2755,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetHostnameRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetHostnameResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func setHostname<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetHostnameRequest>,
@@ -2781,9 +2780,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetPowerModeRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetPowerModeResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func getPowerMode<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
@@ -2806,9 +2805,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetPowerModeRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetPowerModeResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func setPowerMode<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
@@ -2847,9 +2846,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_RunContainerRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_RunContainerResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func runContainer<Result>(
             request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_RunContainerRequest>,
@@ -2875,9 +2874,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_UpdateAgentRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_UpdateAgentResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func updateAgent<Result>(
             request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_UpdateAgentRequest>,
@@ -2903,9 +2902,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetAgentVersionRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetAgentVersionResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func getAgentVersion<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetAgentVersionRequest>,
@@ -2937,9 +2936,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListWiFiNetworksRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListWiFiNetworksResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func listWiFiNetworks<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListWiFiNetworksRequest>,
@@ -2971,9 +2970,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ConnectToWiFiRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ConnectToWiFiResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func connectToWiFi<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectToWiFiRequest>,
@@ -3005,9 +3004,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetWiFiStatusRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetWiFiStatusResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func getWiFiStatus<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetWiFiStatusRequest>,
@@ -3039,9 +3038,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DisconnectWiFiRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DisconnectWiFiResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func disconnectWiFi<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectWiFiRequest>,
@@ -3073,9 +3072,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListKnownWiFiNetworksResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func listKnownWiFiNetworks<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
@@ -3107,9 +3106,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func setWiFiNetworkPriority<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
@@ -3141,9 +3140,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func reorderKnownWiFiNetworks<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
@@ -3175,9 +3174,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ForgetWiFiNetworkResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func forgetWiFiNetwork<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
@@ -3209,9 +3208,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ListHardwareCapabilitiesResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func listHardwareCapabilities<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>,
@@ -3239,9 +3238,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func scanBluetoothPeripherals<Result>(
             request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
@@ -3267,9 +3266,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func connectBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
@@ -3297,9 +3296,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func disconnectBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
@@ -3327,9 +3326,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func forgetBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
@@ -3361,9 +3360,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_UpdateOSRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_UpdateOSResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func updateOS<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_UpdateOSRequest>,
@@ -3399,9 +3398,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_DumpKernelLogRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_DumpKernelLogResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func dumpKernelLog<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DumpKernelLogRequest>,
@@ -3433,9 +3432,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetOSUpdateStatusRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetOSUpdateStatusResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func getOSUpdateStatus<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetOSUpdateStatusRequest>,
@@ -3469,9 +3468,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetHostnameRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetHostnameResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func setHostname<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetHostnameRequest>,
@@ -3505,9 +3504,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_GetPowerModeRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_GetPowerModeResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func getPowerMode<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
@@ -3541,9 +3540,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V1_SetPowerModeRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V1_SetPowerModeResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func setPowerMode<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
@@ -3579,9 +3578,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A streaming request producing `Wendy_Agent_Services_V1_RunContainerRequest` messages.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func runContainer<Result>(
         request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_RunContainerRequest>,
@@ -3602,9 +3601,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A streaming request producing `Wendy_Agent_Services_V1_UpdateAgentRequest` messages.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func updateAgent<Result>(
         request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_UpdateAgentRequest>,
@@ -3625,9 +3624,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetAgentVersionRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getAgentVersion<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetAgentVersionRequest>,
@@ -3654,9 +3653,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListWiFiNetworksRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listWiFiNetworks<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListWiFiNetworksRequest>,
@@ -3683,9 +3682,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_ConnectToWiFiRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func connectToWiFi<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectToWiFiRequest>,
@@ -3712,9 +3711,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetWiFiStatusRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getWiFiStatus<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetWiFiStatusRequest>,
@@ -3741,9 +3740,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_DisconnectWiFiRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func disconnectWiFi<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectWiFiRequest>,
@@ -3770,9 +3769,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listKnownWiFiNetworks<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest>,
@@ -3799,9 +3798,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func setWiFiNetworkPriority<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest>,
@@ -3828,9 +3827,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func reorderKnownWiFiNetworks<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest>,
@@ -3857,9 +3856,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func forgetWiFiNetwork<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest>,
@@ -3886,9 +3885,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listHardwareCapabilities<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest>,
@@ -3911,9 +3910,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A streaming request producing `Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest` messages.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func scanBluetoothPeripherals<Result>(
         request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V1_ScanBluetoothPeripheralsRequest>,
@@ -3934,9 +3933,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func connectBluetoothPeripheral<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest>,
@@ -3959,9 +3958,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func disconnectBluetoothPeripheral<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest>,
@@ -3984,9 +3983,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func forgetBluetoothPeripheral<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest>,
@@ -4013,9 +4012,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_UpdateOSRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func updateOS<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_UpdateOSRequest>,
@@ -4046,9 +4045,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_DumpKernelLogRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func dumpKernelLog<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_DumpKernelLogRequest>,
@@ -4075,9 +4074,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetOSUpdateStatusRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getOSUpdateStatus<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetOSUpdateStatusRequest>,
@@ -4106,9 +4105,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetHostnameRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func setHostname<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetHostnameRequest>,
@@ -4137,9 +4136,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_GetPowerModeRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getPowerMode<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_GetPowerModeRequest>,
@@ -4168,9 +4167,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V1_SetPowerModeRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func setPowerMode<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V1_SetPowerModeRequest>,
@@ -4202,11 +4201,11 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - producer: A closure producing request messages to send to the server. Returning
-    ///       from the closure closes the request stream.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - producer: A closure producing request messages to send to the server. The request
+    ///       stream is closed when the closure returns.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func runContainer<Result>(
         metadata: GRPCCore.Metadata = [:],
@@ -4230,11 +4229,11 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - producer: A closure producing request messages to send to the server. Returning
-    ///       from the closure closes the request stream.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - producer: A closure producing request messages to send to the server. The request
+    ///       stream is closed when the closure returns.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func updateAgent<Result>(
         metadata: GRPCCore.Metadata = [:],
@@ -4259,9 +4258,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getAgentVersion<Result>(
         _ message: Wendy_Agent_Services_V1_GetAgentVersionRequest,
@@ -4292,9 +4291,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listWiFiNetworks<Result>(
         _ message: Wendy_Agent_Services_V1_ListWiFiNetworksRequest,
@@ -4325,9 +4324,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func connectToWiFi<Result>(
         _ message: Wendy_Agent_Services_V1_ConnectToWiFiRequest,
@@ -4358,9 +4357,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getWiFiStatus<Result>(
         _ message: Wendy_Agent_Services_V1_GetWiFiStatusRequest,
@@ -4391,9 +4390,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func disconnectWiFi<Result>(
         _ message: Wendy_Agent_Services_V1_DisconnectWiFiRequest,
@@ -4424,9 +4423,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listKnownWiFiNetworks<Result>(
         _ message: Wendy_Agent_Services_V1_ListKnownWiFiNetworksRequest,
@@ -4457,9 +4456,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func setWiFiNetworkPriority<Result>(
         _ message: Wendy_Agent_Services_V1_SetWiFiNetworkPriorityRequest,
@@ -4490,9 +4489,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func reorderKnownWiFiNetworks<Result>(
         _ message: Wendy_Agent_Services_V1_ReorderKnownWiFiNetworksRequest,
@@ -4523,9 +4522,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func forgetWiFiNetwork<Result>(
         _ message: Wendy_Agent_Services_V1_ForgetWiFiNetworkRequest,
@@ -4556,9 +4555,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listHardwareCapabilities<Result>(
         _ message: Wendy_Agent_Services_V1_ListHardwareCapabilitiesRequest,
@@ -4584,11 +4583,11 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     /// - Parameters:
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - producer: A closure producing request messages to send to the server. Returning
-    ///       from the closure closes the request stream.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - producer: A closure producing request messages to send to the server. The request
+    ///       stream is closed when the closure returns.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func scanBluetoothPeripherals<Result>(
         metadata: GRPCCore.Metadata = [:],
@@ -4613,9 +4612,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func connectBluetoothPeripheral<Result>(
         _ message: Wendy_Agent_Services_V1_ConnectBluetoothPeripheralRequest,
@@ -4642,9 +4641,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func disconnectBluetoothPeripheral<Result>(
         _ message: Wendy_Agent_Services_V1_DisconnectBluetoothPeripheralRequest,
@@ -4671,9 +4670,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func forgetBluetoothPeripheral<Result>(
         _ message: Wendy_Agent_Services_V1_ForgetBluetoothPeripheralRequest,
@@ -4704,9 +4703,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func updateOS<Result>(
         _ message: Wendy_Agent_Services_V1_UpdateOSRequest,
@@ -4741,9 +4740,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func dumpKernelLog<Result>(
         _ message: Wendy_Agent_Services_V1_DumpKernelLogRequest,
@@ -4774,9 +4773,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getOSUpdateStatus<Result>(
         _ message: Wendy_Agent_Services_V1_GetOSUpdateStatusRequest,
@@ -4809,9 +4808,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func setHostname<Result>(
         _ message: Wendy_Agent_Services_V1_SetHostnameRequest,
@@ -4844,9 +4843,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getPowerMode<Result>(
         _ message: Wendy_Agent_Services_V1_GetPowerModeRequest,
@@ -4879,9 +4878,9 @@ extension Wendy_Agent_Services_V1_WendyAgentService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func setPowerMode<Result>(
         _ message: Wendy_Agent_Services_V1_SetPowerModeRequest,

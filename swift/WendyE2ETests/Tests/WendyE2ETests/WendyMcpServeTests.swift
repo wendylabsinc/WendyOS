@@ -54,12 +54,8 @@ struct `'wendy mcp serve'` {
                 #expect(result.status.isSuccess)
                 #expect(result.stderr == "")
 
-                let lines = result.normalizedStdout.split(separator: "\n")
-                #expect(lines.count == 2)
-                let initialize = try #require(
-                    try JSONSerialization.jsonObject(with: Data(lines[0].utf8))
-                        as? [String: Any]
-                )
+                let responses = try mcpResponsesByID(result.normalizedStdout, expectedIDs: [1, 2])
+                let initialize = try #require(responses[1])
                 #expect(initialize["jsonrpc"] as? String == "2.0")
                 #expect(initialize["id"] as? Int == 1)
                 let initializeResult = try #require(initialize["result"] as? [String: Any])
@@ -67,10 +63,7 @@ struct `'wendy mcp serve'` {
                 let serverInfo = try #require(initializeResult["serverInfo"] as? [String: Any])
                 #expect(serverInfo["name"] as? String == "wendy")
 
-                let toolsResponse = try #require(
-                    try JSONSerialization.jsonObject(with: Data(lines[1].utf8))
-                        as? [String: Any]
-                )
+                let toolsResponse = try #require(responses[2])
                 #expect(toolsResponse["id"] as? Int == 2)
                 let toolsResult = try #require(toolsResponse["result"] as? [String: Any])
                 let tools = try #require(toolsResult["tools"] as? [[String: Any]])
@@ -113,12 +106,8 @@ struct `'wendy mcp serve'` {
                 #expect(result.status.isSuccess)
                 #expect(result.stderr == "")
 
-                let lines = result.normalizedStdout.split(separator: "\n")
-                #expect(lines.count == 2)
-                let toolsResponse = try #require(
-                    try JSONSerialization.jsonObject(with: Data(lines[1].utf8))
-                        as? [String: Any]
-                )
+                let responses = try mcpResponsesByID(result.normalizedStdout, expectedIDs: [1, 2])
+                let toolsResponse = try #require(responses[2])
                 #expect(toolsResponse["id"] as? Int == 2)
                 let toolsResult = try #require(toolsResponse["result"] as? [String: Any])
                 let tools = try #require(toolsResult["tools"] as? [[String: Any]])
@@ -172,12 +161,8 @@ struct `'wendy mcp serve'` {
                 #expect(!result.stdout.lowercased().contains("select a device"))
                 #expect(!result.stdout.lowercased().contains("press enter"))
 
-                let lines = result.normalizedStdout.split(separator: "\n")
-                #expect(lines.count == 2)
-                let resourcesResponse = try #require(
-                    try JSONSerialization.jsonObject(with: Data(lines[1].utf8))
-                        as? [String: Any]
-                )
+                let responses = try mcpResponsesByID(result.normalizedStdout, expectedIDs: [1, 2])
+                let resourcesResponse = try #require(responses[2])
                 #expect(resourcesResponse["id"] as? Int == 2)
                 #expect(resourcesResponse["error"] == nil)
                 let resourcesResult = try #require(resourcesResponse["result"] as? [String: Any])
@@ -235,4 +220,41 @@ struct `'wendy mcp serve'` {
     func `rejects undocumented positional arguments`() async throws {
         // TODO: enable when MCP leaf commands reject positional arguments (WDY-1934).
     }
+
+    @Test(arguments: [false, true])
+    func `matches stdio responses by request ID`(reversed: Bool) throws {
+        let initialize =
+            #"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","serverInfo":{"name":"wendy"}}}"#
+        let tools = #"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"cloud_connect"}]}}"#
+        let lines = reversed ? [tools, initialize] : [initialize, tools]
+        let responses = try mcpResponsesByID(lines.joined(separator: "\n"), expectedIDs: [1, 2])
+        let initializeResult = try #require(responses[1]?["result"] as? [String: Any])
+        #expect(initializeResult["protocolVersion"] as? String == "2024-11-05")
+        let toolsResult = try #require(responses[2]?["result"] as? [String: Any])
+        let listedTools = try #require(toolsResult["tools"] as? [[String: Any]])
+        #expect(listedTools.compactMap { $0["name"] as? String } == ["cloud_connect"])
+    }
+}
+
+// JSON-RPC correlates concurrent responses by ID, not by their arrival order.
+// Keep missing, duplicate, unexpected and malformed responses visible as failures.
+private func mcpResponsesByID(
+    _ stdout: String,
+    expectedIDs: Set<Int>
+) throws -> [Int: [String: Any]] {
+    let lines = stdout.split(separator: "\n")
+    try #require(lines.count == expectedIDs.count)
+    var responses: [Int: [String: Any]] = [:]
+    for line in lines {
+        let response = try #require(
+            try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+        )
+        #expect(response["jsonrpc"] as? String == "2.0")
+        #expect(response["error"] == nil)
+        let id = try #require(response["id"] as? Int)
+        try #require(expectedIDs.contains(id))
+        try #require(responses[id] == nil)
+        responses[id] = response
+    }
+    return responses
 }

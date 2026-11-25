@@ -42,6 +42,8 @@ type Process struct {
 	Args     []string `json:"args"`
 	Env      []string `json:"env,omitempty"`
 	Cwd      string   `json:"cwd"`
+	// Serialized even when zero, so apps do not inherit the shim's OOM protection.
+	OOMScoreAdj int `json:"oomScoreAdj"`
 	// Capabilities restricts the process capabilities.
 	Capabilities    *LinuxCapabilities `json:"capabilities,omitempty"`
 	Rlimits         []POSIXRlimit      `json:"rlimits,omitempty"`

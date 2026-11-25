@@ -19,7 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WendyAgentUpdateService_UpdateAgent_FullMethodName = "/wendy.agent.services.v2.WendyAgentUpdateService/UpdateAgent"
+	WendyAgentUpdateService_UpdateAgent_FullMethodName           = "/wendy.agent.services.v2.WendyAgentUpdateService/UpdateAgent"
+	WendyAgentUpdateService_CheckOnlineUpdate_FullMethodName     = "/wendy.agent.services.v2.WendyAgentUpdateService/CheckOnlineUpdate"
+	WendyAgentUpdateService_StartOnlineUpdate_FullMethodName     = "/wendy.agent.services.v2.WendyAgentUpdateService/StartOnlineUpdate"
+	WendyAgentUpdateService_GetOnlineUpdateStatus_FullMethodName = "/wendy.agent.services.v2.WendyAgentUpdateService/GetOnlineUpdateStatus"
 )
 
 // WendyAgentUpdateServiceClient is the client API for WendyAgentUpdateService service.
@@ -27,6 +30,10 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WendyAgentUpdateServiceClient interface {
 	UpdateAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[UpdateAgentRequest, UpdateAgentResponse], error)
+	// Metadata checks and artifact downloads run on the device, never the client.
+	CheckOnlineUpdate(ctx context.Context, in *CheckOnlineUpdateRequest, opts ...grpc.CallOption) (*OnlineUpdateStatus, error)
+	StartOnlineUpdate(ctx context.Context, in *StartOnlineUpdateRequest, opts ...grpc.CallOption) (*OnlineUpdateStatus, error)
+	GetOnlineUpdateStatus(ctx context.Context, in *GetOnlineUpdateStatusRequest, opts ...grpc.CallOption) (*OnlineUpdateStatus, error)
 }
 
 type wendyAgentUpdateServiceClient struct {
@@ -50,11 +57,45 @@ func (c *wendyAgentUpdateServiceClient) UpdateAgent(ctx context.Context, opts ..
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WendyAgentUpdateService_UpdateAgentClient = grpc.BidiStreamingClient[UpdateAgentRequest, UpdateAgentResponse]
 
+func (c *wendyAgentUpdateServiceClient) CheckOnlineUpdate(ctx context.Context, in *CheckOnlineUpdateRequest, opts ...grpc.CallOption) (*OnlineUpdateStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OnlineUpdateStatus)
+	err := c.cc.Invoke(ctx, WendyAgentUpdateService_CheckOnlineUpdate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyAgentUpdateServiceClient) StartOnlineUpdate(ctx context.Context, in *StartOnlineUpdateRequest, opts ...grpc.CallOption) (*OnlineUpdateStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OnlineUpdateStatus)
+	err := c.cc.Invoke(ctx, WendyAgentUpdateService_StartOnlineUpdate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyAgentUpdateServiceClient) GetOnlineUpdateStatus(ctx context.Context, in *GetOnlineUpdateStatusRequest, opts ...grpc.CallOption) (*OnlineUpdateStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OnlineUpdateStatus)
+	err := c.cc.Invoke(ctx, WendyAgentUpdateService_GetOnlineUpdateStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WendyAgentUpdateServiceServer is the server API for WendyAgentUpdateService service.
 // All implementations must embed UnimplementedWendyAgentUpdateServiceServer
 // for forward compatibility.
 type WendyAgentUpdateServiceServer interface {
 	UpdateAgent(grpc.BidiStreamingServer[UpdateAgentRequest, UpdateAgentResponse]) error
+	// Metadata checks and artifact downloads run on the device, never the client.
+	CheckOnlineUpdate(context.Context, *CheckOnlineUpdateRequest) (*OnlineUpdateStatus, error)
+	StartOnlineUpdate(context.Context, *StartOnlineUpdateRequest) (*OnlineUpdateStatus, error)
+	GetOnlineUpdateStatus(context.Context, *GetOnlineUpdateStatusRequest) (*OnlineUpdateStatus, error)
 	mustEmbedUnimplementedWendyAgentUpdateServiceServer()
 }
 
@@ -67,6 +108,15 @@ type UnimplementedWendyAgentUpdateServiceServer struct{}
 
 func (UnimplementedWendyAgentUpdateServiceServer) UpdateAgent(grpc.BidiStreamingServer[UpdateAgentRequest, UpdateAgentResponse]) error {
 	return status.Error(codes.Unimplemented, "method UpdateAgent not implemented")
+}
+func (UnimplementedWendyAgentUpdateServiceServer) CheckOnlineUpdate(context.Context, *CheckOnlineUpdateRequest) (*OnlineUpdateStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckOnlineUpdate not implemented")
+}
+func (UnimplementedWendyAgentUpdateServiceServer) StartOnlineUpdate(context.Context, *StartOnlineUpdateRequest) (*OnlineUpdateStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartOnlineUpdate not implemented")
+}
+func (UnimplementedWendyAgentUpdateServiceServer) GetOnlineUpdateStatus(context.Context, *GetOnlineUpdateStatusRequest) (*OnlineUpdateStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOnlineUpdateStatus not implemented")
 }
 func (UnimplementedWendyAgentUpdateServiceServer) mustEmbedUnimplementedWendyAgentUpdateServiceServer() {
 }
@@ -97,13 +147,80 @@ func _WendyAgentUpdateService_UpdateAgent_Handler(srv interface{}, stream grpc.S
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WendyAgentUpdateService_UpdateAgentServer = grpc.BidiStreamingServer[UpdateAgentRequest, UpdateAgentResponse]
 
+func _WendyAgentUpdateService_CheckOnlineUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckOnlineUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyAgentUpdateServiceServer).CheckOnlineUpdate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyAgentUpdateService_CheckOnlineUpdate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyAgentUpdateServiceServer).CheckOnlineUpdate(ctx, req.(*CheckOnlineUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyAgentUpdateService_StartOnlineUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartOnlineUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyAgentUpdateServiceServer).StartOnlineUpdate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyAgentUpdateService_StartOnlineUpdate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyAgentUpdateServiceServer).StartOnlineUpdate(ctx, req.(*StartOnlineUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyAgentUpdateService_GetOnlineUpdateStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOnlineUpdateStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyAgentUpdateServiceServer).GetOnlineUpdateStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyAgentUpdateService_GetOnlineUpdateStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyAgentUpdateServiceServer).GetOnlineUpdateStatus(ctx, req.(*GetOnlineUpdateStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WendyAgentUpdateService_ServiceDesc is the grpc.ServiceDesc for WendyAgentUpdateService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var WendyAgentUpdateService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "wendy.agent.services.v2.WendyAgentUpdateService",
 	HandlerType: (*WendyAgentUpdateServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CheckOnlineUpdate",
+			Handler:    _WendyAgentUpdateService_CheckOnlineUpdate_Handler,
+		},
+		{
+			MethodName: "StartOnlineUpdate",
+			Handler:    _WendyAgentUpdateService_StartOnlineUpdate_Handler,
+		},
+		{
+			MethodName: "GetOnlineUpdateStatus",
+			Handler:    _WendyAgentUpdateService_GetOnlineUpdateStatus_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "UpdateAgent",

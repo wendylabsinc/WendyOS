@@ -9,10 +9,10 @@ import (
 
 const (
 	// Router QUIC negotiates the explicit whole-IP receive capability. Stream
-	// and leaf roles retain their own independent protocol versions/framing.
+	// carriers retain their own independent protocol versions/framing.
 	// All roles require signed route origins bound to the complete principal.
 	// Require exact ALPN/hello matches; never fall back to weaker protocols.
-	LinkALPN            = "wendy-net-router/2"
+	LinkALPN            = "wendy-net-router/3"
 	LinkProtocolVersion = 2
 	// Leave room for an IPv6 outer header around a minimum-size IPv6 packet.
 	// Carrier fragmentation remains at most two bounded datagrams per packet.
@@ -37,15 +37,21 @@ func EncodeIP(id uint32, packet []byte) ([][]byte, error) {
 	for offset := 0; offset < len(packet); {
 		n := min(DatagramLimit-fragmentHeader, len(packet)-offset)
 		d := make([]byte, fragmentHeader+n)
-		d[0] = PacketIP
-		binary.BigEndian.PutUint32(d[1:5], id)
-		binary.BigEndian.PutUint16(d[5:7], uint16(len(packet)))
-		binary.BigEndian.PutUint16(d[7:9], uint16(offset))
-		copy(d[9:], packet[offset:offset+n])
+		writeIPFragment(d, id, packet, offset)
 		out = append(out, d)
 		offset += n
 	}
 	return out, nil
+}
+
+// writeIPFragment fills one already-sized carrier frame. Callers validate the
+// complete packet and bound offset and destination length before calling it.
+func writeIPFragment(d []byte, id uint32, packet []byte, offset int) {
+	d[0] = PacketIP
+	binary.BigEndian.PutUint32(d[1:5], id)
+	binary.BigEndian.PutUint16(d[5:7], uint16(len(packet)))
+	binary.BigEndian.PutUint16(d[7:9], uint16(offset))
+	copy(d[fragmentHeader:], packet[offset:offset+len(d)-fragmentHeader])
 }
 
 func validIP(p []byte) bool {

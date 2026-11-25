@@ -17,11 +17,12 @@ import (
 const maxProxiedJSONDepth = 1000
 
 var (
-	jsonRawMessageType = reflect.TypeFor[json.RawMessage]()
-	mcpMetaType        = reflect.TypeFor[mcpgo.Meta]()
-	mcpMetaPointerType = reflect.PointerTo(mcpMetaType)
-	textMarshalerType  = reflect.TypeFor[encoding.TextMarshaler]()
-	jsonMarshalerType  = reflect.TypeFor[json.Marshaler]()
+	jsonRawMessageType    = reflect.TypeFor[json.RawMessage]()
+	toolResultContentType = reflect.TypeFor[mcpgo.ToolResultContent]()
+	mcpMetaType           = reflect.TypeFor[mcpgo.Meta]()
+	mcpMetaPointerType    = reflect.PointerTo(mcpMetaType)
+	textMarshalerType     = reflect.TypeFor[encoding.TextMarshaler]()
+	jsonMarshalerType     = reflect.TypeFor[json.Marshaler]()
 )
 
 // proxiedResultExceedsMaxBytes measures the result's JSON wire size without
@@ -70,6 +71,10 @@ func (s *boundedJSONSizer) callToolResult(result *mcpgo.CallToolResult) error {
 			return err
 		}
 	}
+	if result.ResultType != "" {
+		s.fieldPrefix("resultType", &fields)
+		s.string(string(result.ResultType))
+	}
 	s.fieldPrefix("content", &fields)
 	s.add(1) // [
 	for i, content := range result.Content {
@@ -84,7 +89,12 @@ func (s *boundedJSONSizer) callToolResult(result *mcpgo.CallToolResult) error {
 		}
 	}
 	s.add(1) // ]
-	if result.StructuredContent != nil {
+	if len(result.RawStructuredContent) > 0 {
+		s.fieldPrefix("structuredContent", &fields)
+		if err := s.rawJSON(result.RawStructuredContent); err != nil {
+			return err
+		}
+	} else if result.StructuredContent != nil {
 		s.fieldPrefix("structuredContent", &fields)
 		if err := s.value(reflect.ValueOf(result.StructuredContent), 1); err != nil {
 			return err
@@ -94,7 +104,62 @@ func (s *boundedJSONSizer) callToolResult(result *mcpgo.CallToolResult) error {
 		s.fieldPrefix("isError", &fields)
 		s.add(len("true"))
 	}
+	if len(result.InputRequests) > 0 {
+		s.fieldPrefix("inputRequests", &fields)
+		if err := s.value(reflect.ValueOf(result.InputRequests), 1); err != nil {
+			return err
+		}
+	}
+	if result.RequestState != "" {
+		s.fieldPrefix("requestState", &fields)
+		s.string(result.RequestState)
+	}
 	s.add(1) // }
+	return nil
+}
+
+// Raw JSON is compacted and HTML-escaped by encoding/json. Count that wire
+// representation without allocating another copy of an app's response.
+func (s *boundedJSONSizer) rawJSON(raw json.RawMessage) error {
+	if !json.Valid(raw) {
+		return fmt.Errorf("invalid raw JSON")
+	}
+	inString, escaped := false, false
+	for i := 0; i < len(raw) && !s.exceeded; i++ {
+		c := raw[i]
+		if !inString {
+			if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+				continue
+			}
+			if c == '"' {
+				inString = true
+			}
+			s.add(1)
+			continue
+		}
+		if escaped {
+			escaped = false
+			s.add(1)
+			continue
+		}
+		switch c {
+		case '\\':
+			escaped = true
+			s.add(1)
+		case '"':
+			inString = false
+			s.add(1)
+		case '<', '>', '&':
+			s.add(6)
+		default:
+			if c == 0xe2 && i+2 < len(raw) && raw[i+1] == 0x80 && (raw[i+2] == 0xa8 || raw[i+2] == 0xa9) {
+				s.add(6)
+				i += 2
+			} else {
+				s.add(1)
+			}
+		}
+	}
 	return nil
 }
 
@@ -164,9 +229,15 @@ func (s *boundedJSONSizer) value(v reflect.Value, depth int) error {
 		return s.meta(&meta, depth+1)
 	}
 	if v.Type() == jsonRawMessageType {
-		// Proxied results are decoded into ordinary JSON values, so RawMessage
-		// is unexpected. Do not invoke its Marshaler and risk a large copy.
-		return fmt.Errorf("unsupported raw JSON value")
+		return s.rawJSON(v.Interface().(json.RawMessage))
+	}
+	if v.Type() == toolResultContentType {
+		content := v.Interface().(mcpgo.ToolResultContent)
+		type plainToolResultContent mcpgo.ToolResultContent
+		if len(content.RawStructuredContent) > 0 {
+			content.StructuredContent = content.RawStructuredContent
+		}
+		return s.structure(reflect.ValueOf(plainToolResultContent(content)), depth+1)
 	}
 	if hasCustomJSONEncoding(v.Type()) {
 		return fmt.Errorf("unsupported custom JSON marshaler %s", v.Type())

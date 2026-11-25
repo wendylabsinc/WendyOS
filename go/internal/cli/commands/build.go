@@ -55,8 +55,7 @@ type buildOptions struct {
 }
 
 func mustStopBuildAfterTargetError(err error) bool {
-	var recoveryStopped *defaultDeviceRecoveryStoppedError
-	return errors.As(err, &recoveryStopped) || errors.Is(err, ErrUserCancelled) || errors.Is(err, context.Canceled)
+	return errors.Is(err, ErrUserCancelled) || errors.Is(err, context.Canceled)
 }
 
 var appleContainerLocalProviderHintSupported = func() bool {
@@ -118,7 +117,7 @@ func newBuildCmd() *cobra.Command {
 			appCfg, cfgErr := ensureAppConfig(cfgPath, false)
 			if cfgErr == nil {
 				if err := appCfg.Validate(); err != nil {
-					return fmt.Errorf("invalid wendy.json: %w", err)
+					return invalidAppConfigError(err)
 				}
 				if err := warnAppConfigFile(cfgPath); err != nil {
 					return fmt.Errorf("reading wendy.json warnings: %w", err)
@@ -132,6 +131,11 @@ func newBuildCmd() *cobra.Command {
 			// different architecture from the one the user expected.
 			if mustStopBuildAfterTargetError(targetErr) {
 				return targetErr
+			}
+			if cfgErr == nil {
+				if err := buildMCU(cmd.Context(), cwd, appCfg); err != nil {
+					return err
+				}
 			}
 
 			// If the target is an external provider device, use the provider build path.
@@ -294,9 +298,14 @@ func newBuildCmd() *cobra.Command {
 // resolveBuildPlatform is the target platform for a `wendy build`: the
 // selected device's own OS/arch when an agent is connected (cfgPlatform
 // overrides the device-reported OS (and arch, when it names one)), or
-// linux/arm64 with no device to ask.
+// the configured platform with no device to ask, defaulting to linux/arm64.
+// A configured non-Linux OS (darwin, wendy-lite) is not a container platform,
+// so with no device it keeps the linux/arm64 default too.
 func resolveBuildPlatform(ctx context.Context, target *SelectedDevice, cfgPlatform string) string {
-	platform := "linux/arm64"
+	platform := resolveAgentPlatform(cfgPlatform, "linux", "arm64")
+	if !strings.EqualFold(platformOS(platform), appconfig.PlatformLinux) {
+		platform = "linux/arm64"
+	}
 	if target != nil && target.Agent != nil {
 		versionResp, err := target.Agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 		if err == nil {
@@ -451,7 +460,7 @@ func pickBuildOptionWithTitle(options []BuildOption, title string) (*BuildOption
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return nil, fmt.Errorf("build type picker: %w", err)
 	}
@@ -712,7 +721,7 @@ func buildDockerProject(dir, imageName, platform, dockerfile string) error {
 		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}

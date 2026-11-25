@@ -106,14 +106,14 @@ var File_wendy_agent_services_v2_sensor_service_proto protoreflect.FileDescripto
 
 const file_wendy_agent_services_v2_sensor_service_proto_rawDesc = "" +
 	"\n" +
-	",wendy/agent/services/v2/sensor_service.proto\x12\x17wendy.agent.services.v2\x1a\x1bwendy/lite/sensorlink.proto\"\x1a\n" +
+	",wendy/agent/services/v2/sensor_service.proto\x12\x17wendy.agent.services.v2\x1a\x1dwendylite/v1/sensorlink.proto\"\x1a\n" +
 	"\x18GetSensorManifestRequest\"5\n" +
 	"\x14StreamSensorsRequest\x12\x1d\n" +
 	"\n" +
-	"channel_id\x18\x01 \x03(\rR\tchannelId2\xe8\x01\n" +
-	"\x12WendySensorService\x12m\n" +
-	"\x11GetSensorManifest\x121.wendy.agent.services.v2.GetSensorManifestRequest\x1a%.wendy.lite.sensorlink.SensorManifest\x12c\n" +
-	"\rStreamSensors\x12-.wendy.agent.services.v2.StreamSensorsRequest\x1a!.wendy.lite.sensorlink.SensorData0\x01BAZ?github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
+	"channel_id\x18\x01 \x03(\rR\tchannelId2\xd6\x01\n" +
+	"\x12WendySensorService\x12d\n" +
+	"\x11GetSensorManifest\x121.wendy.agent.services.v2.GetSensorManifestRequest\x1a\x1c.wendylite.v1.SensorManifest\x12Z\n" +
+	"\rStreamSensors\x12-.wendy.agent.services.v2.StreamSensorsRequest\x1a\x18.wendylite.v1.SensorData0\x01BAZ?github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
 	file_wendy_agent_services_v2_sensor_service_proto_rawDescOnce sync.Once
@@ -131,14 +131,14 @@ var file_wendy_agent_services_v2_sensor_service_proto_msgTypes = make([]protoimp
 var file_wendy_agent_services_v2_sensor_service_proto_goTypes = []any{
 	(*GetSensorManifestRequest)(nil),    // 0: wendy.agent.services.v2.GetSensorManifestRequest
 	(*StreamSensorsRequest)(nil),        // 1: wendy.agent.services.v2.StreamSensorsRequest
-	(*sensorlinkpb.SensorManifest)(nil), // 2: wendy.lite.sensorlink.SensorManifest
-	(*sensorlinkpb.SensorData)(nil),     // 3: wendy.lite.sensorlink.SensorData
+	(*sensorlinkpb.SensorManifest)(nil), // 2: wendylite.v1.SensorManifest
+	(*sensorlinkpb.SensorData)(nil),     // 3: wendylite.v1.SensorData
 }
 var file_wendy_agent_services_v2_sensor_service_proto_depIdxs = []int32{
 	0, // 0: wendy.agent.services.v2.WendySensorService.GetSensorManifest:input_type -> wendy.agent.services.v2.GetSensorManifestRequest
 	1, // 1: wendy.agent.services.v2.WendySensorService.StreamSensors:input_type -> wendy.agent.services.v2.StreamSensorsRequest
-	2, // 2: wendy.agent.services.v2.WendySensorService.GetSensorManifest:output_type -> wendy.lite.sensorlink.SensorManifest
-	3, // 3: wendy.agent.services.v2.WendySensorService.StreamSensors:output_type -> wendy.lite.sensorlink.SensorData
+	2, // 2: wendy.agent.services.v2.WendySensorService.GetSensorManifest:output_type -> wendylite.v1.SensorManifest
+	3, // 3: wendy.agent.services.v2.WendySensorService.StreamSensors:output_type -> wendylite.v1.SensorData
 	2, // [2:4] is the sub-list for method output_type
 	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
