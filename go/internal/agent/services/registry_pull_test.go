@@ -238,6 +238,9 @@ type importRecorder struct {
 	startCtx  []error         // each start's ctx.Err() as it began
 	startLeft []time.Duration // each start's time to its ctx deadline (0: none)
 	startErr  func(ReleaseStart) error
+	// hang, when set, makes the next start close it and block until its
+	// ctx ends, as a start stuck in containerd does.
+	hang chan struct{}
 	// beforeReplace: startErr failures happen before the container is
 	// replaced (a refused validation). app is the app's container as the
 	// fake runtime holds it.
@@ -275,6 +278,12 @@ func (r *importRecorder) StartRelease(ctx context.Context, s ReleaseStart) (bool
 		left = time.Until(d)
 	}
 	r.startLeft = append(r.startLeft, left)
+	if h := r.hang; h != nil {
+		r.hang = nil
+		close(h)
+		<-ctx.Done()
+		return true, ctx.Err()
+	}
 	var err error
 	if r.startErr != nil {
 		err = r.startErr(s)

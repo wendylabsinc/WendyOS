@@ -127,8 +127,10 @@ func checkAppDefinition(def []byte, app string) error {
 // startRelease starts a's app. If that fails after this attempt replaced the
 // app's container, and what it replaced was the last applied statement's
 // app, that app is put back. Nothing is put back when nothing was replaced,
-// and a directly run app is never replaced by a restore.
-func (p *Postbox) startRelease(ctx context.Context, a *cloudpbv2.DeviceAssignment) error {
+// and a directly run app is never replaced by a restore. ctx holds the start
+// step's budget; base (its parent) bounds the put-back, which gets a budget
+// of its own.
+func (p *Postbox) startRelease(base, ctx context.Context, a *cloudpbv2.DeviceAssignment) error {
 	before := p.control.AppState(ctx, a.GetAppId())
 	s, err := p.releaseStart(ctx, a)
 	if err != nil {
@@ -147,7 +149,7 @@ func (p *Postbox) startRelease(ctx context.Context, a *cloudpbv2.DeviceAssignmen
 	// the user had stopped it, not the instant it was observed in.
 	// The put-back has its own short budget: the failed start may have
 	// spent ctx's, and the previous release needs no unpack.
-	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), putBackTimeout)
+	pctx, cancel := context.WithTimeout(base, putBackTimeout)
 	defer cancel()
 	if perr := p.restart(pctx, prev, !before.StoppedByUser); perr != nil {
 		return errors.Join(err, fmt.Errorf("putting back the previous release: %w", perr))

@@ -728,7 +728,7 @@ func crashedResume(t *testing.T, f *pbFixture, rec *importRecorder, base *cloudp
 	rec.arts.materialErr = func(int) error { return status.Error(codes.Unavailable, "registry unreachable") }
 	f.assignEntry(next)
 	f.cycleWithin(5 * time.Second)
-	f.p.stopPull(next.GetDeploymentId())
+	f.p.stopPull(next.GetDeploymentId(), false)
 	rec.app = left(next)
 	f.p.now = func() time.Time { return f.now.Add(2 * time.Hour) }
 	n := len(rec.starts)
@@ -859,7 +859,7 @@ func TestRegistryPullStartBudgetCoversTheUnpackAndThePutBack(t *testing.T) {
 	}
 	spent, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	if err := f.p.startRelease(spent, next); err == nil {
+	if err := f.p.startRelease(context.Background(), spent, next); err == nil {
 		t.Fatal("want the start that ran out its budget to fail")
 	}
 	last := len(rec.starts) - 1
@@ -868,5 +868,33 @@ func TestRegistryPullStartBudgetCoversTheUnpackAndThePutBack(t *testing.T) {
 	}
 	if left := rec.startLeft[last]; left <= 0 || left > 5*time.Minute {
 		t.Fatalf("put-back budget %v: want at most 5 minutes", left)
+	}
+}
+
+// M6: a removal cuts a start stuck in containerd, and its put-back, instead
+// of waiting out their budgets (up to 40 minutes), then removes the app's
+// container and releases.
+func TestRemovalCutsAStuckStart(t *testing.T) {
+	f, rec, base := runningRelease(t)
+	began := make(chan struct{})
+	rec.hang = began
+	next := proto.Clone(base).(*cloudpbv2.DeviceAssignment)
+	next.Revision, next.ConfigJson = 2, `{"MODE":"b"}`
+	f.assignEntry(next)
+	f.cycleWithin(5 * time.Second)
+	select {
+	case <-began:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the start never began")
+	}
+	f.unassignEntry(base.GetDeploymentId())
+	f.cycleWithin(5 * time.Second)
+	for i := 2; i < len(rec.starts); i++ { // 0: revision 1, 1: the stuck one
+		if rec.startCtx[i] == nil {
+			t.Fatalf("start %d %+v: want no put-back past the cut", i, rec.starts[i])
+		}
+	}
+	if n := len(rec.removed); n == 0 || rec.removed[n-1].prune || rec.removed[n-1].app != base.GetAppId() {
+		t.Fatalf("removals %+v: want the app's container and releases removed", rec.removed)
 	}
 }

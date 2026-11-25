@@ -116,8 +116,8 @@ const (
 	// putBackTimeout bounds the put-back of the last applied app after a
 	// failed start. That release already ran, so nothing is unpacked; a
 	// stuck start holds its deployment at most startStepTimeout plus this
-	// (40 minutes), and with it a newer statement, a detach, a removal or a
-	// reset that must wait for the start to end.
+	// (40 minutes), and with it a newer statement or a detach that must
+	// wait for the start to end. A removal and a reset cut it (stopPull).
 	putBackTimeout    = 5 * time.Minute
 	mediaTypeDockerV2 = "application/vnd.docker.distribution.manifest.v2+json"
 )
@@ -198,7 +198,8 @@ func checkAssignment(a *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, str
 
 // pullAssignment fetches, opens, verifies and imports a checked assignment's
 // release, then removes the app's releases no held assignment uses.
-func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, string, error) {
+// A begun start runs under startCtx, which ctx's end does not cut.
+func (p *Postbox) pullAssignment(ctx, startCtx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, string, error) {
 	// A resumed pull starts without a failure, where pullRetry checks the
 	// expiry: nothing is fetched under a statement that has expired.
 	if !p.trustedNow().Before(a.GetExpiresAt().AsTime()) {
@@ -238,8 +239,8 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 	if err == nil {
 		// A start once begun is not cut by the pull's stop: it ends started
 		// or with the last applied app put back, never between the two.
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startStepTimeout)
-		err = p.startRelease(sctx, a)
+		sctx, cancel := context.WithTimeout(startCtx, startStepTimeout)
+		err = p.startRelease(startCtx, sctx, a)
 		cancel()
 	}
 	if err != nil {
@@ -258,6 +259,7 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 // pullJob is one deployment's pull, running beside the command queue.
 type pullJob struct {
 	cancel context.CancelFunc
+	cut    context.CancelFunc // also ends a begun start and its put-back
 	done   chan struct{}
 }
 
@@ -268,7 +270,9 @@ type pullJob struct {
 func (p *Postbox) startPull(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment, entryID int64, correlation string) {
 	dep := a.GetDeploymentId()
 	ctx, cancel := context.WithCancel(ctx)
-	job := &pullJob{cancel: cancel, done: make(chan struct{})}
+	// Neither the stop nor the agent's shutdown cuts a begun start; only cut.
+	startCtx, cut := context.WithCancel(context.WithoutCancel(ctx))
+	job := &pullJob{cancel: cancel, cut: cut, done: make(chan struct{})}
 	p.mu.Lock()
 	if p.pulls == nil {
 		p.pulls = map[string]*pullJob{}
@@ -287,7 +291,8 @@ func (p *Postbox) startPull(ctx context.Context, id *postboxIdentity, a *cloudpb
 			p.mu.Unlock()
 		}()
 		defer cancel()
-		outcome, reason, err := p.pullAssignment(ctx, id, a)
+		defer cut()
+		outcome, reason, err := p.pullAssignment(ctx, startCtx, id, a)
 		if ctx.Err() != nil {
 			return
 		}
@@ -296,14 +301,20 @@ func (p *Postbox) startPull(ctx context.Context, id *postboxIdentity, a *cloudpb
 }
 
 // stopPull cancels a deployment's pull and waits until it has stopped, so
-// nothing it imports outlives the caller's next step.
-func (p *Postbox) stopPull(dep string) {
+// nothing it imports outlives the caller's next step. A begun start runs to
+// its end (started, or the last applied app put back) unless cut, which a
+// removal and a reset ask: they delete the app's container and releases
+// next, so an app left between two releases is not left running.
+func (p *Postbox) stopPull(dep string, cut bool) {
 	p.mu.Lock()
 	job := p.pulls[dep]
 	delete(p.pulls, dep)
 	p.mu.Unlock()
 	if job != nil {
 		job.cancel()
+		if cut {
+			job.cut()
+		}
 		<-job.done
 	}
 }
@@ -440,7 +451,7 @@ func (p *Postbox) RemoveAllReleases(ctx context.Context, imagesOnly bool) error 
 	deps := slices.Collect(maps.Keys(p.pulls))
 	p.mu.Unlock()
 	for _, dep := range deps {
-		p.stopPull(dep)
+		p.stopPull(dep, true)
 	}
 	if imagesOnly {
 		return p.control.RemoveReleaseImages(ctx)

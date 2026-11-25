@@ -260,9 +260,10 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 	}
 	// A newer entry for the deployment replaces its pull, and a move stops
 	// the old deployment's; their outcomes no longer match what is held.
-	p.stopPull(dep)
+	// An ABSENT revision removes the app next, so a begun start is cut.
+	p.stopPull(dep, absent)
 	if move {
-		p.stopPull(from)
+		p.stopPull(from, false)
 	}
 	switch {
 	case absent:
@@ -341,7 +342,7 @@ func (p *Postbox) applyUnassign(ctx context.Context, entryID int64, r *cloudpbv2
 	}); err != nil {
 		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "save", err
 	}
-	p.stopPull(dep)
+	p.stopPull(dep, true)
 	if app != "" {
 		if err := p.removeReleases(ctx, app); err != nil {
 			return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err
@@ -375,7 +376,7 @@ func (p *Postbox) applyDetach(ctx context.Context, entryID int64, r *cloudpbv2.D
 	var kept []byte
 	if held != nil {
 		app = held.AppID
-		p.stopPull(dep)
+		p.stopPull(dep, false)
 		held = p.heldStatement(dep) // as the pull left it
 		a := &cloudpbv2.DeviceAssignment{}
 		runs := proto.Unmarshal(held.Assignment, a) == nil && p.runsStatement(p.control.AppState(ctx, app), a)
