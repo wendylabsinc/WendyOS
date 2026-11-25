@@ -386,6 +386,36 @@ does not provide the compatible `/dev/v4l2loopback` interface. A previously
 failed availability check is retried, so loading the compatible module does
 not require restarting `wendy-agent`.
 
+### USB thermal cameras without a kernel driver
+
+Some thermal cameras are not UVC devices, so they never get a `/dev/videoN`.
+The agent drives them itself through usbfs (`/dev/bus/usb/BBB/DDD`), in
+[`go/internal/agent/usbthermal`](go/internal/agent/usbthermal/doc.go). Today
+that is the TOPDON TC001 Max (USB `3474:4962`). It is found from sysfs, listed
+as **TC001 Max (thermal)** with an ID from the 88-95 band, and given a
+USB-port-based stable ID such as `by-path:usb-1-2.3-thermal`. Factory
+serials are not reliably unique, so every Max uses its port, even when only
+one is connected. The ID survives replugging and agent restarts on that port;
+moving the camera to another port changes it. Use the exact stable ID from
+`camera list`; older serial-based Max IDs must be selected again.
+
+```sh
+wendy device camera list
+wendy device camera view --id 88                          # live view (H.264)
+wendy device camera view --id 88 --raw --stdout > thermal.raw
+```
+
+Raw frames are 256x384 `YUYV`, 512 bytes per line, the same stacked layout as
+the original TC001's UVC mode. The top 192 rows are the grey picture. The
+bottom 192 rows hold one little-endian `uint16` per pixel in 1/64 K, so
+`°C = raw / 64 - 273.15`. The live view (the default, encoded request) is the
+256x192 grey picture, encoded by the in-process camera path
+(`services/video_inprocess.go`): the agent registers the camera there when it
+is plugged in and unregisters it when it is unplugged. Raw and encoded viewers
+share one capture. The camera streams only while someone is subscribed. The
+agent owns its USB interfaces, so no other process can open the camera at the
+same time.
+
 ### Network cameras
 
 The agent finds them with an Open Network Video Interface Forum (ONVIF)
