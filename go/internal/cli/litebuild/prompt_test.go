@@ -46,10 +46,10 @@ display:
 	t.Run("select warning", func(t *testing.T) {
 		q := Question{Attr: board, Options: board.Enum, Default: "c",
 			Warnings: [][]Warning{nil, nil, {{ID: "w1", Message: "C is slow."}}}}
-		// The highlighted option shows its warning under the list.
+		// The highlighted option shows its warning at the bottom.
 		view := ansi.Strip(selectPicker(q).View())
-		if !strings.Contains(view, "c ⚠") || !strings.Contains(view, "⚠ C is slow.") {
-			t.Errorf("view %q does not show the warning of c", view)
+		if !strings.Contains(view, "c ⚠") || lastLine(view) != "⚠ C is slow." {
+			t.Errorf("view %q does not end with the warning of c", view)
 		}
 		q.Default = "a"
 		if view := ansi.Strip(selectPicker(q).View()); !strings.Contains(view, "c ⚠") || strings.Contains(view, "C is slow.") {
@@ -94,4 +94,10 @@ display:
 			t.Fatalf("Text = %q, %v, want 8MiB", got, err)
 		}
 	})
+}
+
+// lastLine returns the last non-empty line of a view, without its spaces.
+func lastLine(view string) string {
+	lines := strings.Split(strings.TrimRight(view, "\n "), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }

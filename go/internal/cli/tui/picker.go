@@ -124,6 +124,9 @@ type PickerItem struct {
 	OSVersion    string
 	Provisioned  string // "Provisioned" or "Unprovisioned" when known, empty otherwise
 	Hint         string // optional footer text shown when this item is highlighted
+	// Warning is an optional warning shown at the bottom, under Hint, when
+	// this item is highlighted, in the style of WarningMessage.
+	Warning string
 
 	// Probe reflects whether the agent version/OS probe for this row is in
 	// flight (ProbePending), done (ProbeOK), or failed (ProbeFailed). The zero
@@ -797,6 +800,10 @@ func (m PickerModel) viewContent() string {
 	if hint := m.selectedHint(); hint != "" {
 		selectedHint = WrapHint("  "+hint, m.width)
 	}
+	selectedWarning := ""
+	if warning := m.selectedWarning(); warning != "" {
+		selectedWarning = WrapHint(pickerWarningPrefix+warning, m.width)
+	}
 
 	sb.WriteString(colorizeSectionHeaders(ColorizeProbeGlyphs(m.tableView()), m.sectionLabels()) + "\n")
 
@@ -825,11 +832,16 @@ func (m PickerModel) viewContent() string {
 		sb.WriteString("\n" + m.viewLine(pickerScanning.Render("  Scanning for more results...")) + "\n")
 	}
 
-	if selectedHint != "" {
+	if selectedHint != "" || selectedWarning != "" {
 		if !m.scanning {
 			sb.WriteString("\n")
 		}
-		sb.WriteString(pickerHint.Render(selectedHint) + "\n")
+		if selectedHint != "" {
+			sb.WriteString(pickerHint.Render(selectedHint) + "\n")
+		}
+		if selectedWarning != "" {
+			sb.WriteString(warningStyle.Render(selectedWarning) + "\n")
+		}
 	}
 
 	return sb.String()
@@ -920,6 +932,19 @@ func (m PickerModel) selectedHint() string {
 		return ""
 	}
 	return strings.TrimSpace(visible[idx].Hint)
+}
+
+// pickerWarningPrefix starts the warning line of the highlighted item, as
+// WarningMessage, indented as the hint.
+const pickerWarningPrefix = "  ⚠ "
+
+func (m PickerModel) selectedWarning() string {
+	visible := m.visibleItems()
+	idx := m.itemIndexForRow(m.table.Cursor())
+	if idx < 0 || idx >= len(visible) {
+		return ""
+	}
+	return strings.TrimSpace(visible[idx].Warning)
 }
 
 func (m PickerModel) viewLine(line string) string {
@@ -1588,15 +1613,21 @@ func (m PickerModel) tableViewportWidth() int {
 	return PickerTableWidth(m.table.Columns())
 }
 
-// PickerHintHeight reserves enough space for any visible row's hint. Keeping
-// that reservation stable while navigating lets rendering and cursor movement
-// share one viewport, including when adjacent rows have different hint lengths.
+// PickerHintHeight reserves enough space for any visible row's hint and
+// warning. Keeping that reservation stable while navigating lets rendering
+// and cursor movement share one viewport, including when adjacent rows have
+// different hint lengths. prefix starts each hint.
 func PickerHintHeight(items []PickerItem, width int, prefix string) int {
 	height := 0
 	for _, item := range items {
+		lines := 0
 		if hint := strings.TrimSpace(item.Hint); hint != "" {
-			height = max(height, lipgloss.Height(WrapHint(prefix+hint, width)))
+			lines += lipgloss.Height(WrapHint(prefix+hint, width))
 		}
+		if warning := strings.TrimSpace(item.Warning); warning != "" {
+			lines += lipgloss.Height(WrapHint(pickerWarningPrefix+warning, width))
+		}
+		height = max(height, lines)
 	}
 	return height
 }

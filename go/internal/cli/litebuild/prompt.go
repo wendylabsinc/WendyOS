@@ -44,7 +44,7 @@ func (p *TUIPrompter) answered(q Question, value any) {
 
 // selectPicker returns the picker of a Select question, with the default
 // answer highlighted. An option with a warning has a ⚠ after its label, and
-// its warning under the list while it is highlighted.
+// its warning at the bottom, as a logged warning, while it is highlighted.
 func selectPicker(q Question) tui.PickerModel {
 	items := make([]tui.PickerItem, len(q.Options))
 	defaultKey := ""
@@ -54,7 +54,7 @@ func selectPicker(q Question) tui.PickerModel {
 		items[i] = tui.PickerItem{Name: q.Attr.Label(v), DedupKey: key, SortKey: fmt.Sprintf("%04d", i), Value: i}
 		if text := warningText(q, i); text != "" {
 			items[i].Name += " ⚠"
-			items[i].Hint = "⚠ " + text
+			items[i].Warning = text
 		}
 		if q.Default != nil && v == q.Default {
 			defaultKey = key
