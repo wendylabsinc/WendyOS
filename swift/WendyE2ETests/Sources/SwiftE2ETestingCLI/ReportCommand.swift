@@ -20,6 +20,12 @@ struct ReportCommand: ParsableCommand {
     @Option(name: .long, help: "Swift package directory.")
     var packageDir = "."
 
+    @Option(
+        name: .long,
+        help: "Tested Swift package root for source identities; defaults to --package-dir."
+    )
+    var sourcePackageDir: String?
+
     @Option(name: .long, help: "Directory containing Swift E2E test sources.")
     var testsDir: String?
 
@@ -31,8 +37,9 @@ struct ReportCommand: ParsableCommand {
 
     mutating func run() throws {
         let packageURL = URL(fileURLWithPath: packageDir)
+        let sourcePackageURL = sourcePackageDir.map { URL(fileURLWithPath: $0) } ?? packageURL
         let testsURL = URL(
-            fileURLWithPath: testsDir ?? defaultTestsDir(packageURL: packageURL).path
+            fileURLWithPath: testsDir ?? defaultTestsDir(packageURL: sourcePackageURL).path
         )
         let templateURL = URL(
             fileURLWithPath: template
@@ -51,7 +58,7 @@ struct ReportCommand: ParsableCommand {
         let comparisonData = try E2ERunComparison.load(in: runURL)
         let files = try parseTests(
             in: testsURL,
-            packageURL: packageURL,
+            packageURL: sourcePackageURL,
             runURL: runURL,
             records: records,
             aiReviews: aiReviews,
@@ -924,6 +931,14 @@ private func parseTests(
     var files: [ReportTestFile] = []
 
     for sourceURL in sourceURLs {
+        if comparison?.status == "compared" {
+            let root = packageURL.standardizedFileURL.path + "/"
+            guard sourceURL.standardizedFileURL.path.hasPrefix(root) else {
+                throw ValidationError(
+                    "Compared test sources must be under --source-package-dir: " + sourceURL.path
+                )
+            }
+        }
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
         let lines = source.components(separatedBy: .newlines)
         var suite = sourceURL.deletingPathExtension().lastPathComponent

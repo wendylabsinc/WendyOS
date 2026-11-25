@@ -190,7 +190,11 @@ go tool cover -html=/path/to/run/coverage/coverage.out -o=/path/to/coverage.html
 For split checkouts, `aggregate --repo TESTED_REPO` and `review --repo TESTED_REPO`
 validate source against recorded revisions. Run the tool from the trusted
 package (`--package-dir`); the tested repository is read-only investigation data,
-not a source of scripts or package/dependency execution. Review harness startup
+not a source of scripts or package/dependency execution. For split report rendering,
+`report --package-dir TRUSTED_PACKAGE --source-package-dir TESTED_PACKAGE` uses
+trusted templates with tested package-relative spec identities and saved source
+hash checks. `--tests-dir` can narrow the sources within that tested package.
+Review harness startup
 stays in the trusted tooling repository. The workflow materializes the actual tested SHA (including synthetic merges)
 from validated raw Git blobs before aggregation; no checkout conversion or
 archive filters run, and tested files never enter the trusted package.

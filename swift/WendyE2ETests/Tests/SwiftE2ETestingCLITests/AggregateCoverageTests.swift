@@ -122,6 +122,26 @@ struct `aggregate saved coverage` {
         #expect(html.contains("data-spec-change=\"Removed\""))
         // Removed entries never enter the current test count/outcomes.
         #expect(html.components(separatedBy: "<summary class=\"test-summary\">").count - 1 == 2)
+        // Separate trusted templates/tooling from the tested source identity root.
+        var splitReport = try ReportCommand.parse([
+            "--package-dir", f.product.appendingPathComponent("swift/WendyE2ETests").path,
+            "--tests-dir", package.appendingPathComponent("Tests/WendyE2ETests").path,
+            "--run-dir", run.path,
+        ])
+        // A split tests directory alone must not silently fall back to basenames.
+        #expect(throws: (any Error).self) { try splitReport.run() }
+        splitReport.sourcePackageDir = package.path
+        try splitReport.run()
+        let splitHTML = try String(
+            contentsOf: run.appendingPathComponent("index.html"),
+            encoding: .utf8
+        )
+        #expect(splitHTML.contains("data-spec-change=\"Added\""))
+        #expect(splitHTML.contains("data-spec-change=\"Changed\""))
+        #expect(splitHTML.contains("data-spec-change=\"Removed\""))
+        try f.write(file, after + "\n// changed source must not bypass the saved hash guard\n")
+        #expect(throws: (any Error).self) { try splitReport.run() }
+        try f.write(file, after)
         // A renderer has no Git access; it consumes saved results and source hashes.
         try f.write("fake-bin/git", "#!/bin/sh\nexit 99\n")
         try FileManager.default.setAttributes(
@@ -137,12 +157,39 @@ struct `aggregate saved coverage` {
             f.repo.appendingPathComponent("fake-bin").path + ":" + env["PATH", default: ""]
         let rendered = try CoverageIO.execute(
             [
-                cli.path, "report", "--package-dir", package.path, "--template", template.path,
+                cli.path, "report", "--package-dir",
+                f.product.appendingPathComponent("swift/WendyE2ETests").path,
+                "--source-package-dir", package.path, "--template", template.path,
                 "--run-dir", run.path,
             ],
             environment: env
         )
         #expect(rendered.status == 0, Comment(rawValue: rendered.error))
+        // Exercise the actual shell wrapper without recursively invoking SwiftPM.
+        try f.write(
+            "fake-bin/swift",
+            "#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = swift-e2e-testing ] || exit 91\nshift 2\nexec '"
+                + cli.path + "' \"$@\"\n"
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: f.repo.appendingPathComponent("fake-bin/swift").path
+        )
+        let wrapped = try CoverageIO.execute(
+            [
+                "/bin/bash", f.product.appendingPathComponent("swift/Scripts/E2EReport.sh").path,
+                "--package-dir", f.product.appendingPathComponent("swift/WendyE2ETests").path,
+                "--source-package-dir", package.path, "--run-dir", run.path,
+            ],
+            environment: env
+        )
+        #expect(wrapped.status == 0, Comment(rawValue: wrapped.error))
+        let wrappedHTML = try String(
+            contentsOf: run.appendingPathComponent("index.html"),
+            encoding: .utf8
+        )
+        #expect(wrappedHTML.contains("data-spec-change=\"Added\""))
+        #expect(wrappedHTML.contains("data-spec-change=\"Changed\""))
         // A different base uses exactly the same native evidence/profile.
         try aggregate(head + ".." + head)
         #expect(
