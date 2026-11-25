@@ -1,0 +1,139 @@
+syntax = "proto3";
+package wendy.world.replica.v1;
+option go_package = "github.com/wendylabsinc/wendy/go/world/production/api/world/replica/v1;replicav1";
+
+// Private native-agent mTLS service. Enrollment alone grants no access.
+// The host must register this only on its authenticated device server.
+service WorldReplicaService {
+  rpc Inventory(InventoryRequest) returns (InventoryReply);
+  rpc Fetch(FetchRequest) returns (FetchReply);
+  // On-demand source-owned media, separate from state inventory/repair.
+  rpc FetchEvidence(FetchEvidenceRequest) returns (FetchEvidenceReply);
+  // Native peer latest-value push; historical repair remains independent.
+  rpc PushLatest(PushLatestRequest) returns (PushLatestReply);
+}
+
+message Scope {
+  string tenant = 1;
+  string site = 2;
+  string device = 3;
+  string execution_domain = 4;
+  string sample_clock_domain = 5;
+}
+message Actor {
+  string tenant = 1;
+  string site = 2;
+  string device = 3;
+  string app = 4;
+  string service = 5;
+}
+message RecordReference {
+  Actor actor = 1;
+  string entity = 2;
+  string component_type = 3;
+  string stream = 4;
+  uint64 epoch = 5;
+  uint64 sequence = 6;
+  string envelope_sha256 = 7;
+  string record_sha256 = 8;
+}
+message RecordHint {
+  RecordReference reference = 1;
+  // Original sample-clock deadline cap. Never a TTL relative to receipt.
+  int64 expires_at_unix_ns = 2;
+  bool tombstone = 3;
+}
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_FLOOR = 1;
+  KIND_LEASE = 2;
+  KIND_RECORD = 3;
+}
+message AuthorityHint {
+  Actor actor = 1;
+  uint64 revision = 2; // authority_revision or floor attestation_revision
+  uint64 epoch = 3; // source epoch or minimum admitted epoch
+  string envelope_sha256 = 4;
+  uint64 through_revision = 5; // floor denial; zero for a lease
+}
+message Entry {
+  Kind kind = 1;
+  oneof hint {
+    AuthorityHint authority = 2;
+    RecordHint record = 3;
+  }
+}
+message InventoryRequest {
+  uint32 version = 1;
+  // Zero only on the first request. Later requests pin that exact generation.
+  uint64 expected_generation = 2;
+  bytes cursor = 3;
+  uint32 limit = 4; // 1..64; zero retains the default maximum
+}
+message InventoryReply {
+  uint32 version = 1;
+  Scope scope = 2;
+  uint64 generation = 3;
+  repeated Entry entries = 4; // at most 64, including independent floors
+  bytes next_cursor = 5;
+}
+message FetchRequest {
+  uint32 version = 1;
+  uint64 expected_generation = 2;
+  repeated Entry entries = 3; // at most 8 exact inventory hints
+}
+message Item {
+  Entry entry = 1;
+  // Exact original signed record, lease or floor envelope. No normalization.
+  bytes envelope = 2;
+}
+message FetchReply {
+  uint32 version = 1;
+  Scope scope = 2;
+  uint64 generation = 3;
+  repeated Item items = 4;
+  repeated Entry unavailable = 5; // exact requested entries, never replacements
+}
+
+message PushLatestRequest {
+  uint32 version = 1;
+  Scope scope = 2; // exact connected origin, never a third-party relay
+  repeated Item items = 3; // 1..8, at most 512 KiB; floors, leases, then records
+}
+message PushLatestReply {
+  uint32 version = 1;
+  Scope scope = 2; // receiving endpoint
+  uint64 generation = 3; // current receiver import policy
+  uint32 admitted = 4;
+  uint32 skipped = 5; // existing/older originals for which Store.Need is false
+  // Exactly one outcome is true. Counts never claim observation freshness.
+  bool complete = 6;
+  bool deferred = 7; // explicit record-window refusal before record commit
+  bool unknown_outcome = 8; // uncertain receiver Store.Admit
+}
+
+message EvidenceSource {
+  Actor actor = 1;
+  string component_type = 2;
+  string stream = 3;
+}
+message FetchEvidenceRequest {
+  uint32 version = 1;
+  EvidenceSource source = 2;
+  string sha256 = 3;
+  int64 offset = 4;
+  uint32 length = 5; // 1..48 KiB
+}
+message FetchEvidenceReply {
+  uint32 version = 1;
+  Scope scope = 2;
+  uint64 generation = 3; // current export policy checked again after the read
+  EvidenceSource source = 4;
+  string owner_sha256 = 5;
+  string sha256 = 6;
+  int64 size = 7;
+  int64 offset = 8;
+  bytes data = 9; // at most 48 KiB
+  string content_type = 10;
+  int64 retain_until_unix_ms = 11; // original authenticated physical deadline
+}

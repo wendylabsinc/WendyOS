@@ -66,6 +66,19 @@ func localOnly() []mcpgo.ToolOption {
 // toolTitles are the human-readable names MCP clients and app directories show
 // for each tool. Every registered tool needs one (TestEveryToolHasTitleAndHints).
 var toolTitles = map[string]string{
+	"world_sites":        "Read World Sites",
+	"world_zones":        "Read World Zones",
+	"world_annotations":  "Read World Annotations",
+	"world_proposals":    "List World Proposals",
+	"world_proposal":     "Read World Proposal",
+	"world_task_history": "Read World Mission History",
+	"world_task_result":  "Read World Mission Result",
+
+	"world_query":           "Read World Observations",
+	"world_watch":           "Watch World Observations",
+	"world_task_catalog":    "List World Mission Types",
+	"world_task_status":     "Read World Mission Status",
+	"world_task_propose":    "Propose World Mission",
 	"experiment_plan":       "Plan Experiment",
 	"job_submit":            "Submit Training Job",
 	"compute_status":        "Inspect Compute Capacity",

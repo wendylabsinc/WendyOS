@@ -1,0 +1,3 @@
+# Use Ubuntu22.04 ROS Humble system rclpy/nav_msgs/sensor_msgs/std_msgs/tf2_msgs
+# and the system libddsc provided by ros-humble-cyclonedds.
+cyclonedds==0.10.2

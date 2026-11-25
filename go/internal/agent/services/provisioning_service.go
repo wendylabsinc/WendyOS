@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -129,30 +130,33 @@ type ProvisioningService struct {
 	agentpb.UnimplementedWendyProvisioningServiceServer
 	logger         *zap.Logger
 	configPath     string
-	mu             sync.Mutex
+	mu             sync.RWMutex
 	unenrollmentMu sync.Mutex
 	// lifecycleMu orders publication of dependent enrollment resources with
 	// reset. Callbacks may reenter read APIs, so it must precede mu and must
 	// never be acquired while mu is held.
-	lifecycleMu         sync.Mutex
-	enrolled            bool
-	resetRecoveryErr    error
-	resetCleanupErr     error
-	resetRestartPending bool
-	trustedTime         func(context.Context) (timesync.TimeWindow, error)
-	verifyCloudReset    func(context.Context, []byte, string, string, string, []byte, *x509.Certificate, time.Time, time.Time) ([]byte, error)
-	cloudHost           string
-	orgID               int32
-	assetID             int32
-	keyPEM              []byte // stored as []byte so it can be zeroed on rotation/shutdown
-	certPEM             string
-	chainPEM            string
-	principalURI        string
-	acmeDirectoryURL    string
-	CloudDialer         CloudDialer
-	OnProvisioned       OnProvisionedFunc
-	OnUnprovisioned     OnUnprovisionedFunc
-	BeforeUnprovisioned BeforeUnprovisionedFunc
+	lifecycleMu              sync.Mutex
+	enrolled                 bool
+	resetRecoveryErr         error
+	resetCleanupErr          error
+	resetRestartPending      bool
+	trustedTime              func(context.Context) (timesync.TimeWindow, error)
+	verifyCloudReset         func(context.Context, []byte, string, string, string, []byte, *x509.Certificate, time.Time, time.Time) ([]byte, error)
+	cloudHost                string
+	orgID                    int32
+	assetID                  int32
+	keyPEM                   []byte // stored as []byte so it can be zeroed on rotation/shutdown
+	certPEM                  string
+	chainPEM                 string
+	principalURI             string
+	acmeDirectoryURL         string
+	CloudDialer              CloudDialer
+	OnProvisioned            OnProvisionedFunc
+	OnUnprovisioned          OnUnprovisionedFunc
+	BeforeUnprovisioned      BeforeUnprovisionedFunc
+	worldIdentityToken       atomic.Uint64
+	worldIdentityInvalidated chan struct{}
+	worldOperationMu         sync.Mutex
 }
 
 func NewProvisioningService(logger *zap.Logger, configPath string, clock ...*timesync.Manager) *ProvisioningService {
@@ -162,6 +166,8 @@ func NewProvisioningService(logger *zap.Logger, configPath string, clock ...*tim
 		CloudDialer:      DefaultCloudDialer,
 		verifyCloudReset: unenrollproof.VerifyCloudReset,
 	}
+	svc.worldIdentityToken.Store(1)
+	svc.worldIdentityInvalidated = make(chan struct{})
 	if len(clock) > 0 && clock[0] != nil {
 		svc.trustedTime = clock[0].FreshTime
 	}
@@ -382,6 +388,7 @@ func (s *ProvisioningService) persistProvisioning(state *provisioningState, keyP
 	}
 
 	// Persist succeeded — now it is safe to update in-memory state.
+	s.invalidateWorldIdentityLocked()
 	s.enrolled = true
 	s.cloudHost = state.CloudHost
 	s.orgID = state.OrgID
@@ -483,6 +490,7 @@ func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint
 	}
 
 	// Zero the in-memory key before dropping the reference, then clear state.
+	s.invalidateWorldIdentityLocked()
 	for i := range s.keyPEM {
 		s.keyPEM[i] = 0
 	}

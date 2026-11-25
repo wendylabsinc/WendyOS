@@ -1,0 +1,77 @@
+{
+  "schema_version": "wendy.world.package.v0",
+  "site_id": "synthetic-office",
+  "package_revision": "live-office-fixture-v1",
+  "frame_revision": "office-frame-v1",
+  "provenance": "synthetic",
+  "description": "Synthetic live office. One physical state drives actuation, rendered cameras, robot-mounted gas and generated audio. No real office data.",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "mujoco": {
+    "path": "office.xml",
+    "sha256": "1752e510dd1a14a1b6a8111243027c8b059d1cf35113d7d56f6ab0ff38b3469c",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ],
+    "body": "inspection-puck",
+    "actuator": "drive",
+    "control": 0,
+    "control_mode": "velocity"
+  },
+  "gas_model": {
+    "kind": "analytic-gaussian-fixture",
+    "unit": "ppm",
+    "source_local_m": [
+      0,
+      0.2,
+      0
+    ],
+    "background_ppm": 1,
+    "peak_ppm": 80,
+    "sigma_m": 2.5,
+    "noise_stddev_ppm": 0.1
+  },
+  "fidelity": {
+    "geometry": "hand-authored illustrative boxes",
+    "robot": "single-axis velocity-controlled puck with ideal watchdog brake, not Go2 dynamics",
+    "gas": "analytic Gaussian field with seeded measurement noise; no fluid dynamics",
+    "camera": "camera-a fixed, camera-b robot-mounted; live MuJoCo RGB renders from copied physics state",
+    "audio": "generated 880 Hz mono test tone or quiet noise; no acoustic propagation"
+  },
+  "asset_license": "Proprietary Wendy Labs fixture; no real office data",
+  "scenario": {
+    "name": "live-inspection-fixture",
+    "expected": "operator task moves the robot and changes its camera and gas observations in the same physics scene"
+  },
+  "live_sensors": {
+    "cameras": [
+      "camera-a",
+      "camera-b"
+    ],
+    "width": 320,
+    "height": 240,
+    "gas_binding": "robot",
+    "audio_binding": "robot",
+    "audio_rate_hz": 8000,
+    "audio_duration_ms": 250,
+    "alarm_frequency_hz": 880,
+    "calibration_revision": "synthetic-live-sensors-v1"
+  }
+}

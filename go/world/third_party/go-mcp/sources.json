@@ -1,0 +1,119 @@
+{
+  "checked_at": "2026-11-11",
+  "command": "GOTOOLCHAIN=go1.27.3 go list -deps -f {{with .Module}}{{.Path}}@{{.Version}}{{end}} ./cmd/world-mcp",
+  "licenses": [
+    {
+      "module": "github.com/modelcontextprotocol/go-sdk",
+      "version": "v1.8.0",
+      "role": "runtime",
+      "source": "Go module cache: github.com/modelcontextprotocol/go-sdk@v1.8.0/LICENSE",
+      "path": "third_party/go-mcp/github.com/modelcontextprotocol/go-sdk/LICENSE",
+      "sha256": "af679003d933f045393a6a029f43da113f9ae364eac651d9ae268392985580f5"
+    },
+    {
+      "module": "github.com/google/jsonschema-go",
+      "version": "v0.4.3",
+      "role": "runtime",
+      "source": "Go module cache: github.com/google/jsonschema-go@v0.4.3/LICENSE",
+      "path": "third_party/go-mcp/github.com/google/jsonschema-go/LICENSE",
+      "sha256": "2d56c53449691d85d9aea245eb8dac12713e9075d70d5557b82ae1e94805b357"
+    },
+    {
+      "module": "github.com/segmentio/asm",
+      "version": "v1.1.3",
+      "role": "runtime",
+      "source": "Go module cache: github.com/segmentio/asm@v1.1.3/LICENSE",
+      "path": "third_party/go-mcp/github.com/segmentio/asm/LICENSE",
+      "sha256": "e2a78de21d6d8ded2dff0f3189cd32e011630d785da127ebfbc8949012c0947b"
+    },
+    {
+      "module": "github.com/segmentio/encoding",
+      "version": "v0.5.4",
+      "role": "runtime",
+      "source": "Go module cache: github.com/segmentio/encoding@v0.5.4/LICENSE",
+      "path": "third_party/go-mcp/github.com/segmentio/encoding/LICENSE",
+      "sha256": "d6d71a1f7dc6539e371120cc7af6e3257e55ca79634d473211f217b8965b0f16"
+    },
+    {
+      "module": "github.com/yosida95/uritemplate/v3",
+      "version": "v3.0.2",
+      "role": "runtime",
+      "source": "Go module cache: github.com/yosida95/uritemplate/v3@v3.0.2/LICENSE",
+      "path": "third_party/go-mcp/github.com/yosida95/uritemplate/v3/LICENSE",
+      "sha256": "0761aadfb1921103752869ee942d4a71bdd54494697684d4b13dc17ad9781191"
+    },
+    {
+      "module": "golang.org/x/oauth2",
+      "version": "v0.35.0",
+      "role": "runtime",
+      "source": "Go module cache: golang.org/x/oauth2@v0.35.0/LICENSE",
+      "path": "third_party/go-mcp/golang.org/x/oauth2/LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "module": "golang.org/x/sync",
+      "version": "v0.20.0",
+      "role": "runtime",
+      "source": "Go module cache: golang.org/x/sync@v0.20.0/LICENSE",
+      "path": "third_party/go-mcp/golang.org/x/sync/LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "module": "golang.org/x/time",
+      "version": "v0.15.0",
+      "role": "runtime",
+      "source": "Go module cache: golang.org/x/time@v0.15.0/LICENSE",
+      "path": "third_party/go-mcp/golang.org/x/time/LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "module": "golang.org/x/sys",
+      "version": "v0.46.0",
+      "role": "existing runtime dependency",
+      "source": "Go module cache: golang.org/x/sys@v0.46.0/LICENSE",
+      "path": "third_party/go-mcp/golang.org/x/sys/LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "module": "github.com/golang-jwt/jwt/v5",
+      "version": "v5.3.1",
+      "role": "module test/tool dependency; not linked by world-mcp",
+      "source": "Go module cache: github.com/golang-jwt/jwt/v5@v5.3.1/LICENSE",
+      "path": "third_party/go-mcp/github.com/golang-jwt/jwt/v5/LICENSE",
+      "sha256": "fe26ca41577b9b2b4448050a24b25e5753af66b5d5945d5d36094e7790bfcb2f"
+    },
+    {
+      "module": "golang.org/x/tools",
+      "version": "v0.42.0",
+      "role": "module test/tool dependency; not linked by world-mcp",
+      "source": "Go module cache: golang.org/x/tools@v0.42.0/LICENSE",
+      "path": "third_party/go-mcp/golang.org/x/tools/LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "module": "Go toolchain/standard library and Go-derived implementation notices",
+      "version": "go1.27.3",
+      "role": "runtime and third-party source attribution",
+      "source": "selected local Go1.27.3 GOROOT/LICENSE",
+      "path": "third_party/go-mcp/GO-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "module": "github.com/segmentio/encoding/json/fuzz",
+      "version": "v0.5.4",
+      "role": "module fuzz/test assets; not linked by world-mcp",
+      "source": "Go module cache: github.com/segmentio/encoding@v0.5.4/json/fuzz/LICENSE",
+      "path": "third_party/go-mcp/github.com/segmentio/encoding/json-fuzz-LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    {
+      "module": "golang.org/x/tools/cmd/goyacc",
+      "version": "v0.42.0",
+      "role": "module tool source notice; not linked by world-mcp",
+      "source": "Go module cache: golang.org/x/tools@v0.42.0/cmd/goyacc/yacc.go initial copyright/permission comment",
+      "source_file_sha256": "30b4a688128138b64855725aaa58809effa47e61b586702ca95c19719439e5c9",
+      "path": "third_party/go-mcp/golang.org/x/tools/goyacc-NOTICE",
+      "sha256": "9d68a6adff2c59c41358ee863999228771c1a408f72f51a5483fac4b8ea9aa6d"
+    }
+  ]
+}

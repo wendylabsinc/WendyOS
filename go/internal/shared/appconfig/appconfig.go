@@ -97,6 +97,7 @@ const (
 
 // ValidEntitlementTypes is the set of all recognized entitlement type strings.
 var ValidEntitlementTypes = []string{
+	EntitlementWorld,
 	EntitlementNetwork,
 	EntitlementBluetooth,
 	EntitlementAvahi,
@@ -139,6 +140,7 @@ var deprecatedEntitlementReplacements = map[string]string{
 
 // allowedKeys maps each entitlement type to the set of JSON keys that are valid for it.
 var allowedKeys = map[string][]string{
+	EntitlementWorld:         {"type", "publish", "subscribe"},
 	EntitlementNetwork:       {"type", "mode", "ports", "serviceCIDR"},
 	EntitlementBluetooth:     {"type", "mode"},
 	EntitlementAvahi:         {"type"},
@@ -480,16 +482,18 @@ func CameraShareChoice(entitlements []Entitlement) string {
 
 // Entitlement represents a single entitlement entry in wendy.json.
 type Entitlement struct {
-	Streams   map[string]RecordingStream `json:"streams,omitempty"`
-	Type      string                     `json:"type"`
-	Mode      string                     `json:"mode,omitempty"`      // Network, Bluetooth, Video, Camera ("direct")
-	Allowlist []string                   `json:"allowlist,omitempty"` // Camera, Video
-	Name      string                     `json:"name,omitempty"`      // Persist
-	Path      string                     `json:"path,omitempty"`      // Persist
-	Device    string                     `json:"device,omitempty"`    // I2C, Serial
-	Pins      []int                      `json:"pins,omitempty"`      // GPIO
-	Ports     []PortMapping              `json:"ports,omitempty"`     // Network
-	Port      int                        `json:"port,omitempty"`      // MCP, HTTP
+	WorldPublish   []WorldPublication         `json:"publish,omitempty"`
+	WorldSubscribe []WorldSubscription        `json:"subscribe,omitempty"`
+	Streams        map[string]RecordingStream `json:"streams,omitempty"`
+	Type           string                     `json:"type"`
+	Mode           string                     `json:"mode,omitempty"`      // Network, Bluetooth, Video, Camera ("direct")
+	Allowlist      []string                   `json:"allowlist,omitempty"` // Camera, Video
+	Name           string                     `json:"name,omitempty"`      // Persist
+	Path           string                     `json:"path,omitempty"`      // Persist
+	Device         string                     `json:"device,omitempty"`    // I2C, Serial
+	Pins           []int                      `json:"pins,omitempty"`      // GPIO
+	Ports          []PortMapping              `json:"ports,omitempty"`     // Network
+	Port           int                        `json:"port,omitempty"`      // MCP, HTTP
 	// User and Password are optional credentials for a network camera. Local
 	// cameras need none, so they are only consulted for an IP camera that reports
 	// it has no stored login. Supplying them here means an unattended deploy does
@@ -597,6 +601,10 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 		}
 
 		switch e.Type {
+		case EntitlementWorld:
+			if err := ValidateWorldAccess(e.WorldPublish, e.WorldSubscribe); err != nil {
+				return fmt.Errorf("%s[%d]: %w", prefix, i, err)
+			}
 		case EntitlementEpisodeWrite:
 			if err := ValidateRecordingStreams(e.Streams); err != nil {
 				return fmt.Errorf("%s[%d]: %w", prefix, i, err)

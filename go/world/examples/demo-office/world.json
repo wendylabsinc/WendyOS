@@ -1,0 +1,77 @@
+{
+  "schema_version": "wendy.world.package.v0",
+  "site_id": "synthetic-office",
+  "package_revision": "demo-office-building-v1",
+  "frame_revision": "office-frame-v1",
+  "provenance": "synthetic",
+  "description": "Synthetic furnished office building with open-roof cutaway, workspace, meeting room, private office, lounge, reception and kitchenette. One-axis test robot; no captured real office data.",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "mujoco": {
+    "path": "office.xml",
+    "sha256": "eae529669b3cb9a1c3a764605944e03d60cb24e9d08a4afa328f53c70e9a4a98",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ],
+    "body": "inspection-puck",
+    "actuator": "drive",
+    "control": 0,
+    "control_mode": "velocity"
+  },
+  "gas_model": {
+    "kind": "analytic-gaussian-fixture",
+    "unit": "ppm",
+    "source_local_m": [
+      0,
+      0.2,
+      0
+    ],
+    "background_ppm": 1,
+    "peak_ppm": 80,
+    "sigma_m": 2.5,
+    "noise_stddev_ppm": 0.1
+  },
+  "fidelity": {
+    "geometry": "Hand-authored 16 by 12 metre furnished office cutaway; native MJCF primitives and procedural materials, illustrative layout and collision geometry",
+    "robot": "One-axis test robot with visual mobile-base bodywork; original 1 kg sphere collision envelope and 0.016 kg m^2 diagonal inertia, ideal watchdog brake; not differential-drive or Go2 dynamics",
+    "gas": "analytic Gaussian field with seeded measurement noise; no fluid dynamics",
+    "camera": "camera-a fixed, camera-b robot-mounted; live MuJoCo RGB renders from copied physics state",
+    "audio": "generated 880 Hz mono test tone or quiet noise; no acoustic propagation"
+  },
+  "asset_license": "Proprietary Wendy Labs fixture; no real office data",
+  "scenario": {
+    "name": "furnished-office-inspection",
+    "expected": "operator task moves the robot and changes its camera and gas observations in the same physics scene"
+  },
+  "live_sensors": {
+    "cameras": [
+      "camera-a",
+      "camera-b"
+    ],
+    "width": 320,
+    "height": 240,
+    "gas_binding": "robot",
+    "audio_binding": "robot",
+    "audio_rate_hz": 8000,
+    "audio_duration_ms": 250,
+    "alarm_frequency_hz": 880,
+    "calibration_revision": "synthetic-live-sensors-v1"
+  }
+}

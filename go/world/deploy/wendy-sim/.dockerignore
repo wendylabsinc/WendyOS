@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!.dockerignore
+!worldd
+!world-wendy-boot
+!node-seed.json

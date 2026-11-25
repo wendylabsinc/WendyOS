@@ -1,10 +1,22 @@
 import SwiftUI
 import AppKit
+import WorldTwin
+import WorldOperator
 
 @main
 struct WendyDesktopApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
+    init() {
+        if WorldTwinLaunchRequest.recognizes(ProcessInfo.processInfo.arguments) || WorldTimelineRenderRequest.recognizes(ProcessInfo.processInfo.arguments) || WorldOperatorLaunchRequest.recognizes(ProcessInfo.processInfo.arguments) {
+            // An explicit session launch must show a window even if a previous
+            // Wendy process quit with only its menu-bar item visible.
+            var domain = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+            domain["ApplePersistenceIgnoreState"] = true
+            UserDefaults.standard.setVolatileDomain(domain, forName: UserDefaults.argumentDomain)
+        }
+    }
+
     var body: some Scene {
         WindowGroup("Wendy", id: "main") {
             ContentView().environmentObject(model)

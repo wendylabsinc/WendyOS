@@ -1,0 +1,218 @@
+syntax = "proto3";
+package wendy.world.app.v1;
+option go_package = "github.com/wendylabsinc/wendy/go/world/production/api/world/app/v1;appv1";
+
+// Private, service-scoped Unix socket. Identity and publisher versions are
+// supplied by the agent, never by this request. Acceptance means durable local
+// admission; it does not promise forwarding or authorize physical effects.
+service WorldAppService {
+  rpc Publish(PublishRequest) returns (PublishReply);
+  rpc PublishStream(stream PublishRequest) returns (stream PublishReply);
+  rpc Query(QueryRequest) returns (QueryReply);
+  rpc PutEvidence(PutEvidenceRequest) returns (PutEvidenceReply);
+  rpc GetEvidence(GetEvidenceRequest) returns (GetEvidenceReply);
+  // Trust comes from the commissioned private socket, not a transferable
+  // signature. Physical authority time and sample time remain separate.
+  rpc Clock(ClockRequest) returns (ClockReply);
+  // Fresh physical authority time without acquiring a source-clock sample.
+  // This does not establish source freshness or replace Clock's sample time.
+  rpc PhysicalClock(ClockRequest) returns (PhysicalClockReply);
+  // Audit bytes only. Reading a retained proof never makes it live again.
+  rpc GetRecordProof(GetRecordProofRequest) returns (GetRecordProofReply);
+  // Fresh active publisher metadata, independent of observation availability.
+  // Trust comes from the private socket. This is not a transferable lease.
+  rpc GetSourceAuthority(GetSourceAuthorityRequest) returns (SourceAuthorityReply);
+  // One native camera snapshot, delivered in bounded chunks. The host maps
+  // the existing publication scope to a camera; callers cannot select a path.
+  // Metadata preserves source time separately from gateway receipt time.
+  // Retrieval does not publish an observation or assert a UTC capture time.
+  rpc GetSensorFrame(GetSensorFrameRequest) returns (stream SensorFrameChunk);
+}
+message GetSourceAuthorityRequest {
+  bytes nonce = 1;
+  repeated SourceSelector sources = 2;
+}
+message SourceAuthority {
+  SourceSelector source = 1;
+  bytes signed_delegation_json = 2;
+}
+message SourceAuthorityReply {
+  bytes nonce = 1;
+  repeated SourceAuthority authorities = 2;
+  PhysicalClock physical = 3;
+  string tenant = 4;
+  string site = 5;
+  string device = 6;
+  string app = 7;
+  string service = 8;
+  string execution_domain = 9;
+  uint64 deployment_generation = 10;
+  string server_boot_id = 11;
+}
+message FrameRef { string id = 1; string revision = 2; }
+message Timing {
+  int64 sample_unix_ns = 1;
+  string clock_domain = 2;
+  bool error_known = 3;
+  uint64 error_bound_ns = 4;
+  uint64 age_hint_ns = 5;
+}
+enum Origin {
+  ORIGIN_UNSPECIFIED = 0;
+  ORIGIN_MEASURED = 1;
+  ORIGIN_SIMULATED = 2;
+  ORIGIN_REPLAYED = 3;
+  ORIGIN_INFERRED = 4;
+  ORIGIN_AUTHORED = 5;
+}
+message SimulationContext {
+  string run_id = 1;
+  string scenario_version = 2;
+  uint64 seed = 3;
+  string clock_domain = 4;
+}
+message Input {
+  string id = 1;
+  Origin origin = 2;
+  SimulationContext simulation = 3;
+  optional int64 original_capture_unix_ns = 4;
+  string original_clock_domain = 5;
+}
+message Provenance {
+  Origin origin = 1;
+  string app_version = 2;
+  string model_id = 3;
+  string model_version = 4;
+  SimulationContext simulation = 5;
+  optional int64 original_capture_unix_ns = 6;
+  string original_clock_domain = 7;
+  repeated Input inputs = 8;
+}
+message PublishRequest {
+  string entity = 1;
+  string component_type = 2;
+  string stream = 3;
+  FrameRef frame = 4;
+  Timing timing = 5;
+  uint64 ttl_ns = 6;
+  Provenance provenance = 7;
+  bytes payload_json = 8;
+  bool tombstone = 9;
+}
+message PublishReply {
+  bytes signed_record_json = 1;
+  bool accepted = 2;
+}
+
+// Exact source in the socket's commissioned tenant/site. An omitted device
+// means this agent. An explicit device needs its own exact read permission;
+// it never selects caller identity or grants publication authority.
+message SourceSelector {
+  string app = 1;
+  string service = 2;
+  string component_type = 3;
+  string stream = 4;
+  string device = 5;
+}
+message QueryRequest {
+  repeated SourceSelector sources = 1;
+  uint32 limit = 2; // 1..8
+  string after = 3;
+}
+message QueryReply {
+  repeated bytes signed_record_json = 1;
+  string next = 2; // changing latest-state page; restart to see new updates
+}
+message PutEvidenceRequest {
+  string component_type = 1;
+  string stream = 2;
+  string sha256 = 3;
+  int64 size = 4;
+  int64 offset = 5;
+  bytes data = 6; // at most 48 KiB
+  string content_type = 7;
+  int64 retain_until_unix_ms = 8; // authenticated physical time
+}
+message PutEvidenceReply {
+  string sha256 = 1;
+  int64 size = 2;
+  int64 received = 3;
+  bool complete = 4;
+  string content_type = 5;
+  int64 retain_until_unix_ms = 6;
+}
+message GetEvidenceRequest {
+  SourceSelector source = 1;
+  string sha256 = 2;
+  int64 offset = 3;
+  int32 length = 4; // 1..48 KiB
+}
+message GetEvidenceReply {
+  string sha256 = 1;
+  int64 size = 2;
+  int64 offset = 3;
+  bytes data = 4;
+  string content_type = 5;
+  int64 retain_until_unix_ms = 6;
+}
+
+message ClockRequest { bytes nonce = 1; } // exactly 32 fresh random bytes
+message PhysicalClock {
+  int64 earliest_unix_ns = 1;
+  int64 latest_unix_ns = 2;
+  string boot_id = 3;
+  int64 monotonic_ns = 4;
+  string source = 5;
+}
+message ClockReply {
+  bytes nonce = 1;
+  PhysicalClock physical = 2;
+  string sample_clock_domain = 3;
+  int64 sample_unix_ns = 4;
+  string tenant = 5;
+  string site = 6;
+  string device = 7;
+  string app = 8;
+  string service = 9;
+  string execution_domain = 10;
+  uint64 deployment_generation = 11;
+  string server_boot_id = 12; // random per-module incarnation, not host boot
+}
+
+message PhysicalClockReply {
+  bytes nonce = 1;
+  PhysicalClock physical = 2;
+  reserved 3, 4; // no source-clock domain or sample timestamp
+  string tenant = 5;
+  string site = 6;
+  string device = 7;
+  string app = 8;
+  string service = 9;
+  string execution_domain = 10;
+  uint64 deployment_generation = 11;
+  string server_boot_id = 12;
+}
+
+message GetRecordProofRequest {
+  SourceSelector source = 1;
+  string entity = 2;
+  uint64 epoch = 3;
+  uint64 sequence = 4;
+  string envelope_sha256 = 5;
+  string record_sha256 = 6;
+}
+message GetRecordProofReply {
+  bytes signed_record_json = 1;
+  int64 retain_until_unix_ms = 2;
+  bool historical = 3; // always true; no current-source authority assertion
+}
+
+message GetSensorFrameRequest {
+  string component_type = 1;
+  string stream = 2;
+}
+message SensorFrameChunk {
+  bytes metadata_json = 1;
+  int64 offset = 2;
+  bytes data = 3; // at most 48 KiB; all chunks belong to one snapshot
+}

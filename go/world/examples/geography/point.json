@@ -1,0 +1,17 @@
+{
+  "from": {
+    "id": "mezzanine",
+    "revision": "mezzanine-v1"
+  },
+  "to": {
+    "id": "site-origin",
+    "revision": "geo-v1"
+  },
+  "position_m": [
+    2,
+    1,
+    0
+  ],
+  "at": "2026-11-09T22:00:00Z",
+  "uncertainty_metres": 0.02
+}

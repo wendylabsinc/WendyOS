@@ -1,0 +1,2366 @@
+{
+  "version": 1,
+  "description": "Synthetic Go wire contract, not recorded inference, signed proof verification or available media. Proof and media hashes are deterministic fixture identifiers. Sample and physical clocks are distinct; UTC-only viewers must not call these simulation records current.",
+  "scope": {
+    "frame": {
+      "id": "office",
+      "revision": "viewer-fixture-v1"
+    },
+    "run_id": "viewer-native-v1",
+    "site": "studio-01",
+    "tenant": "11111111-1111-4111-8111-111111111111"
+  },
+  "clocks": {
+    "clock_domain": "simulation:viewer-native-v1",
+    "physical_now": "2026-11-13T12:00:00Z",
+    "sample_now": "2026-01-01T00:00:02.1Z"
+  },
+  "snapshot": {
+    "components": [
+      {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/track/anonymous-1",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "people",
+            "stream": "tracks"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 2
+        },
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:01.75Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 1250000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-live-people-v1",
+          "model_id": "camera-ankle-two-observation-tracking",
+          "model_version": "1",
+          "inputs": [
+            {
+              "id": "sha256:233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "version": 1,
+          "result_schema": "wendy.person.track.v1",
+          "result_json": "eyJzY2hlbWEiOiJ3ZW5keS5wZXJzb24udHJhY2sudjEiLCJhbGdvcml0aG0iOiJjYW1lcmEtYW5rbGUtdHdvLW9ic2VydmF0aW9uLXRyYWNraW5nIiwiYWxnb3JpdGhtX3ZlcnNpb24iOiIxIiwidHJhY2tfaWQiOiJhbm9ueW1vdXMtMSIsInJldmlzaW9uIjoyLCJydW5faWQiOiJ2aWV3ZXItbmF0aXZlLXYxIiwiY2xvY2tfZG9tYWluIjoic2ltdWxhdGlvbjp2aWV3ZXItbmF0aXZlLXYxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sIm9ic2VydmVkX2F0IjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDNaIiwicG9zaXRpb25feHoiOlsxLDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImFtYmlndW91cyI6ZmFsc2UsIm1vdGlvbl9rbm93biI6dHJ1ZSwidmVsb2NpdHlfeHoiOlswLjQsMF0sInZlbG9jaXR5X2NvdmFyaWFuY2UiOlsxLjI4LDAsMCwyLjg4XSwicHJldmlvdXNfb2JzZXJ2ZWRfYXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAxLjc1WiIsImN1cnJlbnQiOlt7InByb29mIjp7ImtleSI6eyJ0ZW5hbnQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJzaXRlIjoic3R1ZGlvLTAxIiwiZW50aXR5Ijoic2Vuc29yL3Blb3BsZS1mcm9udCIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8yMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLWZyb250Iiwic3RyZWFtIjoicGVvcGxlLWZyb250In19LCJ2ZXJzaW9uIjp7ImVwb2NoIjo3LCJzZXF1ZW5jZSI6MTF9LCJlbnZlbG9wZV9zaGEyNTYiOiIyMzNjYzIyZTE0MGEzMjRiZDJjNDdmZjhjN2NjN2M4ZDg2OTZhNjIxYjk4MjBlYTg5ZDUyZjJkZGZmYjRjNGM4IiwicmVjb3JkX3NoYTI1NiI6ImRhMDE0YTA2ZDk4MTg5NWRiNzJlNTVlN2FiMDk0ZDExYWRkMmJjYWFiNDJjMjgwMTYxY2ZkMDZlOWY5NzNiMjEifSwic2Vuc29yX2lkIjoicGVvcGxlLWZyb250Iiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtZnJvbnQvMTEiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMSwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDJaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzLjI1WiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC45KzAxOjAwIiwicG9zaXRpb25feHoiOlsxLDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6ImFmNTIxZjRkMDVmMmVjNDYyOWI0Y2Y4NjAwN2FiMTJjOTNmZmRjMTBkOTliZGIzOTJiZjA0MzA5NjFkYTQ1NmUiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiIyYWE4ZmNjYmIwNDFmNjZhMzkwYWRkMGVmZTAzNjQ2NmY4OGE5M2E4MDRhZDUxNTAwOGRmZTE5YzUxNmJkZWE4Iiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTkwMDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH0seyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtb2JsaXF1ZSIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8zMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLW9ibGlxdWUiLCJzdHJlYW0iOiJwZW9wbGUtb2JsaXF1ZSJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfSwiZW52ZWxvcGVfc2hhMjU2IjoiMDI3NGJkZWQ0NDM0Mjg4MTY5M2JjMTcyOTBjY2Q1NGY1N2FjZDMwMjBkNzQ1MjVmYWRlMmVjOGMzYjI3ODE4NSIsInJlY29yZF9zaGEyNTYiOiI3NmUxMzYzYWUzZjQ4YjVhZTBjZDQxOWIzMzI2NjY4MDNmNGM0MThhNzU2ZjZlZDA3NmU1OWRjZTA2MzBiMDc3In0sInNlbnNvcl9pZCI6InBlb3BsZS1vYmxpcXVlIiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtb2JsaXF1ZS8xMSIsImNhcHR1cmVfc2VxdWVuY2UiOjExLCJtZW1iZXJfaW5kZXgiOjAsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDMuMjVaIiwicGh5c2ljYWxfdW50aWwiOiIyMDI2LTExLTEzVDEzOjAwOjA0LjkrMDE6MDAiLCJwb3NpdGlvbl94eiI6WzEsMl0sImNvdmFyaWFuY2UiOlswLjA0LDAsMCwwLjA5XSwiaW1hZ2UiOnsic2hhMjU2IjoiM2NlNWUzN2UxOWViOTAzOTAxMTUzYjNlYmFhZDQyMzQ2ZGI2OWQ4M2Y2ZDljYzA5NWM3N2VjZjE0MjM0YWJhZiIsImNvbnRlbnRfdHlwZSI6ImltYWdlL3BuZyIsInNpemUiOjEwMjR9LCJtb2RlbF9pZCI6InN5bnRoZXRpYy1wb3NlLWZpeHR1cmUiLCJtb2RlbF92ZXJzaW9uIjoiMSIsIm1vZGVsX3NoYTI1NiI6IjRlMmQzMThhODIzMTY2ODkzNmI0ZGVkNDJlM2MwMzZiMTZmOGMzOTAyNTQwMTQ4MzIwYTE5ZDkwMjhkN2Y0YjEiLCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImNhbGlicmF0aW9uX3NoYTI1NiI6ImQ3YmJhYjMzMzFkNzhmMTI3OWVmMjViYmZjNzI4ZjJmYmZjNmUzMzY5N2YwMGMyODMzOWViODk3MDJhNjhhOGEiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJjYXB0dXJlZF91bml4X25zIjoxNzk0NTcxMTk5OTAwMDAwMDAwLCJzaW11bGF0aW9uX2FuY2hvcl91bml4X25zIjoxNzY3MjI1NjAwMDAwMDAwMDAwfV0sInByZXZpb3VzIjpbeyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtZnJvbnQiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1mcm9udCIsInN0cmVhbSI6InBlb3BsZS1mcm9udCJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjEwfSwiZW52ZWxvcGVfc2hhMjU2IjoiMjA1N2EyNjY4ZDcwMTUyMDIzYTNmNjA5ZDI0NTkzNjk3Yzk4YTk4YjI5MjE3MDczNmU2MjkwYWIxM2U3OWYwYyIsInJlY29yZF9zaGEyNTYiOiJmMjNjOTYyMGJkMDVlNGY0ODM1ZWRkZTA5ZDYwZjIyZGY0NWQ4Mzg3OTcxOThmNjZjYTE0OTA2NzY0ZDBmNzRmIn0sInNlbnNvcl9pZCI6InBlb3BsZS1mcm9udCIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLWZyb250LzEwIiwiY2FwdHVyZV9zZXF1ZW5jZSI6MTAsIm1lbWJlcl9pbmRleCI6MCwic2FtcGxlX3RpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAxLjc1WiIsInZhbGlkX3VudGlsIjoiMjAyNi0wMS0wMVQwMDowMDowM1oiLCJwaHlzaWNhbF91bnRpbCI6IjIwMjYtMTEtMTNUMTM6MDA6MDQuNjUrMDE6MDAiLCJwb3NpdGlvbl94eiI6WzAuOSwyXSwiY292YXJpYW5jZSI6WzAuMDQsMCwwLDAuMDldLCJpbWFnZSI6eyJzaGEyNTYiOiJhZjUyMWY0ZDA1ZjJlYzQ2MjliNGNmODYwMDdhYjEyYzkzZmZkYzEwZDk5YmRiMzkyYmYwNDMwOTYxZGE0NTZlIiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH0sIm1vZGVsX2lkIjoic3ludGhldGljLXBvc2UtZml4dHVyZSIsIm1vZGVsX3ZlcnNpb24iOiIxIiwibW9kZWxfc2hhMjU2IjoiNGUyZDMxOGE4MjMxNjY4OTM2YjRkZWQ0MmUzYzAzNmIxNmY4YzM5MDI1NDAxNDgzMjBhMTlkOTAyOGQ3ZjRiMSIsImNhbGlicmF0aW9uX3JldmlzaW9uIjoidmlld2VyLWNhbGlicmF0aW9uLXYxIiwiY2FsaWJyYXRpb25fc2hhMjU2IjoiMmFhOGZjY2JiMDQxZjY2YTM5MGFkZDBlZmUwMzY0NjZmODhhOTNhODA0YWQ1MTUwMDhkZmUxOWM1MTZiZGVhOCIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsImNhcHR1cmVkX3VuaXhfbnMiOjE3OTQ1NzExOTk2NTAwMDAwMDAsInNpbXVsYXRpb25fYW5jaG9yX3VuaXhfbnMiOjE3NjcyMjU2MDAwMDAwMDAwMDB9LHsicHJvb2YiOnsia2V5Ijp7InRlbmFudCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInNpdGUiOiJzdHVkaW8tMDEiLCJlbnRpdHkiOiJzZW5zb3IvcGVvcGxlLW9ibGlxdWUiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMzMzMzMzMzMzMzMzIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1vYmxpcXVlIiwic3RyZWFtIjoicGVvcGxlLW9ibGlxdWUifX0sInZlcnNpb24iOnsiZXBvY2giOjcsInNlcXVlbmNlIjoxMH0sImVudmVsb3BlX3NoYTI1NiI6IjliZGQyN2FkOTJiYmJhZTg0NGI1MGRjM2UyYzhhZTc3YmNkZTQ0NWExZWJkOGI3MWE4MWVhNjVhN2Y4NTFmYTAiLCJyZWNvcmRfc2hhMjU2IjoiNTFkYWI3NGMwMGZkNjEyMjE4OGVmNjJkMTc5M2JkYTYwYWRmNGFkZmE3ZjdhYzMxOThiMTA4NmI3ZGQ0NzA4OSJ9LCJzZW5zb3JfaWQiOiJwZW9wbGUtb2JsaXF1ZSIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLW9ibGlxdWUvMTAiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMCwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDEuNzVaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzWiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC42NSswMTowMCIsInBvc2l0aW9uX3h6IjpbMC45LDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6IjNjZTVlMzdlMTllYjkwMzkwMTE1M2IzZWJhYWQ0MjM0NmRiNjlkODNmNmQ5Y2MwOTVjNzdlY2YxNDIzNGFiYWYiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiJkN2JiYWIzMzMxZDc4ZjEyNzllZjI1YmJmYzcyOGYyZmJmYzZlMzM2OTdmMDBjMjgzMzllYjg5NzAyYTY4YThhIiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTY1MDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH1dfQ==",
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "record_sha256": "f23c9620bd05e4f4835edde09d60f22df45d838797198f66ca14906764d0f74f"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "record_sha256": "51dab74c00fd6122188ef62d1793bda60adf4adfa7f7ac3198b1086b7dd47089"
+            }
+          ],
+          "retain_until_unix_ms": 1795176000000
+        },
+        "tombstone": false
+      },
+      {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/track/anonymous-2",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "people",
+            "stream": "tracks"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 1
+        },
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:02Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 1250000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-live-people-v1",
+          "model_id": "camera-ankle-two-observation-tracking",
+          "model_version": "1",
+          "inputs": [
+            {
+              "id": "sha256:233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "version": 1,
+          "result_schema": "wendy.person.track.v1",
+          "result_json": "eyJzY2hlbWEiOiJ3ZW5keS5wZXJzb24udHJhY2sudjEiLCJhbGdvcml0aG0iOiJjYW1lcmEtYW5rbGUtdHdvLW9ic2VydmF0aW9uLXRyYWNraW5nIiwiYWxnb3JpdGhtX3ZlcnNpb24iOiIxIiwidHJhY2tfaWQiOiJhbm9ueW1vdXMtMiIsInJldmlzaW9uIjoxLCJydW5faWQiOiJ2aWV3ZXItbmF0aXZlLXYxIiwiY2xvY2tfZG9tYWluIjoic2ltdWxhdGlvbjp2aWV3ZXItbmF0aXZlLXYxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sIm9ic2VydmVkX2F0IjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDMuMjVaIiwicG9zaXRpb25feHoiOlsyLDNdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImFtYmlndW91cyI6dHJ1ZSwibW90aW9uX2tub3duIjpmYWxzZSwiY3VycmVudCI6W3sicHJvb2YiOnsia2V5Ijp7InRlbmFudCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInNpdGUiOiJzdHVkaW8tMDEiLCJlbnRpdHkiOiJzZW5zb3IvcGVvcGxlLWZyb250IiwidHlwZSI6IndlbmR5LnNlbnNvci5jYXB0dXJlLnYxIiwic291cmNlIjp7ImRldmljZSI6InNwaWZmZTovL3dlbmR5LnNoL3RlbmFudC8xMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEvZGV2aWNlLzIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMiIsImFwcCI6ImNvbS53ZW5keS53b3JsZC52aWV3ZXItZml4dHVyZSIsInNlcnZpY2UiOiJwZW9wbGUtZnJvbnQiLCJzdHJlYW0iOiJwZW9wbGUtZnJvbnQifX0sInZlcnNpb24iOnsiZXBvY2giOjcsInNlcXVlbmNlIjoxMX0sImVudmVsb3BlX3NoYTI1NiI6IjIzM2NjMjJlMTQwYTMyNGJkMmM0N2ZmOGM3Y2M3YzhkODY5NmE2MjFiOTgyMGVhODlkNTJmMmRkZmZiNGM0YzgiLCJyZWNvcmRfc2hhMjU2IjoiZGEwMTRhMDZkOTgxODk1ZGI3MmU1NWU3YWIwOTRkMTFhZGQyYmNhYWI0MmMyODAxNjFjZmQwNmU5Zjk3M2IyMSJ9LCJzZW5zb3JfaWQiOiJwZW9wbGUtZnJvbnQiLCJzYW1wbGVfaWQiOiJ2aWV3ZXItbmF0aXZlLXYxL3Blb3BsZS1mcm9udC8xMSIsImNhcHR1cmVfc2VxdWVuY2UiOjExLCJtZW1iZXJfaW5kZXgiOjAsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDMuMjVaIiwicGh5c2ljYWxfdW50aWwiOiIyMDI2LTExLTEzVDEzOjAwOjA0LjkrMDE6MDAiLCJwb3NpdGlvbl94eiI6WzIsM10sImNvdmFyaWFuY2UiOlswLjA0LDAsMCwwLjA5XSwiaW1hZ2UiOnsic2hhMjU2IjoiYWY1MjFmNGQwNWYyZWM0NjI5YjRjZjg2MDA3YWIxMmM5M2ZmZGMxMGQ5OWJkYjM5MmJmMDQzMDk2MWRhNDU2ZSIsImNvbnRlbnRfdHlwZSI6ImltYWdlL3BuZyIsInNpemUiOjEwMjR9LCJtb2RlbF9pZCI6InN5bnRoZXRpYy1wb3NlLWZpeHR1cmUiLCJtb2RlbF92ZXJzaW9uIjoiMSIsIm1vZGVsX3NoYTI1NiI6IjRlMmQzMThhODIzMTY2ODkzNmI0ZGVkNDJlM2MwMzZiMTZmOGMzOTAyNTQwMTQ4MzIwYTE5ZDkwMjhkN2Y0YjEiLCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImNhbGlicmF0aW9uX3NoYTI1NiI6IjJhYThmY2NiYjA0MWY2NmEzOTBhZGQwZWZlMDM2NDY2Zjg4YTkzYTgwNGFkNTE1MDA4ZGZlMTljNTE2YmRlYTgiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJjYXB0dXJlZF91bml4X25zIjoxNzk0NTcxMTk5OTAwMDAwMDAwLCJzaW11bGF0aW9uX2FuY2hvcl91bml4X25zIjoxNzY3MjI1NjAwMDAwMDAwMDAwfSx7InByb29mIjp7ImtleSI6eyJ0ZW5hbnQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJzaXRlIjoic3R1ZGlvLTAxIiwiZW50aXR5Ijoic2Vuc29yL3Blb3BsZS1vYmxpcXVlIiwidHlwZSI6IndlbmR5LnNlbnNvci5jYXB0dXJlLnYxIiwic291cmNlIjp7ImRldmljZSI6InNwaWZmZTovL3dlbmR5LnNoL3RlbmFudC8xMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEvZGV2aWNlLzMzMzMzMzMzLTMzMzMtNDMzMy04MzMzLTMzMzMzMzMzMzMzMyIsImFwcCI6ImNvbS53ZW5keS53b3JsZC52aWV3ZXItZml4dHVyZSIsInNlcnZpY2UiOiJwZW9wbGUtb2JsaXF1ZSIsInN0cmVhbSI6InBlb3BsZS1vYmxpcXVlIn19LCJ2ZXJzaW9uIjp7ImVwb2NoIjo3LCJzZXF1ZW5jZSI6MTF9LCJlbnZlbG9wZV9zaGEyNTYiOiIwMjc0YmRlZDQ0MzQyODgxNjkzYmMxNzI5MGNjZDU0ZjU3YWNkMzAyMGQ3NDUyNWZhZGUyZWM4YzNiMjc4MTg1IiwicmVjb3JkX3NoYTI1NiI6Ijc2ZTEzNjNhZTNmNDhiNWFlMGNkNDE5YjMzMjY2NjgwM2Y0YzQxOGE3NTZmNmVkMDc2ZTU5ZGNlMDYzMGIwNzcifSwic2Vuc29yX2lkIjoicGVvcGxlLW9ibGlxdWUiLCJzYW1wbGVfaWQiOiJ2aWV3ZXItbmF0aXZlLXYxL3Blb3BsZS1vYmxpcXVlLzExIiwiY2FwdHVyZV9zZXF1ZW5jZSI6MTEsIm1lbWJlcl9pbmRleCI6MCwic2FtcGxlX3RpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAyWiIsInZhbGlkX3VudGlsIjoiMjAyNi0wMS0wMVQwMDowMDowMy4yNVoiLCJwaHlzaWNhbF91bnRpbCI6IjIwMjYtMTEtMTNUMTM6MDA6MDQuOSswMTowMCIsInBvc2l0aW9uX3h6IjpbMiwzXSwiY292YXJpYW5jZSI6WzAuMDQsMCwwLDAuMDldLCJpbWFnZSI6eyJzaGEyNTYiOiIzY2U1ZTM3ZTE5ZWI5MDM5MDExNTNiM2ViYWFkNDIzNDZkYjY5ZDgzZjZkOWNjMDk1Yzc3ZWNmMTQyMzRhYmFmIiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH0sIm1vZGVsX2lkIjoic3ludGhldGljLXBvc2UtZml4dHVyZSIsIm1vZGVsX3ZlcnNpb24iOiIxIiwibW9kZWxfc2hhMjU2IjoiNGUyZDMxOGE4MjMxNjY4OTM2YjRkZWQ0MmUzYzAzNmIxNmY4YzM5MDI1NDAxNDgzMjBhMTlkOTAyOGQ3ZjRiMSIsImNhbGlicmF0aW9uX3JldmlzaW9uIjoidmlld2VyLWNhbGlicmF0aW9uLXYxIiwiY2FsaWJyYXRpb25fc2hhMjU2IjoiZDdiYmFiMzMzMWQ3OGYxMjc5ZWYyNWJiZmM3MjhmMmZiZmM2ZTMzNjk3ZjAwYzI4MzM5ZWI4OTcwMmE2OGE4YSIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsImNhcHR1cmVkX3VuaXhfbnMiOjE3OTQ1NzExOTk5MDAwMDAwMDAsInNpbXVsYXRpb25fYW5jaG9yX3VuaXhfbnMiOjE3NjcyMjU2MDAwMDAwMDAwMDB9XX0=",
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+            }
+          ],
+          "retain_until_unix_ms": 1795176000000
+        },
+        "tombstone": false
+      },
+      {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/possible-gas-hazard",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "fusion",
+            "stream": "hazard"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 11
+        },
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:01.75Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 3000000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-fusion-v2",
+          "model_id": "synthetic-gas-warning-rule",
+          "model_version": "2",
+          "inputs": [
+            {
+              "id": "sha256:b9e24e4318bf02a23c8366ef1ea3db821f23ef54c51ed2bc7a765b96ee49b652",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:74369b6c83c4bbdf80259895e4e67149e3de077ffe939e7792ed5cd06757c83b",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:ada4c8880db6ceb158ed87f069e18f3ccc72e4fbd0dbb69be2bc2c552ba9b942",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:6d4e06aec8afa6dc974466c3decda803282fcb8fb4a1e76f6b8dd256f0de148f",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:6affce01cc5f910b43f65f02fe6e1218c7b32db26c76193797556d862896fa94",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "version": 1,
+          "result_schema": "wendy.hazard.v1",
+          "result_json": "eyJhdWRpbyI6eyJybXMiOjAuMiwidG9uZV9mcmFjdGlvbiI6MC45OX0sImNhbWVyYXMiOlt7InNlbnNvcl9pZCI6ImNhbWVyYS1hIiwicmVkX2ZyYWN0aW9uIjowLjAyLCJvYnNlcnZhdGlvbiI6eyJwaXhlbHMiOjEwMCwiY2VudHJvaWRfcHgiOlsxNjAsMTIwXSwiYm91bmRzX3B4IjpbMTU1LDExNSwxNjUsMTI1XSwicmF5X29yaWdpbl9tIjpbLTEsMSwwXSwicmF5X2RpcmVjdGlvbiI6WzAsMCwxXSwicmVwcm9qZWN0aW9uX2Vycm9yX3B4IjowLjV9fSx7InNlbnNvcl9pZCI6ImNhbWVyYS1iIiwicmVkX2ZyYWN0aW9uIjowLjAyLCJvYnNlcnZhdGlvbiI6eyJwaXhlbHMiOjEwMCwiY2VudHJvaWRfcHgiOlsxNjAsMTIwXSwiYm91bmRzX3B4IjpbMTU1LDExNSwxNjUsMTI1XSwicmF5X29yaWdpbl9tIjpbMSwxLDBdLCJyYXlfZGlyZWN0aW9uIjpbMCwwLDFdLCJyZXByb2plY3Rpb25fZXJyb3JfcHgiOjAuNX19XSwiY29uZmlkZW5jZSI6MC44LCJjb25maWRlbmNlX21lYW5pbmciOiJmaXhlZCBzeW50aGV0aWMgcnVsZSBzY29yZSwgbm90IGEgY2FsaWJyYXRlZCBwcm9iYWJpbGl0eSIsImV2aWRlbmNlIjpbeyJzaGEyNTYiOiI2NDY3YTlkY2Y5YjBhNTljZTA0NmI4OGU3ZTg3MGViNjgzOTliNWRmM2ExNDgwOGYyYzNlY2QyMzg1ZmM2NjExIiwiY29udGVudF90eXBlIjoiYXVkaW8vd2F2Iiwic2l6ZSI6NDA0NH0seyJzaGEyNTYiOiJiMGExNTg0NzIwMjVmZmRhNzhkY2E4ZmU1ZGVjYzhjMmQ3YTUwMmVhYmExYmJjOWY5NTBlZmJhMWExZDgzOTI5IiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH0seyJzaGEyNTYiOiI3NzQwM2JlNDMyMDdiNWFlODA4MGVhOTBmMWVkY2ZiMjE2MzBiZGI5YTAwZjY0MDY1ZTc4YWY3NGE2MGYxYTc3IiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH1dLCJnYXNfc3BlY2llcyI6InN5bnRoZXRpYy10ZXN0LWdhcyIsImdhc191bmNlcnRhaW50eV9wcG0iOjEuNSwiZ2FzX3ZhbHVlX3BwbSI6ODAsImlucHV0X2RpZ2VzdCI6ImRmYThmNzI3NTVhNWViNGZhNjBlZWNhNjcyZDRlMGUwOWI0Y2JkZmY0OThlNzExZTZjMzFlYWVhYzkwNjNlOGQiLCJpbnB1dHMiOlt7ImNhcHR1cmUiOnsicHJvb2Zfc2hhMjU2IjoiYjllMjRlNDMxOGJmMDJhMjNjODM2NmVmMWVhM2RiODIxZjIzZWY1NGM1MWVkMmJjN2E3NjViOTZlZTQ5YjY1MiIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsInNpbXVsYXRpb25fYW5jaG9yIjoiMjAyNi0wMS0wMVQwMDowMDowMFoifSwiY2FwdHVyZV9zdGFydCI6IjIwMjYtMDEtMDFUMDA6MDA6MDEuNzVaIiwiZXZpZGVuY2UiOnsic2hhMjU2IjoiNjQ2N2E5ZGNmOWIwYTU5Y2UwNDZiODhlN2U4NzBlYjY4Mzk5YjVkZjNhMTQ4MDhmMmMzZWNkMjM4NWZjNjYxMSIsImNvbnRlbnRfdHlwZSI6ImF1ZGlvL3dhdiIsInNpemUiOjQwNDR9LCJraW5kIjoiYXVkaW8iLCJzYW1wbGUiOnsic2NoZW1hX3ZlcnNpb24iOiJ3ZW5keS5zZW5zb3Iuc2FtcGxlLnYxIiwiaWQiOiJ2aWV3ZXItbmF0aXZlLXYxL2F1ZGlvLTEvMTEiLCJzaXRlX2lkIjoic3R1ZGlvLTAxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sInNlbnNvcl9pZCI6ImF1ZGlvLTEiLCJraW5kIjoiYXVkaW8iLCJzZXF1ZW5jZSI6MTEsInNhbXBsZV9ucyI6MjAwMDAwMDAwMCwicnVuX2lkIjoidmlld2VyLW5hdGl2ZS12MSIsInNjZW5hcmlvX3ZlcnNpb24iOiJzeW50aGV0aWMtdmlld2VyLWNvbnRyYWN0LXYxIiwic2VlZCI6NywicGFja2FnZV9zaGEyNTYiOiJjYjRhMWFkMGU5MjEwZWI0YjQ4OTJkN2Y5YTI1NTY2Mjg4OTg3YmMwYjFkOWQ2NWVhNjAxZjZkNWUwMWFhYTBiIiwic2Vuc29yX21vZGVsIjoic3ludGhldGljLWF1ZGlvLWZpeHR1cmUtdjEiLCJwb3NpdGlvbl9tIjpbMSwwLjI0LDJdLCJ1bmNlcnRhaW50eV9tIjowLjA1LCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImF1ZGlvIjp7InNhbXBsZV9yYXRlX2h6Ijo4MDAwLCJjaGFubmVscyI6MSwiZHVyYXRpb25fbnMiOjI1MDAwMDAwMH0sImV2aWRlbmNlIjp7InNoYTI1NiI6IjY0NjdhOWRjZjliMGE1OWNlMDQ2Yjg4ZTdlODcwZWI2ODM5OWI1ZGYzYTE0ODA4ZjJjM2VjZDIzODVmYzY2MTEiLCJjb250ZW50X3R5cGUiOiJhdWRpby93YXYiLCJzaXplIjo0MDQ0fX0sInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvYXVkaW8tMS8xMSIsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJzZW5zb3JfaWQiOiJhdWRpby0xIiwic291cmNlIjp7ImRldmljZSI6InNwaWZmZTovL3dlbmR5LnNoL3RlbmFudC8xMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEvZGV2aWNlLzMzMzMzMzMzLTMzMzMtNDMzMy04MzMzLTMzMzMzMzMzMzMzMyIsImFwcCI6ImNvbS53ZW5keS53b3JsZC52aWV3ZXItZml4dHVyZSIsInNlcnZpY2UiOiJhdWRpby0xIiwic3RyZWFtIjoiYXVkaW8tMSJ9LCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDQuNzVaIiwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfX0seyJjYXB0dXJlIjp7InByb29mX3NoYTI1NiI6Ijc0MzY5YjZjODNjNGJiZGY4MDI1OTg5NWU0ZTY3MTQ5ZTNkZTA3N2ZmZTkzOWU3NzkyZWQ1Y2QwNjc1N2M4M2IiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJzaW11bGF0aW9uX2FuY2hvciI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIn0sImNhcHR1cmVfc3RhcnQiOiIyMDI2LTAxLTAxVDAwOjAwOjAyWiIsImV2aWRlbmNlIjp7InNoYTI1NiI6ImIwYTE1ODQ3MjAyNWZmZGE3OGRjYThmZTVkZWNjOGMyZDdhNTAyZWFiYTFiYmM5Zjk1MGVmYmExYTFkODM5MjkiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwia2luZCI6ImNhbWVyYSIsInNhbXBsZSI6eyJzY2hlbWFfdmVyc2lvbiI6IndlbmR5LnNlbnNvci5zYW1wbGUudjEiLCJpZCI6InZpZXdlci1uYXRpdmUtdjEvY2FtZXJhLWEvMTEiLCJzaXRlX2lkIjoic3R1ZGlvLTAxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sInNlbnNvcl9pZCI6ImNhbWVyYS1hIiwia2luZCI6ImNhbWVyYSIsInNlcXVlbmNlIjoxMSwic2FtcGxlX25zIjoyMDAwMDAwMDAwLCJydW5faWQiOiJ2aWV3ZXItbmF0aXZlLXYxIiwic2NlbmFyaW9fdmVyc2lvbiI6InN5bnRoZXRpYy12aWV3ZXItY29udHJhY3QtdjEiLCJzZWVkIjo3LCJwYWNrYWdlX3NoYTI1NiI6ImNiNGExYWQwZTkyMTBlYjRiNDg5MmQ3ZjlhMjU1NjYyODg5ODdiYzBiMWQ5ZDY1ZWE2MDFmNmQ1ZTAxYWFhMGIiLCJzZW5zb3JfbW9kZWwiOiJzeW50aGV0aWMtY2FtZXJhLWZpeHR1cmUtdjEiLCJwb3NpdGlvbl9tIjpbLTEsMSwwXSwidW5jZXJ0YWludHlfbSI6MC4wNSwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYW1lcmEiOnsid2lkdGgiOjMyMCwiaGVpZ2h0IjoyNDAsImZ4IjoyNDAsImZ5IjoyNDAsImN4IjoxNjAsImN5IjoxMjAsImNhbWVyYV90b19zaXRlIjpbMSwwLDAsLTEsMCwxLDAsMSwwLDAsMSwwLDAsMCwwLDFdLCJjYWxpYnJhdGlvbl92YWxpZF9mb3JfbnMiOjYwMDAwMDAwMDAwfSwiZXZpZGVuY2UiOnsic2hhMjU2IjoiYjBhMTU4NDcyMDI1ZmZkYTc4ZGNhOGZlNWRlY2M4YzJkN2E1MDJlYWJhMWJiYzlmOTUwZWZiYTFhMWQ4MzkyOSIsImNvbnRlbnRfdHlwZSI6ImltYWdlL3BuZyIsInNpemUiOjEwMjR9fSwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9jYW1lcmEtYS8xMSIsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJzZW5zb3JfaWQiOiJjYW1lcmEtYSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8yMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoiY2FtZXJhLWEiLCJzdHJlYW0iOiJjYW1lcmEtYSJ9LCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDVaIiwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfX0seyJjYXB0dXJlIjp7InByb29mX3NoYTI1NiI6ImFkYTRjODg4MGRiNmNlYjE1OGVkODdmMDY5ZTE4ZjNjY2M3MmU0ZmJkMGRiYjY5YmUyYmMyYzU1MmJhOWI5NDIiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJzaW11bGF0aW9uX2FuY2hvciI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIn0sImNhcHR1cmVfc3RhcnQiOiIyMDI2LTAxLTAxVDAwOjAwOjAyWiIsImV2aWRlbmNlIjp7InNoYTI1NiI6Ijc3NDAzYmU0MzIwN2I1YWU4MDgwZWE5MGYxZWRjZmIyMTYzMGJkYjlhMDBmNjQwNjVlNzhhZjc0YTYwZjFhNzciLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwia2luZCI6ImNhbWVyYSIsInNhbXBsZSI6eyJzY2hlbWFfdmVyc2lvbiI6IndlbmR5LnNlbnNvci5zYW1wbGUudjEiLCJpZCI6InZpZXdlci1uYXRpdmUtdjEvY2FtZXJhLWIvMTEiLCJzaXRlX2lkIjoic3R1ZGlvLTAxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sInNlbnNvcl9pZCI6ImNhbWVyYS1iIiwia2luZCI6ImNhbWVyYSIsInNlcXVlbmNlIjoxMSwic2FtcGxlX25zIjoyMDAwMDAwMDAwLCJydW5faWQiOiJ2aWV3ZXItbmF0aXZlLXYxIiwic2NlbmFyaW9fdmVyc2lvbiI6InN5bnRoZXRpYy12aWV3ZXItY29udHJhY3QtdjEiLCJzZWVkIjo3LCJwYWNrYWdlX3NoYTI1NiI6ImNiNGExYWQwZTkyMTBlYjRiNDg5MmQ3ZjlhMjU1NjYyODg5ODdiYzBiMWQ5ZDY1ZWE2MDFmNmQ1ZTAxYWFhMGIiLCJzZW5zb3JfbW9kZWwiOiJzeW50aGV0aWMtY2FtZXJhLWZpeHR1cmUtdjEiLCJwb3NpdGlvbl9tIjpbMSwxLDBdLCJ1bmNlcnRhaW50eV9tIjowLjA1LCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImNhbWVyYSI6eyJ3aWR0aCI6MzIwLCJoZWlnaHQiOjI0MCwiZngiOjI0MCwiZnkiOjI0MCwiY3giOjE2MCwiY3kiOjEyMCwiY2FtZXJhX3RvX3NpdGUiOlsxLDAsMCwxLDAsMSwwLDEsMCwwLDEsMCwwLDAsMCwxXSwiY2FsaWJyYXRpb25fdmFsaWRfZm9yX25zIjo2MDAwMDAwMDAwMH0sImV2aWRlbmNlIjp7InNoYTI1NiI6Ijc3NDAzYmU0MzIwN2I1YWU4MDgwZWE5MGYxZWRjZmIyMTYzMGJkYjlhMDBmNjQwNjVlNzhhZjc0YTYwZjFhNzciLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fX0sInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvY2FtZXJhLWIvMTEiLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDJaIiwic2Vuc29yX2lkIjoiY2FtZXJhLWIiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMzMzMzMzMzMzMzMzIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6ImNhbWVyYS1iIiwic3RyZWFtIjoiY2FtZXJhLWIifSwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjA1WiIsInZlcnNpb24iOnsiZXBvY2giOjcsInNlcXVlbmNlIjoxMX19LHsiY2FwdHVyZSI6eyJwcm9vZl9zaGEyNTYiOiI2ZDRlMDZhZWM4YWZhNmRjOTc0NDY2YzNkZWNkYTgwMzI4MmZjYjhmYjRhMWU3NmY2YjhkZDI1NmYwZGUxNDhmIiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290Iiwic2ltdWxhdGlvbl9hbmNob3IiOiIyMDI2LTAxLTAxVDAwOjAwOjAwWiJ9LCJjYXB0dXJlX3N0YXJ0IjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJraW5kIjoiZ2FzIiwic2FtcGxlIjp7InNjaGVtYV92ZXJzaW9uIjoid2VuZHkuc2Vuc29yLnNhbXBsZS52MSIsImlkIjoidmlld2VyLW5hdGl2ZS12MS9nYXMtMS8xMSIsInNpdGVfaWQiOiJzdHVkaW8tMDEiLCJmcmFtZSI6eyJpZCI6Im9mZmljZSIsInJldmlzaW9uIjoidmlld2VyLWZpeHR1cmUtdjEifSwic2Vuc29yX2lkIjoiZ2FzLTEiLCJraW5kIjoiZ2FzIiwic2VxdWVuY2UiOjExLCJzYW1wbGVfbnMiOjIwMDAwMDAwMDAsInJ1bl9pZCI6InZpZXdlci1uYXRpdmUtdjEiLCJzY2VuYXJpb192ZXJzaW9uIjoic3ludGhldGljLXZpZXdlci1jb250cmFjdC12MSIsInNlZWQiOjcsInBhY2thZ2Vfc2hhMjU2IjoiY2I0YTFhZDBlOTIxMGViNGI0ODkyZDdmOWEyNTU2NjI4ODk4N2JjMGIxZDlkNjVlYTYwMWY2ZDVlMDFhYWEwYiIsInNlbnNvcl9tb2RlbCI6InN5bnRoZXRpYy1nYXMtZml4dHVyZS12MSIsInBvc2l0aW9uX20iOlsxLDAuMjQsMl0sInVuY2VydGFpbnR5X20iOjAuMDUsImNhbGlicmF0aW9uX3JldmlzaW9uIjoidmlld2VyLWNhbGlicmF0aW9uLXYxIiwiZ2FzIjp7InZhbHVlX3BwbSI6ODAsInVuY2VydGFpbnR5X3BwbSI6MS41LCJzcGVjaWVzIjoic3ludGhldGljLXRlc3QtZ2FzIn19LCJzYW1wbGVfaWQiOiJ2aWV3ZXItbmF0aXZlLXYxL2dhcy0xLzExIiwic2FtcGxlX3RpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAyWiIsInNlbnNvcl9pZCI6Imdhcy0xIiwic291cmNlIjp7ImRldmljZSI6InNwaWZmZTovL3dlbmR5LnNoL3RlbmFudC8xMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEvZGV2aWNlLzIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMiIsImFwcCI6ImNvbS53ZW5keS53b3JsZC52aWV3ZXItZml4dHVyZSIsInNlcnZpY2UiOiJnYXMtMSIsInN0cmVhbSI6Imdhcy0xIn0sInZhbGlkX3VudGlsIjoiMjAyNi0wMS0wMVQwMDowMDowNVoiLCJ2ZXJzaW9uIjp7ImVwb2NoIjo3LCJzZXF1ZW5jZSI6MTF9fSx7ImNhcHR1cmUiOnsicHJvb2Zfc2hhMjU2IjoiNmFmZmNlMDFjYzVmOTEwYjQzZjY1ZjAyZmU2ZTEyMThjN2IzMmRiMjZjNzYxOTM3OTc1NTZkODYyODk2ZmE5NCIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsInNpbXVsYXRpb25fYW5jaG9yIjoiMjAyNi0wMS0wMVQwMDowMDowMFoifSwiY2FwdHVyZV9zdGFydCI6IjIwMjYtMDEtMDFUMDA6MDA6MDJaIiwia2luZCI6ImxpZGFyIiwibGlkYXJfc3VtbWFyeSI6eyJwb2ludF9jb3VudCI6MiwibWF4X3JhbmdlX20iOjYsIm5vcm1hbGl6ZWRfc2FtcGxlX3NoYTI1NiI6IjRkNjZjY2FkM2Y3MWYwMTYyMWNlZDY0MDBlODI4MGNlZmMwNGY1MTdjZTRiYThlM2MwZjEzYmM4YWJkNDg2NzQifSwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9saWRhci1hdGxhcy8xMSIsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJzZW5zb3JfaWQiOiJsaWRhci1hdGxhcyIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8yMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoibGlkYXItYXRsYXMiLCJzdHJlYW0iOiJsaWRhci1hdGxhcyJ9LCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDVaIiwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfX1dLCJsYWJlbCI6InBvc3NpYmxlLWdhcy1oYXphcmQiLCJsb2NhdGlvbl9iYXNpcyI6InR3byBjYWxpYnJhdGVkIGNhbWVyYSBvYnNlcnZhdGlvbnMgYXNzb2NpYXRlZCB3aXRoIExpREFSIHN1cmZhY2UgcmV0dXJucyIsInBvc2l0aW9uX20iOlsxLDAuNywyXSwic3BhdGlhbCI6eyJhc3NvY2lhdGVkIjp0cnVlLCJyZWFzb24iOiJ0d28gY2FtZXJhIHJheXMgYW5kIG9ic2VydmVkIExpREFSIHN1cmZhY2VzIGFncmVlIiwicG9zaXRpb25fbSI6WzEsMC43LDJdLCJ0cmlhbmd1bGF0ZWRfbSI6WzEsMC43LDJdLCJ1bmNlcnRhaW50eV9tIjowLjIsInJheV9zZXBhcmF0aW9uX20iOjAuMDEsInJheV9hbmdsZV9kZWciOjI1LCJyZXByb2plY3Rpb25fZXJyb3JfcHgiOjAuNSwiY2FtZXJhcyI6W3sic2Vuc29yX2lkIjoiY2FtZXJhLWEiLCJyZWRfZnJhY3Rpb24iOjAuMDIsIm9ic2VydmF0aW9uIjp7InBpeGVscyI6MTAwLCJjZW50cm9pZF9weCI6WzE2MCwxMjBdLCJib3VuZHNfcHgiOlsxNTUsMTE1LDE2NSwxMjVdLCJyYXlfb3JpZ2luX20iOlstMSwxLDBdLCJyYXlfZGlyZWN0aW9uIjpbMCwwLDFdLCJyZXByb2plY3Rpb25fZXJyb3JfcHgiOjAuNX19LHsic2Vuc29yX2lkIjoiY2FtZXJhLWIiLCJyZWRfZnJhY3Rpb24iOjAuMDIsIm9ic2VydmF0aW9uIjp7InBpeGVscyI6MTAwLCJjZW50cm9pZF9weCI6WzE2MCwxMjBdLCJib3VuZHNfcHgiOlsxNTUsMTE1LDE2NSwxMjVdLCJyYXlfb3JpZ2luX20iOlsxLDEsMF0sInJheV9kaXJlY3Rpb24iOlswLDAsMV0sInJlcHJvamVjdGlvbl9lcnJvcl9weCI6MC41fX1dLCJsaWRhcl9wb2ludHNfY29uc2lkZXJlZCI6MiwibGlkYXJfc3VwcG9ydF9jb3VudCI6MiwibGlkYXJfc3VwcG9ydF9wb2ludHMiOltbMSwwLjcsMl0sWzEuMDIsMC43LDJdXX0sInVuY2VydGFpbnR5X20iOjAuMiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjA0Ljc1WiIsInBoeXNpY2FsX3ZhbGlkX3VudGlsIjoiMjAyNi0xMS0xM1QxMjowMDowNC45WiJ9",
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/audio-1",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "audio-1",
+                  "stream": "audio-1"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "b9e24e4318bf02a23c8366ef1ea3db821f23ef54c51ed2bc7a765b96ee49b652",
+              "record_sha256": "1213b2ca4723c06fbcc3883217f14a6cce5ff1fdb711e6fbe7ad0f383a1313eb"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/camera-a",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "camera-a",
+                  "stream": "camera-a"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "74369b6c83c4bbdf80259895e4e67149e3de077ffe939e7792ed5cd06757c83b",
+              "record_sha256": "38459f2fbc1252ffc47eea91751976eea68ed53dc0bc0d137830ba40f4bd4e58"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/camera-b",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "camera-b",
+                  "stream": "camera-b"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "ada4c8880db6ceb158ed87f069e18f3ccc72e4fbd0dbb69be2bc2c552ba9b942",
+              "record_sha256": "b1e1bd10800d392b1009dd55fa81e653eb4f327fce20b4e6f710ed2e2fc831d2"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/gas-1",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "gas-1",
+                  "stream": "gas-1"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "6d4e06aec8afa6dc974466c3decda803282fcb8fb4a1e76f6b8dd256f0de148f",
+              "record_sha256": "bf492b60ec7c8059c3d50bdfb0245a37506be541d9c61ba19120bc7a31eb92cc"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/lidar-atlas",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "lidar-atlas",
+                  "stream": "lidar-atlas"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "6affce01cc5f910b43f65f02fe6e1218c7b32db26c76193797556d862896fa94",
+              "record_sha256": "b0e6c28002bfb267d3ad22602f1ad1325bd586d2a00e0693f8049558fcffbac6"
+            }
+          ],
+          "retain_until_unix_ms": 1795176000000
+        },
+        "tombstone": false
+      }
+    ],
+    "cursor": "synthetic-viewer-fixture-v1"
+  },
+  "cases": [
+    {
+      "name": "person-motion",
+      "component_index": 0,
+      "result_json_sha256": "db8bdf583f2827d3af1a518820899ee36a2948cc9c24ca568055d8846dd8f1af",
+      "expected": {
+        "ambiguous": false,
+        "clock_domain": "simulation:viewer-native-v1",
+        "covariance": [
+          0.04,
+          0,
+          0,
+          0.09
+        ],
+        "current_members": 2,
+        "evidence_available": false,
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "input_refs": [
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/people-front",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "people-front",
+                "stream": "people-front"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 11
+            },
+            "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+            "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+          },
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/people-oblique",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "people-oblique",
+                "stream": "people-oblique"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 11
+            },
+            "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+            "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+          },
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/people-front",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "people-front",
+                "stream": "people-front"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 10
+            },
+            "envelope_sha256": "2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+            "record_sha256": "f23c9620bd05e4f4835edde09d60f22df45d838797198f66ca14906764d0f74f"
+          },
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/people-oblique",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "people-oblique",
+                "stream": "people-oblique"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 10
+            },
+            "envelope_sha256": "9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+            "record_sha256": "51dab74c00fd6122188ef62d1793bda60adf4adfa7f7ac3198b1086b7dd47089"
+          }
+        ],
+        "inputs_independently_verified": false,
+        "kind": "person",
+        "model_id": "camera-ankle-two-observation-tracking",
+        "model_version": "1",
+        "motion_known": true,
+        "observed_at": "2026-01-01T00:00:02Z",
+        "physical_valid_until": "2026-11-13T13:00:04.65+01:00",
+        "position_xz": [
+          1,
+          2
+        ],
+        "previous_members": 2,
+        "retention_is_live_validity": false,
+        "run_id": "viewer-native-v1",
+        "sample_time": "2026-01-01T00:00:01.75Z",
+        "sample_valid_until": "2026-01-01T00:00:03Z",
+        "source": {
+          "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+          "app": "com.wendy.world.viewer-fixture",
+          "service": "people",
+          "stream": "tracks"
+        },
+        "track_id": "anonymous-1",
+        "velocity_covariance": [
+          1.28,
+          0,
+          0,
+          2.88
+        ],
+        "velocity_xz": [
+          0.4,
+          0
+        ],
+        "version": {
+          "epoch": 7,
+          "sequence": 2
+        }
+      }
+    },
+    {
+      "name": "person-motion-unknown",
+      "component_index": 1,
+      "result_json_sha256": "efbcd57986167a5baa693b07a2845da1f0d63000aa9548c12dfb86ef85b6dd8d",
+      "expected": {
+        "ambiguous": true,
+        "clock_domain": "simulation:viewer-native-v1",
+        "covariance": [
+          0.04,
+          0,
+          0,
+          0.09
+        ],
+        "current_members": 2,
+        "evidence_available": false,
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "input_refs": [
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/people-front",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "people-front",
+                "stream": "people-front"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 11
+            },
+            "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+            "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+          },
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/people-oblique",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "people-oblique",
+                "stream": "people-oblique"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 11
+            },
+            "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+            "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+          }
+        ],
+        "inputs_independently_verified": false,
+        "kind": "person",
+        "model_id": "camera-ankle-two-observation-tracking",
+        "model_version": "1",
+        "motion_known": false,
+        "observed_at": "2026-01-01T00:00:02Z",
+        "physical_valid_until": "2026-11-13T13:00:04.9+01:00",
+        "position_xz": [
+          2,
+          3
+        ],
+        "previous_members": 0,
+        "retention_is_live_validity": false,
+        "run_id": "viewer-native-v1",
+        "sample_time": "2026-01-01T00:00:02Z",
+        "sample_valid_until": "2026-01-01T00:00:03.25Z",
+        "source": {
+          "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+          "app": "com.wendy.world.viewer-fixture",
+          "service": "people",
+          "stream": "tracks"
+        },
+        "track_id": "anonymous-2",
+        "version": {
+          "epoch": 7,
+          "sequence": 1
+        }
+      }
+    },
+    {
+      "name": "hazard-spatial",
+      "component_index": 2,
+      "result_json_sha256": "dd2360ee5fecf502d46ec2929498cef2b12d4ce90c5511f2ecb72888cfb87aa8",
+      "expected": {
+        "clock_domain": "simulation:viewer-native-v1",
+        "confidence": 0.8,
+        "confidence_meaning": "fixed synthetic rule score, not a calibrated probability",
+        "evidence": [
+          {
+            "sha256": "6467a9dcf9b0a59ce046b88e7e870eb68399b5df3a14808f2c3ecd2385fc6611",
+            "content_type": "audio/wav",
+            "size": 4044
+          },
+          {
+            "sha256": "b0a158472025ffda78dca8fe5decc8c2d7a502eaba1bbc9f950efba1a1d83929",
+            "content_type": "image/png",
+            "size": 1024
+          },
+          {
+            "sha256": "77403be43207b5ae8080ea90f1edcfb21630bdb9a00f64065e78af74a60f1a77",
+            "content_type": "image/png",
+            "size": 1024
+          }
+        ],
+        "evidence_available": false,
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "gas_uncertainty_ppm": 1.5,
+        "gas_value_ppm": 80,
+        "input_refs": [
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/audio-1",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "audio-1",
+                "stream": "audio-1"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 11
+            },
+            "envelope_sha256": "b9e24e4318bf02a23c8366ef1ea3db821f23ef54c51ed2bc7a765b96ee49b652",
+            "record_sha256": "1213b2ca4723c06fbcc3883217f14a6cce5ff1fdb711e6fbe7ad0f383a1313eb"
+          },
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/camera-a",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "camera-a",
+                "stream": "camera-a"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 11
+            },
+            "envelope_sha256": "74369b6c83c4bbdf80259895e4e67149e3de077ffe939e7792ed5cd06757c83b",
+            "record_sha256": "38459f2fbc1252ffc47eea91751976eea68ed53dc0bc0d137830ba40f4bd4e58"
+          },
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/camera-b",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "camera-b",
+                "stream": "camera-b"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 11
+            },
+            "envelope_sha256": "ada4c8880db6ceb158ed87f069e18f3ccc72e4fbd0dbb69be2bc2c552ba9b942",
+            "record_sha256": "b1e1bd10800d392b1009dd55fa81e653eb4f327fce20b4e6f710ed2e2fc831d2"
+          },
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/gas-1",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "gas-1",
+                "stream": "gas-1"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 11
+            },
+            "envelope_sha256": "6d4e06aec8afa6dc974466c3decda803282fcb8fb4a1e76f6b8dd256f0de148f",
+            "record_sha256": "bf492b60ec7c8059c3d50bdfb0245a37506be541d9c61ba19120bc7a31eb92cc"
+          },
+          {
+            "key": {
+              "tenant": "11111111-1111-4111-8111-111111111111",
+              "site": "studio-01",
+              "entity": "sensor/lidar-atlas",
+              "type": "wendy.sensor.capture.v1",
+              "source": {
+                "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                "app": "com.wendy.world.viewer-fixture",
+                "service": "lidar-atlas",
+                "stream": "lidar-atlas"
+              }
+            },
+            "version": {
+              "epoch": 7,
+              "sequence": 11
+            },
+            "envelope_sha256": "6affce01cc5f910b43f65f02fe6e1218c7b32db26c76193797556d862896fa94",
+            "record_sha256": "b0e6c28002bfb267d3ad22602f1ad1325bd586d2a00e0693f8049558fcffbac6"
+          }
+        ],
+        "inputs_independently_verified": false,
+        "kind": "hazard",
+        "lidar_returns": 2,
+        "model_id": "synthetic-gas-warning-rule",
+        "model_version": "2",
+        "physical_valid_until": "2026-11-13T12:00:04.9Z",
+        "position_m": [
+          1,
+          0.7,
+          2
+        ],
+        "retention_is_live_validity": false,
+        "run_id": "viewer-native-v1",
+        "sample_time": "2026-01-01T00:00:01.75Z",
+        "sample_valid_until": "2026-01-01T00:00:04.75Z",
+        "source": {
+          "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+          "app": "com.wendy.world.viewer-fixture",
+          "service": "fusion",
+          "stream": "hazard"
+        },
+        "uncertainty_m": 0.2,
+        "version": {
+          "epoch": 7,
+          "sequence": 11
+        }
+      }
+    }
+  ],
+  "rejection_cases": [
+    {
+      "name": "invalid-base64",
+      "component": {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/track/anonymous-1",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "people",
+            "stream": "tracks"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 2
+        },
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:01.75Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 1250000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-live-people-v1",
+          "model_id": "camera-ankle-two-observation-tracking",
+          "model_version": "1",
+          "inputs": [
+            {
+              "id": "sha256:233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "record_sha256": "f23c9620bd05e4f4835edde09d60f22df45d838797198f66ca14906764d0f74f"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "record_sha256": "51dab74c00fd6122188ef62d1793bda60adf4adfa7f7ac3198b1086b7dd47089"
+            }
+          ],
+          "result_json": "%%%",
+          "result_schema": "wendy.person.track.v1",
+          "retain_until_unix_ms": 1795176000000,
+          "version": 1
+        },
+        "tombstone": false
+      },
+      "reason": "invalid-base64"
+    },
+    {
+      "name": "result-json-object",
+      "component": {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/track/anonymous-1",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "people",
+            "stream": "tracks"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 2
+        },
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:01.75Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 1250000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-live-people-v1",
+          "model_id": "camera-ankle-two-observation-tracking",
+          "model_version": "1",
+          "inputs": [
+            {
+              "id": "sha256:233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "record_sha256": "f23c9620bd05e4f4835edde09d60f22df45d838797198f66ca14906764d0f74f"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "record_sha256": "51dab74c00fd6122188ef62d1793bda60adf4adfa7f7ac3198b1086b7dd47089"
+            }
+          ],
+          "result_json": {
+            "schema": "wendy.person.track.v1",
+            "algorithm": "camera-ankle-two-observation-tracking",
+            "algorithm_version": "1",
+            "track_id": "anonymous-1",
+            "revision": 2,
+            "run_id": "viewer-native-v1",
+            "clock_domain": "simulation:viewer-native-v1",
+            "frame": {
+              "id": "office",
+              "revision": "viewer-fixture-v1"
+            },
+            "observed_at": "2026-01-01T00:00:02Z",
+            "valid_until": "2026-01-01T00:00:03Z",
+            "position_xz": [
+              1,
+              2
+            ],
+            "covariance": [
+              0.04,
+              0,
+              0,
+              0.09
+            ],
+            "ambiguous": false,
+            "motion_known": true,
+            "velocity_xz": [
+              0.4,
+              0
+            ],
+            "velocity_covariance": [
+              1.28,
+              0,
+              0,
+              2.88
+            ],
+            "previous_observed_at": "2026-01-01T00:00:01.75Z",
+            "current": [
+              {
+                "proof": {
+                  "key": {
+                    "tenant": "11111111-1111-4111-8111-111111111111",
+                    "site": "studio-01",
+                    "entity": "sensor/people-front",
+                    "type": "wendy.sensor.capture.v1",
+                    "source": {
+                      "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                      "app": "com.wendy.world.viewer-fixture",
+                      "service": "people-front",
+                      "stream": "people-front"
+                    }
+                  },
+                  "version": {
+                    "epoch": 7,
+                    "sequence": 11
+                  },
+                  "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+                  "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+                },
+                "sensor_id": "people-front",
+                "sample_id": "viewer-native-v1/people-front/11",
+                "capture_sequence": 11,
+                "member_index": 0,
+                "sample_time": "2026-01-01T00:00:02Z",
+                "valid_until": "2026-01-01T00:00:03.25Z",
+                "physical_until": "2026-11-13T13:00:04.9+01:00",
+                "position_xz": [
+                  1,
+                  2
+                ],
+                "covariance": [
+                  0.04,
+                  0,
+                  0,
+                  0.09
+                ],
+                "image": {
+                  "sha256": "af521f4d05f2ec4629b4cf86007ab12c93ffdc10d99bdb392bf0430961da456e",
+                  "content_type": "image/png",
+                  "size": 1024
+                },
+                "model_id": "synthetic-pose-fixture",
+                "model_version": "1",
+                "model_sha256": "4e2d318a8231668936b4ded42e3c036b16f8c3902540148320a19d9028d7f4b1",
+                "calibration_revision": "viewer-calibration-v1",
+                "calibration_sha256": "2aa8fccbb041f66a390add0efe036466f88a93a804ad515008dfe19c516bdea8",
+                "scene_boot_id": "synthetic-scene-boot",
+                "captured_unix_ns": 1794571199900000000,
+                "simulation_anchor_unix_ns": 1767225600000000000
+              },
+              {
+                "proof": {
+                  "key": {
+                    "tenant": "11111111-1111-4111-8111-111111111111",
+                    "site": "studio-01",
+                    "entity": "sensor/people-oblique",
+                    "type": "wendy.sensor.capture.v1",
+                    "source": {
+                      "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                      "app": "com.wendy.world.viewer-fixture",
+                      "service": "people-oblique",
+                      "stream": "people-oblique"
+                    }
+                  },
+                  "version": {
+                    "epoch": 7,
+                    "sequence": 11
+                  },
+                  "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+                  "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+                },
+                "sensor_id": "people-oblique",
+                "sample_id": "viewer-native-v1/people-oblique/11",
+                "capture_sequence": 11,
+                "member_index": 0,
+                "sample_time": "2026-01-01T00:00:02Z",
+                "valid_until": "2026-01-01T00:00:03.25Z",
+                "physical_until": "2026-11-13T13:00:04.9+01:00",
+                "position_xz": [
+                  1,
+                  2
+                ],
+                "covariance": [
+                  0.04,
+                  0,
+                  0,
+                  0.09
+                ],
+                "image": {
+                  "sha256": "3ce5e37e19eb903901153b3ebaad42346db69d83f6d9cc095c77ecf14234abaf",
+                  "content_type": "image/png",
+                  "size": 1024
+                },
+                "model_id": "synthetic-pose-fixture",
+                "model_version": "1",
+                "model_sha256": "4e2d318a8231668936b4ded42e3c036b16f8c3902540148320a19d9028d7f4b1",
+                "calibration_revision": "viewer-calibration-v1",
+                "calibration_sha256": "d7bbab3331d78f1279ef25bbfc728f2fbfc6e33697f00c28339eb89702a68a8a",
+                "scene_boot_id": "synthetic-scene-boot",
+                "captured_unix_ns": 1794571199900000000,
+                "simulation_anchor_unix_ns": 1767225600000000000
+              }
+            ],
+            "previous": [
+              {
+                "proof": {
+                  "key": {
+                    "tenant": "11111111-1111-4111-8111-111111111111",
+                    "site": "studio-01",
+                    "entity": "sensor/people-front",
+                    "type": "wendy.sensor.capture.v1",
+                    "source": {
+                      "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                      "app": "com.wendy.world.viewer-fixture",
+                      "service": "people-front",
+                      "stream": "people-front"
+                    }
+                  },
+                  "version": {
+                    "epoch": 7,
+                    "sequence": 10
+                  },
+                  "envelope_sha256": "2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+                  "record_sha256": "f23c9620bd05e4f4835edde09d60f22df45d838797198f66ca14906764d0f74f"
+                },
+                "sensor_id": "people-front",
+                "sample_id": "viewer-native-v1/people-front/10",
+                "capture_sequence": 10,
+                "member_index": 0,
+                "sample_time": "2026-01-01T00:00:01.75Z",
+                "valid_until": "2026-01-01T00:00:03Z",
+                "physical_until": "2026-11-13T13:00:04.65+01:00",
+                "position_xz": [
+                  0.9,
+                  2
+                ],
+                "covariance": [
+                  0.04,
+                  0,
+                  0,
+                  0.09
+                ],
+                "image": {
+                  "sha256": "af521f4d05f2ec4629b4cf86007ab12c93ffdc10d99bdb392bf0430961da456e",
+                  "content_type": "image/png",
+                  "size": 1024
+                },
+                "model_id": "synthetic-pose-fixture",
+                "model_version": "1",
+                "model_sha256": "4e2d318a8231668936b4ded42e3c036b16f8c3902540148320a19d9028d7f4b1",
+                "calibration_revision": "viewer-calibration-v1",
+                "calibration_sha256": "2aa8fccbb041f66a390add0efe036466f88a93a804ad515008dfe19c516bdea8",
+                "scene_boot_id": "synthetic-scene-boot",
+                "captured_unix_ns": 1794571199650000000,
+                "simulation_anchor_unix_ns": 1767225600000000000
+              },
+              {
+                "proof": {
+                  "key": {
+                    "tenant": "11111111-1111-4111-8111-111111111111",
+                    "site": "studio-01",
+                    "entity": "sensor/people-oblique",
+                    "type": "wendy.sensor.capture.v1",
+                    "source": {
+                      "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                      "app": "com.wendy.world.viewer-fixture",
+                      "service": "people-oblique",
+                      "stream": "people-oblique"
+                    }
+                  },
+                  "version": {
+                    "epoch": 7,
+                    "sequence": 10
+                  },
+                  "envelope_sha256": "9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+                  "record_sha256": "51dab74c00fd6122188ef62d1793bda60adf4adfa7f7ac3198b1086b7dd47089"
+                },
+                "sensor_id": "people-oblique",
+                "sample_id": "viewer-native-v1/people-oblique/10",
+                "capture_sequence": 10,
+                "member_index": 0,
+                "sample_time": "2026-01-01T00:00:01.75Z",
+                "valid_until": "2026-01-01T00:00:03Z",
+                "physical_until": "2026-11-13T13:00:04.65+01:00",
+                "position_xz": [
+                  0.9,
+                  2
+                ],
+                "covariance": [
+                  0.04,
+                  0,
+                  0,
+                  0.09
+                ],
+                "image": {
+                  "sha256": "3ce5e37e19eb903901153b3ebaad42346db69d83f6d9cc095c77ecf14234abaf",
+                  "content_type": "image/png",
+                  "size": 1024
+                },
+                "model_id": "synthetic-pose-fixture",
+                "model_version": "1",
+                "model_sha256": "4e2d318a8231668936b4ded42e3c036b16f8c3902540148320a19d9028d7f4b1",
+                "calibration_revision": "viewer-calibration-v1",
+                "calibration_sha256": "d7bbab3331d78f1279ef25bbfc728f2fbfc6e33697f00c28339eb89702a68a8a",
+                "scene_boot_id": "synthetic-scene-boot",
+                "captured_unix_ns": 1794571199650000000,
+                "simulation_anchor_unix_ns": 1767225600000000000
+              }
+            ]
+          },
+          "result_schema": "wendy.person.track.v1",
+          "retain_until_unix_ms": 1795176000000,
+          "version": 1
+        },
+        "tombstone": false
+      },
+      "reason": "result-json-object"
+    },
+    {
+      "name": "unknown-schema",
+      "component": {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/track/anonymous-1",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "people",
+            "stream": "tracks"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 2
+        },
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:01.75Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 1250000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-live-people-v1",
+          "model_id": "camera-ankle-two-observation-tracking",
+          "model_version": "1",
+          "inputs": [
+            {
+              "id": "sha256:233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "record_sha256": "f23c9620bd05e4f4835edde09d60f22df45d838797198f66ca14906764d0f74f"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "record_sha256": "51dab74c00fd6122188ef62d1793bda60adf4adfa7f7ac3198b1086b7dd47089"
+            }
+          ],
+          "result_json": "eyJzY2hlbWEiOiJ3ZW5keS5wZXJzb24udHJhY2sudjEiLCJhbGdvcml0aG0iOiJjYW1lcmEtYW5rbGUtdHdvLW9ic2VydmF0aW9uLXRyYWNraW5nIiwiYWxnb3JpdGhtX3ZlcnNpb24iOiIxIiwidHJhY2tfaWQiOiJhbm9ueW1vdXMtMSIsInJldmlzaW9uIjoyLCJydW5faWQiOiJ2aWV3ZXItbmF0aXZlLXYxIiwiY2xvY2tfZG9tYWluIjoic2ltdWxhdGlvbjp2aWV3ZXItbmF0aXZlLXYxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sIm9ic2VydmVkX2F0IjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDNaIiwicG9zaXRpb25feHoiOlsxLDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImFtYmlndW91cyI6ZmFsc2UsIm1vdGlvbl9rbm93biI6dHJ1ZSwidmVsb2NpdHlfeHoiOlswLjQsMF0sInZlbG9jaXR5X2NvdmFyaWFuY2UiOlsxLjI4LDAsMCwyLjg4XSwicHJldmlvdXNfb2JzZXJ2ZWRfYXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAxLjc1WiIsImN1cnJlbnQiOlt7InByb29mIjp7ImtleSI6eyJ0ZW5hbnQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJzaXRlIjoic3R1ZGlvLTAxIiwiZW50aXR5Ijoic2Vuc29yL3Blb3BsZS1mcm9udCIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8yMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLWZyb250Iiwic3RyZWFtIjoicGVvcGxlLWZyb250In19LCJ2ZXJzaW9uIjp7ImVwb2NoIjo3LCJzZXF1ZW5jZSI6MTF9LCJlbnZlbG9wZV9zaGEyNTYiOiIyMzNjYzIyZTE0MGEzMjRiZDJjNDdmZjhjN2NjN2M4ZDg2OTZhNjIxYjk4MjBlYTg5ZDUyZjJkZGZmYjRjNGM4IiwicmVjb3JkX3NoYTI1NiI6ImRhMDE0YTA2ZDk4MTg5NWRiNzJlNTVlN2FiMDk0ZDExYWRkMmJjYWFiNDJjMjgwMTYxY2ZkMDZlOWY5NzNiMjEifSwic2Vuc29yX2lkIjoicGVvcGxlLWZyb250Iiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtZnJvbnQvMTEiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMSwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDJaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzLjI1WiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC45KzAxOjAwIiwicG9zaXRpb25feHoiOlsxLDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6ImFmNTIxZjRkMDVmMmVjNDYyOWI0Y2Y4NjAwN2FiMTJjOTNmZmRjMTBkOTliZGIzOTJiZjA0MzA5NjFkYTQ1NmUiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiIyYWE4ZmNjYmIwNDFmNjZhMzkwYWRkMGVmZTAzNjQ2NmY4OGE5M2E4MDRhZDUxNTAwOGRmZTE5YzUxNmJkZWE4Iiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTkwMDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH0seyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtb2JsaXF1ZSIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8zMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLW9ibGlxdWUiLCJzdHJlYW0iOiJwZW9wbGUtb2JsaXF1ZSJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfSwiZW52ZWxvcGVfc2hhMjU2IjoiMDI3NGJkZWQ0NDM0Mjg4MTY5M2JjMTcyOTBjY2Q1NGY1N2FjZDMwMjBkNzQ1MjVmYWRlMmVjOGMzYjI3ODE4NSIsInJlY29yZF9zaGEyNTYiOiI3NmUxMzYzYWUzZjQ4YjVhZTBjZDQxOWIzMzI2NjY4MDNmNGM0MThhNzU2ZjZlZDA3NmU1OWRjZTA2MzBiMDc3In0sInNlbnNvcl9pZCI6InBlb3BsZS1vYmxpcXVlIiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtb2JsaXF1ZS8xMSIsImNhcHR1cmVfc2VxdWVuY2UiOjExLCJtZW1iZXJfaW5kZXgiOjAsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDMuMjVaIiwicGh5c2ljYWxfdW50aWwiOiIyMDI2LTExLTEzVDEzOjAwOjA0LjkrMDE6MDAiLCJwb3NpdGlvbl94eiI6WzEsMl0sImNvdmFyaWFuY2UiOlswLjA0LDAsMCwwLjA5XSwiaW1hZ2UiOnsic2hhMjU2IjoiM2NlNWUzN2UxOWViOTAzOTAxMTUzYjNlYmFhZDQyMzQ2ZGI2OWQ4M2Y2ZDljYzA5NWM3N2VjZjE0MjM0YWJhZiIsImNvbnRlbnRfdHlwZSI6ImltYWdlL3BuZyIsInNpemUiOjEwMjR9LCJtb2RlbF9pZCI6InN5bnRoZXRpYy1wb3NlLWZpeHR1cmUiLCJtb2RlbF92ZXJzaW9uIjoiMSIsIm1vZGVsX3NoYTI1NiI6IjRlMmQzMThhODIzMTY2ODkzNmI0ZGVkNDJlM2MwMzZiMTZmOGMzOTAyNTQwMTQ4MzIwYTE5ZDkwMjhkN2Y0YjEiLCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImNhbGlicmF0aW9uX3NoYTI1NiI6ImQ3YmJhYjMzMzFkNzhmMTI3OWVmMjViYmZjNzI4ZjJmYmZjNmUzMzY5N2YwMGMyODMzOWViODk3MDJhNjhhOGEiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJjYXB0dXJlZF91bml4X25zIjoxNzk0NTcxMTk5OTAwMDAwMDAwLCJzaW11bGF0aW9uX2FuY2hvcl91bml4X25zIjoxNzY3MjI1NjAwMDAwMDAwMDAwfV0sInByZXZpb3VzIjpbeyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtZnJvbnQiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1mcm9udCIsInN0cmVhbSI6InBlb3BsZS1mcm9udCJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjEwfSwiZW52ZWxvcGVfc2hhMjU2IjoiMjA1N2EyNjY4ZDcwMTUyMDIzYTNmNjA5ZDI0NTkzNjk3Yzk4YTk4YjI5MjE3MDczNmU2MjkwYWIxM2U3OWYwYyIsInJlY29yZF9zaGEyNTYiOiJmMjNjOTYyMGJkMDVlNGY0ODM1ZWRkZTA5ZDYwZjIyZGY0NWQ4Mzg3OTcxOThmNjZjYTE0OTA2NzY0ZDBmNzRmIn0sInNlbnNvcl9pZCI6InBlb3BsZS1mcm9udCIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLWZyb250LzEwIiwiY2FwdHVyZV9zZXF1ZW5jZSI6MTAsIm1lbWJlcl9pbmRleCI6MCwic2FtcGxlX3RpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAxLjc1WiIsInZhbGlkX3VudGlsIjoiMjAyNi0wMS0wMVQwMDowMDowM1oiLCJwaHlzaWNhbF91bnRpbCI6IjIwMjYtMTEtMTNUMTM6MDA6MDQuNjUrMDE6MDAiLCJwb3NpdGlvbl94eiI6WzAuOSwyXSwiY292YXJpYW5jZSI6WzAuMDQsMCwwLDAuMDldLCJpbWFnZSI6eyJzaGEyNTYiOiJhZjUyMWY0ZDA1ZjJlYzQ2MjliNGNmODYwMDdhYjEyYzkzZmZkYzEwZDk5YmRiMzkyYmYwNDMwOTYxZGE0NTZlIiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH0sIm1vZGVsX2lkIjoic3ludGhldGljLXBvc2UtZml4dHVyZSIsIm1vZGVsX3ZlcnNpb24iOiIxIiwibW9kZWxfc2hhMjU2IjoiNGUyZDMxOGE4MjMxNjY4OTM2YjRkZWQ0MmUzYzAzNmIxNmY4YzM5MDI1NDAxNDgzMjBhMTlkOTAyOGQ3ZjRiMSIsImNhbGlicmF0aW9uX3JldmlzaW9uIjoidmlld2VyLWNhbGlicmF0aW9uLXYxIiwiY2FsaWJyYXRpb25fc2hhMjU2IjoiMmFhOGZjY2JiMDQxZjY2YTM5MGFkZDBlZmUwMzY0NjZmODhhOTNhODA0YWQ1MTUwMDhkZmUxOWM1MTZiZGVhOCIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsImNhcHR1cmVkX3VuaXhfbnMiOjE3OTQ1NzExOTk2NTAwMDAwMDAsInNpbXVsYXRpb25fYW5jaG9yX3VuaXhfbnMiOjE3NjcyMjU2MDAwMDAwMDAwMDB9LHsicHJvb2YiOnsia2V5Ijp7InRlbmFudCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInNpdGUiOiJzdHVkaW8tMDEiLCJlbnRpdHkiOiJzZW5zb3IvcGVvcGxlLW9ibGlxdWUiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMzMzMzMzMzMzMzMzIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1vYmxpcXVlIiwic3RyZWFtIjoicGVvcGxlLW9ibGlxdWUifX0sInZlcnNpb24iOnsiZXBvY2giOjcsInNlcXVlbmNlIjoxMH0sImVudmVsb3BlX3NoYTI1NiI6IjliZGQyN2FkOTJiYmJhZTg0NGI1MGRjM2UyYzhhZTc3YmNkZTQ0NWExZWJkOGI3MWE4MWVhNjVhN2Y4NTFmYTAiLCJyZWNvcmRfc2hhMjU2IjoiNTFkYWI3NGMwMGZkNjEyMjE4OGVmNjJkMTc5M2JkYTYwYWRmNGFkZmE3ZjdhYzMxOThiMTA4NmI3ZGQ0NzA4OSJ9LCJzZW5zb3JfaWQiOiJwZW9wbGUtb2JsaXF1ZSIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLW9ibGlxdWUvMTAiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMCwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDEuNzVaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzWiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC42NSswMTowMCIsInBvc2l0aW9uX3h6IjpbMC45LDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6IjNjZTVlMzdlMTllYjkwMzkwMTE1M2IzZWJhYWQ0MjM0NmRiNjlkODNmNmQ5Y2MwOTVjNzdlY2YxNDIzNGFiYWYiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiJkN2JiYWIzMzMxZDc4ZjEyNzllZjI1YmJmYzcyOGYyZmJmYzZlMzM2OTdmMDBjMjgzMzllYjg5NzAyYTY4YThhIiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTY1MDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH1dfQ==",
+          "result_schema": "wendy.unknown.v1",
+          "retain_until_unix_ms": 1795176000000,
+          "version": 1
+        },
+        "tombstone": false
+      },
+      "reason": "unknown-schema"
+    },
+    {
+      "name": "mismatched-frame",
+      "component": {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/track/anonymous-1",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "people",
+            "stream": "tracks"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 2
+        },
+        "frame": {
+          "id": "office",
+          "revision": "different"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:01.75Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 1250000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-live-people-v1",
+          "model_id": "camera-ankle-two-observation-tracking",
+          "model_version": "1",
+          "inputs": [
+            {
+              "id": "sha256:233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "record_sha256": "f23c9620bd05e4f4835edde09d60f22df45d838797198f66ca14906764d0f74f"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "record_sha256": "51dab74c00fd6122188ef62d1793bda60adf4adfa7f7ac3198b1086b7dd47089"
+            }
+          ],
+          "result_json": "eyJzY2hlbWEiOiJ3ZW5keS5wZXJzb24udHJhY2sudjEiLCJhbGdvcml0aG0iOiJjYW1lcmEtYW5rbGUtdHdvLW9ic2VydmF0aW9uLXRyYWNraW5nIiwiYWxnb3JpdGhtX3ZlcnNpb24iOiIxIiwidHJhY2tfaWQiOiJhbm9ueW1vdXMtMSIsInJldmlzaW9uIjoyLCJydW5faWQiOiJ2aWV3ZXItbmF0aXZlLXYxIiwiY2xvY2tfZG9tYWluIjoic2ltdWxhdGlvbjp2aWV3ZXItbmF0aXZlLXYxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sIm9ic2VydmVkX2F0IjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDNaIiwicG9zaXRpb25feHoiOlsxLDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImFtYmlndW91cyI6ZmFsc2UsIm1vdGlvbl9rbm93biI6dHJ1ZSwidmVsb2NpdHlfeHoiOlswLjQsMF0sInZlbG9jaXR5X2NvdmFyaWFuY2UiOlsxLjI4LDAsMCwyLjg4XSwicHJldmlvdXNfb2JzZXJ2ZWRfYXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAxLjc1WiIsImN1cnJlbnQiOlt7InByb29mIjp7ImtleSI6eyJ0ZW5hbnQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJzaXRlIjoic3R1ZGlvLTAxIiwiZW50aXR5Ijoic2Vuc29yL3Blb3BsZS1mcm9udCIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8yMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLWZyb250Iiwic3RyZWFtIjoicGVvcGxlLWZyb250In19LCJ2ZXJzaW9uIjp7ImVwb2NoIjo3LCJzZXF1ZW5jZSI6MTF9LCJlbnZlbG9wZV9zaGEyNTYiOiIyMzNjYzIyZTE0MGEzMjRiZDJjNDdmZjhjN2NjN2M4ZDg2OTZhNjIxYjk4MjBlYTg5ZDUyZjJkZGZmYjRjNGM4IiwicmVjb3JkX3NoYTI1NiI6ImRhMDE0YTA2ZDk4MTg5NWRiNzJlNTVlN2FiMDk0ZDExYWRkMmJjYWFiNDJjMjgwMTYxY2ZkMDZlOWY5NzNiMjEifSwic2Vuc29yX2lkIjoicGVvcGxlLWZyb250Iiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtZnJvbnQvMTEiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMSwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDJaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzLjI1WiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC45KzAxOjAwIiwicG9zaXRpb25feHoiOlsxLDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6ImFmNTIxZjRkMDVmMmVjNDYyOWI0Y2Y4NjAwN2FiMTJjOTNmZmRjMTBkOTliZGIzOTJiZjA0MzA5NjFkYTQ1NmUiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiIyYWE4ZmNjYmIwNDFmNjZhMzkwYWRkMGVmZTAzNjQ2NmY4OGE5M2E4MDRhZDUxNTAwOGRmZTE5YzUxNmJkZWE4Iiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTkwMDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH0seyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtb2JsaXF1ZSIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8zMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLW9ibGlxdWUiLCJzdHJlYW0iOiJwZW9wbGUtb2JsaXF1ZSJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfSwiZW52ZWxvcGVfc2hhMjU2IjoiMDI3NGJkZWQ0NDM0Mjg4MTY5M2JjMTcyOTBjY2Q1NGY1N2FjZDMwMjBkNzQ1MjVmYWRlMmVjOGMzYjI3ODE4NSIsInJlY29yZF9zaGEyNTYiOiI3NmUxMzYzYWUzZjQ4YjVhZTBjZDQxOWIzMzI2NjY4MDNmNGM0MThhNzU2ZjZlZDA3NmU1OWRjZTA2MzBiMDc3In0sInNlbnNvcl9pZCI6InBlb3BsZS1vYmxpcXVlIiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtb2JsaXF1ZS8xMSIsImNhcHR1cmVfc2VxdWVuY2UiOjExLCJtZW1iZXJfaW5kZXgiOjAsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDMuMjVaIiwicGh5c2ljYWxfdW50aWwiOiIyMDI2LTExLTEzVDEzOjAwOjA0LjkrMDE6MDAiLCJwb3NpdGlvbl94eiI6WzEsMl0sImNvdmFyaWFuY2UiOlswLjA0LDAsMCwwLjA5XSwiaW1hZ2UiOnsic2hhMjU2IjoiM2NlNWUzN2UxOWViOTAzOTAxMTUzYjNlYmFhZDQyMzQ2ZGI2OWQ4M2Y2ZDljYzA5NWM3N2VjZjE0MjM0YWJhZiIsImNvbnRlbnRfdHlwZSI6ImltYWdlL3BuZyIsInNpemUiOjEwMjR9LCJtb2RlbF9pZCI6InN5bnRoZXRpYy1wb3NlLWZpeHR1cmUiLCJtb2RlbF92ZXJzaW9uIjoiMSIsIm1vZGVsX3NoYTI1NiI6IjRlMmQzMThhODIzMTY2ODkzNmI0ZGVkNDJlM2MwMzZiMTZmOGMzOTAyNTQwMTQ4MzIwYTE5ZDkwMjhkN2Y0YjEiLCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImNhbGlicmF0aW9uX3NoYTI1NiI6ImQ3YmJhYjMzMzFkNzhmMTI3OWVmMjViYmZjNzI4ZjJmYmZjNmUzMzY5N2YwMGMyODMzOWViODk3MDJhNjhhOGEiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJjYXB0dXJlZF91bml4X25zIjoxNzk0NTcxMTk5OTAwMDAwMDAwLCJzaW11bGF0aW9uX2FuY2hvcl91bml4X25zIjoxNzY3MjI1NjAwMDAwMDAwMDAwfV0sInByZXZpb3VzIjpbeyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtZnJvbnQiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1mcm9udCIsInN0cmVhbSI6InBlb3BsZS1mcm9udCJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjEwfSwiZW52ZWxvcGVfc2hhMjU2IjoiMjA1N2EyNjY4ZDcwMTUyMDIzYTNmNjA5ZDI0NTkzNjk3Yzk4YTk4YjI5MjE3MDczNmU2MjkwYWIxM2U3OWYwYyIsInJlY29yZF9zaGEyNTYiOiJmMjNjOTYyMGJkMDVlNGY0ODM1ZWRkZTA5ZDYwZjIyZGY0NWQ4Mzg3OTcxOThmNjZjYTE0OTA2NzY0ZDBmNzRmIn0sInNlbnNvcl9pZCI6InBlb3BsZS1mcm9udCIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLWZyb250LzEwIiwiY2FwdHVyZV9zZXF1ZW5jZSI6MTAsIm1lbWJlcl9pbmRleCI6MCwic2FtcGxlX3RpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAxLjc1WiIsInZhbGlkX3VudGlsIjoiMjAyNi0wMS0wMVQwMDowMDowM1oiLCJwaHlzaWNhbF91bnRpbCI6IjIwMjYtMTEtMTNUMTM6MDA6MDQuNjUrMDE6MDAiLCJwb3NpdGlvbl94eiI6WzAuOSwyXSwiY292YXJpYW5jZSI6WzAuMDQsMCwwLDAuMDldLCJpbWFnZSI6eyJzaGEyNTYiOiJhZjUyMWY0ZDA1ZjJlYzQ2MjliNGNmODYwMDdhYjEyYzkzZmZkYzEwZDk5YmRiMzkyYmYwNDMwOTYxZGE0NTZlIiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH0sIm1vZGVsX2lkIjoic3ludGhldGljLXBvc2UtZml4dHVyZSIsIm1vZGVsX3ZlcnNpb24iOiIxIiwibW9kZWxfc2hhMjU2IjoiNGUyZDMxOGE4MjMxNjY4OTM2YjRkZWQ0MmUzYzAzNmIxNmY4YzM5MDI1NDAxNDgzMjBhMTlkOTAyOGQ3ZjRiMSIsImNhbGlicmF0aW9uX3JldmlzaW9uIjoidmlld2VyLWNhbGlicmF0aW9uLXYxIiwiY2FsaWJyYXRpb25fc2hhMjU2IjoiMmFhOGZjY2JiMDQxZjY2YTM5MGFkZDBlZmUwMzY0NjZmODhhOTNhODA0YWQ1MTUwMDhkZmUxOWM1MTZiZGVhOCIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsImNhcHR1cmVkX3VuaXhfbnMiOjE3OTQ1NzExOTk2NTAwMDAwMDAsInNpbXVsYXRpb25fYW5jaG9yX3VuaXhfbnMiOjE3NjcyMjU2MDAwMDAwMDAwMDB9LHsicHJvb2YiOnsia2V5Ijp7InRlbmFudCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInNpdGUiOiJzdHVkaW8tMDEiLCJlbnRpdHkiOiJzZW5zb3IvcGVvcGxlLW9ibGlxdWUiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMzMzMzMzMzMzMzMzIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1vYmxpcXVlIiwic3RyZWFtIjoicGVvcGxlLW9ibGlxdWUifX0sInZlcnNpb24iOnsiZXBvY2giOjcsInNlcXVlbmNlIjoxMH0sImVudmVsb3BlX3NoYTI1NiI6IjliZGQyN2FkOTJiYmJhZTg0NGI1MGRjM2UyYzhhZTc3YmNkZTQ0NWExZWJkOGI3MWE4MWVhNjVhN2Y4NTFmYTAiLCJyZWNvcmRfc2hhMjU2IjoiNTFkYWI3NGMwMGZkNjEyMjE4OGVmNjJkMTc5M2JkYTYwYWRmNGFkZmE3ZjdhYzMxOThiMTA4NmI3ZGQ0NzA4OSJ9LCJzZW5zb3JfaWQiOiJwZW9wbGUtb2JsaXF1ZSIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLW9ibGlxdWUvMTAiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMCwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDEuNzVaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzWiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC42NSswMTowMCIsInBvc2l0aW9uX3h6IjpbMC45LDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6IjNjZTVlMzdlMTllYjkwMzkwMTE1M2IzZWJhYWQ0MjM0NmRiNjlkODNmNmQ5Y2MwOTVjNzdlY2YxNDIzNGFiYWYiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiJkN2JiYWIzMzMxZDc4ZjEyNzllZjI1YmJmYzcyOGYyZmJmYzZlMzM2OTdmMDBjMjgzMzllYjg5NzAyYTY4YThhIiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTY1MDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH1dfQ==",
+          "result_schema": "wendy.person.track.v1",
+          "retain_until_unix_ms": 1795176000000,
+          "version": 1
+        },
+        "tombstone": false
+      },
+      "reason": "mismatched-frame"
+    },
+    {
+      "name": "changed-proof-version",
+      "component": {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/track/anonymous-1",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "people",
+            "stream": "tracks"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 2
+        },
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:01.75Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 1250000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-live-people-v1",
+          "model_id": "camera-ankle-two-observation-tracking",
+          "model_version": "1",
+          "inputs": [
+            {
+              "id": "sha256:233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 12
+              },
+              "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "record_sha256": "f23c9620bd05e4f4835edde09d60f22df45d838797198f66ca14906764d0f74f"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "record_sha256": "51dab74c00fd6122188ef62d1793bda60adf4adfa7f7ac3198b1086b7dd47089"
+            }
+          ],
+          "result_json": "eyJzY2hlbWEiOiJ3ZW5keS5wZXJzb24udHJhY2sudjEiLCJhbGdvcml0aG0iOiJjYW1lcmEtYW5rbGUtdHdvLW9ic2VydmF0aW9uLXRyYWNraW5nIiwiYWxnb3JpdGhtX3ZlcnNpb24iOiIxIiwidHJhY2tfaWQiOiJhbm9ueW1vdXMtMSIsInJldmlzaW9uIjoyLCJydW5faWQiOiJ2aWV3ZXItbmF0aXZlLXYxIiwiY2xvY2tfZG9tYWluIjoic2ltdWxhdGlvbjp2aWV3ZXItbmF0aXZlLXYxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sIm9ic2VydmVkX2F0IjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDNaIiwicG9zaXRpb25feHoiOlsxLDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImFtYmlndW91cyI6ZmFsc2UsIm1vdGlvbl9rbm93biI6dHJ1ZSwidmVsb2NpdHlfeHoiOlswLjQsMF0sInZlbG9jaXR5X2NvdmFyaWFuY2UiOlsxLjI4LDAsMCwyLjg4XSwicHJldmlvdXNfb2JzZXJ2ZWRfYXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAxLjc1WiIsImN1cnJlbnQiOlt7InByb29mIjp7ImtleSI6eyJ0ZW5hbnQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJzaXRlIjoic3R1ZGlvLTAxIiwiZW50aXR5Ijoic2Vuc29yL3Blb3BsZS1mcm9udCIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8yMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLWZyb250Iiwic3RyZWFtIjoicGVvcGxlLWZyb250In19LCJ2ZXJzaW9uIjp7ImVwb2NoIjo3LCJzZXF1ZW5jZSI6MTF9LCJlbnZlbG9wZV9zaGEyNTYiOiIyMzNjYzIyZTE0MGEzMjRiZDJjNDdmZjhjN2NjN2M4ZDg2OTZhNjIxYjk4MjBlYTg5ZDUyZjJkZGZmYjRjNGM4IiwicmVjb3JkX3NoYTI1NiI6ImRhMDE0YTA2ZDk4MTg5NWRiNzJlNTVlN2FiMDk0ZDExYWRkMmJjYWFiNDJjMjgwMTYxY2ZkMDZlOWY5NzNiMjEifSwic2Vuc29yX2lkIjoicGVvcGxlLWZyb250Iiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtZnJvbnQvMTEiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMSwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDJaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzLjI1WiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC45KzAxOjAwIiwicG9zaXRpb25feHoiOlsxLDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6ImFmNTIxZjRkMDVmMmVjNDYyOWI0Y2Y4NjAwN2FiMTJjOTNmZmRjMTBkOTliZGIzOTJiZjA0MzA5NjFkYTQ1NmUiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiIyYWE4ZmNjYmIwNDFmNjZhMzkwYWRkMGVmZTAzNjQ2NmY4OGE5M2E4MDRhZDUxNTAwOGRmZTE5YzUxNmJkZWE4Iiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTkwMDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH0seyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtb2JsaXF1ZSIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8zMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLW9ibGlxdWUiLCJzdHJlYW0iOiJwZW9wbGUtb2JsaXF1ZSJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfSwiZW52ZWxvcGVfc2hhMjU2IjoiMDI3NGJkZWQ0NDM0Mjg4MTY5M2JjMTcyOTBjY2Q1NGY1N2FjZDMwMjBkNzQ1MjVmYWRlMmVjOGMzYjI3ODE4NSIsInJlY29yZF9zaGEyNTYiOiI3NmUxMzYzYWUzZjQ4YjVhZTBjZDQxOWIzMzI2NjY4MDNmNGM0MThhNzU2ZjZlZDA3NmU1OWRjZTA2MzBiMDc3In0sInNlbnNvcl9pZCI6InBlb3BsZS1vYmxpcXVlIiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtb2JsaXF1ZS8xMSIsImNhcHR1cmVfc2VxdWVuY2UiOjExLCJtZW1iZXJfaW5kZXgiOjAsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDMuMjVaIiwicGh5c2ljYWxfdW50aWwiOiIyMDI2LTExLTEzVDEzOjAwOjA0LjkrMDE6MDAiLCJwb3NpdGlvbl94eiI6WzEsMl0sImNvdmFyaWFuY2UiOlswLjA0LDAsMCwwLjA5XSwiaW1hZ2UiOnsic2hhMjU2IjoiM2NlNWUzN2UxOWViOTAzOTAxMTUzYjNlYmFhZDQyMzQ2ZGI2OWQ4M2Y2ZDljYzA5NWM3N2VjZjE0MjM0YWJhZiIsImNvbnRlbnRfdHlwZSI6ImltYWdlL3BuZyIsInNpemUiOjEwMjR9LCJtb2RlbF9pZCI6InN5bnRoZXRpYy1wb3NlLWZpeHR1cmUiLCJtb2RlbF92ZXJzaW9uIjoiMSIsIm1vZGVsX3NoYTI1NiI6IjRlMmQzMThhODIzMTY2ODkzNmI0ZGVkNDJlM2MwMzZiMTZmOGMzOTAyNTQwMTQ4MzIwYTE5ZDkwMjhkN2Y0YjEiLCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImNhbGlicmF0aW9uX3NoYTI1NiI6ImQ3YmJhYjMzMzFkNzhmMTI3OWVmMjViYmZjNzI4ZjJmYmZjNmUzMzY5N2YwMGMyODMzOWViODk3MDJhNjhhOGEiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJjYXB0dXJlZF91bml4X25zIjoxNzk0NTcxMTk5OTAwMDAwMDAwLCJzaW11bGF0aW9uX2FuY2hvcl91bml4X25zIjoxNzY3MjI1NjAwMDAwMDAwMDAwfV0sInByZXZpb3VzIjpbeyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtZnJvbnQiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1mcm9udCIsInN0cmVhbSI6InBlb3BsZS1mcm9udCJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjEwfSwiZW52ZWxvcGVfc2hhMjU2IjoiMjA1N2EyNjY4ZDcwMTUyMDIzYTNmNjA5ZDI0NTkzNjk3Yzk4YTk4YjI5MjE3MDczNmU2MjkwYWIxM2U3OWYwYyIsInJlY29yZF9zaGEyNTYiOiJmMjNjOTYyMGJkMDVlNGY0ODM1ZWRkZTA5ZDYwZjIyZGY0NWQ4Mzg3OTcxOThmNjZjYTE0OTA2NzY0ZDBmNzRmIn0sInNlbnNvcl9pZCI6InBlb3BsZS1mcm9udCIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLWZyb250LzEwIiwiY2FwdHVyZV9zZXF1ZW5jZSI6MTAsIm1lbWJlcl9pbmRleCI6MCwic2FtcGxlX3RpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAxLjc1WiIsInZhbGlkX3VudGlsIjoiMjAyNi0wMS0wMVQwMDowMDowM1oiLCJwaHlzaWNhbF91bnRpbCI6IjIwMjYtMTEtMTNUMTM6MDA6MDQuNjUrMDE6MDAiLCJwb3NpdGlvbl94eiI6WzAuOSwyXSwiY292YXJpYW5jZSI6WzAuMDQsMCwwLDAuMDldLCJpbWFnZSI6eyJzaGEyNTYiOiJhZjUyMWY0ZDA1ZjJlYzQ2MjliNGNmODYwMDdhYjEyYzkzZmZkYzEwZDk5YmRiMzkyYmYwNDMwOTYxZGE0NTZlIiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH0sIm1vZGVsX2lkIjoic3ludGhldGljLXBvc2UtZml4dHVyZSIsIm1vZGVsX3ZlcnNpb24iOiIxIiwibW9kZWxfc2hhMjU2IjoiNGUyZDMxOGE4MjMxNjY4OTM2YjRkZWQ0MmUzYzAzNmIxNmY4YzM5MDI1NDAxNDgzMjBhMTlkOTAyOGQ3ZjRiMSIsImNhbGlicmF0aW9uX3JldmlzaW9uIjoidmlld2VyLWNhbGlicmF0aW9uLXYxIiwiY2FsaWJyYXRpb25fc2hhMjU2IjoiMmFhOGZjY2JiMDQxZjY2YTM5MGFkZDBlZmUwMzY0NjZmODhhOTNhODA0YWQ1MTUwMDhkZmUxOWM1MTZiZGVhOCIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsImNhcHR1cmVkX3VuaXhfbnMiOjE3OTQ1NzExOTk2NTAwMDAwMDAsInNpbXVsYXRpb25fYW5jaG9yX3VuaXhfbnMiOjE3NjcyMjU2MDAwMDAwMDAwMDB9LHsicHJvb2YiOnsia2V5Ijp7InRlbmFudCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInNpdGUiOiJzdHVkaW8tMDEiLCJlbnRpdHkiOiJzZW5zb3IvcGVvcGxlLW9ibGlxdWUiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMzMzMzMzMzMzMzMzIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1vYmxpcXVlIiwic3RyZWFtIjoicGVvcGxlLW9ibGlxdWUifX0sInZlcnNpb24iOnsiZXBvY2giOjcsInNlcXVlbmNlIjoxMH0sImVudmVsb3BlX3NoYTI1NiI6IjliZGQyN2FkOTJiYmJhZTg0NGI1MGRjM2UyYzhhZTc3YmNkZTQ0NWExZWJkOGI3MWE4MWVhNjVhN2Y4NTFmYTAiLCJyZWNvcmRfc2hhMjU2IjoiNTFkYWI3NGMwMGZkNjEyMjE4OGVmNjJkMTc5M2JkYTYwYWRmNGFkZmE3ZjdhYzMxOThiMTA4NmI3ZGQ0NzA4OSJ9LCJzZW5zb3JfaWQiOiJwZW9wbGUtb2JsaXF1ZSIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLW9ibGlxdWUvMTAiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMCwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDEuNzVaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzWiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC42NSswMTowMCIsInBvc2l0aW9uX3h6IjpbMC45LDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6IjNjZTVlMzdlMTllYjkwMzkwMTE1M2IzZWJhYWQ0MjM0NmRiNjlkODNmNmQ5Y2MwOTVjNzdlY2YxNDIzNGFiYWYiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiJkN2JiYWIzMzMxZDc4ZjEyNzllZjI1YmJmYzcyOGYyZmJmYzZlMzM2OTdmMDBjMjgzMzllYjg5NzAyYTY4YThhIiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTY1MDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH1dfQ==",
+          "result_schema": "wendy.person.track.v1",
+          "retain_until_unix_ms": 1795176000000,
+          "version": 1
+        },
+        "tombstone": false
+      },
+      "reason": "changed-proof-version"
+    },
+    {
+      "name": "unknown-motion-with-velocity",
+      "component": {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/track/anonymous-1",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "people",
+            "stream": "tracks"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 2
+        },
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:01.75Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 1250000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-live-people-v1",
+          "model_id": "camera-ankle-two-observation-tracking",
+          "model_version": "1",
+          "inputs": [
+            {
+              "id": "sha256:233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "233cc22e140a324bd2c47ff8c7cc7c8d8696a621b9820ea89d52f2ddffb4c4c8",
+              "record_sha256": "da014a06d981895db72e55e7ab094d11add2bcaab42c280161cfd06e9f973b21"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "0274bded44342881693bc17290ccd54f57acd3020d74525fade2ec8c3b278185",
+              "record_sha256": "76e1363ae3f48b5ae0cd419b332666803f4c418a756f6ed076e59dce0630b077"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-front",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-front",
+                  "stream": "people-front"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "2057a2668d70152023a3f609d24593697c98a98b292170736e6290ab13e79f0c",
+              "record_sha256": "f23c9620bd05e4f4835edde09d60f22df45d838797198f66ca14906764d0f74f"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/people-oblique",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "people-oblique",
+                  "stream": "people-oblique"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 10
+              },
+              "envelope_sha256": "9bdd27ad92bbbae844b50dc3e2c8ae77bcde445a1ebd8b71a81ea65a7f851fa0",
+              "record_sha256": "51dab74c00fd6122188ef62d1793bda60adf4adfa7f7ac3198b1086b7dd47089"
+            }
+          ],
+          "result_json": "eyJhbGdvcml0aG0iOiJjYW1lcmEtYW5rbGUtdHdvLW9ic2VydmF0aW9uLXRyYWNraW5nIiwiYWxnb3JpdGhtX3ZlcnNpb24iOiIxIiwiYW1iaWd1b3VzIjpmYWxzZSwiY2xvY2tfZG9tYWluIjoic2ltdWxhdGlvbjp2aWV3ZXItbmF0aXZlLXYxIiwiY292YXJpYW5jZSI6WzAuMDQsMCwwLDAuMDldLCJjdXJyZW50IjpbeyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtZnJvbnQiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1mcm9udCIsInN0cmVhbSI6InBlb3BsZS1mcm9udCJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfSwiZW52ZWxvcGVfc2hhMjU2IjoiMjMzY2MyMmUxNDBhMzI0YmQyYzQ3ZmY4YzdjYzdjOGQ4Njk2YTYyMWI5ODIwZWE4OWQ1MmYyZGRmZmI0YzRjOCIsInJlY29yZF9zaGEyNTYiOiJkYTAxNGEwNmQ5ODE4OTVkYjcyZTU1ZTdhYjA5NGQxMWFkZDJiY2FhYjQyYzI4MDE2MWNmZDA2ZTlmOTczYjIxIn0sInNlbnNvcl9pZCI6InBlb3BsZS1mcm9udCIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLWZyb250LzExIiwiY2FwdHVyZV9zZXF1ZW5jZSI6MTEsIm1lbWJlcl9pbmRleCI6MCwic2FtcGxlX3RpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAyWiIsInZhbGlkX3VudGlsIjoiMjAyNi0wMS0wMVQwMDowMDowMy4yNVoiLCJwaHlzaWNhbF91bnRpbCI6IjIwMjYtMTEtMTNUMTM6MDA6MDQuOSswMTowMCIsInBvc2l0aW9uX3h6IjpbMSwyXSwiY292YXJpYW5jZSI6WzAuMDQsMCwwLDAuMDldLCJpbWFnZSI6eyJzaGEyNTYiOiJhZjUyMWY0ZDA1ZjJlYzQ2MjliNGNmODYwMDdhYjEyYzkzZmZkYzEwZDk5YmRiMzkyYmYwNDMwOTYxZGE0NTZlIiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH0sIm1vZGVsX2lkIjoic3ludGhldGljLXBvc2UtZml4dHVyZSIsIm1vZGVsX3ZlcnNpb24iOiIxIiwibW9kZWxfc2hhMjU2IjoiNGUyZDMxOGE4MjMxNjY4OTM2YjRkZWQ0MmUzYzAzNmIxNmY4YzM5MDI1NDAxNDgzMjBhMTlkOTAyOGQ3ZjRiMSIsImNhbGlicmF0aW9uX3JldmlzaW9uIjoidmlld2VyLWNhbGlicmF0aW9uLXYxIiwiY2FsaWJyYXRpb25fc2hhMjU2IjoiMmFhOGZjY2JiMDQxZjY2YTM5MGFkZDBlZmUwMzY0NjZmODhhOTNhODA0YWQ1MTUwMDhkZmUxOWM1MTZiZGVhOCIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsImNhcHR1cmVkX3VuaXhfbnMiOjE3OTQ1NzExOTk5MDAwMDAwMDAsInNpbXVsYXRpb25fYW5jaG9yX3VuaXhfbnMiOjE3NjcyMjU2MDAwMDAwMDAwMDB9LHsicHJvb2YiOnsia2V5Ijp7InRlbmFudCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsInNpdGUiOiJzdHVkaW8tMDEiLCJlbnRpdHkiOiJzZW5zb3IvcGVvcGxlLW9ibGlxdWUiLCJ0eXBlIjoid2VuZHkuc2Vuc29yLmNhcHR1cmUudjEiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMzMzMzMzMzMzMzMzIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6InBlb3BsZS1vYmxpcXVlIiwic3RyZWFtIjoicGVvcGxlLW9ibGlxdWUifX0sInZlcnNpb24iOnsiZXBvY2giOjcsInNlcXVlbmNlIjoxMX0sImVudmVsb3BlX3NoYTI1NiI6IjAyNzRiZGVkNDQzNDI4ODE2OTNiYzE3MjkwY2NkNTRmNTdhY2QzMDIwZDc0NTI1ZmFkZTJlYzhjM2IyNzgxODUiLCJyZWNvcmRfc2hhMjU2IjoiNzZlMTM2M2FlM2Y0OGI1YWUwY2Q0MTliMzMyNjY2ODAzZjRjNDE4YTc1NmY2ZWQwNzZlNTlkY2UwNjMwYjA3NyJ9LCJzZW5zb3JfaWQiOiJwZW9wbGUtb2JsaXF1ZSIsInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvcGVvcGxlLW9ibGlxdWUvMTEiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMSwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDJaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzLjI1WiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC45KzAxOjAwIiwicG9zaXRpb25feHoiOlsxLDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6IjNjZTVlMzdlMTllYjkwMzkwMTE1M2IzZWJhYWQ0MjM0NmRiNjlkODNmNmQ5Y2MwOTVjNzdlY2YxNDIzNGFiYWYiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiJkN2JiYWIzMzMxZDc4ZjEyNzllZjI1YmJmYzcyOGYyZmJmYzZlMzM2OTdmMDBjMjgzMzllYjg5NzAyYTY4YThhIiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTkwMDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH1dLCJmcmFtZSI6eyJpZCI6Im9mZmljZSIsInJldmlzaW9uIjoidmlld2VyLWZpeHR1cmUtdjEifSwibW90aW9uX2tub3duIjpmYWxzZSwib2JzZXJ2ZWRfYXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAyWiIsInBvc2l0aW9uX3h6IjpbMSwyXSwicHJldmlvdXMiOlt7InByb29mIjp7ImtleSI6eyJ0ZW5hbnQiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJzaXRlIjoic3R1ZGlvLTAxIiwiZW50aXR5Ijoic2Vuc29yL3Blb3BsZS1mcm9udCIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8yMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLWZyb250Iiwic3RyZWFtIjoicGVvcGxlLWZyb250In19LCJ2ZXJzaW9uIjp7ImVwb2NoIjo3LCJzZXF1ZW5jZSI6MTB9LCJlbnZlbG9wZV9zaGEyNTYiOiIyMDU3YTI2NjhkNzAxNTIwMjNhM2Y2MDlkMjQ1OTM2OTdjOThhOThiMjkyMTcwNzM2ZTYyOTBhYjEzZTc5ZjBjIiwicmVjb3JkX3NoYTI1NiI6ImYyM2M5NjIwYmQwNWU0ZjQ4MzVlZGRlMDlkNjBmMjJkZjQ1ZDgzODc5NzE5OGY2NmNhMTQ5MDY3NjRkMGY3NGYifSwic2Vuc29yX2lkIjoicGVvcGxlLWZyb250Iiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtZnJvbnQvMTAiLCJjYXB0dXJlX3NlcXVlbmNlIjoxMCwibWVtYmVyX2luZGV4IjowLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDEuNzVaIiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjAzWiIsInBoeXNpY2FsX3VudGlsIjoiMjAyNi0xMS0xM1QxMzowMDowNC42NSswMTowMCIsInBvc2l0aW9uX3h6IjpbMC45LDJdLCJjb3ZhcmlhbmNlIjpbMC4wNCwwLDAsMC4wOV0sImltYWdlIjp7InNoYTI1NiI6ImFmNTIxZjRkMDVmMmVjNDYyOWI0Y2Y4NjAwN2FiMTJjOTNmZmRjMTBkOTliZGIzOTJiZjA0MzA5NjFkYTQ1NmUiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwibW9kZWxfaWQiOiJzeW50aGV0aWMtcG9zZS1maXh0dXJlIiwibW9kZWxfdmVyc2lvbiI6IjEiLCJtb2RlbF9zaGEyNTYiOiI0ZTJkMzE4YTgyMzE2Njg5MzZiNGRlZDQyZTNjMDM2YjE2ZjhjMzkwMjU0MDE0ODMyMGExOWQ5MDI4ZDdmNGIxIiwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYWxpYnJhdGlvbl9zaGEyNTYiOiIyYWE4ZmNjYmIwNDFmNjZhMzkwYWRkMGVmZTAzNjQ2NmY4OGE5M2E4MDRhZDUxNTAwOGRmZTE5YzUxNmJkZWE4Iiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290IiwiY2FwdHVyZWRfdW5peF9ucyI6MTc5NDU3MTE5OTY1MDAwMDAwMCwic2ltdWxhdGlvbl9hbmNob3JfdW5peF9ucyI6MTc2NzIyNTYwMDAwMDAwMDAwMH0seyJwcm9vZiI6eyJrZXkiOnsidGVuYW50IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwic2l0ZSI6InN0dWRpby0wMSIsImVudGl0eSI6InNlbnNvci9wZW9wbGUtb2JsaXF1ZSIsInR5cGUiOiJ3ZW5keS5zZW5zb3IuY2FwdHVyZS52MSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8zMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoicGVvcGxlLW9ibGlxdWUiLCJzdHJlYW0iOiJwZW9wbGUtb2JsaXF1ZSJ9fSwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjEwfSwiZW52ZWxvcGVfc2hhMjU2IjoiOWJkZDI3YWQ5MmJiYmFlODQ0YjUwZGMzZTJjOGFlNzdiY2RlNDQ1YTFlYmQ4YjcxYTgxZWE2NWE3Zjg1MWZhMCIsInJlY29yZF9zaGEyNTYiOiI1MWRhYjc0YzAwZmQ2MTIyMTg4ZWY2MmQxNzkzYmRhNjBhZGY0YWRmYTdmN2FjMzE5OGIxMDg2YjdkZDQ3MDg5In0sInNlbnNvcl9pZCI6InBlb3BsZS1vYmxpcXVlIiwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9wZW9wbGUtb2JsaXF1ZS8xMCIsImNhcHR1cmVfc2VxdWVuY2UiOjEwLCJtZW1iZXJfaW5kZXgiOjAsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMS43NVoiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDNaIiwicGh5c2ljYWxfdW50aWwiOiIyMDI2LTExLTEzVDEzOjAwOjA0LjY1KzAxOjAwIiwicG9zaXRpb25feHoiOlswLjksMl0sImNvdmFyaWFuY2UiOlswLjA0LDAsMCwwLjA5XSwiaW1hZ2UiOnsic2hhMjU2IjoiM2NlNWUzN2UxOWViOTAzOTAxMTUzYjNlYmFhZDQyMzQ2ZGI2OWQ4M2Y2ZDljYzA5NWM3N2VjZjE0MjM0YWJhZiIsImNvbnRlbnRfdHlwZSI6ImltYWdlL3BuZyIsInNpemUiOjEwMjR9LCJtb2RlbF9pZCI6InN5bnRoZXRpYy1wb3NlLWZpeHR1cmUiLCJtb2RlbF92ZXJzaW9uIjoiMSIsIm1vZGVsX3NoYTI1NiI6IjRlMmQzMThhODIzMTY2ODkzNmI0ZGVkNDJlM2MwMzZiMTZmOGMzOTAyNTQwMTQ4MzIwYTE5ZDkwMjhkN2Y0YjEiLCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImNhbGlicmF0aW9uX3NoYTI1NiI6ImQ3YmJhYjMzMzFkNzhmMTI3OWVmMjViYmZjNzI4ZjJmYmZjNmUzMzY5N2YwMGMyODMzOWViODk3MDJhNjhhOGEiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJjYXB0dXJlZF91bml4X25zIjoxNzk0NTcxMTk5NjUwMDAwMDAwLCJzaW11bGF0aW9uX2FuY2hvcl91bml4X25zIjoxNzY3MjI1NjAwMDAwMDAwMDAwfV0sInByZXZpb3VzX29ic2VydmVkX2F0IjoiMjAyNi0wMS0wMVQwMDowMDowMS43NVoiLCJyZXZpc2lvbiI6MiwicnVuX2lkIjoidmlld2VyLW5hdGl2ZS12MSIsInNjaGVtYSI6IndlbmR5LnBlcnNvbi50cmFjay52MSIsInRyYWNrX2lkIjoiYW5vbnltb3VzLTEiLCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDNaIiwidmVsb2NpdHlfY292YXJpYW5jZSI6WzEuMjgsMCwwLDIuODhdLCJ2ZWxvY2l0eV94eiI6WzAuNCwwXX0=",
+          "result_schema": "wendy.person.track.v1",
+          "retain_until_unix_ms": 1795176000000,
+          "version": 1
+        },
+        "tombstone": false
+      },
+      "reason": "unknown-motion-with-velocity"
+    },
+    {
+      "name": "missing-hazard-physical-cap",
+      "component": {
+        "key": {
+          "tenant": "11111111-1111-4111-8111-111111111111",
+          "site": "studio-01",
+          "entity": "viewer-native-v1/possible-gas-hazard",
+          "type": "wendy.inference.result.v1",
+          "source": {
+            "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+            "app": "com.wendy.world.viewer-fixture",
+            "service": "fusion",
+            "stream": "hazard"
+          }
+        },
+        "version": {
+          "epoch": 7,
+          "sequence": 11
+        },
+        "frame": {
+          "id": "office",
+          "revision": "viewer-fixture-v1"
+        },
+        "timing": {
+          "sample_time": "2026-01-01T00:00:01.75Z",
+          "clock_domain": "simulation:viewer-native-v1",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 3000000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-fusion-v2",
+          "model_id": "synthetic-gas-warning-rule",
+          "model_version": "2",
+          "inputs": [
+            {
+              "id": "sha256:b9e24e4318bf02a23c8366ef1ea3db821f23ef54c51ed2bc7a765b96ee49b652",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:74369b6c83c4bbdf80259895e4e67149e3de077ffe939e7792ed5cd06757c83b",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:ada4c8880db6ceb158ed87f069e18f3ccc72e4fbd0dbb69be2bc2c552ba9b942",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:6d4e06aec8afa6dc974466c3decda803282fcb8fb4a1e76f6b8dd256f0de148f",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            },
+            {
+              "id": "sha256:6affce01cc5f910b43f65f02fe6e1218c7b32db26c76193797556d862896fa94",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "viewer-native-v1",
+                "scenario_version": "synthetic-viewer-contract-v1",
+                "seed": 7,
+                "clock_domain": "simulation:viewer-native-v1"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "inputs": [
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/audio-1",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "audio-1",
+                  "stream": "audio-1"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "b9e24e4318bf02a23c8366ef1ea3db821f23ef54c51ed2bc7a765b96ee49b652",
+              "record_sha256": "1213b2ca4723c06fbcc3883217f14a6cce5ff1fdb711e6fbe7ad0f383a1313eb"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/camera-a",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "camera-a",
+                  "stream": "camera-a"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "74369b6c83c4bbdf80259895e4e67149e3de077ffe939e7792ed5cd06757c83b",
+              "record_sha256": "38459f2fbc1252ffc47eea91751976eea68ed53dc0bc0d137830ba40f4bd4e58"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/camera-b",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/33333333-3333-4333-8333-333333333333",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "camera-b",
+                  "stream": "camera-b"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "ada4c8880db6ceb158ed87f069e18f3ccc72e4fbd0dbb69be2bc2c552ba9b942",
+              "record_sha256": "b1e1bd10800d392b1009dd55fa81e653eb4f327fce20b4e6f710ed2e2fc831d2"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/gas-1",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "gas-1",
+                  "stream": "gas-1"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "6d4e06aec8afa6dc974466c3decda803282fcb8fb4a1e76f6b8dd256f0de148f",
+              "record_sha256": "bf492b60ec7c8059c3d50bdfb0245a37506be541d9c61ba19120bc7a31eb92cc"
+            },
+            {
+              "key": {
+                "tenant": "11111111-1111-4111-8111-111111111111",
+                "site": "studio-01",
+                "entity": "sensor/lidar-atlas",
+                "type": "wendy.sensor.capture.v1",
+                "source": {
+                  "device": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/22222222-2222-4222-8222-222222222222",
+                  "app": "com.wendy.world.viewer-fixture",
+                  "service": "lidar-atlas",
+                  "stream": "lidar-atlas"
+                }
+              },
+              "version": {
+                "epoch": 7,
+                "sequence": 11
+              },
+              "envelope_sha256": "6affce01cc5f910b43f65f02fe6e1218c7b32db26c76193797556d862896fa94",
+              "record_sha256": "b0e6c28002bfb267d3ad22602f1ad1325bd586d2a00e0693f8049558fcffbac6"
+            }
+          ],
+          "result_json": "eyJhdWRpbyI6eyJybXMiOjAuMiwidG9uZV9mcmFjdGlvbiI6MC45OX0sImNhbWVyYXMiOlt7InNlbnNvcl9pZCI6ImNhbWVyYS1hIiwicmVkX2ZyYWN0aW9uIjowLjAyLCJvYnNlcnZhdGlvbiI6eyJwaXhlbHMiOjEwMCwiY2VudHJvaWRfcHgiOlsxNjAsMTIwXSwiYm91bmRzX3B4IjpbMTU1LDExNSwxNjUsMTI1XSwicmF5X29yaWdpbl9tIjpbLTEsMSwwXSwicmF5X2RpcmVjdGlvbiI6WzAsMCwxXSwicmVwcm9qZWN0aW9uX2Vycm9yX3B4IjowLjV9fSx7InNlbnNvcl9pZCI6ImNhbWVyYS1iIiwicmVkX2ZyYWN0aW9uIjowLjAyLCJvYnNlcnZhdGlvbiI6eyJwaXhlbHMiOjEwMCwiY2VudHJvaWRfcHgiOlsxNjAsMTIwXSwiYm91bmRzX3B4IjpbMTU1LDExNSwxNjUsMTI1XSwicmF5X29yaWdpbl9tIjpbMSwxLDBdLCJyYXlfZGlyZWN0aW9uIjpbMCwwLDFdLCJyZXByb2plY3Rpb25fZXJyb3JfcHgiOjAuNX19XSwiY29uZmlkZW5jZSI6MC44LCJjb25maWRlbmNlX21lYW5pbmciOiJmaXhlZCBzeW50aGV0aWMgcnVsZSBzY29yZSwgbm90IGEgY2FsaWJyYXRlZCBwcm9iYWJpbGl0eSIsImV2aWRlbmNlIjpbeyJzaGEyNTYiOiI2NDY3YTlkY2Y5YjBhNTljZTA0NmI4OGU3ZTg3MGViNjgzOTliNWRmM2ExNDgwOGYyYzNlY2QyMzg1ZmM2NjExIiwiY29udGVudF90eXBlIjoiYXVkaW8vd2F2Iiwic2l6ZSI6NDA0NH0seyJzaGEyNTYiOiJiMGExNTg0NzIwMjVmZmRhNzhkY2E4ZmU1ZGVjYzhjMmQ3YTUwMmVhYmExYmJjOWY5NTBlZmJhMWExZDgzOTI5IiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH0seyJzaGEyNTYiOiI3NzQwM2JlNDMyMDdiNWFlODA4MGVhOTBmMWVkY2ZiMjE2MzBiZGI5YTAwZjY0MDY1ZTc4YWY3NGE2MGYxYTc3IiwiY29udGVudF90eXBlIjoiaW1hZ2UvcG5nIiwic2l6ZSI6MTAyNH1dLCJnYXNfc3BlY2llcyI6InN5bnRoZXRpYy10ZXN0LWdhcyIsImdhc191bmNlcnRhaW50eV9wcG0iOjEuNSwiZ2FzX3ZhbHVlX3BwbSI6ODAsImlucHV0X2RpZ2VzdCI6ImRmYThmNzI3NTVhNWViNGZhNjBlZWNhNjcyZDRlMGUwOWI0Y2JkZmY0OThlNzExZTZjMzFlYWVhYzkwNjNlOGQiLCJpbnB1dHMiOlt7ImNhcHR1cmUiOnsicHJvb2Zfc2hhMjU2IjoiYjllMjRlNDMxOGJmMDJhMjNjODM2NmVmMWVhM2RiODIxZjIzZWY1NGM1MWVkMmJjN2E3NjViOTZlZTQ5YjY1MiIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsInNpbXVsYXRpb25fYW5jaG9yIjoiMjAyNi0wMS0wMVQwMDowMDowMFoifSwiY2FwdHVyZV9zdGFydCI6IjIwMjYtMDEtMDFUMDA6MDA6MDEuNzVaIiwiZXZpZGVuY2UiOnsic2hhMjU2IjoiNjQ2N2E5ZGNmOWIwYTU5Y2UwNDZiODhlN2U4NzBlYjY4Mzk5YjVkZjNhMTQ4MDhmMmMzZWNkMjM4NWZjNjYxMSIsImNvbnRlbnRfdHlwZSI6ImF1ZGlvL3dhdiIsInNpemUiOjQwNDR9LCJraW5kIjoiYXVkaW8iLCJzYW1wbGUiOnsic2NoZW1hX3ZlcnNpb24iOiJ3ZW5keS5zZW5zb3Iuc2FtcGxlLnYxIiwiaWQiOiJ2aWV3ZXItbmF0aXZlLXYxL2F1ZGlvLTEvMTEiLCJzaXRlX2lkIjoic3R1ZGlvLTAxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sInNlbnNvcl9pZCI6ImF1ZGlvLTEiLCJraW5kIjoiYXVkaW8iLCJzZXF1ZW5jZSI6MTEsInNhbXBsZV9ucyI6MjAwMDAwMDAwMCwicnVuX2lkIjoidmlld2VyLW5hdGl2ZS12MSIsInNjZW5hcmlvX3ZlcnNpb24iOiJzeW50aGV0aWMtdmlld2VyLWNvbnRyYWN0LXYxIiwic2VlZCI6NywicGFja2FnZV9zaGEyNTYiOiJjYjRhMWFkMGU5MjEwZWI0YjQ4OTJkN2Y5YTI1NTY2Mjg4OTg3YmMwYjFkOWQ2NWVhNjAxZjZkNWUwMWFhYTBiIiwic2Vuc29yX21vZGVsIjoic3ludGhldGljLWF1ZGlvLWZpeHR1cmUtdjEiLCJwb3NpdGlvbl9tIjpbMSwwLjI0LDJdLCJ1bmNlcnRhaW50eV9tIjowLjA1LCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImF1ZGlvIjp7InNhbXBsZV9yYXRlX2h6Ijo4MDAwLCJjaGFubmVscyI6MSwiZHVyYXRpb25fbnMiOjI1MDAwMDAwMH0sImV2aWRlbmNlIjp7InNoYTI1NiI6IjY0NjdhOWRjZjliMGE1OWNlMDQ2Yjg4ZTdlODcwZWI2ODM5OWI1ZGYzYTE0ODA4ZjJjM2VjZDIzODVmYzY2MTEiLCJjb250ZW50X3R5cGUiOiJhdWRpby93YXYiLCJzaXplIjo0MDQ0fX0sInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvYXVkaW8tMS8xMSIsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJzZW5zb3JfaWQiOiJhdWRpby0xIiwic291cmNlIjp7ImRldmljZSI6InNwaWZmZTovL3dlbmR5LnNoL3RlbmFudC8xMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEvZGV2aWNlLzMzMzMzMzMzLTMzMzMtNDMzMy04MzMzLTMzMzMzMzMzMzMzMyIsImFwcCI6ImNvbS53ZW5keS53b3JsZC52aWV3ZXItZml4dHVyZSIsInNlcnZpY2UiOiJhdWRpby0xIiwic3RyZWFtIjoiYXVkaW8tMSJ9LCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDQuNzVaIiwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfX0seyJjYXB0dXJlIjp7InByb29mX3NoYTI1NiI6Ijc0MzY5YjZjODNjNGJiZGY4MDI1OTg5NWU0ZTY3MTQ5ZTNkZTA3N2ZmZTkzOWU3NzkyZWQ1Y2QwNjc1N2M4M2IiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJzaW11bGF0aW9uX2FuY2hvciI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIn0sImNhcHR1cmVfc3RhcnQiOiIyMDI2LTAxLTAxVDAwOjAwOjAyWiIsImV2aWRlbmNlIjp7InNoYTI1NiI6ImIwYTE1ODQ3MjAyNWZmZGE3OGRjYThmZTVkZWNjOGMyZDdhNTAyZWFiYTFiYmM5Zjk1MGVmYmExYTFkODM5MjkiLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwia2luZCI6ImNhbWVyYSIsInNhbXBsZSI6eyJzY2hlbWFfdmVyc2lvbiI6IndlbmR5LnNlbnNvci5zYW1wbGUudjEiLCJpZCI6InZpZXdlci1uYXRpdmUtdjEvY2FtZXJhLWEvMTEiLCJzaXRlX2lkIjoic3R1ZGlvLTAxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sInNlbnNvcl9pZCI6ImNhbWVyYS1hIiwia2luZCI6ImNhbWVyYSIsInNlcXVlbmNlIjoxMSwic2FtcGxlX25zIjoyMDAwMDAwMDAwLCJydW5faWQiOiJ2aWV3ZXItbmF0aXZlLXYxIiwic2NlbmFyaW9fdmVyc2lvbiI6InN5bnRoZXRpYy12aWV3ZXItY29udHJhY3QtdjEiLCJzZWVkIjo3LCJwYWNrYWdlX3NoYTI1NiI6ImNiNGExYWQwZTkyMTBlYjRiNDg5MmQ3ZjlhMjU1NjYyODg5ODdiYzBiMWQ5ZDY1ZWE2MDFmNmQ1ZTAxYWFhMGIiLCJzZW5zb3JfbW9kZWwiOiJzeW50aGV0aWMtY2FtZXJhLWZpeHR1cmUtdjEiLCJwb3NpdGlvbl9tIjpbLTEsMSwwXSwidW5jZXJ0YWludHlfbSI6MC4wNSwiY2FsaWJyYXRpb25fcmV2aXNpb24iOiJ2aWV3ZXItY2FsaWJyYXRpb24tdjEiLCJjYW1lcmEiOnsid2lkdGgiOjMyMCwiaGVpZ2h0IjoyNDAsImZ4IjoyNDAsImZ5IjoyNDAsImN4IjoxNjAsImN5IjoxMjAsImNhbWVyYV90b19zaXRlIjpbMSwwLDAsLTEsMCwxLDAsMSwwLDAsMSwwLDAsMCwwLDFdLCJjYWxpYnJhdGlvbl92YWxpZF9mb3JfbnMiOjYwMDAwMDAwMDAwfSwiZXZpZGVuY2UiOnsic2hhMjU2IjoiYjBhMTU4NDcyMDI1ZmZkYTc4ZGNhOGZlNWRlY2M4YzJkN2E1MDJlYWJhMWJiYzlmOTUwZWZiYTFhMWQ4MzkyOSIsImNvbnRlbnRfdHlwZSI6ImltYWdlL3BuZyIsInNpemUiOjEwMjR9fSwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9jYW1lcmEtYS8xMSIsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJzZW5zb3JfaWQiOiJjYW1lcmEtYSIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8yMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoiY2FtZXJhLWEiLCJzdHJlYW0iOiJjYW1lcmEtYSJ9LCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDVaIiwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfX0seyJjYXB0dXJlIjp7InByb29mX3NoYTI1NiI6ImFkYTRjODg4MGRiNmNlYjE1OGVkODdmMDY5ZTE4ZjNjY2M3MmU0ZmJkMGRiYjY5YmUyYmMyYzU1MmJhOWI5NDIiLCJzY2VuZV9ib290X2lkIjoic3ludGhldGljLXNjZW5lLWJvb3QiLCJzaW11bGF0aW9uX2FuY2hvciI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIn0sImNhcHR1cmVfc3RhcnQiOiIyMDI2LTAxLTAxVDAwOjAwOjAyWiIsImV2aWRlbmNlIjp7InNoYTI1NiI6Ijc3NDAzYmU0MzIwN2I1YWU4MDgwZWE5MGYxZWRjZmIyMTYzMGJkYjlhMDBmNjQwNjVlNzhhZjc0YTYwZjFhNzciLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fSwia2luZCI6ImNhbWVyYSIsInNhbXBsZSI6eyJzY2hlbWFfdmVyc2lvbiI6IndlbmR5LnNlbnNvci5zYW1wbGUudjEiLCJpZCI6InZpZXdlci1uYXRpdmUtdjEvY2FtZXJhLWIvMTEiLCJzaXRlX2lkIjoic3R1ZGlvLTAxIiwiZnJhbWUiOnsiaWQiOiJvZmZpY2UiLCJyZXZpc2lvbiI6InZpZXdlci1maXh0dXJlLXYxIn0sInNlbnNvcl9pZCI6ImNhbWVyYS1iIiwia2luZCI6ImNhbWVyYSIsInNlcXVlbmNlIjoxMSwic2FtcGxlX25zIjoyMDAwMDAwMDAwLCJydW5faWQiOiJ2aWV3ZXItbmF0aXZlLXYxIiwic2NlbmFyaW9fdmVyc2lvbiI6InN5bnRoZXRpYy12aWV3ZXItY29udHJhY3QtdjEiLCJzZWVkIjo3LCJwYWNrYWdlX3NoYTI1NiI6ImNiNGExYWQwZTkyMTBlYjRiNDg5MmQ3ZjlhMjU1NjYyODg5ODdiYzBiMWQ5ZDY1ZWE2MDFmNmQ1ZTAxYWFhMGIiLCJzZW5zb3JfbW9kZWwiOiJzeW50aGV0aWMtY2FtZXJhLWZpeHR1cmUtdjEiLCJwb3NpdGlvbl9tIjpbMSwxLDBdLCJ1bmNlcnRhaW50eV9tIjowLjA1LCJjYWxpYnJhdGlvbl9yZXZpc2lvbiI6InZpZXdlci1jYWxpYnJhdGlvbi12MSIsImNhbWVyYSI6eyJ3aWR0aCI6MzIwLCJoZWlnaHQiOjI0MCwiZngiOjI0MCwiZnkiOjI0MCwiY3giOjE2MCwiY3kiOjEyMCwiY2FtZXJhX3RvX3NpdGUiOlsxLDAsMCwxLDAsMSwwLDEsMCwwLDEsMCwwLDAsMCwxXSwiY2FsaWJyYXRpb25fdmFsaWRfZm9yX25zIjo2MDAwMDAwMDAwMH0sImV2aWRlbmNlIjp7InNoYTI1NiI6Ijc3NDAzYmU0MzIwN2I1YWU4MDgwZWE5MGYxZWRjZmIyMTYzMGJkYjlhMDBmNjQwNjVlNzhhZjc0YTYwZjFhNzciLCJjb250ZW50X3R5cGUiOiJpbWFnZS9wbmciLCJzaXplIjoxMDI0fX0sInNhbXBsZV9pZCI6InZpZXdlci1uYXRpdmUtdjEvY2FtZXJhLWIvMTEiLCJzYW1wbGVfdGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDJaIiwic2Vuc29yX2lkIjoiY2FtZXJhLWIiLCJzb3VyY2UiOnsiZGV2aWNlIjoic3BpZmZlOi8vd2VuZHkuc2gvdGVuYW50LzExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMS9kZXZpY2UvMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMzMzMzMzMzMzMzMzIiwiYXBwIjoiY29tLndlbmR5LndvcmxkLnZpZXdlci1maXh0dXJlIiwic2VydmljZSI6ImNhbWVyYS1iIiwic3RyZWFtIjoiY2FtZXJhLWIifSwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjA1WiIsInZlcnNpb24iOnsiZXBvY2giOjcsInNlcXVlbmNlIjoxMX19LHsiY2FwdHVyZSI6eyJwcm9vZl9zaGEyNTYiOiI2ZDRlMDZhZWM4YWZhNmRjOTc0NDY2YzNkZWNkYTgwMzI4MmZjYjhmYjRhMWU3NmY2YjhkZDI1NmYwZGUxNDhmIiwic2NlbmVfYm9vdF9pZCI6InN5bnRoZXRpYy1zY2VuZS1ib290Iiwic2ltdWxhdGlvbl9hbmNob3IiOiIyMDI2LTAxLTAxVDAwOjAwOjAwWiJ9LCJjYXB0dXJlX3N0YXJ0IjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJraW5kIjoiZ2FzIiwic2FtcGxlIjp7InNjaGVtYV92ZXJzaW9uIjoid2VuZHkuc2Vuc29yLnNhbXBsZS52MSIsImlkIjoidmlld2VyLW5hdGl2ZS12MS9nYXMtMS8xMSIsInNpdGVfaWQiOiJzdHVkaW8tMDEiLCJmcmFtZSI6eyJpZCI6Im9mZmljZSIsInJldmlzaW9uIjoidmlld2VyLWZpeHR1cmUtdjEifSwic2Vuc29yX2lkIjoiZ2FzLTEiLCJraW5kIjoiZ2FzIiwic2VxdWVuY2UiOjExLCJzYW1wbGVfbnMiOjIwMDAwMDAwMDAsInJ1bl9pZCI6InZpZXdlci1uYXRpdmUtdjEiLCJzY2VuYXJpb192ZXJzaW9uIjoic3ludGhldGljLXZpZXdlci1jb250cmFjdC12MSIsInNlZWQiOjcsInBhY2thZ2Vfc2hhMjU2IjoiY2I0YTFhZDBlOTIxMGViNGI0ODkyZDdmOWEyNTU2NjI4ODk4N2JjMGIxZDlkNjVlYTYwMWY2ZDVlMDFhYWEwYiIsInNlbnNvcl9tb2RlbCI6InN5bnRoZXRpYy1nYXMtZml4dHVyZS12MSIsInBvc2l0aW9uX20iOlsxLDAuMjQsMl0sInVuY2VydGFpbnR5X20iOjAuMDUsImNhbGlicmF0aW9uX3JldmlzaW9uIjoidmlld2VyLWNhbGlicmF0aW9uLXYxIiwiZ2FzIjp7InZhbHVlX3BwbSI6ODAsInVuY2VydGFpbnR5X3BwbSI6MS41LCJzcGVjaWVzIjoic3ludGhldGljLXRlc3QtZ2FzIn19LCJzYW1wbGVfaWQiOiJ2aWV3ZXItbmF0aXZlLXYxL2dhcy0xLzExIiwic2FtcGxlX3RpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAyWiIsInNlbnNvcl9pZCI6Imdhcy0xIiwic291cmNlIjp7ImRldmljZSI6InNwaWZmZTovL3dlbmR5LnNoL3RlbmFudC8xMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEvZGV2aWNlLzIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMiIsImFwcCI6ImNvbS53ZW5keS53b3JsZC52aWV3ZXItZml4dHVyZSIsInNlcnZpY2UiOiJnYXMtMSIsInN0cmVhbSI6Imdhcy0xIn0sInZhbGlkX3VudGlsIjoiMjAyNi0wMS0wMVQwMDowMDowNVoiLCJ2ZXJzaW9uIjp7ImVwb2NoIjo3LCJzZXF1ZW5jZSI6MTF9fSx7ImNhcHR1cmUiOnsicHJvb2Zfc2hhMjU2IjoiNmFmZmNlMDFjYzVmOTEwYjQzZjY1ZjAyZmU2ZTEyMThjN2IzMmRiMjZjNzYxOTM3OTc1NTZkODYyODk2ZmE5NCIsInNjZW5lX2Jvb3RfaWQiOiJzeW50aGV0aWMtc2NlbmUtYm9vdCIsInNpbXVsYXRpb25fYW5jaG9yIjoiMjAyNi0wMS0wMVQwMDowMDowMFoifSwiY2FwdHVyZV9zdGFydCI6IjIwMjYtMDEtMDFUMDA6MDA6MDJaIiwia2luZCI6ImxpZGFyIiwibGlkYXJfc3VtbWFyeSI6eyJwb2ludF9jb3VudCI6MiwibWF4X3JhbmdlX20iOjYsIm5vcm1hbGl6ZWRfc2FtcGxlX3NoYTI1NiI6IjRkNjZjY2FkM2Y3MWYwMTYyMWNlZDY0MDBlODI4MGNlZmMwNGY1MTdjZTRiYThlM2MwZjEzYmM4YWJkNDg2NzQifSwic2FtcGxlX2lkIjoidmlld2VyLW5hdGl2ZS12MS9saWRhci1hdGxhcy8xMSIsInNhbXBsZV90aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMloiLCJzZW5zb3JfaWQiOiJsaWRhci1hdGxhcyIsInNvdXJjZSI6eyJkZXZpY2UiOiJzcGlmZmU6Ly93ZW5keS5zaC90ZW5hbnQvMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExL2RldmljZS8yMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJhcHAiOiJjb20ud2VuZHkud29ybGQudmlld2VyLWZpeHR1cmUiLCJzZXJ2aWNlIjoibGlkYXItYXRsYXMiLCJzdHJlYW0iOiJsaWRhci1hdGxhcyJ9LCJ2YWxpZF91bnRpbCI6IjIwMjYtMDEtMDFUMDA6MDA6MDVaIiwidmVyc2lvbiI6eyJlcG9jaCI6Nywic2VxdWVuY2UiOjExfX1dLCJsYWJlbCI6InBvc3NpYmxlLWdhcy1oYXphcmQiLCJsb2NhdGlvbl9iYXNpcyI6InR3byBjYWxpYnJhdGVkIGNhbWVyYSBvYnNlcnZhdGlvbnMgYXNzb2NpYXRlZCB3aXRoIExpREFSIHN1cmZhY2UgcmV0dXJucyIsInBvc2l0aW9uX20iOlsxLDAuNywyXSwic3BhdGlhbCI6eyJhc3NvY2lhdGVkIjp0cnVlLCJyZWFzb24iOiJ0d28gY2FtZXJhIHJheXMgYW5kIG9ic2VydmVkIExpREFSIHN1cmZhY2VzIGFncmVlIiwicG9zaXRpb25fbSI6WzEsMC43LDJdLCJ0cmlhbmd1bGF0ZWRfbSI6WzEsMC43LDJdLCJ1bmNlcnRhaW50eV9tIjowLjIsInJheV9zZXBhcmF0aW9uX20iOjAuMDEsInJheV9hbmdsZV9kZWciOjI1LCJyZXByb2plY3Rpb25fZXJyb3JfcHgiOjAuNSwiY2FtZXJhcyI6W3sic2Vuc29yX2lkIjoiY2FtZXJhLWEiLCJyZWRfZnJhY3Rpb24iOjAuMDIsIm9ic2VydmF0aW9uIjp7InBpeGVscyI6MTAwLCJjZW50cm9pZF9weCI6WzE2MCwxMjBdLCJib3VuZHNfcHgiOlsxNTUsMTE1LDE2NSwxMjVdLCJyYXlfb3JpZ2luX20iOlstMSwxLDBdLCJyYXlfZGlyZWN0aW9uIjpbMCwwLDFdLCJyZXByb2plY3Rpb25fZXJyb3JfcHgiOjAuNX19LHsic2Vuc29yX2lkIjoiY2FtZXJhLWIiLCJyZWRfZnJhY3Rpb24iOjAuMDIsIm9ic2VydmF0aW9uIjp7InBpeGVscyI6MTAwLCJjZW50cm9pZF9weCI6WzE2MCwxMjBdLCJib3VuZHNfcHgiOlsxNTUsMTE1LDE2NSwxMjVdLCJyYXlfb3JpZ2luX20iOlsxLDEsMF0sInJheV9kaXJlY3Rpb24iOlswLDAsMV0sInJlcHJvamVjdGlvbl9lcnJvcl9weCI6MC41fX1dLCJsaWRhcl9wb2ludHNfY29uc2lkZXJlZCI6MiwibGlkYXJfc3VwcG9ydF9jb3VudCI6MiwibGlkYXJfc3VwcG9ydF9wb2ludHMiOltbMSwwLjcsMl0sWzEuMDIsMC43LDJdXX0sInVuY2VydGFpbnR5X20iOjAuMiwidmFsaWRfdW50aWwiOiIyMDI2LTAxLTAxVDAwOjAwOjA0Ljc1WiJ9",
+          "result_schema": "wendy.hazard.v1",
+          "retain_until_unix_ms": 1795176000000,
+          "version": 1
+        },
+        "tombstone": false
+      },
+      "reason": "missing-hazard-physical-cap"
+    }
+  ]
+}

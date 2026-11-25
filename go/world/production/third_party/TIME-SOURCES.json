@@ -1,0 +1,134 @@
+{
+  "repository": "github.com/wendylabsinc/wendy",
+  "revision": "f29c41dbb86e8d05a8562b52c86a2f5120ace076",
+  "original_sources": [
+    {
+      "path": "go/internal/shared/roughtime/client.go",
+      "git_blob": "f09d28af9c4772fd0fc0a869d0f518b70ffbb512",
+      "sha256": "7160e331ede5afbfa5ec0e2f58d4f2a0c3696e9640733b52d4be15690df3c342"
+    },
+    {
+      "path": "go/internal/shared/roughtime/message.go",
+      "git_blob": "dea36785c9ddb37db567f04b56fff48328c7d4ee",
+      "sha256": "36639e17bf2f256715c22e1dfe78fb55739303efeca70797eb60e2b58df672d5"
+    },
+    {
+      "path": "go/internal/shared/roughtime/servers.go",
+      "git_blob": "8eb01e781ffdd2b6a958d328815bc25155ec0581",
+      "sha256": "1e4c57c60d06aa567d9c728ca24bf51b8cdb258bcc38b8b02376366c4be88ba9"
+    },
+    {
+      "path": "go/internal/shared/roughtime/client_test.go",
+      "git_blob": "cd952d83cf3890f8ba82a32b571f17af39ac31d3",
+      "sha256": "2c16189d6fad0f6a0464bc9ac761b8261e6ce2503de62b117c9791fa38f54116"
+    },
+    {
+      "path": "go/internal/shared/roughtime/merkle_test.go",
+      "git_blob": "24a7524cdd8f5f3ce1f6c2c091a12d29f413fdc6",
+      "sha256": "1a7daf7844475aa96010914e07db35748db767252caf9e06209603523b5fde58"
+    },
+    {
+      "path": "go/internal/agent/timesync/consensus.go",
+      "git_blob": "c3e48954660ed007cf92d266eaa116cb1be2a78e",
+      "sha256": "ee9486b1f9d606220072df3a04206cd418d5a806ef32976b89b270df921fd44f"
+    },
+    {
+      "path": "go/internal/agent/timesync/consensus_test.go",
+      "git_blob": "aba43e3431a134bf5183420e3998644206885ffc",
+      "sha256": "0db5820f80859148091b892b8350b90dbc998b42b3174261123f55bcffd228a0"
+    },
+    {
+      "path": "go/internal/agent/timesync/fresh_time.go",
+      "git_blob": "08231563517a8f9a577e27717c65a54203e14bfd",
+      "sha256": "5157f48a795d5911963a4f14470526447ddf29009abb8a4240cd3f11974a91f2"
+    },
+    {
+      "path": "go/internal/agent/timesync/floor.go",
+      "git_blob": "dd41ca1d23441124e865623ab56aef63ebe74370",
+      "sha256": "8811ca12126d5c39d7c6fc5cd9e89d8dabbd2e1ddc9f5e4c021517611c0954f2"
+    },
+    {
+      "path": "go/internal/agent/timesync/roughtime.go",
+      "git_blob": "516705cb2efcf6b78a099f06bea80b58ac2a75f9",
+      "sha256": "4040c47ed5f2c6728781fc3e79ca51fad6174ae6706e2b962973dfa16c8cec4e"
+    },
+    {
+      "path": "go/internal/agent/timesync/boottime_linux.go",
+      "git_blob": "0067de2455cf93e95da47c1957ea4a0c6fb85938",
+      "sha256": "a0756bdc14e08846c710fc1a1603b15d79d6c683177ad72f660ebb5158479816"
+    },
+    {
+      "path": "go/internal/agent/timesync/boottime_other.go",
+      "git_blob": "4889e03fbfd3c71b83e22b0a5b753b8ee715fdb5",
+      "sha256": "843a4e15ee3b35e151c1c1b76c5324b2e7c7a8ebd8e3103a59631711f45cc6da"
+    },
+    {
+      "path": "LICENSE",
+      "git_blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ],
+  "adapted_files": [
+    {
+      "path": "internal/upstreamtime/roughtime/client.go",
+      "sha256": "d944117de8974364e9dd6869da4d6f470a611aa93ea8b52f0ae7665a659acff4",
+      "change": "See TIME-NOTICE.md for preserved behavior and reviewed transport, bounds, clock-injection, package/import differences"
+    },
+    {
+      "path": "internal/upstreamtime/roughtime/message.go",
+      "sha256": "58f1d8e41369a4712d0a7e710b7f39ffb77923a0fa684062ea05efd56c7eb4e0",
+      "change": "See TIME-NOTICE.md for preserved behavior and reviewed transport, bounds, clock-injection, package/import differences"
+    },
+    {
+      "path": "internal/upstreamtime/roughtime/servers.go",
+      "sha256": "561a17ee5f0e0fe02b2d3cdfbd854c6ee8c43b69ac568d6e00c929cef59110ea",
+      "change": "See TIME-NOTICE.md for preserved behavior and reviewed transport, bounds, clock-injection, package/import differences"
+    },
+    {
+      "path": "internal/upstreamtime/roughtime/client_test.go",
+      "sha256": "d7fbc40f991872fe8938b8a8500bfdfc08d00975a9252b56a5a7fbc33f6b27c3",
+      "change": "See TIME-NOTICE.md for preserved behavior and reviewed transport, bounds, clock-injection, package/import differences"
+    },
+    {
+      "path": "internal/upstreamtime/roughtime/merkle_test.go",
+      "sha256": "d6043e7134dded6b22dec858a4efa26ef84fca630345fea2d728134bc8ae185d",
+      "change": "See TIME-NOTICE.md for preserved behavior and reviewed transport, bounds, clock-injection, package/import differences"
+    },
+    {
+      "path": "internal/upstreamtime/consensus.go",
+      "sha256": "28666b9c0e119c43e4c0883c9bacbbe4801d3934b9d21d705544be2f4f947866",
+      "change": "See TIME-NOTICE.md for preserved behavior and reviewed transport, bounds, clock-injection, package/import differences"
+    },
+    {
+      "path": "internal/upstreamtime/consensus_test.go",
+      "sha256": "dadbf9e0c6fca4280631aa1419cfc9c73dc4d8484ec818432ce3918ff2d10165",
+      "change": "See TIME-NOTICE.md for preserved behavior and reviewed transport, bounds, clock-injection, package/import differences"
+    }
+  ],
+  "private_adapter_files": [
+    {
+      "path": "authenticatedtime/README.md",
+      "sha256": "5c77468f14f566245a150d363409fa76050085ff0ddb2a9e4a0a059967c444d3"
+    },
+    {
+      "path": "authenticatedtime/clock_darwin.go",
+      "sha256": "cbefc0ccb12687bb0cc1c82018644e09bb3e8d6c4c322d0182b11005ff8fc6a4"
+    },
+    {
+      "path": "authenticatedtime/clock_linux.go",
+      "sha256": "097acecb74e49027a512a7ff13a086a502e108fe629ae2b305ac5fac770d1eb3"
+    },
+    {
+      "path": "authenticatedtime/clock_other.go",
+      "sha256": "97c5a4a1ba0d0052af6814065694eafe0c2151c3f15967d1dd5f791704c5a939"
+    },
+    {
+      "path": "authenticatedtime/provider.go",
+      "sha256": "0f6101d8810032a5a2a41727416642b8be3690db327356f9ca69785c7c1a603c"
+    },
+    {
+      "path": "authenticatedtime/provider_test.go",
+      "sha256": "b1124a20e740b604fd9b6a9a479a44c687d2ec9c3a768c695ec26a32023b54d4"
+    }
+  ]
+}

@@ -53,13 +53,13 @@ var deviceControlSkill string
 
 var profiles = []Profile{
 	{Name: "general", Description: "Build, deploy, diagnose, and delegate to specialists", Skills: []string{"*"}, groups: []string{"*"}, Instructions: generalSkill, StartupSkill: "profiles/general/SKILL.md"},
-	{Name: "developer", Description: "Build, test, and deploy applications", Skills: []string{"wendy", "wendy-data", "wendy-device-install", "wendy-robot-deploy", "wendy-template-app", "wendy-app-lifecycle", "swift", "swift-concurrency", "swift-nio", "hummingbird", "postgres-nio", "swift-valkey"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: developerSkill, StartupSkill: "profiles/developer/SKILL.md"},
-	{Name: "simulation", Description: "Build and deploy simulations to VMs and other targets", Skills: []string{"wendy", "wendy-data", "wendy-device-install", "wendy-robot-deploy", "wendy-template-app", "wendy-app-lifecycle", "swift", "swift-concurrency"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: simulationSkill, StartupSkill: "profiles/simulation/SKILL.md"},
-	{Name: "debugger", Description: "Diagnose software, ROS 2, LiDAR, cameras, and hardware", Skills: []string{"wendy", "wendy-data", "wendy-device-install", "wendy-robot-deploy", "wendy-template-app", "wendy-app-lifecycle", "swift", "swift-concurrency", "swift-nio"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "network", "app"}, Instructions: debuggerSkill, StartupSkill: "profiles/debugger/SKILL.md"},
+	{Name: "developer", Description: "Build, test, and deploy applications", Skills: []string{"wendy", "wendy-data", "wendy-device-install", "wendy-robot-deploy", "wendy-template-app", "wendy-app-lifecycle", "swift", "swift-concurrency", "swift-nio", "hummingbird", "postgres-nio", "swift-valkey"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "app", "world"}, Instructions: developerSkill, StartupSkill: "profiles/developer/SKILL.md"},
+	{Name: "simulation", Description: "Build and deploy simulations to VMs and other targets", Skills: []string{"wendy", "wendy-data", "wendy-device-install", "wendy-robot-deploy", "wendy-template-app", "wendy-app-lifecycle", "swift", "swift-concurrency"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "app", "world"}, Instructions: simulationSkill, StartupSkill: "profiles/simulation/SKILL.md"},
+	{Name: "debugger", Description: "Diagnose software, ROS 2, LiDAR, cameras, and hardware", Skills: []string{"wendy", "wendy-data", "wendy-device-install", "wendy-robot-deploy", "wendy-template-app", "wendy-app-lifecycle", "swift", "swift-concurrency", "swift-nio"}, groups: []string{"workspace", "connection", "container", "telemetry", "hardware", "sensors", "network", "app", "world"}, Instructions: debuggerSkill, StartupSkill: "profiles/debugger/SKILL.md"},
 	{Name: "fleet", Description: "Coordinate work across devices over cloud or LAN", Skills: []string{"wendy"}, groups: []string{"connection", "container", "telemetry", "hardware", "network", "os"}, Instructions: fleetSkill, StartupSkill: "profiles/fleet/SKILL.md"},
-	{Name: "device-reasoning", Description: "Reason about device goals, observations, and events", Skills: []string{"wendy"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: deviceReasoningSkill, StartupSkill: "profiles/device-reasoning/SKILL.md"},
-	{Name: "device-sensors", Description: "Configure perception models and interpret sensor observations", Skills: []string{"wendy", "wendy-data"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: deviceSensorsSkill, StartupSkill: "profiles/device-sensors/SKILL.md"},
-	{Name: "device-control", Description: "Supervise motion models and execute bounded device goals", Skills: []string{"wendy"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app"}, Instructions: deviceControlSkill, StartupSkill: "profiles/device-control/SKILL.md"},
+	{Name: "device-reasoning", Description: "Reason about device goals, observations, and events", Skills: []string{"wendy"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app", "world"}, Instructions: deviceReasoningSkill, StartupSkill: "profiles/device-reasoning/SKILL.md"},
+	{Name: "device-sensors", Description: "Configure perception models and interpret sensor observations", Skills: []string{"wendy", "wendy-data"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app", "world"}, Instructions: deviceSensorsSkill, StartupSkill: "profiles/device-sensors/SKILL.md"},
+	{Name: "device-control", Description: "Supervise motion models and execute bounded device goals", Skills: []string{"wendy"}, groups: []string{"connection", "container", "telemetry", "hardware", "sensors", "app", "world"}, Instructions: deviceControlSkill, StartupSkill: "profiles/device-control/SKILL.md"},
 }
 
 func Profiles() []Profile {
@@ -113,7 +113,7 @@ func toolGroup(name string) string {
 	case "background_process_list", "background_process_stop", "audio_listen":
 		return "sensors"
 	}
-	for _, prefix := range []string{"workspace_", "container_", "telemetry_", "hardware_", "os_"} {
+	for _, prefix := range []string{"workspace_", "container_", "telemetry_", "hardware_", "os_", "world_"} {
 		if strings.HasPrefix(name, prefix) {
 			return strings.TrimSuffix(prefix, "_")
 		}

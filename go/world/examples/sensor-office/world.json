@@ -1,0 +1,85 @@
+{
+  "schema_version": "wendy.world.package.v0",
+  "site_id": "synthetic-office",
+  "package_revision": "sensor-office-fixture-v1",
+  "frame_revision": "office-frame-v1",
+  "provenance": "synthetic",
+  "description": "Synthetic sensor office with two rendered cameras, an analytic gas field, and generated alarm audio. No real office data.",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "mujoco": {
+    "path": "office.xml",
+    "sha256": "ccfdcd284ff04ce88babb6ca2f67aefd723dc5f9f64a3523082c402508611997",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ],
+    "body": "inspection-puck",
+    "actuator": "drive",
+    "control": 0.5
+  },
+  "gas_model": {
+    "kind": "analytic-gaussian-fixture",
+    "unit": "ppm",
+    "source_local_m": [
+      0,
+      0.2,
+      0
+    ],
+    "background_ppm": 1,
+    "peak_ppm": 50,
+    "sigma_m": 1,
+    "noise_stddev_ppm": 0.1
+  },
+  "fidelity": {
+    "geometry": "hand-authored illustrative boxes",
+    "robot": "single-axis puck, not Go2 dynamics",
+    "gas": "analytic Gaussian field with seeded measurement noise; no fluid dynamics",
+    "camera": "MuJoCo OpenGL RGB rendering; ideal pinhole calibration; no lens noise or perception model",
+    "audio": "generated 880 Hz mono test tone or quiet noise; no acoustic propagation"
+  },
+  "asset_license": "Proprietary Wendy Labs fixture; no real office data",
+  "scenario": {
+    "name": "multimodal-warning-fixture",
+    "expected": "two distinct rendered views, a gas sample, and a generated audio segment per time step"
+  },
+  "sensors": {
+    "cameras": [
+      "camera-a",
+      "camera-b"
+    ],
+    "width": 320,
+    "height": 240,
+    "indicator_material": "indicator-material",
+    "gas_position_m": [
+      0,
+      0.2,
+      0
+    ],
+    "audio_position_m": [
+      0,
+      0.5,
+      0
+    ],
+    "audio_rate_hz": 8000,
+    "audio_duration_ms": 250,
+    "alarm_frequency_hz": 880,
+    "calibration_revision": "synthetic-sensors-v1"
+  }
+}

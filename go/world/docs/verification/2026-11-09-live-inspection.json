@@ -1,0 +1,638 @@
+{
+  "mode": "isolated Linux containers on existing Docker VM",
+  "single_live_scene": true,
+  "scene_boot_id": "a730afd0-ea8d-48ea-81c3-af632d7087aa",
+  "initial_robot_x": -2.0,
+  "inspected_robot_x": -0.6261737016393734,
+  "robot_camera_changed": true,
+  "robot_gas_position_and_value_changed": true,
+  "protocol_viewers": 2,
+  "completed_while_peer_disconnected": true,
+  "partition_seconds": 5.326,
+  "partition_start_x": -1.8073469387755046,
+  "durable_result_survived_gateway_sigkill": true,
+  "result_media_verified": 3,
+  "local_sensor_loss_holds": true,
+  "result_media_verified_after_gateway_sigkill": 3,
+  "inspection_result": {
+    "task_id": "inspect-live",
+    "trigger": {
+      "sha256": "32869462df64de89ea1cb1d1f88eb01c8a677d9c389846fc34f8e2f502e2ebc3",
+      "component": {
+        "key": {
+          "tenant": "lab",
+          "site": "synthetic-office",
+          "entity": "live-test/possible-gas-hazard",
+          "type": "wendy.hazard.v1",
+          "source": {
+            "device": "sim-fusion",
+            "app": "wendy-world",
+            "service": "fusion",
+            "stream": "hazards"
+          }
+        },
+        "version": {
+          "epoch": 1,
+          "sequence": 1
+        },
+        "frame": {
+          "id": "office-floor",
+          "revision": "office-frame-v1"
+        },
+        "timing": {
+          "sample_time": "2026-11-09T22:16:49.552Z",
+          "clock_domain": "simulation:live-test",
+          "error_known": true,
+          "error_bound_ns": 0,
+          "age_hint_ns": 0
+        },
+        "ttl_ns": 3000000000,
+        "provenance": {
+          "origin": "inferred",
+          "app_version": "world-fusion-v1",
+          "model_id": "synthetic-gas-warning-rule",
+          "model_version": "1",
+          "inputs": [
+            {
+              "id": "25341e737d672aed7c9778b9b005359f8ae49c956106422e898a38e2b4c8b334/1/live-test/audio-1/12",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "live-test",
+                "scenario_version": "live-office-fixture-v1",
+                "seed": 7,
+                "clock_domain": "simulation:live-test"
+              }
+            },
+            {
+              "id": "d0928f9e6c4b6d4911db47bb9107ab5a8e5bb216feb3e973cc528a808072cc5c/1/live-test/camera-a/12",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "live-test",
+                "scenario_version": "live-office-fixture-v1",
+                "seed": 7,
+                "clock_domain": "simulation:live-test"
+              }
+            },
+            {
+              "id": "86dda3112676827c14a361e9b54feceb0c58ff7e743ae703b48f36a5c0461b76/1/live-test/camera-b/12",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "live-test",
+                "scenario_version": "live-office-fixture-v1",
+                "seed": 7,
+                "clock_domain": "simulation:live-test"
+              }
+            },
+            {
+              "id": "18c0b89565ebca4eb73c8cbcc1a0c4fe1723d888ceadab23a394fe0729c4f91b/1/live-test/gas-1/12",
+              "origin": "simulated",
+              "simulation": {
+                "run_id": "live-test",
+                "scenario_version": "live-office-fixture-v1",
+                "seed": 7,
+                "clock_domain": "simulation:live-test"
+              }
+            }
+          ]
+        },
+        "payload": {
+          "label": "possible-gas-hazard",
+          "confidence": 0.8,
+          "confidence_meaning": "fixed synthetic rule score, not a calibrated probability",
+          "position_m": [
+            -2,
+            0.2,
+            0
+          ],
+          "uncertainty_m": 0.01,
+          "location_basis": "gas sensor position; leak source is not localized",
+          "gas_value_ppm": 59.2764389218961,
+          "gas_uncertainty_ppm": 0.1,
+          "gas_species": "synthetic-test-gas",
+          "cameras": [
+            {
+              "sensor_id": "camera-a",
+              "red_fraction": 0.013177083333333334
+            },
+            {
+              "sensor_id": "camera-b",
+              "red_fraction": 0.028802083333333332
+            }
+          ],
+          "audio": {
+            "rms": 0.28284176354167206,
+            "tone_fraction": 0.9999837150825486
+          },
+          "inputs": [
+            {
+              "sample": {
+                "schema_version": "wendy.sensor.sample.v1",
+                "id": "live-test/audio-1/12",
+                "site_id": "synthetic-office",
+                "frame": {
+                  "id": "office-floor",
+                  "revision": "office-frame-v1"
+                },
+                "sensor_id": "audio-1",
+                "kind": "audio",
+                "sequence": 12,
+                "sample_ns": 2490000000,
+                "run_id": "live-test",
+                "scenario_version": "live-office-fixture-v1",
+                "seed": 7,
+                "package_sha256": "b16c2015cec52bac515eeb2d6f7f4f04c4896140d305086b458e8ba585d35a30",
+                "sensor_model": "generated-880hz-tone-v1",
+                "position_m": [
+                  -2,
+                  0.2,
+                  0
+                ],
+                "uncertainty_m": 0.01,
+                "calibration_revision": "synthetic-live-sensors-v1",
+                "audio": {
+                  "sample_rate_hz": 8000,
+                  "channels": 1,
+                  "duration_ns": 250000000
+                },
+                "evidence": {
+                  "sha256": "08fea947eae9a8e9298f84a37391bf769c78bfb344946e4834089ed33fac10b6",
+                  "content_type": "audio/wav",
+                  "size": 4044
+                }
+              },
+              "sample_id": "live-test/audio-1/12",
+              "sensor_id": "audio-1",
+              "kind": "audio",
+              "source": {
+                "device": "sim-sensor-audio-1",
+                "app": "wendy-world",
+                "service": "audio-1",
+                "stream": "samples"
+              },
+              "version": {
+                "epoch": 1,
+                "sequence": 12
+              },
+              "sample_time": "2026-11-09T22:16:49.802Z",
+              "capture_start": "2026-11-09T22:16:49.552Z",
+              "valid_until": "2026-11-09T22:16:52.552Z",
+              "evidence": {
+                "sha256": "08fea947eae9a8e9298f84a37391bf769c78bfb344946e4834089ed33fac10b6",
+                "content_type": "audio/wav",
+                "size": 4044
+              }
+            },
+            {
+              "sample": {
+                "schema_version": "wendy.sensor.sample.v1",
+                "id": "live-test/camera-a/12",
+                "site_id": "synthetic-office",
+                "frame": {
+                  "id": "office-floor",
+                  "revision": "office-frame-v1"
+                },
+                "sensor_id": "camera-a",
+                "kind": "camera",
+                "sequence": 12,
+                "sample_ns": 2490000000,
+                "run_id": "live-test",
+                "scenario_version": "live-office-fixture-v1",
+                "seed": 7,
+                "package_sha256": "b16c2015cec52bac515eeb2d6f7f4f04c4896140d305086b458e8ba585d35a30",
+                "sensor_model": "mujoco-3.3.7-live-rgb-pinhole",
+                "position_m": [
+                  -3,
+                  2.8,
+                  4
+                ],
+                "uncertainty_m": 0.01,
+                "calibration_revision": "synthetic-live-sensors-v1",
+                "camera": {
+                  "width": 320,
+                  "height": 240,
+                  "fx": 230.51785523653993,
+                  "fy": 230.51785523653993,
+                  "cx": 160,
+                  "cy": 120,
+                  "camera_to_site": [
+                    0.8479983040050879,
+                    -0.18819254825310153,
+                    0.49546184634792867,
+                    -3,
+                    0,
+                    -0.9348355420200576,
+                    -0.3550809898826822,
+                    2.8,
+                    0.52999894000318,
+                    0.30110807720496235,
+                    -0.7927389541566858,
+                    4,
+                    0,
+                    0,
+                    0,
+                    1
+                  ],
+                  "calibration_valid_for_ns": 60000000000
+                },
+                "evidence": {
+                  "sha256": "efee8ed33399a7ea1cdee5492362c4642289cd9b817b8362a43d4ac0b2f358e7",
+                  "content_type": "image/png",
+                  "size": 17209
+                }
+              },
+              "sample_id": "live-test/camera-a/12",
+              "sensor_id": "camera-a",
+              "kind": "camera",
+              "source": {
+                "device": "sim-sensor-camera-a",
+                "app": "wendy-world",
+                "service": "camera-a",
+                "stream": "samples"
+              },
+              "version": {
+                "epoch": 1,
+                "sequence": 12
+              },
+              "sample_time": "2026-11-09T22:16:49.802Z",
+              "capture_start": "2026-11-09T22:16:49.802Z",
+              "valid_until": "2026-11-09T22:16:52.802Z",
+              "evidence": {
+                "sha256": "efee8ed33399a7ea1cdee5492362c4642289cd9b817b8362a43d4ac0b2f358e7",
+                "content_type": "image/png",
+                "size": 17209
+              }
+            },
+            {
+              "sample": {
+                "schema_version": "wendy.sensor.sample.v1",
+                "id": "live-test/camera-b/12",
+                "site_id": "synthetic-office",
+                "frame": {
+                  "id": "office-floor",
+                  "revision": "office-frame-v1"
+                },
+                "sensor_id": "camera-b",
+                "kind": "camera",
+                "sequence": 12,
+                "sample_ns": 2490000000,
+                "run_id": "live-test",
+                "scenario_version": "live-office-fixture-v1",
+                "seed": 7,
+                "package_sha256": "b16c2015cec52bac515eeb2d6f7f4f04c4896140d305086b458e8ba585d35a30",
+                "sensor_model": "mujoco-3.3.7-live-rgb-pinhole",
+                "position_m": [
+                  -2,
+                  2,
+                  2
+                ],
+                "uncertainty_m": 0.01,
+                "calibration_revision": "synthetic-live-sensors-v1",
+                "camera": {
+                  "width": 320,
+                  "height": 240,
+                  "fx": 207.84609690826528,
+                  "fy": 207.84609690826528,
+                  "cx": 160,
+                  "cy": 120,
+                  "camera_to_site": [
+                    0.813733471206735,
+                    -0.21228671931039134,
+                    0.5410842694463303,
+                    -2,
+                    0,
+                    -0.9309165765314937,
+                    -0.3652318818762729,
+                    2,
+                    0.5812381937190965,
+                    0.29720140703454784,
+                    -0.7575179772248624,
+                    2,
+                    0,
+                    0,
+                    0,
+                    1
+                  ],
+                  "calibration_valid_for_ns": 60000000000
+                },
+                "evidence": {
+                  "sha256": "75a7a2974d8cbbe7df3a822b90d75737ead8032981217f794933c7cdcbea63f0",
+                  "content_type": "image/png",
+                  "size": 16405
+                }
+              },
+              "sample_id": "live-test/camera-b/12",
+              "sensor_id": "camera-b",
+              "kind": "camera",
+              "source": {
+                "device": "sim-sensor-camera-b",
+                "app": "wendy-world",
+                "service": "camera-b",
+                "stream": "samples"
+              },
+              "version": {
+                "epoch": 1,
+                "sequence": 12
+              },
+              "sample_time": "2026-11-09T22:16:49.802Z",
+              "capture_start": "2026-11-09T22:16:49.802Z",
+              "valid_until": "2026-11-09T22:16:52.802Z",
+              "evidence": {
+                "sha256": "75a7a2974d8cbbe7df3a822b90d75737ead8032981217f794933c7cdcbea63f0",
+                "content_type": "image/png",
+                "size": 16405
+              }
+            },
+            {
+              "sample": {
+                "schema_version": "wendy.sensor.sample.v1",
+                "id": "live-test/gas-1/12",
+                "site_id": "synthetic-office",
+                "frame": {
+                  "id": "office-floor",
+                  "revision": "office-frame-v1"
+                },
+                "sensor_id": "gas-1",
+                "kind": "gas",
+                "sequence": 12,
+                "sample_ns": 2490000000,
+                "run_id": "live-test",
+                "scenario_version": "live-office-fixture-v1",
+                "seed": 7,
+                "package_sha256": "b16c2015cec52bac515eeb2d6f7f4f04c4896140d305086b458e8ba585d35a30",
+                "sensor_model": "analytic-gaussian-fixture-v1",
+                "position_m": [
+                  -2,
+                  0.2,
+                  0
+                ],
+                "uncertainty_m": 0.01,
+                "calibration_revision": "synthetic-live-sensors-v1",
+                "gas": {
+                  "value_ppm": 59.2764389218961,
+                  "uncertainty_ppm": 0.1,
+                  "species": "synthetic-test-gas"
+                }
+              },
+              "sample_id": "live-test/gas-1/12",
+              "sensor_id": "gas-1",
+              "kind": "gas",
+              "source": {
+                "device": "sim-sensor-gas-1",
+                "app": "wendy-world",
+                "service": "gas-1",
+                "stream": "samples"
+              },
+              "version": {
+                "epoch": 1,
+                "sequence": 12
+              },
+              "sample_time": "2026-11-09T22:16:49.802Z",
+              "capture_start": "2026-11-09T22:16:49.802Z",
+              "valid_until": "2026-11-09T22:16:52.802Z"
+            }
+          ],
+          "evidence": [
+            {
+              "sha256": "08fea947eae9a8e9298f84a37391bf769c78bfb344946e4834089ed33fac10b6",
+              "content_type": "audio/wav",
+              "size": 4044
+            },
+            {
+              "sha256": "efee8ed33399a7ea1cdee5492362c4642289cd9b817b8362a43d4ac0b2f358e7",
+              "content_type": "image/png",
+              "size": 17209
+            },
+            {
+              "sha256": "75a7a2974d8cbbe7df3a822b90d75737ead8032981217f794933c7cdcbea63f0",
+              "content_type": "image/png",
+              "size": 16405
+            }
+          ],
+          "valid_until": "2026-11-09T22:16:52.552Z",
+          "input_digest": "1a8534384627986d830f9862fd0f490bef7457436db65ddd5fe682ae27f57651"
+        },
+        "tombstone": false
+      }
+    },
+    "run_id": "live-test",
+    "boot_id": "a730afd0-ea8d-48ea-81c3-af632d7087aa",
+    "session": "d6bb826d-8cc0-4c3e-a564-d66a9b20b5df",
+    "sequence": 47,
+    "settled_since_simulation_ns": 8490000000,
+    "settled_since_unix_ms": 1794262616463,
+    "captured_unix_ms": 1794262616844,
+    "simulation_time_ns": 8820000000,
+    "frame": {
+      "id": "office-floor",
+      "revision": "office-frame-v1"
+    },
+    "position_m": [
+      -0.6261737016393734,
+      0.2,
+      0
+    ],
+    "velocity_mps": [
+      0,
+      0,
+      0
+    ],
+    "sensors": {
+      "gas": true,
+      "local-obstacles": true
+    },
+    "obstacle_clear": true,
+    "energy": 1,
+    "samples": [
+      {
+        "schema_version": "wendy.sensor.sample.v1",
+        "id": "live-test/camera-a/47",
+        "site_id": "synthetic-office",
+        "frame": {
+          "id": "office-floor",
+          "revision": "office-frame-v1"
+        },
+        "sensor_id": "camera-a",
+        "kind": "camera",
+        "sequence": 47,
+        "sample_ns": 8820000000,
+        "run_id": "live-test",
+        "scenario_version": "live-office-fixture-v1",
+        "seed": 7,
+        "package_sha256": "b16c2015cec52bac515eeb2d6f7f4f04c4896140d305086b458e8ba585d35a30",
+        "sensor_model": "mujoco-3.3.7-live-rgb-pinhole",
+        "position_m": [
+          -3,
+          2.8,
+          4
+        ],
+        "uncertainty_m": 0.01,
+        "calibration_revision": "synthetic-live-sensors-v1",
+        "camera": {
+          "width": 320,
+          "height": 240,
+          "fx": 230.51785523653993,
+          "fy": 230.51785523653993,
+          "cx": 160,
+          "cy": 120,
+          "camera_to_site": [
+            0.8479983040050879,
+            -0.18819254825310153,
+            0.49546184634792867,
+            -3,
+            0,
+            -0.9348355420200576,
+            -0.3550809898826822,
+            2.8,
+            0.52999894000318,
+            0.30110807720496235,
+            -0.7927389541566858,
+            4,
+            0,
+            0,
+            0,
+            1
+          ],
+          "calibration_valid_for_ns": 60000000000
+        },
+        "evidence": {
+          "sha256": "abd23a6145ae57a7d94802e591ce1b5c81c9b45062212765fefbb6dc1babf786",
+          "content_type": "image/png",
+          "size": 16953
+        }
+      },
+      {
+        "schema_version": "wendy.sensor.sample.v1",
+        "id": "live-test/camera-b/47",
+        "site_id": "synthetic-office",
+        "frame": {
+          "id": "office-floor",
+          "revision": "office-frame-v1"
+        },
+        "sensor_id": "camera-b",
+        "kind": "camera",
+        "sequence": 47,
+        "sample_ns": 8820000000,
+        "run_id": "live-test",
+        "scenario_version": "live-office-fixture-v1",
+        "seed": 7,
+        "package_sha256": "b16c2015cec52bac515eeb2d6f7f4f04c4896140d305086b458e8ba585d35a30",
+        "sensor_model": "mujoco-3.3.7-live-rgb-pinhole",
+        "position_m": [
+          -0.6261737016393734,
+          2,
+          2
+        ],
+        "uncertainty_m": 0.01,
+        "calibration_revision": "synthetic-live-sensors-v1",
+        "camera": {
+          "width": 320,
+          "height": 240,
+          "fx": 207.84609690826528,
+          "fy": 207.84609690826528,
+          "cx": 160,
+          "cy": 120,
+          "camera_to_site": [
+            0.975894530529148,
+            -0.09291614572430437,
+            0.19747520134698845,
+            -0.6261737016393734,
+            0,
+            -0.904842286944954,
+            -0.4257469151458713,
+            2,
+            0.21824267521109111,
+            0.4154840858805132,
+            -0.8830306388210664,
+            2,
+            0,
+            0,
+            0,
+            1
+          ],
+          "calibration_valid_for_ns": 60000000000
+        },
+        "evidence": {
+          "sha256": "2de6fd7df93acbe096755f6cdb57711eb5899c3f062eac7c332b2ae5345d91af",
+          "content_type": "image/png",
+          "size": 16536
+        }
+      },
+      {
+        "schema_version": "wendy.sensor.sample.v1",
+        "id": "live-test/gas-1/47",
+        "site_id": "synthetic-office",
+        "frame": {
+          "id": "office-floor",
+          "revision": "office-frame-v1"
+        },
+        "sensor_id": "gas-1",
+        "kind": "gas",
+        "sequence": 47,
+        "sample_ns": 8820000000,
+        "run_id": "live-test",
+        "scenario_version": "live-office-fixture-v1",
+        "seed": 7,
+        "package_sha256": "b16c2015cec52bac515eeb2d6f7f4f04c4896140d305086b458e8ba585d35a30",
+        "sensor_model": "analytic-gaussian-fixture-v1",
+        "position_m": [
+          -0.6261737016393734,
+          0.2,
+          0
+        ],
+        "uncertainty_m": 0.01,
+        "calibration_revision": "synthetic-live-sensors-v1",
+        "gas": {
+          "value_ppm": 78.40554572104516,
+          "uncertainty_ppm": 0.1,
+          "species": "synthetic-test-gas"
+        }
+      },
+      {
+        "schema_version": "wendy.sensor.sample.v1",
+        "id": "live-test/audio-1/47",
+        "site_id": "synthetic-office",
+        "frame": {
+          "id": "office-floor",
+          "revision": "office-frame-v1"
+        },
+        "sensor_id": "audio-1",
+        "kind": "audio",
+        "sequence": 47,
+        "sample_ns": 8820000000,
+        "run_id": "live-test",
+        "scenario_version": "live-office-fixture-v1",
+        "seed": 7,
+        "package_sha256": "b16c2015cec52bac515eeb2d6f7f4f04c4896140d305086b458e8ba585d35a30",
+        "sensor_model": "generated-880hz-tone-v1",
+        "position_m": [
+          -0.6261737016393734,
+          0.2,
+          0
+        ],
+        "uncertainty_m": 0.01,
+        "calibration_revision": "synthetic-live-sensors-v1",
+        "audio": {
+          "sample_rate_hz": 8000,
+          "channels": 1,
+          "duration_ns": 250000000
+        },
+        "evidence": {
+          "sha256": "126a61016eff82a4ec14867507ed7b7854811713ff97b2c203b3cf6f1cc590b5",
+          "content_type": "audio/wav",
+          "size": 4044
+        }
+      }
+    ]
+  },
+  "limits": [
+    "synthetic one-axis robot and heuristic hazard fixture",
+    "direct task delivery and result retrieval; no distributed task status plane",
+    "no SensorLink wire adapter, native clients or physical deployment",
+    "single functional run, not performance or safety certification"
+  ],
+  "verification_date": "2026-11-09",
+  "images": {
+    "wendy-world-node:local": "sha256:5e3a4ca8534d3b70dcac718bf98ba9de9f6b0fb5c9e96d741ee641defc008edf",
+    "wendy-world-live:local": "sha256:5ee775fab4e68693b03408150dab68147584a957820b80a32717152de5f31914"
+  }
+}

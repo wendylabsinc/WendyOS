@@ -46,8 +46,10 @@ func (p SensorPairing) Validate() error {
 	if err != nil || p.SourceAssetID != 0 || p.SourcePrincipalURI != certs.DeviceSPIFFEURI(id.TenantUUID, id.EntityID) {
 		return fmt.Errorf("sensor source must have one direct PKI device identity")
 	}
-	if p.Transport != "wendycom" {
-		return fmt.Errorf("PKI sensor sources require WendyCom transport")
+	// Both transports pin the canonical device principal with native mTLS.
+	// The private simulated source uses the existing raw SensorLink protocol.
+	if p.Transport != "wendycom" && p.Transport != "tcp" {
+		return fmt.Errorf("PKI sensor sources require WendyCom or TCP transport")
 	}
 	return nil
 }

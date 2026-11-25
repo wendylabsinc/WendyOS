@@ -1,0 +1,129 @@
+// Extracted from Wendy f29c41dbb86e8d05a8562b52c86a2f5120ace076; TLSKeyPair omitted, imports/package adjusted.
+package upstreamcerts
+
+import (
+	"bytes"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// VerifyPeerCertificateChain verifies signatures through peer-supplied issuers
+// to a locally trusted CA. Peer certificates never become trust anchors.
+// This supplements crypto/x509 for ML-DSA signatures. Unsupported constraints
+// fail closed; the standard verifier handles such chains when it supports the
+// signature algorithms. leafNow preserves the agent's NotBefore clock floor.
+func VerifyPeerCertificateChain(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) error {
+	_, err := VerifyPeerCertificateChainExpiry(leaf, peers, roots, usage, now, leafNow)
+	return err
+}
+
+// VerifyPeerCertificateChainExpiry applies the same policy as
+// VerifyPeerCertificateChain and returns the earliest expiry on its successful
+// path. Unused issuers and trust anchors do not affect that path's lifetime.
+func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (time.Time, error) {
+	if len(peers) > 32 {
+		return time.Time{}, fmt.Errorf("too many peer certificates")
+	}
+	if leafNow.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return time.Time{}, fmt.Errorf("peer certificate not valid at current time")
+	}
+	if len(leaf.UnhandledCriticalExtensions) != 0 || !permitsUsage(leaf, usage) {
+		return time.Time{}, fmt.Errorf("peer certificate has unsupported extensions or authentication usage")
+	}
+	candidates := append(append([]*x509.Certificate(nil), roots...), peers...)
+	seen := map[string]bool{}
+	var walk func(*x509.Certificate, int) (time.Time, error)
+	walk = func(child *x509.Certificate, depth int) (time.Time, error) {
+		if depth >= 8 || seen[string(child.Raw)] {
+			return time.Time{}, fmt.Errorf("certificate chain is cyclic or too deep")
+		}
+		seen[string(child.Raw)] = true
+		defer delete(seen, string(child.Raw))
+		var lastErr error = &IssuerPathError{Err: fmt.Errorf("peer certificate issuer not found in trusted CA chain")}
+		for _, ca := range candidates {
+			if !bytes.Equal(ca.RawSubject, child.RawIssuer) {
+				continue
+			}
+			if err := checkPeerCA(ca, usage, now, depth); err != nil {
+				lastErr = err
+				continue
+			}
+			var err error
+			if oid, oidErr := mldsaCertSigAlgOID(child); oidErr == nil {
+				if _, schemeErr := mldsaScheme(oid); schemeErr == nil {
+					err = verifyMLDSASignature(ca, child)
+				} else {
+					err = child.CheckSignatureFrom(ca)
+				}
+			} else {
+				err = oidErr
+			}
+			if err != nil {
+				lastErr = err
+				if !errors.Is(err, x509.ErrUnsupportedAlgorithm) {
+					lastErr = &IssuerPathError{Err: err}
+				}
+				continue
+			}
+			for _, root := range roots {
+				if bytes.Equal(root.Raw, ca.Raw) {
+					expires := child.NotAfter
+					if ca.NotAfter.Before(expires) {
+						expires = ca.NotAfter
+					}
+					return expires, nil
+				}
+			}
+			if expires, err := walk(ca, depth+1); err == nil {
+				if child.NotAfter.Before(expires) {
+					expires = child.NotAfter
+				}
+				return expires, nil
+			} else {
+				lastErr = err
+			}
+		}
+		return time.Time{}, lastErr
+	}
+	expires, err := walk(leaf, 0)
+	return expires, ClassifyIssuerFailure(err, leaf, peers, roots, usage, now, leafNow)
+}
+
+func permitsUsage(cert *x509.Certificate, usage x509.ExtKeyUsage) bool {
+	if len(cert.UnknownExtKeyUsage) != 0 {
+		return false
+	}
+	if len(cert.ExtKeyUsage) == 0 {
+		return true
+	}
+	for _, eku := range cert.ExtKeyUsage {
+		if eku == usage || eku == x509.ExtKeyUsageAny {
+			return true
+		}
+	}
+	return false
+}
+
+func checkPeerCA(ca *x509.Certificate, usage x509.ExtKeyUsage, now time.Time, depth int) error {
+	if !ca.BasicConstraintsValid || !ca.IsCA || ca.KeyUsage != 0 && ca.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return fmt.Errorf("peer issuer %q is not permitted to sign certificates", ca.Subject.CommonName)
+	}
+	if now.Before(ca.NotBefore) || now.After(ca.NotAfter) || !permitsUsage(ca, usage) {
+		return fmt.Errorf("peer issuer %q is not valid for this time or authentication usage", ca.Subject.CommonName)
+	}
+	if (ca.MaxPathLen > 0 || ca.MaxPathLenZero) && depth > ca.MaxPathLen {
+		return fmt.Errorf("peer issuer %q exceeded its certificate path length", ca.Subject.CommonName)
+	}
+	if len(ca.UnhandledCriticalExtensions) != 0 {
+		return fmt.Errorf("peer issuer %q has unsupported critical extensions", ca.Subject.CommonName)
+	}
+	// Do not silently ignore constraints the custom ML-DSA path cannot enforce.
+	for _, ext := range ca.Extensions {
+		if ext.Id.String() == "2.5.29.30" || ext.Id.String() == "2.5.29.33" || ext.Id.String() == "2.5.29.36" || ext.Id.String() == "2.5.29.54" {
+			return fmt.Errorf("peer issuer %q has constraints unsupported by ML-DSA verification", ca.Subject.CommonName)
+		}
+	}
+	return nil
+}

@@ -16,6 +16,7 @@ import (
 )
 
 // A robot_find card carries the object in Title and "bark" as Camera 1.
+// A world card carries its workspace section in Episode.
 type ChatCard struct {
 	Kind, Title string
 	Episode     string
@@ -35,7 +36,7 @@ func (t *deviceCardTools) ListTools(ctx context.Context) ([]chat.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(tools, chat.Tool{Name: "show_device_card", Description: "Display a native interactive card in this conversation for the originally selected device. Use camera for a live camera player. For a named camera pass camera_name (for example ESP), or a known camera_id. Omitting a selector never shows multiple cameras; set all_cameras true only when the user explicitly asks for all cameras, resources for live CPU/memory/GPU, or device_info for hardware and software versions. The card reads current device data, not model-generated values. Use notifications to show the native permission and Cloud push registration prompt on this Mac or iPhone. Displaying it does not grant permission or verify registration. Camera playback does not give the model visual perception.", Parameters: json.RawMessage(`{"type":"object","properties":{"kind":{"type":"string","enum":["camera","resources","device_info","notifications"]},"camera_id":{"type":"integer","minimum":0},"camera_name":{"type":"string","minLength":1},"all_cameras":{"type":"boolean"}},"required":["kind"],"additionalProperties":false}`)},
+	return append(tools, worldWorkspaceTool(), chat.Tool{Name: "show_device_card", Description: "Display a native interactive card in this conversation for the originally selected device. Use camera for a live camera player. For a named camera pass camera_name (for example ESP), or a known camera_id. Omitting a selector never shows multiple cameras; set all_cameras true only when the user explicitly asks for all cameras, resources for live CPU/memory/GPU, or device_info for hardware and software versions. The card reads current device data, not model-generated values. Use notifications to show the native permission and Cloud push registration prompt on this Mac or iPhone. Displaying it does not grant permission or verify registration. Camera playback does not give the model visual perception.", Parameters: json.RawMessage(`{"type":"object","properties":{"kind":{"type":"string","enum":["camera","resources","device_info","notifications"]},"camera_id":{"type":"integer","minimum":0},"camera_name":{"type":"string","minLength":1},"all_cameras":{"type":"boolean"}},"required":["kind"],"additionalProperties":false}`)},
 		chat.Tool{Name: robotFindTool, RequiresApproval: true, Description: "Send the Unitree Go2 robot dog paired with the originally selected device to find a physical object. Use it when the user asks the robot or dog to find, look for, locate or go to something, including when they do not know which room it is in. Go2 first returns to where it last saw the object, then looks around with its camera and LiDAR and walks to other places until it sees it, then walks up to it. This is physical motion and needs the user's approval. It displays a live third-person view of Go2 in this conversation; the search runs there, stops if the user closes that view, and reports its own result. The tool returns once the view is shown, not when the object is found, so never claim the object was found. Set bark true only when the user asks for a bark or sound on finding it.", Parameters: json.RawMessage(`{"type":"object","properties":{"object":{"type":"string","minLength":1,"maxLength":80,"description":"The thing to find, in a few words, such as red toolbox"},"bark":{"type":"boolean"}},"required":["object"],"additionalProperties":false}`)}), nil
 }
 
@@ -85,6 +86,9 @@ func (t *deviceCardTools) findWithRobot(ctx context.Context, call chat.ToolCall)
 	return fmt.Sprintf("Displayed the live Go2 view. It is now connecting to Go2 and will search for %q there; the view shows progress and the outcome. The object has not been found yet. Tell the user to keep the view open, and that Stop is on the view.", object), nil
 }
 func (t *deviceCardTools) Execute(ctx context.Context, call chat.ToolCall) (string, error) {
+	if call.Name == showWorldWorkspaceTool {
+		return t.showWorldWorkspace(ctx, call)
+	}
 	if call.Name == robotFindTool {
 		return t.findWithRobot(ctx, call)
 	}
@@ -190,7 +194,7 @@ func cameraNameMatches(name, query string) bool {
 }
 
 func (t *deviceCardTools) ExecuteResult(ctx context.Context, call chat.ToolCall) (chat.ToolResult, error) {
-	if call.Name != "show_device_card" && call.Name != robotFindTool {
+	if call.Name != "show_device_card" && call.Name != robotFindTool && call.Name != showWorldWorkspaceTool {
 		if media, ok := t.Executor.(chat.MediaExecutor); ok {
 			return media.ExecuteResult(ctx, call)
 		}

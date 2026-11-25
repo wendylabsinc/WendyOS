@@ -1,0 +1,29 @@
+<mujoco model="two-joint-twin">
+  <compiler angle="radian"/>
+  <option timestep="0.002" gravity="0 0 0"/>
+  <default>
+    <joint damping="0.2"/>
+    <geom type="capsule" size="0.04" density="500"/>
+    <motor ctrllimited="true" ctrlrange="-1 1"/>
+  </default>
+  <worldbody>
+    <body name="arm" pos="0 0 0.5">
+      <joint name="shoulder" type="hinge" axis="0 0 1"/>
+      <geom fromto="0 0 0 0.5 0 0"/>
+      <body name="forearm" pos="0.5 0 0">
+        <joint name="elbow" type="hinge" axis="0 0 1"/>
+        <geom fromto="0 0 0 0.4 0 0"/>
+        <site name="tip" pos="0.4 0 0" size="0.01"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="shoulder-drive" joint="shoulder"/>
+    <motor name="elbow-drive" joint="elbow"/>
+  </actuator>
+  <sensor>
+    <jointpos name="shoulder-position" joint="shoulder"/>
+    <jointvel name="elbow-velocity" joint="elbow"/>
+    <framepos name="tip-position" objtype="site" objname="tip"/>
+  </sensor>
+</mujoco>

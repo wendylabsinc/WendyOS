@@ -1,0 +1,18 @@
+{
+  "schema_version": "wendy.world.simulation-run.v1",
+  "package_sha256": "3bcf04947b7b6a8590b3f66e0d3eb32abf389cce4b05769ec2655c71dc09ef1b",
+  "run_id": "generic-office-mujoco4",
+  "steps": 100,
+  "sample_every": 10,
+  "body_names": [
+    "desk"
+  ],
+  "sensor_names": [
+    "desk-position"
+  ],
+  "initial_state": "model-default",
+  "control": {
+    "mode": "zero"
+  },
+  "resource_policy": "linux-offline-v1"
+}

@@ -1,0 +1,42 @@
+{
+  "site_id": "synthetic-office",
+  "frame_revision": "office-frame-v1",
+  "provenance": "synthetic",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "asset_license": "Proprietary Wendy Labs fixture; no real office data",
+  "schema_version": "wendy.world.package.v1",
+  "package_revision": "generic-office-v1",
+  "description": "Passive synthetic office with native position sensing and no actuator or gas model.",
+  "mujoco": {
+    "path": "office.xml",
+    "sha256": "2b3ef1e2177fd2c9e2947bdc46400aea57a971018ce8a9bf5ba45694628fb73e",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ]
+  },
+  "assets": [
+    {
+      "path": "room.xml",
+      "sha256": "d74ceab25488cb238c5e28498dfc7db946b5f0ee4959f2774ffb40ed3b7dfa23",
+      "size": 252
+    }
+  ]
+}

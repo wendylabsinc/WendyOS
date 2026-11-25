@@ -1,0 +1,23 @@
+{
+  "appId": "com.wendy.world.vmfixture",
+  "version": "1.0.0",
+  "platform": "linux",
+  "services": {
+    "gas": {
+      "context": ".",
+      "env": { "FIXTURE_STREAM": "gas" },
+      "entitlements": [
+        { "type": "persist", "name": "world-vm-gas-proofs", "path": "/proofs" },
+        { "type": "world", "publish": [{ "componentType": "wendy.sensor.scalar.v1", "stream": "gas" }] }
+      ]
+    },
+    "temperature": {
+      "context": ".",
+      "env": { "FIXTURE_STREAM": "temperature" },
+      "entitlements": [
+        { "type": "persist", "name": "world-vm-temperature-proofs", "path": "/proofs" },
+        { "type": "world", "publish": [{ "componentType": "wendy.sensor.scalar.v1", "stream": "temperature" }] }
+      ]
+    }
+  }
+}

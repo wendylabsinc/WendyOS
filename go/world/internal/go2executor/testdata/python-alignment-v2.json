@@ -1,0 +1,1 @@
+{"schema":"wendy.world.go2-alignment.v1","source_frame":"odom","target_frame":{"id":"office-floor","revision":"v1"},"translation_xy_m":[0,0],"yaw_rad":0,"reference_point":"base_footprint","synthetic":true,"position_uncertainty_m":0.02,"yaw_uncertainty_rad":0.01}

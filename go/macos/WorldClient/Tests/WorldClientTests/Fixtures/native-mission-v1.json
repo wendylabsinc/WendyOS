@@ -1,0 +1,488 @@
+{
+  "clock_observation": {
+    "version": 1,
+    "grant": {
+      "grant": {
+        "publish_audience": "node-1",
+        "version": 1,
+        "id": "mission-clock",
+        "tenant": "tenant",
+        "site": "office",
+        "domain": "simulation",
+        "principal": "gateway-clock",
+        "kind": "device",
+        "source": {
+          "device": "native",
+          "app": "mission-console",
+          "service": "operator",
+          "stream": "tasks"
+        },
+        "public_key": "RQigeqlBcH8+stuUyIl6gLLBGXR2tt4hOsJz332GxP8=",
+        "scopes": [
+          "mission-clock-server"
+        ],
+        "not_before_unix_ms": 1794394800000,
+        "not_after_unix_ms": 1794402000000
+      },
+      "signature": "RsXD70vHBY/4CXhOhKyN+PWu0mTSiZdXdwQ0Z7NoKOtM9lbl5p9/J5puaKKiwK54GK5V6kOU88/orfHoSArwDQ=="
+    },
+    "observation": {
+      "request_sha256": "d4a3760b00ae5367aa2d7307ed9578fe346dedb7dd6b305d68a5b573611556b4",
+      "tenant": "tenant",
+      "site": "office",
+      "audience": "node-1",
+      "run_id": "run-native",
+      "clock_domain": "simulation:run-native",
+      "purpose": "mission",
+      "nonce": "abababababababababababababababababababababababababababababababab",
+      "operator_principal": "operator-native",
+      "operator_key_sha256": "b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092",
+      "gateway_principal": "gateway-clock",
+      "gateway_boot_id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "sample_unix_ms": 1794398400000,
+      "reference": "simulation-gateway-relative-mission-v1",
+      "max_rtt_ms": 2000,
+      "max_holdover_ms": 5000,
+      "drift_ppm": 100,
+      "quantization_ms": 1
+    },
+    "signature": "mX6S0rKL2+KoPyUfWDWbPuWrEF39QxubA4YPd9I+iXHv3kJYm8ZNWtSzMJOYJB/DEs86EhA/f3cjM0xmjyCZCA=="
+  },
+  "clock_observation_canonical": "{\"version\":1,\"grant\":{\"grant\":{\"publish_audience\":\"node-1\",\"version\":1,\"id\":\"mission-clock\",\"tenant\":\"tenant\",\"site\":\"office\",\"domain\":\"simulation\",\"principal\":\"gateway-clock\",\"kind\":\"device\",\"source\":{\"device\":\"native\",\"app\":\"mission-console\",\"service\":\"operator\",\"stream\":\"tasks\"},\"public_key\":\"RQigeqlBcH8+stuUyIl6gLLBGXR2tt4hOsJz332GxP8=\",\"scopes\":[\"mission-clock-server\"],\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000},\"signature\":\"RsXD70vHBY/4CXhOhKyN+PWu0mTSiZdXdwQ0Z7NoKOtM9lbl5p9/J5puaKKiwK54GK5V6kOU88/orfHoSArwDQ==\"},\"observation\":{\"request_sha256\":\"d4a3760b00ae5367aa2d7307ed9578fe346dedb7dd6b305d68a5b573611556b4\",\"tenant\":\"tenant\",\"site\":\"office\",\"audience\":\"node-1\",\"run_id\":\"run-native\",\"clock_domain\":\"simulation:run-native\",\"purpose\":\"mission\",\"nonce\":\"abababababababababababababababababababababababababababababababab\",\"operator_principal\":\"operator-native\",\"operator_key_sha256\":\"b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092\",\"gateway_principal\":\"gateway-clock\",\"gateway_boot_id\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"sample_unix_ms\":1794398400000,\"reference\":\"simulation-gateway-relative-mission-v1\",\"max_rtt_ms\":2000,\"max_holdover_ms\":5000,\"drift_ppm\":100,\"quantization_ms\":1},\"signature\":\"mX6S0rKL2+KoPyUfWDWbPuWrEF39QxubA4YPd9I+iXHv3kJYm8ZNWtSzMJOYJB/DEs86EhA/f3cjM0xmjyCZCA==\"}",
+  "clock_observation_signing_bytes": "wendy.world.authority.v1/mission-clock-observation\u0000{\"version\":1,\"grant_sha256\":\"b7ed42e49e4825d2399847b5f3098a7931772ad7dbc4f44f045615fdd8435ea8\",\"message\":{\"request_sha256\":\"d4a3760b00ae5367aa2d7307ed9578fe346dedb7dd6b305d68a5b573611556b4\",\"tenant\":\"tenant\",\"site\":\"office\",\"audience\":\"node-1\",\"run_id\":\"run-native\",\"clock_domain\":\"simulation:run-native\",\"purpose\":\"mission\",\"nonce\":\"abababababababababababababababababababababababababababababababab\",\"operator_principal\":\"operator-native\",\"operator_key_sha256\":\"b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092\",\"gateway_principal\":\"gateway-clock\",\"gateway_boot_id\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"sample_unix_ms\":1794398400000,\"reference\":\"simulation-gateway-relative-mission-v1\",\"max_rtt_ms\":2000,\"max_holdover_ms\":5000,\"drift_ppm\":100,\"quantization_ms\":1}}",
+  "clock_request": {
+    "version": 1,
+    "grant": {
+      "grant": {
+        "version": 1,
+        "id": "native-operator",
+        "tenant": "tenant",
+        "site": "office",
+        "domain": "simulation",
+        "principal": "operator-native",
+        "kind": "operator",
+        "source": {
+          "device": "native",
+          "app": "mission-console",
+          "service": "operator",
+          "stream": "tasks"
+        },
+        "public_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+        "scopes": [
+          "read",
+          "mission",
+          "stop"
+        ],
+        "not_before_unix_ms": 1794394800000,
+        "not_after_unix_ms": 1794402000000
+      },
+      "signature": "wwTaND5h/+NdhQphylrkTa9GvfQKk0ZegT4sNZhyD9E1QYeTibt1gvKOjlIcPULddNigiYZiTPgK78OxAe7ECA=="
+    },
+    "request": {
+      "tenant": "tenant",
+      "site": "office",
+      "audience": "node-1",
+      "run_id": "run-native",
+      "clock_domain": "simulation:run-native",
+      "purpose": "mission",
+      "nonce": "abababababababababababababababababababababababababababababababab"
+    },
+    "signature": "LMDAaAkqCTGUl9sm3DX8LT2/PlKMK8pujXFigxF+rPcfLeM/cEm9XNqESi7ld1NjFYN7KWRITJngfFwEvK/gBw=="
+  },
+  "clock_request_canonical": "{\"version\":1,\"grant\":{\"grant\":{\"version\":1,\"id\":\"native-operator\",\"tenant\":\"tenant\",\"site\":\"office\",\"domain\":\"simulation\",\"principal\":\"operator-native\",\"kind\":\"operator\",\"source\":{\"device\":\"native\",\"app\":\"mission-console\",\"service\":\"operator\",\"stream\":\"tasks\"},\"public_key\":\"GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=\",\"scopes\":[\"read\",\"mission\",\"stop\"],\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000},\"signature\":\"wwTaND5h/+NdhQphylrkTa9GvfQKk0ZegT4sNZhyD9E1QYeTibt1gvKOjlIcPULddNigiYZiTPgK78OxAe7ECA==\"},\"request\":{\"tenant\":\"tenant\",\"site\":\"office\",\"audience\":\"node-1\",\"run_id\":\"run-native\",\"clock_domain\":\"simulation:run-native\",\"purpose\":\"mission\",\"nonce\":\"abababababababababababababababababababababababababababababababab\"},\"signature\":\"LMDAaAkqCTGUl9sm3DX8LT2/PlKMK8pujXFigxF+rPcfLeM/cEm9XNqESi7ld1NjFYN7KWRITJngfFwEvK/gBw==\"}",
+  "clock_request_signing_bytes": "wendy.world.authority.v1/mission-clock-request\u0000{\"version\":1,\"grant_sha256\":\"fba14a3c4e936c71ccac3769c764b4450dff98b96b117e3802d85deb9fadae73\",\"message\":{\"tenant\":\"tenant\",\"site\":\"office\",\"audience\":\"node-1\",\"run_id\":\"run-native\",\"clock_domain\":\"simulation:run-native\",\"purpose\":\"mission\",\"nonce\":\"abababababababababababababababababababababababababababababababab\"}}",
+  "clock_server_grant": {
+    "grant": {
+      "publish_audience": "node-1",
+      "version": 1,
+      "id": "mission-clock",
+      "tenant": "tenant",
+      "site": "office",
+      "domain": "simulation",
+      "principal": "gateway-clock",
+      "kind": "device",
+      "source": {
+        "device": "native",
+        "app": "mission-console",
+        "service": "operator",
+        "stream": "tasks"
+      },
+      "public_key": "RQigeqlBcH8+stuUyIl6gLLBGXR2tt4hOsJz332GxP8=",
+      "scopes": [
+        "mission-clock-server"
+      ],
+      "not_before_unix_ms": 1794394800000,
+      "not_after_unix_ms": 1794402000000
+    },
+    "signature": "RsXD70vHBY/4CXhOhKyN+PWu0mTSiZdXdwQ0Z7NoKOtM9lbl5p9/J5puaKKiwK54GK5V6kOU88/orfHoSArwDQ=="
+  },
+  "control_context": {
+    "context": {
+      "version": 1,
+      "tenant": "tenant",
+      "site": "office",
+      "audience": "node-1",
+      "run_id": "run-native",
+      "package_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+      "assignee": "robot/navigation",
+      "frame": {
+        "id": "office-floor",
+        "revision": "office-frame-v1"
+      },
+      "type": "wendy.nav.inspect.v1",
+      "class": "MOVE",
+      "mode": "autonomous",
+      "area": {
+        "min": [
+          -2,
+          0,
+          -1
+        ],
+        "max": [
+          2,
+          1,
+          1
+        ]
+      },
+      "required_sensors": [
+        "obstacles"
+      ],
+      "minimum_energy": 0.1,
+      "fallback": "hold",
+      "speed_mps": 0.25,
+      "tolerance_m": 0.1,
+      "stop_speed_mps": 0.05,
+      "max_duration_ms": 60000,
+      "not_before_unix_ms": 1794394800000,
+      "not_after_unix_ms": 1794402000000
+    },
+    "signature": "pLRiTpaYLlIZ2h5pmuJRAPbttsaIDIkhf4OcPLqrxlRoQOGO8etxSr/FdCCRlv4b+iy2c3ZSz+0a8McABqo6Bg=="
+  },
+  "control_context_canonical": "{\"context\":{\"version\":1,\"tenant\":\"tenant\",\"site\":\"office\",\"audience\":\"node-1\",\"run_id\":\"run-native\",\"package_sha256\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"assignee\":\"robot/navigation\",\"frame\":{\"id\":\"office-floor\",\"revision\":\"office-frame-v1\"},\"type\":\"wendy.nav.inspect.v1\",\"class\":\"MOVE\",\"mode\":\"autonomous\",\"area\":{\"min\":[-2,0,-1],\"max\":[2,1,1]},\"required_sensors\":[\"obstacles\"],\"minimum_energy\":0.1,\"fallback\":\"hold\",\"speed_mps\":0.25,\"tolerance_m\":0.1,\"stop_speed_mps\":0.05,\"max_duration_ms\":60000,\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000},\"signature\":\"pLRiTpaYLlIZ2h5pmuJRAPbttsaIDIkhf4OcPLqrxlRoQOGO8etxSr/FdCCRlv4b+iy2c3ZSz+0a8McABqo6Bg==\"}",
+  "control_context_sha256": "dd108d06e9d62068fa05130634273fdbdf61b42901b36a57d2989fd132367df9",
+  "control_context_signing_bytes": "wendy.world.authority.v1/mission-control-context\u0000{\"version\":1,\"tenant\":\"tenant\",\"site\":\"office\",\"audience\":\"node-1\",\"run_id\":\"run-native\",\"package_sha256\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"assignee\":\"robot/navigation\",\"frame\":{\"id\":\"office-floor\",\"revision\":\"office-frame-v1\"},\"type\":\"wendy.nav.inspect.v1\",\"class\":\"MOVE\",\"mode\":\"autonomous\",\"area\":{\"min\":[-2,0,-1],\"max\":[2,1,1]},\"required_sensors\":[\"obstacles\"],\"minimum_energy\":0.1,\"fallback\":\"hold\",\"speed_mps\":0.25,\"tolerance_m\":0.1,\"stop_speed_mps\":0.05,\"max_duration_ms\":60000,\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000}",
+  "instruction": {
+    "version": 1,
+    "grant": {
+      "grant": {
+        "version": 1,
+        "id": "native-operator",
+        "tenant": "tenant",
+        "site": "office",
+        "domain": "simulation",
+        "principal": "operator-native",
+        "kind": "operator",
+        "source": {
+          "device": "native",
+          "app": "mission-console",
+          "service": "operator",
+          "stream": "tasks"
+        },
+        "public_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+        "scopes": [
+          "read",
+          "mission",
+          "stop"
+        ],
+        "not_before_unix_ms": 1794394800000,
+        "not_after_unix_ms": 1794402000000
+      },
+      "signature": "wwTaND5h/+NdhQphylrkTa9GvfQKk0ZegT4sNZhyD9E1QYeTibt1gvKOjlIcPULddNigiYZiTPgK78OxAe7ECA=="
+    },
+    "audience": "node-1",
+    "operation": "mission",
+    "payload": {
+      "control_context": {
+        "context": {
+          "version": 1,
+          "tenant": "tenant",
+          "site": "office",
+          "audience": "node-1",
+          "run_id": "run-native",
+          "package_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+          "assignee": "robot/navigation",
+          "frame": {
+            "id": "office-floor",
+            "revision": "office-frame-v1"
+          },
+          "type": "wendy.nav.inspect.v1",
+          "class": "MOVE",
+          "mode": "autonomous",
+          "area": {
+            "min": [
+              -2,
+              0,
+              -1
+            ],
+            "max": [
+              2,
+              1,
+              1
+            ]
+          },
+          "required_sensors": [
+            "obstacles"
+          ],
+          "minimum_energy": 0.1,
+          "fallback": "hold",
+          "speed_mps": 0.25,
+          "tolerance_m": 0.1,
+          "stop_speed_mps": 0.05,
+          "max_duration_ms": 60000,
+          "not_before_unix_ms": 1794394800000,
+          "not_after_unix_ms": 1794402000000
+        },
+        "signature": "pLRiTpaYLlIZ2h5pmuJRAPbttsaIDIkhf4OcPLqrxlRoQOGO8etxSr/FdCCRlv4b+iy2c3ZSz+0a8McABqo6Bg=="
+      },
+      "proposal": {
+        "audience": "node-1",
+        "id": "proposal-native",
+        "body_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+      },
+      "id": "mission-native",
+      "type": "wendy.nav.inspect.v1",
+      "site": "office",
+      "assignee": "robot/navigation",
+      "domain": "simulation",
+      "class": "MOVE",
+      "mode": "autonomous",
+      "frame": {
+        "id": "office-floor",
+        "revision": "office-frame-v1"
+      },
+      "not_after_unix_ms": 1794398430000,
+      "area": {
+        "min": [
+          -2,
+          0,
+          -1
+        ],
+        "max": [
+          2,
+          1,
+          1
+        ]
+      },
+      "required_sensors": [
+        "obstacles"
+      ],
+      "minimum_energy": 0.1,
+      "fallback": "hold",
+      "target": [
+        1.25,
+        0.2,
+        0
+      ],
+      "speed_mps": 0.25,
+      "tolerance_m": 0.1,
+      "stop_speed_mps": 0.05
+    },
+    "issued_at_unix_ms": 1794398400000,
+    "expires_at_unix_ms": 1794398430000,
+    "signature": "UxDf8Cl1deWVOoGJvRupDrn5ogtjIDFDri0KeLcDNzfwNwemXq1pYr/nKHq7uTAv3J1ZaEwcDrAyc9JBzFM4Dw=="
+  },
+  "instruction_canonical": "{\"version\":1,\"grant\":{\"grant\":{\"version\":1,\"id\":\"native-operator\",\"tenant\":\"tenant\",\"site\":\"office\",\"domain\":\"simulation\",\"principal\":\"operator-native\",\"kind\":\"operator\",\"source\":{\"device\":\"native\",\"app\":\"mission-console\",\"service\":\"operator\",\"stream\":\"tasks\"},\"public_key\":\"GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=\",\"scopes\":[\"read\",\"mission\",\"stop\"],\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000},\"signature\":\"wwTaND5h/+NdhQphylrkTa9GvfQKk0ZegT4sNZhyD9E1QYeTibt1gvKOjlIcPULddNigiYZiTPgK78OxAe7ECA==\"},\"audience\":\"node-1\",\"operation\":\"mission\",\"payload\":{\"control_context\":{\"context\":{\"version\":1,\"tenant\":\"tenant\",\"site\":\"office\",\"audience\":\"node-1\",\"run_id\":\"run-native\",\"package_sha256\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"assignee\":\"robot/navigation\",\"frame\":{\"id\":\"office-floor\",\"revision\":\"office-frame-v1\"},\"type\":\"wendy.nav.inspect.v1\",\"class\":\"MOVE\",\"mode\":\"autonomous\",\"area\":{\"min\":[-2,0,-1],\"max\":[2,1,1]},\"required_sensors\":[\"obstacles\"],\"minimum_energy\":0.1,\"fallback\":\"hold\",\"speed_mps\":0.25,\"tolerance_m\":0.1,\"stop_speed_mps\":0.05,\"max_duration_ms\":60000,\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000},\"signature\":\"pLRiTpaYLlIZ2h5pmuJRAPbttsaIDIkhf4OcPLqrxlRoQOGO8etxSr/FdCCRlv4b+iy2c3ZSz+0a8McABqo6Bg==\"},\"proposal\":{\"audience\":\"node-1\",\"id\":\"proposal-native\",\"body_sha256\":\"1212121212121212121212121212121212121212121212121212121212121212\"},\"id\":\"mission-native\",\"type\":\"wendy.nav.inspect.v1\",\"site\":\"office\",\"assignee\":\"robot/navigation\",\"domain\":\"simulation\",\"class\":\"MOVE\",\"mode\":\"autonomous\",\"frame\":{\"id\":\"office-floor\",\"revision\":\"office-frame-v1\"},\"not_after_unix_ms\":1794398430000,\"area\":{\"min\":[-2,0,-1],\"max\":[2,1,1]},\"required_sensors\":[\"obstacles\"],\"minimum_energy\":0.1,\"fallback\":\"hold\",\"target\":[1.25,0.2,0],\"speed_mps\":0.25,\"tolerance_m\":0.1,\"stop_speed_mps\":0.05},\"issued_at_unix_ms\":1794398400000,\"expires_at_unix_ms\":1794398430000,\"signature\":\"UxDf8Cl1deWVOoGJvRupDrn5ogtjIDFDri0KeLcDNzfwNwemXq1pYr/nKHq7uTAv3J1ZaEwcDrAyc9JBzFM4Dw==\"}",
+  "instruction_signing_bytes": "wendy.world.authority.v1/instruction\u0000{\"version\":1,\"grant_digest\":\"fba14a3c4e936c71ccac3769c764b4450dff98b96b117e3802d85deb9fadae73\",\"audience\":\"node-1\",\"operation\":\"mission\",\"payload\":{\"control_context\":{\"context\":{\"version\":1,\"tenant\":\"tenant\",\"site\":\"office\",\"audience\":\"node-1\",\"run_id\":\"run-native\",\"package_sha256\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"assignee\":\"robot/navigation\",\"frame\":{\"id\":\"office-floor\",\"revision\":\"office-frame-v1\"},\"type\":\"wendy.nav.inspect.v1\",\"class\":\"MOVE\",\"mode\":\"autonomous\",\"area\":{\"min\":[-2,0,-1],\"max\":[2,1,1]},\"required_sensors\":[\"obstacles\"],\"minimum_energy\":0.1,\"fallback\":\"hold\",\"speed_mps\":0.25,\"tolerance_m\":0.1,\"stop_speed_mps\":0.05,\"max_duration_ms\":60000,\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000},\"signature\":\"pLRiTpaYLlIZ2h5pmuJRAPbttsaIDIkhf4OcPLqrxlRoQOGO8etxSr/FdCCRlv4b+iy2c3ZSz+0a8McABqo6Bg==\"},\"proposal\":{\"audience\":\"node-1\",\"id\":\"proposal-native\",\"body_sha256\":\"1212121212121212121212121212121212121212121212121212121212121212\"},\"id\":\"mission-native\",\"type\":\"wendy.nav.inspect.v1\",\"site\":\"office\",\"assignee\":\"robot/navigation\",\"domain\":\"simulation\",\"class\":\"MOVE\",\"mode\":\"autonomous\",\"frame\":{\"id\":\"office-floor\",\"revision\":\"office-frame-v1\"},\"not_after_unix_ms\":1794398430000,\"area\":{\"min\":[-2,0,-1],\"max\":[2,1,1]},\"required_sensors\":[\"obstacles\"],\"minimum_energy\":0.1,\"fallback\":\"hold\",\"target\":[1.25,0.2,0],\"speed_mps\":0.25,\"tolerance_m\":0.1,\"stop_speed_mps\":0.05},\"issued\":1794398400000,\"expires\":1794398430000}",
+  "mission_clock_trust": {
+    "root_public_key": "+kg0FH9uaQw2k+/2EzYEZAPNiuKhTzGzxAc1hWkjlWU=",
+    "gateway_principal": "gateway-clock",
+    "gateway_key_sha256": "26f3cfc4e47f703666721413ce07c50f3565672f4aecc104a59835e7fc70b52e",
+    "run_id": "run-native",
+    "clock_domain": "simulation:run-native"
+  },
+  "now_unix_ms": 1794398400000,
+  "operator_grant": {
+    "grant": {
+      "version": 1,
+      "id": "native-operator",
+      "tenant": "tenant",
+      "site": "office",
+      "domain": "simulation",
+      "principal": "operator-native",
+      "kind": "operator",
+      "source": {
+        "device": "native",
+        "app": "mission-console",
+        "service": "operator",
+        "stream": "tasks"
+      },
+      "public_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+      "scopes": [
+        "read",
+        "mission",
+        "stop"
+      ],
+      "not_before_unix_ms": 1794394800000,
+      "not_after_unix_ms": 1794402000000
+    },
+    "signature": "wwTaND5h/+NdhQphylrkTa9GvfQKk0ZegT4sNZhyD9E1QYeTibt1gvKOjlIcPULddNigiYZiTPgK78OxAe7ECA=="
+  },
+  "operator_private_key": "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioZf2sj4WyFMsaryDj6zV6nib4MdrKSAzQDm/qLPTaNYQ==",
+  "purpose": "public deterministic cross-language test keys; simulation only",
+  "root_public_key": "+kg0FH9uaQw2k+/2EzYEZAPNiuKhTzGzxAc1hWkjlWU=",
+  "spec": {
+    "control_context": {
+      "context": {
+        "version": 1,
+        "tenant": "tenant",
+        "site": "office",
+        "audience": "node-1",
+        "run_id": "run-native",
+        "package_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+        "assignee": "robot/navigation",
+        "frame": {
+          "id": "office-floor",
+          "revision": "office-frame-v1"
+        },
+        "type": "wendy.nav.inspect.v1",
+        "class": "MOVE",
+        "mode": "autonomous",
+        "area": {
+          "min": [
+            -2,
+            0,
+            -1
+          ],
+          "max": [
+            2,
+            1,
+            1
+          ]
+        },
+        "required_sensors": [
+          "obstacles"
+        ],
+        "minimum_energy": 0.1,
+        "fallback": "hold",
+        "speed_mps": 0.25,
+        "tolerance_m": 0.1,
+        "stop_speed_mps": 0.05,
+        "max_duration_ms": 60000,
+        "not_before_unix_ms": 1794394800000,
+        "not_after_unix_ms": 1794402000000
+      },
+      "signature": "pLRiTpaYLlIZ2h5pmuJRAPbttsaIDIkhf4OcPLqrxlRoQOGO8etxSr/FdCCRlv4b+iy2c3ZSz+0a8McABqo6Bg=="
+    },
+    "proposal": {
+      "audience": "node-1",
+      "id": "proposal-native",
+      "body_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+    },
+    "id": "mission-native",
+    "type": "wendy.nav.inspect.v1",
+    "site": "office",
+    "assignee": "robot/navigation",
+    "domain": "simulation",
+    "class": "MOVE",
+    "mode": "autonomous",
+    "frame": {
+      "id": "office-floor",
+      "revision": "office-frame-v1"
+    },
+    "not_after_unix_ms": 1794398430000,
+    "area": {
+      "min": [
+        -2,
+        0,
+        -1
+      ],
+      "max": [
+        2,
+        1,
+        1
+      ]
+    },
+    "required_sensors": [
+      "obstacles"
+    ],
+    "minimum_energy": 0.1,
+    "fallback": "hold",
+    "target": [
+      1.25,
+      0.2,
+      0
+    ],
+    "speed_mps": 0.25,
+    "tolerance_m": 0.1,
+    "stop_speed_mps": 0.05
+  },
+  "spec_canonical": "{\"control_context\":{\"context\":{\"version\":1,\"tenant\":\"tenant\",\"site\":\"office\",\"audience\":\"node-1\",\"run_id\":\"run-native\",\"package_sha256\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"assignee\":\"robot/navigation\",\"frame\":{\"id\":\"office-floor\",\"revision\":\"office-frame-v1\"},\"type\":\"wendy.nav.inspect.v1\",\"class\":\"MOVE\",\"mode\":\"autonomous\",\"area\":{\"min\":[-2,0,-1],\"max\":[2,1,1]},\"required_sensors\":[\"obstacles\"],\"minimum_energy\":0.1,\"fallback\":\"hold\",\"speed_mps\":0.25,\"tolerance_m\":0.1,\"stop_speed_mps\":0.05,\"max_duration_ms\":60000,\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000},\"signature\":\"pLRiTpaYLlIZ2h5pmuJRAPbttsaIDIkhf4OcPLqrxlRoQOGO8etxSr/FdCCRlv4b+iy2c3ZSz+0a8McABqo6Bg==\"},\"proposal\":{\"audience\":\"node-1\",\"id\":\"proposal-native\",\"body_sha256\":\"1212121212121212121212121212121212121212121212121212121212121212\"},\"id\":\"mission-native\",\"type\":\"wendy.nav.inspect.v1\",\"site\":\"office\",\"assignee\":\"robot/navigation\",\"domain\":\"simulation\",\"class\":\"MOVE\",\"mode\":\"autonomous\",\"frame\":{\"id\":\"office-floor\",\"revision\":\"office-frame-v1\"},\"not_after_unix_ms\":1794398430000,\"area\":{\"min\":[-2,0,-1],\"max\":[2,1,1]},\"required_sensors\":[\"obstacles\"],\"minimum_energy\":0.1,\"fallback\":\"hold\",\"target\":[1.25,0.2,0],\"speed_mps\":0.25,\"tolerance_m\":0.1,\"stop_speed_mps\":0.05}",
+  "stop_instruction": {
+    "version": 1,
+    "grant": {
+      "grant": {
+        "version": 1,
+        "id": "native-operator",
+        "tenant": "tenant",
+        "site": "office",
+        "domain": "simulation",
+        "principal": "operator-native",
+        "kind": "operator",
+        "source": {
+          "device": "native",
+          "app": "mission-console",
+          "service": "operator",
+          "stream": "tasks"
+        },
+        "public_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+        "scopes": [
+          "read",
+          "mission",
+          "stop"
+        ],
+        "not_before_unix_ms": 1794394800000,
+        "not_after_unix_ms": 1794402000000
+      },
+      "signature": "wwTaND5h/+NdhQphylrkTa9GvfQKk0ZegT4sNZhyD9E1QYeTibt1gvKOjlIcPULddNigiYZiTPgK78OxAe7ECA=="
+    },
+    "audience": "node-1",
+    "operation": "stop",
+    "payload": {
+      "task_id": "mission-native"
+    },
+    "issued_at_unix_ms": 1794398400000,
+    "expires_at_unix_ms": 1794398430000,
+    "signature": "zurVTxn9c23x2iCIeoEZJ9eesihoL8zKStOTNePgCOSXBxT/r4ZHJMRialIxiI/27KWdV7JkkgPRfWNvccVQDw=="
+  },
+  "stop_instruction_canonical": "{\"version\":1,\"grant\":{\"grant\":{\"version\":1,\"id\":\"native-operator\",\"tenant\":\"tenant\",\"site\":\"office\",\"domain\":\"simulation\",\"principal\":\"operator-native\",\"kind\":\"operator\",\"source\":{\"device\":\"native\",\"app\":\"mission-console\",\"service\":\"operator\",\"stream\":\"tasks\"},\"public_key\":\"GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=\",\"scopes\":[\"read\",\"mission\",\"stop\"],\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000},\"signature\":\"wwTaND5h/+NdhQphylrkTa9GvfQKk0ZegT4sNZhyD9E1QYeTibt1gvKOjlIcPULddNigiYZiTPgK78OxAe7ECA==\"},\"audience\":\"node-1\",\"operation\":\"stop\",\"payload\":{\"task_id\":\"mission-native\"},\"issued_at_unix_ms\":1794398400000,\"expires_at_unix_ms\":1794398430000,\"signature\":\"zurVTxn9c23x2iCIeoEZJ9eesihoL8zKStOTNePgCOSXBxT/r4ZHJMRialIxiI/27KWdV7JkkgPRfWNvccVQDw==\"}",
+  "stop_instruction_signing_bytes": "wendy.world.authority.v1/instruction\u0000{\"version\":1,\"grant_digest\":\"fba14a3c4e936c71ccac3769c764b4450dff98b96b117e3802d85deb9fadae73\",\"audience\":\"node-1\",\"operation\":\"stop\",\"payload\":{\"task_id\":\"mission-native\"},\"issued\":1794398400000,\"expires\":1794398430000}",
+  "transport": {
+    "version": 1,
+    "grant": {
+      "grant": {
+        "version": 1,
+        "id": "native-operator",
+        "tenant": "tenant",
+        "site": "office",
+        "domain": "simulation",
+        "principal": "operator-native",
+        "kind": "operator",
+        "source": {
+          "device": "native",
+          "app": "mission-console",
+          "service": "operator",
+          "stream": "tasks"
+        },
+        "public_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+        "scopes": [
+          "read",
+          "mission",
+          "stop"
+        ],
+        "not_before_unix_ms": 1794394800000,
+        "not_after_unix_ms": 1794402000000
+      },
+      "signature": "wwTaND5h/+NdhQphylrkTa9GvfQKk0ZegT4sNZhyD9E1QYeTibt1gvKOjlIcPULddNigiYZiTPgK78OxAe7ECA=="
+    },
+    "audience": "node-1",
+    "operation": "mission",
+    "body_sha256": "bc646545bf66e19211acd1491f496d6b6f736e9fa1eb07f0c240d3a1d413305a",
+    "nonce": "native-transport-nonce-0001",
+    "issued_at_unix_ms": 1794398400000,
+    "expires_at_unix_ms": 1794398460000,
+    "signature": "HX89pynM44n8EvF7fPL1ymqWsESZIqy+U37wiPDiSio2BhddLcchk4kyDBw1fxOO5pHw0SAgnwEXR7uLeX1FAA=="
+  },
+  "transport_canonical": "{\"version\":1,\"grant\":{\"grant\":{\"version\":1,\"id\":\"native-operator\",\"tenant\":\"tenant\",\"site\":\"office\",\"domain\":\"simulation\",\"principal\":\"operator-native\",\"kind\":\"operator\",\"source\":{\"device\":\"native\",\"app\":\"mission-console\",\"service\":\"operator\",\"stream\":\"tasks\"},\"public_key\":\"GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=\",\"scopes\":[\"read\",\"mission\",\"stop\"],\"not_before_unix_ms\":1794394800000,\"not_after_unix_ms\":1794402000000},\"signature\":\"wwTaND5h/+NdhQphylrkTa9GvfQKk0ZegT4sNZhyD9E1QYeTibt1gvKOjlIcPULddNigiYZiTPgK78OxAe7ECA==\"},\"audience\":\"node-1\",\"operation\":\"mission\",\"body_sha256\":\"bc646545bf66e19211acd1491f496d6b6f736e9fa1eb07f0c240d3a1d413305a\",\"nonce\":\"native-transport-nonce-0001\",\"issued_at_unix_ms\":1794398400000,\"expires_at_unix_ms\":1794398460000,\"signature\":\"HX89pynM44n8EvF7fPL1ymqWsESZIqy+U37wiPDiSio2BhddLcchk4kyDBw1fxOO5pHw0SAgnwEXR7uLeX1FAA==\"}",
+  "transport_signing_bytes": "wendy.world.authority.v1/request\u0000{\"version\":1,\"grant_digest\":\"fba14a3c4e936c71ccac3769c764b4450dff98b96b117e3802d85deb9fadae73\",\"audience\":\"node-1\",\"operation\":\"mission\",\"body_digest\":\"bc646545bf66e19211acd1491f496d6b6f736e9fa1eb07f0c240d3a1d413305a\",\"nonce\":\"native-transport-nonce-0001\",\"issued\":1794398400000,\"expires\":1794398460000}",
+  "version": 1
+}

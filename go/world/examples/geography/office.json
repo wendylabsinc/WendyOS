@@ -1,0 +1,76 @@
+{
+  "schema_version": "wendy.world.georeference.v1",
+  "site": "synthetic-office",
+  "revision": "illustrative-geo-v1",
+  "package_sha256": "b16c2015cec52bac515eeb2d6f7f4f04c4896140d305086b458e8ba585d35a30",
+  "root": {
+    "id": "site-origin",
+    "revision": "geo-v1"
+  },
+  "anchor": {
+    "latitude_degrees": 52,
+    "longitude_degrees": 5,
+    "altitude_metres": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "uncertainty_metres": 100
+  },
+  "axes": [
+    "east",
+    "up",
+    "south"
+  ],
+  "placement": "illustrative",
+  "placement_source": "Hand-placed synthetic fixture, not a survey or real office location",
+  "valid_from": "2026-01-01T00:00:00Z",
+  "valid_until": "2027-01-01T00:00:00Z",
+  "frames": [
+    {
+      "ref": {
+        "id": "office-floor",
+        "revision": "office-frame-v1"
+      },
+      "parent": {
+        "id": "site-origin",
+        "revision": "geo-v1"
+      },
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "rotation_xyzw": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2027-01-01T00:00:00Z",
+      "uncertainty_metres": 0.1
+    },
+    {
+      "ref": {
+        "id": "mezzanine",
+        "revision": "mezzanine-v1"
+      },
+      "parent": {
+        "id": "site-origin",
+        "revision": "geo-v1"
+      },
+      "translation": [
+        10,
+        3,
+        5
+      ],
+      "rotation_xyzw": [
+        0,
+        0.7071067811865475,
+        0,
+        0.7071067811865476
+      ],
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2027-01-01T00:00:00Z",
+      "uncertainty_metres": 0.1
+    }
+  ]
+}

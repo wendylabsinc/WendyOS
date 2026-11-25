@@ -1,0 +1,242 @@
+{
+  "credentials": {
+    "allow_insecure_simulation": true,
+    "audience": "node-3",
+    "grant": {
+      "grant": {
+        "publish_audience": "node-3",
+        "version": 1,
+        "id": "native-contributor",
+        "tenant": "lab",
+        "site": "synthetic-office",
+        "domain": "simulation",
+        "principal": "lab/operator-é\u003c\u003e\u0026",
+        "kind": "operator",
+        "source": {
+          "device": "native-contributor",
+          "app": "wendy-world",
+          "service": "viewer",
+          "stream": "annotations"
+        },
+        "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+        "scopes": [
+          "read",
+          "evidence-read",
+          "annotation-write"
+        ],
+        "not_before_unix_ms": 1794308400120,
+        "not_after_unix_ms": 1794315600120
+      },
+      "signature": "W4dmlERAOPCMhobfMV1fkXj0TdurnLXkCdKmRJ9Q+3Pjrv+feLGpUAUeobCoEpRE+WAHFoHmo65RRgTFuFO0AA=="
+    },
+    "private_key": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8prLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1w==",
+    "url": "http://127.0.0.1:1234"
+  },
+  "epoch": 7,
+  "expected_component": {
+    "key": {
+      "tenant": "lab",
+      "site": "synthetic-office",
+      "entity": "annotation/12345678-1234-4123-8123-123456789abc",
+      "type": "wendy.annotation.note.v1",
+      "source": {
+        "device": "native-contributor",
+        "app": "wendy-world",
+        "service": "viewer",
+        "stream": "annotations"
+      }
+    },
+    "version": {
+      "epoch": 7,
+      "sequence": 1
+    },
+    "frame": {
+      "id": "site",
+      "revision": "office-v1"
+    },
+    "timing": {
+      "sample_time": "2026-11-10T12:00:00.12Z",
+      "clock_domain": "simulation:office-run",
+      "error_known": true,
+      "error_bound_ns": 1000000000,
+      "age_hint_ns": 0
+    },
+    "ttl_ns": 3600000000000,
+    "provenance": {
+      "origin": "authored",
+      "app_version": "world-annotations-v1",
+      "simulation": {
+        "run_id": "office-run",
+        "scenario_version": "office-v1",
+        "seed": 0,
+        "clock_domain": "simulation:office-run"
+      }
+    },
+    "payload": {
+      "id": "12345678-1234-4123-8123-123456789abc",
+      "author_principal": "lab/operator-é\u003c\u003e\u0026",
+      "text": "Check \"north\" door\n東京 \u003c\u003e\u0026\u2028\u2029",
+      "position_mm": [
+        1250,
+        0,
+        -2500
+      ],
+      "authored_at_unix_ms": 1794312000120,
+      "expires_at_unix_ms": 1794315600120
+    },
+    "tombstone": false
+  },
+  "expected_component_json": "{\"key\":{\"tenant\":\"lab\",\"site\":\"synthetic-office\",\"entity\":\"annotation/12345678-1234-4123-8123-123456789abc\",\"type\":\"wendy.annotation.note.v1\",\"source\":{\"device\":\"native-contributor\",\"app\":\"wendy-world\",\"service\":\"viewer\",\"stream\":\"annotations\"}},\"version\":{\"epoch\":7,\"sequence\":1},\"frame\":{\"id\":\"site\",\"revision\":\"office-v1\"},\"timing\":{\"sample_time\":\"2026-11-10T12:00:00.12Z\",\"clock_domain\":\"simulation:office-run\",\"error_known\":true,\"error_bound_ns\":1000000000,\"age_hint_ns\":0},\"ttl_ns\":3600000000000,\"provenance\":{\"origin\":\"authored\",\"app_version\":\"world-annotations-v1\",\"simulation\":{\"run_id\":\"office-run\",\"scenario_version\":\"office-v1\",\"seed\":0,\"clock_domain\":\"simulation:office-run\"}},\"payload\":{\"id\":\"12345678-1234-4123-8123-123456789abc\",\"author_principal\":\"lab/operator-é\\u003c\\u003e\\u0026\",\"text\":\"Check \\\"north\\\" door\\n東京 \\u003c\\u003e\\u0026\\u2028\\u2029\",\"position_mm\":[1250,0,-2500],\"authored_at_unix_ms\":1794312000120,\"expires_at_unix_ms\":1794315600120},\"tombstone\":false}",
+  "expected_grant_json": "{\"grant\":{\"publish_audience\":\"node-3\",\"version\":1,\"id\":\"native-contributor\",\"tenant\":\"lab\",\"site\":\"synthetic-office\",\"domain\":\"simulation\",\"principal\":\"lab/operator-é\\u003c\\u003e\\u0026\",\"kind\":\"operator\",\"source\":{\"device\":\"native-contributor\",\"app\":\"wendy-world\",\"service\":\"viewer\",\"stream\":\"annotations\"},\"public_key\":\"Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=\",\"scopes\":[\"read\",\"evidence-read\",\"annotation-write\"],\"not_before_unix_ms\":1794308400120,\"not_after_unix_ms\":1794315600120},\"signature\":\"W4dmlERAOPCMhobfMV1fkXj0TdurnLXkCdKmRJ9Q+3Pjrv+feLGpUAUeobCoEpRE+WAHFoHmo65RRgTFuFO0AA==\"}",
+  "expected_record_signing_bytes_base64": "d2VuZHkud29ybGQuYXV0aG9yaXR5LnYxL3JlY29yZAB7InZlcnNpb24iOjEsImdyYW50X2RpZ2VzdCI6ImRlMmNkZmJmYTIzYWE5NWY0NTdhY2ZjZGY3MTk4YTk4NzlkMGFhY2IyOGY5NzU3MzRjMGZjOGU5YzViODUyNDciLCJjb21wb25lbnQiOnsia2V5Ijp7InRlbmFudCI6ImxhYiIsInNpdGUiOiJzeW50aGV0aWMtb2ZmaWNlIiwiZW50aXR5IjoiYW5ub3RhdGlvbi8xMjM0NTY3OC0xMjM0LTQxMjMtODEyMy0xMjM0NTY3ODlhYmMiLCJ0eXBlIjoid2VuZHkuYW5ub3RhdGlvbi5ub3RlLnYxIiwic291cmNlIjp7ImRldmljZSI6Im5hdGl2ZS1jb250cmlidXRvciIsImFwcCI6IndlbmR5LXdvcmxkIiwic2VydmljZSI6InZpZXdlciIsInN0cmVhbSI6ImFubm90YXRpb25zIn19LCJ2ZXJzaW9uIjp7ImVwb2NoIjo3LCJzZXF1ZW5jZSI6MX0sImZyYW1lIjp7ImlkIjoic2l0ZSIsInJldmlzaW9uIjoib2ZmaWNlLXYxIn0sInRpbWluZyI6eyJzYW1wbGVfdGltZSI6IjIwMjYtMTEtMTBUMTI6MDA6MDAuMTJaIiwiY2xvY2tfZG9tYWluIjoic2ltdWxhdGlvbjpvZmZpY2UtcnVuIiwiZXJyb3Jfa25vd24iOnRydWUsImVycm9yX2JvdW5kX25zIjoxMDAwMDAwMDAwLCJhZ2VfaGludF9ucyI6MH0sInR0bF9ucyI6MzYwMDAwMDAwMDAwMCwicHJvdmVuYW5jZSI6eyJvcmlnaW4iOiJhdXRob3JlZCIsImFwcF92ZXJzaW9uIjoid29ybGQtYW5ub3RhdGlvbnMtdjEiLCJzaW11bGF0aW9uIjp7InJ1bl9pZCI6Im9mZmljZS1ydW4iLCJzY2VuYXJpb192ZXJzaW9uIjoib2ZmaWNlLXYxIiwic2VlZCI6MCwiY2xvY2tfZG9tYWluIjoic2ltdWxhdGlvbjpvZmZpY2UtcnVuIn19LCJwYXlsb2FkIjp7ImlkIjoiMTIzNDU2NzgtMTIzNC00MTIzLTgxMjMtMTIzNDU2Nzg5YWJjIiwiYXV0aG9yX3ByaW5jaXBhbCI6ImxhYi9vcGVyYXRvci3DqVx1MDAzY1x1MDAzZVx1MDAyNiIsInRleHQiOiJDaGVjayBcIm5vcnRoXCIgZG9vclxu5p2x5LqsIFx1MDAzY1x1MDAzZVx1MDAyNlx1MjAyOFx1MjAyOSIsInBvc2l0aW9uX21tIjpbMTI1MCwwLC0yNTAwXSwiYXV0aG9yZWRfYXRfdW5peF9tcyI6MTc5NDMxMjAwMDEyMCwiZXhwaXJlc19hdF91bml4X21zIjoxNzk0MzE1NjAwMTIwfSwidG9tYnN0b25lIjpmYWxzZX0sInNpZ25lZF9hdCI6MTc5NDMxMjAwMDEyMCwiZXhwaXJlc19hdCI6MTc5NDM5ODQwMDEyMH0=",
+  "expected_request_signing_bytes_base64": "d2VuZHkud29ybGQuYXV0aG9yaXR5LnYxL3JlcXVlc3QAeyJ2ZXJzaW9uIjoxLCJncmFudF9kaWdlc3QiOiJkZTJjZGZiZmEyM2FhOTVmNDU3YWNmY2RmNzE5OGE5ODc5ZDBhYWNiMjhmOTc1NzM0YzBmYzhlOWM1Yjg1MjQ3IiwiYXVkaWVuY2UiOiJub2RlLTMiLCJvcGVyYXRpb24iOiJhbm5vdGF0aW9uLXdyaXRlIiwiYm9keV9kaWdlc3QiOiI0NmI3MGQ3NWY1NGFlNTk5YjNkYmIyNTUzMWNmM2YzMzcxZjgwMzY4YTExNTM1NGY3ZTdkMTUzODljMjliYzNkIiwibm9uY2UiOiJhbm5vdGF0aW9uX2ZpeHR1cmVfbm9uY2VfMDEyMzQ1Njc4OSIsImlzc3VlZCI6MTc5NDMxMjAwMTEyMCwiZXhwaXJlcyI6MTc5NDMxMjA2MTEyMH0=",
+  "expected_signed_record": {
+    "version": 1,
+    "grant": {
+      "grant": {
+        "publish_audience": "node-3",
+        "version": 1,
+        "id": "native-contributor",
+        "tenant": "lab",
+        "site": "synthetic-office",
+        "domain": "simulation",
+        "principal": "lab/operator-é\u003c\u003e\u0026",
+        "kind": "operator",
+        "source": {
+          "device": "native-contributor",
+          "app": "wendy-world",
+          "service": "viewer",
+          "stream": "annotations"
+        },
+        "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+        "scopes": [
+          "read",
+          "evidence-read",
+          "annotation-write"
+        ],
+        "not_before_unix_ms": 1794308400120,
+        "not_after_unix_ms": 1794315600120
+      },
+      "signature": "W4dmlERAOPCMhobfMV1fkXj0TdurnLXkCdKmRJ9Q+3Pjrv+feLGpUAUeobCoEpRE+WAHFoHmo65RRgTFuFO0AA=="
+    },
+    "component": {
+      "key": {
+        "tenant": "lab",
+        "site": "synthetic-office",
+        "entity": "annotation/12345678-1234-4123-8123-123456789abc",
+        "type": "wendy.annotation.note.v1",
+        "source": {
+          "device": "native-contributor",
+          "app": "wendy-world",
+          "service": "viewer",
+          "stream": "annotations"
+        }
+      },
+      "version": {
+        "epoch": 7,
+        "sequence": 1
+      },
+      "frame": {
+        "id": "site",
+        "revision": "office-v1"
+      },
+      "timing": {
+        "sample_time": "2026-11-10T12:00:00.12Z",
+        "clock_domain": "simulation:office-run",
+        "error_known": true,
+        "error_bound_ns": 1000000000,
+        "age_hint_ns": 0
+      },
+      "ttl_ns": 3600000000000,
+      "provenance": {
+        "origin": "authored",
+        "app_version": "world-annotations-v1",
+        "simulation": {
+          "run_id": "office-run",
+          "scenario_version": "office-v1",
+          "seed": 0,
+          "clock_domain": "simulation:office-run"
+        }
+      },
+      "payload": {
+        "id": "12345678-1234-4123-8123-123456789abc",
+        "author_principal": "lab/operator-é\u003c\u003e\u0026",
+        "text": "Check \"north\" door\n東京 \u003c\u003e\u0026\u2028\u2029",
+        "position_mm": [
+          1250,
+          0,
+          -2500
+        ],
+        "authored_at_unix_ms": 1794312000120,
+        "expires_at_unix_ms": 1794315600120
+      },
+      "tombstone": false
+    },
+    "signed_at_unix_ms": 1794312000120,
+    "expires_at_unix_ms": 1794398400120,
+    "signature": "MUMmVrOjS5qezFZLh7Ov7x8H7K9RbPzkKV4snqaQifwharXTAAJ2huey8wr7QgXk0lDShLrcs+b93D0sGCw+Bg=="
+  },
+  "expected_signed_record_json": "{\"version\":1,\"grant\":{\"grant\":{\"publish_audience\":\"node-3\",\"version\":1,\"id\":\"native-contributor\",\"tenant\":\"lab\",\"site\":\"synthetic-office\",\"domain\":\"simulation\",\"principal\":\"lab/operator-é\\u003c\\u003e\\u0026\",\"kind\":\"operator\",\"source\":{\"device\":\"native-contributor\",\"app\":\"wendy-world\",\"service\":\"viewer\",\"stream\":\"annotations\"},\"public_key\":\"Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=\",\"scopes\":[\"read\",\"evidence-read\",\"annotation-write\"],\"not_before_unix_ms\":1794308400120,\"not_after_unix_ms\":1794315600120},\"signature\":\"W4dmlERAOPCMhobfMV1fkXj0TdurnLXkCdKmRJ9Q+3Pjrv+feLGpUAUeobCoEpRE+WAHFoHmo65RRgTFuFO0AA==\"},\"component\":{\"key\":{\"tenant\":\"lab\",\"site\":\"synthetic-office\",\"entity\":\"annotation/12345678-1234-4123-8123-123456789abc\",\"type\":\"wendy.annotation.note.v1\",\"source\":{\"device\":\"native-contributor\",\"app\":\"wendy-world\",\"service\":\"viewer\",\"stream\":\"annotations\"}},\"version\":{\"epoch\":7,\"sequence\":1},\"frame\":{\"id\":\"site\",\"revision\":\"office-v1\"},\"timing\":{\"sample_time\":\"2026-11-10T12:00:00.12Z\",\"clock_domain\":\"simulation:office-run\",\"error_known\":true,\"error_bound_ns\":1000000000,\"age_hint_ns\":0},\"ttl_ns\":3600000000000,\"provenance\":{\"origin\":\"authored\",\"app_version\":\"world-annotations-v1\",\"simulation\":{\"run_id\":\"office-run\",\"scenario_version\":\"office-v1\",\"seed\":0,\"clock_domain\":\"simulation:office-run\"}},\"payload\":{\"id\":\"12345678-1234-4123-8123-123456789abc\",\"author_principal\":\"lab/operator-é\\u003c\\u003e\\u0026\",\"text\":\"Check \\\"north\\\" door\\n東京 \\u003c\\u003e\\u0026\\u2028\\u2029\",\"position_mm\":[1250,0,-2500],\"authored_at_unix_ms\":1794312000120,\"expires_at_unix_ms\":1794315600120},\"tombstone\":false},\"signed_at_unix_ms\":1794312000120,\"expires_at_unix_ms\":1794398400120,\"signature\":\"MUMmVrOjS5qezFZLh7Ov7x8H7K9RbPzkKV4snqaQifwharXTAAJ2huey8wr7QgXk0lDShLrcs+b93D0sGCw+Bg==\"}",
+  "expected_signed_request": {
+    "version": 1,
+    "grant": {
+      "grant": {
+        "publish_audience": "node-3",
+        "version": 1,
+        "id": "native-contributor",
+        "tenant": "lab",
+        "site": "synthetic-office",
+        "domain": "simulation",
+        "principal": "lab/operator-é\u003c\u003e\u0026",
+        "kind": "operator",
+        "source": {
+          "device": "native-contributor",
+          "app": "wendy-world",
+          "service": "viewer",
+          "stream": "annotations"
+        },
+        "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+        "scopes": [
+          "read",
+          "evidence-read",
+          "annotation-write"
+        ],
+        "not_before_unix_ms": 1794308400120,
+        "not_after_unix_ms": 1794315600120
+      },
+      "signature": "W4dmlERAOPCMhobfMV1fkXj0TdurnLXkCdKmRJ9Q+3Pjrv+feLGpUAUeobCoEpRE+WAHFoHmo65RRgTFuFO0AA=="
+    },
+    "audience": "node-3",
+    "operation": "annotation-write",
+    "body_sha256": "46b70d75f54ae599b3dbb25531cf3f3371f80368a115354f7e7d15389c29bc3d",
+    "nonce": "annotation_fixture_nonce_0123456789",
+    "issued_at_unix_ms": 1794312001120,
+    "expires_at_unix_ms": 1794312061120,
+    "signature": "9ukAhBihEMlTIKicVVKoMw/HqPSR27JWOrUUhszjWv4gq569XRHDofptRSWRr4sugncB1CynRzIIPpZ2k1TPBQ=="
+  },
+  "frame": {
+    "id": "site",
+    "revision": "office-v1"
+  },
+  "nonce": "annotation_fixture_nonce_0123456789",
+  "note": {
+    "id": "12345678-1234-4123-8123-123456789abc",
+    "author_principal": "lab/operator-é\u003c\u003e\u0026",
+    "text": "Check \"north\" door\n東京 \u003c\u003e\u0026\u2028\u2029",
+    "position_mm": [
+      1250,
+      0,
+      -2500
+    ],
+    "authored_at_unix_ms": 1794312000120,
+    "expires_at_unix_ms": 1794315600120
+  },
+  "operation": "annotation-write",
+  "request_issued_at_unix_ms": 1794312001120,
+  "request_lifetime_ms": 60000,
+  "root_public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "run_id": "office-run",
+  "schema": "wendy.native-client.annotation-fixtures.v1",
+  "sequence": 1,
+  "test_only": true
+}

@@ -1,0 +1,62 @@
+{
+  "schema_version": "wendy.world.package.v0",
+  "site_id": "synthetic-go2-islands",
+  "package_revision": "islands-v1",
+  "frame_revision": "islands-frame-v1",
+  "provenance": "synthetic",
+  "description": "Hand-authored synthetic islands geometry; not a real office scan.",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "mujoco": {
+    "path": "scene.xml",
+    "sha256": "5d03385440e24d588cb4939dd313eb889d2000fc9ffb01b4250bbf3d9ba138ea",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ],
+    "body": "source_puck",
+    "actuator": "source_drive",
+    "control": 0.0
+  },
+  "gas_model": {
+    "kind": "analytic-gaussian-fixture",
+    "unit": "ppm",
+    "source_local_m": [
+      0,
+      0.2,
+      0
+    ],
+    "background_ppm": 1,
+    "peak_ppm": 30,
+    "sigma_m": 1,
+    "noise_stddev_ppm": 0.1
+  },
+  "fidelity": {
+    "geometry": "hand-authored static primitives",
+    "robot": "excluded source puck; existing Go2 runtime remains separate",
+    "sensors": "source camera/joint sensor excluded",
+    "physical": "no surveyed geometry or physical validation"
+  },
+  "asset_license": "Proprietary Wendy Labs synthetic fixture; no copied robot assets",
+  "scenario": {
+    "name": "go2-static-overlay",
+    "expected": "explicit selected geometry only; runtime remains paused"
+  },
+  "assets": []
+}

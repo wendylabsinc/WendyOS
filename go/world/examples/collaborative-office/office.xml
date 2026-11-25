@@ -1,0 +1,1107 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="wendy-collaborative-office-v1">
+  <compiler angle="degree" />
+  <option timestep="0.01" gravity="0 0 -9.81" />
+  <statistic center="0 0 0.7" extent="19" />
+  <visual>
+    <global offwidth="320" offheight="240" azimuth="130" elevation="-48" />
+    <headlight ambient=".30 .31 .33" diffuse=".50 .49 .46" specular="0.15 0.15 0.15" />
+    <quality shadowsize="2048" offsamples="4" />
+    <map znear="0.01" zfar="50" shadowclip="1" />
+  </visual>
+  <asset>
+    <material name="wall" rgba=".82 .81 .76 1" specular="0.08" shininess=".08" />
+    <material name="edge" rgba=".19 .21 .20 1" specular="0.18" shininess=".08" />
+    <material name="floor" rgba=".66 .65 .60 1" specular="0.12" shininess=".08" />
+    <material name="carpet" rgba=".42 .46 .43 1" specular="0.02" shininess=".08" />
+    <material name="wood" rgba=".48 .32 .19 1" specular="0.16" shininess=".08" />
+    <material name="birch" rgba=".76 .61 .42 1" specular="0.12" shininess=".08" />
+    <material name="metal" rgba=".14 .17 .18 1" specular="0.5" shininess=".25" />
+    <material name="white" rgba=".88 .87 .82 1" specular="0.12" shininess=".08" />
+    <material name="screen" rgba="0.035 0.09 0.13 1" emission="0.1" />
+    <material name="ui" rgba="0.16 0.66 0.64 1" emission="0.3" />
+    <material name="blue" rgba=".24 .38 .43 1" specular="0.08" shininess=".08" />
+    <material name="seat" rgba=".20 .28 .28 1" specular="0.05" shininess=".08" />
+    <material name="sofa" rgba=".36 .44 .39 1" specular="0.03" shininess=".08" />
+    <material name="leaf" rgba=".13 .28 .16 1" specular="0.08" shininess=".08" />
+    <material name="leaf-light" rgba=".28 .41 .23 1" specular="0.07" shininess=".08" />
+    <material name="pot" rgba=".62 .56 .46 1" specular="0.06" shininess=".08" />
+    <material name="glass" rgba=".57 .74 .76 .19" specular="0.65" shininess=".25" />
+    <material name="indicator-material" rgba="1 0.02 0.02 1" emission="0.5" specular="0" />
+    <material name="route" rgba="0.10 0.53 0.53 1" />
+    <material name="paper" rgba=".94 .92 .85 1" specular="0.04" shininess=".08" />
+    <material name="stone" rgba=".58 .59 .56 1" specular="0.18" shininess=".08" />
+    <material name="felt" rgba=".47 .51 .47 1" specular="0.02" shininess=".08" />
+    <material name="linen" rgba=".63 .60 .51 1" specular="0.02" shininess=".08" />
+    <material name="clay" rgba=".64 .37 .26 1" specular="0.03" shininess=".08" />
+    <material name="bronze" rgba=".35 .29 .19 1" specular="0.45" shininess=".08" />
+    <material name="rubber" rgba=".055 .065 .067 1" specular="0.03" shininess=".08" />
+    <material name="lens" rgba=".025 .06 .075 1" specular="0.75" shininess=".25" />
+    <material name="light-diffuser" rgba="1 .91 .73 1" specular="0.05" shininess=".08" emission=".45" />
+    <material name="oak-board-0" rgba=".64 .49 .32 1" specular=".13" shininess=".07" />
+    <material name="oak-board-1" rgba=".68 .53 .36 1" specular=".13" shininess=".07" />
+    <material name="oak-board-2" rgba=".72 .57 .39 1" specular=".13" shininess=".07" />
+    <material name="oak-board-3" rgba=".66 .51 .34 1" specular=".13" shininess=".07" />
+    <material name="robot-atlas-color" rgba="1.0 0.64 0.12 1" specular="0.25" />
+    <material name="robot-iris-color" rgba="0.08 0.77 0.69 1" specular="0.25" />
+    <material name="robot-echo-color" rgba="0.65 0.42 0.96 1" specular="0.25" />
+  </asset>
+  <worldbody>
+    <geom name="original-ground-plane" type="plane" size="8 6 0.1" rgba="0 0 0 0" group="2" />
+    <geom name="building-plinth" type="box" pos="0 0 -0.13" size="8.15 6.15 0.12" material="edge" contype="0" conaffinity="0" group="2" />
+    <geom name="office-floor" type="box" pos="0 0 -0.005" size="8 6 0.005" material="floor" contype="0" conaffinity="0" group="2" />
+    <geom name="central-corridor" type="box" pos="0 0 0.004" size="7.9 1.3 0.004" material="wood" contype="0" conaffinity="0" group="2" />
+    <geom name="detail-22" type="box" pos="0 6 0.06" size="8.012 0.112 0.06" material="edge" group="0" />
+    <geom name="detail-23" type="box" pos="0 6 2.625" size="8.025 0.125 0.025" material="white" group="0" />
+    <geom name="detail-24" type="box" pos="-8 0 0.65" size="0.1 6 0.65" material="wall" group="0" />
+    <geom name="detail-25" type="box" pos="-8 0 0.06" size="0.112 6.012 0.06" material="edge" group="0" />
+    <geom name="detail-26" type="box" pos="-8 0 1.325" size="0.125 6.025 0.025" material="white" group="0" />
+    <geom name="detail-27" type="box" pos="8 0 0.65" size="0.1 6 0.65" material="wall" group="0" />
+    <geom name="detail-28" type="box" pos="8 0 0.06" size="0.112 6.012 0.06" material="edge" group="0" />
+    <geom name="detail-29" type="box" pos="8 0 1.325" size="0.125 6.025 0.025" material="white" group="0" />
+    <geom name="detail-30" type="box" pos="0 -6 0.325" size="8 0.1 0.325" material="wall" group="0" />
+    <geom name="detail-31" type="box" pos="0 -6 0.06" size="8.012 0.112 0.06" material="edge" group="0" />
+    <geom name="detail-32" type="box" pos="0 -6 0.675" size="8.025 0.125 0.025" material="white" group="0" />
+    <geom name="detail-53" type="box" pos="-2.65 3.75 0.9" size="0.07 2.15 0.9" material="wall" group="0" />
+    <geom name="detail-54" type="box" pos="-2.65 3.75 0.06" size="0.082 2.162 0.06" material="edge" group="0" />
+    <geom name="detail-55" type="box" pos="-2.65 3.75 1.825" size="0.095 2.175 0.025" material="white" group="0" />
+    <geom name="detail-56" type="box" pos="2.65 3.75 0.9" size="0.07 2.15 0.9" material="wall" group="0" />
+    <geom name="detail-57" type="box" pos="2.65 3.75 0.06" size="0.082 2.162 0.06" material="edge" group="0" />
+    <geom name="detail-58" type="box" pos="2.65 3.75 1.825" size="0.095 2.175 0.025" material="white" group="0" />
+    <geom name="detail-59" type="box" pos="-6.625 1.5 0.55" size="1.375 0.065 0.55" material="wall" group="0" />
+    <geom name="detail-60" type="box" pos="-6.625 1.5 0.06" size="1.387 0.077 0.06" material="edge" group="0" />
+    <geom name="detail-61" type="box" pos="-6.625 1.5 1.125" size="1.4 0.09 0.025" material="white" group="0" />
+    <geom name="detail-62" type="box" pos="-6.625 1.5 1.9" size="1.375 0.017 0.75" material="glass" group="0" />
+    <geom name="detail-63" type="box" pos="-3.3 1.5 0.55" size="0.65 0.065 0.55" material="wall" group="0" />
+    <geom name="detail-64" type="box" pos="-3.3 1.5 0.06" size="0.662 0.077 0.06" material="edge" group="0" />
+    <geom name="detail-65" type="box" pos="-3.3 1.5 1.125" size="0.675 0.09 0.025" material="white" group="0" />
+    <geom name="detail-66" type="box" pos="-3.3 1.5 1.9" size="0.65 0.017 0.75" material="glass" group="0" />
+    <geom name="detail-67" type="box" pos="-5.25 1.5 1.18" size="0.045 0.09 1.18" material="edge" group="0" />
+    <geom name="detail-68" type="box" pos="-3.95 1.5 1.18" size="0.045 0.09 1.18" material="edge" group="0" />
+    <geom name="detail-69" type="box" pos="-4.6 1.5 2.4" size="0.7 0.09 0.06" material="edge" group="0" />
+    <geom name="detail-70" type="box" pos="-1.65 1.5 0.55" size="1 0.065 0.55" material="wall" group="0" />
+    <geom name="detail-71" type="box" pos="-1.65 1.5 0.06" size="1.012 0.077 0.06" material="edge" group="0" />
+    <geom name="detail-72" type="box" pos="-1.65 1.5 1.125" size="1.025 0.09 0.025" material="white" group="0" />
+    <geom name="detail-73" type="box" pos="-1.65 1.5 1.9" size="1 0.017 0.75" material="glass" group="0" />
+    <geom name="detail-74" type="box" pos="1.65 1.5 0.55" size="1 0.065 0.55" material="wall" group="0" />
+    <geom name="detail-75" type="box" pos="1.65 1.5 0.06" size="1.012 0.077 0.06" material="edge" group="0" />
+    <geom name="detail-76" type="box" pos="1.65 1.5 1.125" size="1.025 0.09 0.025" material="white" group="0" />
+    <geom name="detail-77" type="box" pos="1.65 1.5 1.9" size="1 0.017 0.75" material="glass" group="0" />
+    <geom name="detail-78" type="box" pos="-0.65 1.5 1.18" size="0.045 0.09 1.18" material="edge" group="0" />
+    <geom name="detail-79" type="box" pos="0.65 1.5 1.18" size="0.045 0.09 1.18" material="edge" group="0" />
+    <geom name="detail-80" type="box" pos="0 1.5 2.4" size="0.7 0.09 0.06" material="edge" group="0" />
+    <geom name="detail-81" type="box" pos="3.3 1.5 0.55" size="0.65 0.065 0.55" material="wall" group="0" />
+    <geom name="detail-82" type="box" pos="3.3 1.5 0.06" size="0.662 0.077 0.06" material="edge" group="0" />
+    <geom name="detail-83" type="box" pos="3.3 1.5 1.125" size="0.675 0.09 0.025" material="white" group="0" />
+    <geom name="detail-84" type="box" pos="3.3 1.5 1.9" size="0.65 0.017 0.75" material="glass" group="0" />
+    <geom name="detail-85" type="box" pos="6.625 1.5 0.55" size="1.375 0.065 0.55" material="wall" group="0" />
+    <geom name="detail-86" type="box" pos="6.625 1.5 0.06" size="1.387 0.077 0.06" material="edge" group="0" />
+    <geom name="detail-87" type="box" pos="6.625 1.5 1.125" size="1.4 0.09 0.025" material="white" group="0" />
+    <geom name="detail-88" type="box" pos="6.625 1.5 1.9" size="1.375 0.017 0.75" material="glass" group="0" />
+    <geom name="detail-89" type="box" pos="3.95 1.5 1.18" size="0.045 0.09 1.18" material="edge" group="0" />
+    <geom name="detail-90" type="box" pos="5.25 1.5 1.18" size="0.045 0.09 1.18" material="edge" group="0" />
+    <geom name="detail-91" type="box" pos="4.6 1.5 2.4" size="0.7 0.09 0.06" material="edge" group="0" />
+    <geom name="detail-92" type="box" pos="-5.3 3.75 0.007" size="2.5 2.1 0.007" material="carpet" contype="0" conaffinity="0" group="2" />
+    <geom name="detail-93" type="box" pos="0 3.75 0.007" size="2.5 2.1 0.007" material="carpet" contype="0" conaffinity="0" group="2" />
+    <geom name="detail-94" type="box" pos="5.3 3.75 0.007" size="2.5 2.1 0.007" material="felt" contype="0" conaffinity="0" group="2" />
+    <geom name="detail-95" type="box" pos="-4.7 -3.75 0.007" size="3 2.1 0.007" material="linen" contype="0" conaffinity="0" group="2" />
+    <geom name="detail-96" type="box" pos="3.6 -3.75 0.007" size="4.1 2.1 0.007" material="stone" contype="0" conaffinity="0" group="2" />
+    <body name="workstation-1" pos="-6.4 4.5 0" euler="0 0 0">
+      <geom name="detail-97" type="box" pos="0 0 0.76" size="0.8 0.38 0.04" material="birch" group="0" />
+      <geom name="detail-98" type="box" pos="-0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-99" type="box" pos="0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-100" type="box" pos="0.09 0.18 1.08" size="0.31 0.035 0.22" material="metal" group="0" />
+      <geom name="detail-101" type="box" pos="0.09 0.14 1.08" size="0.285 0.008 0.193" material="screen" group="0" />
+      <geom name="detail-102" type="box" pos="0 0.129 1.17" size="0.16 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-103" type="box" pos="0 0.129 1.098" size="0.135 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-104" type="box" pos="0 0.129 1.026" size="0.11 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-105" type="box" pos="0.09 0.18 0.85" size="0.045 0.035 0.085" material="metal" group="0" />
+      <geom name="detail-106" type="box" pos="0.09 0.1 0.808" size="0.15 0.1 0.01" material="metal" group="0" />
+      <geom name="detail-107" type="box" pos="0.05 -0.17 0.817" size="0.23 0.075 0.015" material="white" group="0" />
+      <geom name="detail-108" type="box" pos="-0.48 -0.08 0.81" size="0.13 0.18 0.007" material="paper" euler="0 0 -12" group="0" />
+      <geom name="detail-109" type="cylinder" pos="0.61 -0.08 0.86" size="0.045 0.055" material="blue" group="0" />
+      <body pos="0 -0.77 0" euler="0 0 180">
+        <geom name="detail-110" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-111" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-112" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-113" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-114" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-115" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-116" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-117" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-118" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-119" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-120" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-121" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-122" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-110-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-110-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-110-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-110-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <geom name="desk-workstation-1-deskmat" type="box" size="0.36 0.19 0.003" material="felt" group="0" contype="0" conaffinity="0" pos="0.03 -0.12 0.804" />
+      <geom name="desk-workstation-1-mouse" type="ellipsoid" size="0.035 0.05 0.013" material="metal" group="0" contype="0" conaffinity="0" pos="0.37 -0.18 0.827" />
+      <geom name="desk-workstation-1-lamp-base" type="cylinder" size="0.08 0.012" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.815" />
+      <geom name="desk-workstation-1-lamp-arm" type="cylinder" size="0.012 0.16" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.98" />
+      <geom name="desk-workstation-1-lamp-shade" type="box" size="0.14 0.07 0.018" material="metal" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.14" />
+      <geom name="desk-workstation-1-lamp-light" type="box" size="0.12 0.055 0.004" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.119" />
+    </body>
+    <body name="workstation-2" pos="-4.4 4.5 0" euler="0 0 0">
+      <geom name="detail-123" type="box" pos="0 0 0.76" size="0.8 0.38 0.04" material="birch" group="0" />
+      <geom name="detail-124" type="box" pos="-0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-125" type="box" pos="0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-126" type="box" pos="0.09 0.18 1.08" size="0.31 0.035 0.22" material="metal" group="0" />
+      <geom name="detail-127" type="box" pos="0.09 0.14 1.08" size="0.285 0.008 0.193" material="screen" group="0" />
+      <geom name="detail-128" type="box" pos="0 0.129 1.17" size="0.16 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-129" type="box" pos="0 0.129 1.098" size="0.135 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-130" type="box" pos="0 0.129 1.026" size="0.11 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-131" type="box" pos="0.09 0.18 0.85" size="0.045 0.035 0.085" material="metal" group="0" />
+      <geom name="detail-132" type="box" pos="0.09 0.1 0.808" size="0.15 0.1 0.01" material="metal" group="0" />
+      <geom name="detail-133" type="box" pos="0.05 -0.17 0.817" size="0.23 0.075 0.015" material="white" group="0" />
+      <geom name="detail-134" type="box" pos="-0.48 -0.08 0.81" size="0.13 0.18 0.007" material="paper" euler="0 0 -12" group="0" />
+      <geom name="detail-135" type="cylinder" pos="0.61 -0.08 0.86" size="0.045 0.055" material="blue" group="0" />
+      <body pos="0 -0.77 0" euler="0 0 180">
+        <geom name="detail-136" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-137" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-138" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-139" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-140" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-141" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-142" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-143" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-144" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-145" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-146" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-147" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-148" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-136-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-136-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-136-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-136-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <geom name="desk-workstation-2-deskmat" type="box" size="0.36 0.19 0.003" material="felt" group="0" contype="0" conaffinity="0" pos="0.03 -0.12 0.804" />
+      <geom name="desk-workstation-2-mouse" type="ellipsoid" size="0.035 0.05 0.013" material="metal" group="0" contype="0" conaffinity="0" pos="0.37 -0.18 0.827" />
+      <geom name="desk-workstation-2-lamp-base" type="cylinder" size="0.08 0.012" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.815" />
+      <geom name="desk-workstation-2-lamp-arm" type="cylinder" size="0.012 0.16" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.98" />
+      <geom name="desk-workstation-2-lamp-shade" type="box" size="0.14 0.07 0.018" material="metal" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.14" />
+      <geom name="desk-workstation-2-lamp-light" type="box" size="0.12 0.055 0.004" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.119" />
+    </body>
+    <body name="workstation-3" pos="-6.4 2.5 0" euler="0 0 180">
+      <geom name="detail-149" type="box" pos="0 0 0.76" size="0.8 0.38 0.04" material="birch" group="0" />
+      <geom name="detail-150" type="box" pos="-0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-151" type="box" pos="0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-152" type="box" pos="0.09 0.18 1.08" size="0.31 0.035 0.22" material="metal" group="0" />
+      <geom name="detail-153" type="box" pos="0.09 0.14 1.08" size="0.285 0.008 0.193" material="screen" group="0" />
+      <geom name="detail-154" type="box" pos="0 0.129 1.17" size="0.16 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-155" type="box" pos="0 0.129 1.098" size="0.135 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-156" type="box" pos="0 0.129 1.026" size="0.11 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-157" type="box" pos="0.09 0.18 0.85" size="0.045 0.035 0.085" material="metal" group="0" />
+      <geom name="detail-158" type="box" pos="0.09 0.1 0.808" size="0.15 0.1 0.01" material="metal" group="0" />
+      <geom name="detail-159" type="box" pos="0.05 -0.17 0.817" size="0.23 0.075 0.015" material="white" group="0" />
+      <geom name="detail-160" type="box" pos="-0.48 -0.08 0.81" size="0.13 0.18 0.007" material="paper" euler="0 0 -12" group="0" />
+      <geom name="detail-161" type="cylinder" pos="0.61 -0.08 0.86" size="0.045 0.055" material="blue" group="0" />
+      <body pos="0 -0.77 0" euler="0 0 180">
+        <geom name="detail-162" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-163" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-164" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-165" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-166" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-167" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-168" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-169" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-170" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-171" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-172" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-173" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-174" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-162-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-162-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-162-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-162-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <geom name="desk-workstation-3-deskmat" type="box" size="0.36 0.19 0.003" material="felt" group="0" contype="0" conaffinity="0" pos="0.03 -0.12 0.804" />
+      <geom name="desk-workstation-3-mouse" type="ellipsoid" size="0.035 0.05 0.013" material="metal" group="0" contype="0" conaffinity="0" pos="0.37 -0.18 0.827" />
+      <geom name="desk-workstation-3-lamp-base" type="cylinder" size="0.08 0.012" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.815" />
+      <geom name="desk-workstation-3-lamp-arm" type="cylinder" size="0.012 0.16" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.98" />
+      <geom name="desk-workstation-3-lamp-shade" type="box" size="0.14 0.07 0.018" material="metal" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.14" />
+      <geom name="desk-workstation-3-lamp-light" type="box" size="0.12 0.055 0.004" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.119" />
+    </body>
+    <body name="workstation-4" pos="-4.4 2.5 0" euler="0 0 180">
+      <geom name="detail-175" type="box" pos="0 0 0.76" size="0.8 0.38 0.04" material="birch" group="0" />
+      <geom name="detail-176" type="box" pos="-0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-177" type="box" pos="0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-178" type="box" pos="0.09 0.18 1.08" size="0.31 0.035 0.22" material="metal" group="0" />
+      <geom name="detail-179" type="box" pos="0.09 0.14 1.08" size="0.285 0.008 0.193" material="screen" group="0" />
+      <geom name="detail-180" type="box" pos="0 0.129 1.17" size="0.16 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-181" type="box" pos="0 0.129 1.098" size="0.135 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-182" type="box" pos="0 0.129 1.026" size="0.11 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-183" type="box" pos="0.09 0.18 0.85" size="0.045 0.035 0.085" material="metal" group="0" />
+      <geom name="detail-184" type="box" pos="0.09 0.1 0.808" size="0.15 0.1 0.01" material="metal" group="0" />
+      <geom name="detail-185" type="box" pos="0.05 -0.17 0.817" size="0.23 0.075 0.015" material="white" group="0" />
+      <geom name="detail-186" type="box" pos="-0.48 -0.08 0.81" size="0.13 0.18 0.007" material="paper" euler="0 0 -12" group="0" />
+      <geom name="detail-187" type="cylinder" pos="0.61 -0.08 0.86" size="0.045 0.055" material="blue" group="0" />
+      <body pos="0 -0.77 0" euler="0 0 180">
+        <geom name="detail-188" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-189" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-190" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-191" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-192" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-193" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-194" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-195" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-196" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-197" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-198" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-199" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-200" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-188-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-188-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-188-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-188-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <geom name="desk-workstation-4-deskmat" type="box" size="0.36 0.19 0.003" material="felt" group="0" contype="0" conaffinity="0" pos="0.03 -0.12 0.804" />
+      <geom name="desk-workstation-4-mouse" type="ellipsoid" size="0.035 0.05 0.013" material="metal" group="0" contype="0" conaffinity="0" pos="0.37 -0.18 0.827" />
+      <geom name="desk-workstation-4-lamp-base" type="cylinder" size="0.08 0.012" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.815" />
+      <geom name="desk-workstation-4-lamp-arm" type="cylinder" size="0.012 0.16" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.98" />
+      <geom name="desk-workstation-4-lamp-shade" type="box" size="0.14 0.07 0.018" material="metal" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.14" />
+      <geom name="desk-workstation-4-lamp-light" type="box" size="0.12 0.055 0.004" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.119" />
+    </body>
+    <body name="private-desk" pos="5.4 4.4 0" euler="0 0 0">
+      <geom name="detail-201" type="box" pos="0 0 0.76" size="0.8 0.38 0.04" material="birch" group="0" />
+      <geom name="detail-202" type="box" pos="-0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-203" type="box" pos="0.69 0 0.36" size="0.035 0.3 0.36" material="white" group="0" />
+      <geom name="detail-204" type="box" pos="0.09 0.18 1.08" size="0.31 0.035 0.22" material="metal" group="0" />
+      <geom name="detail-205" type="box" pos="0.09 0.14 1.08" size="0.285 0.008 0.193" material="screen" group="0" />
+      <geom name="detail-206" type="box" pos="0 0.129 1.17" size="0.16 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-207" type="box" pos="0 0.129 1.098" size="0.135 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-208" type="box" pos="0 0.129 1.026" size="0.11 0.003 0.009" material="ui" group="0" />
+      <geom name="detail-209" type="box" pos="0.09 0.18 0.85" size="0.045 0.035 0.085" material="metal" group="0" />
+      <geom name="detail-210" type="box" pos="0.09 0.1 0.808" size="0.15 0.1 0.01" material="metal" group="0" />
+      <geom name="detail-211" type="box" pos="0.05 -0.17 0.817" size="0.23 0.075 0.015" material="white" group="0" />
+      <geom name="detail-212" type="box" pos="-0.48 -0.08 0.81" size="0.13 0.18 0.007" material="paper" euler="0 0 -12" group="0" />
+      <geom name="detail-213" type="cylinder" pos="0.61 -0.08 0.86" size="0.045 0.055" material="blue" group="0" />
+      <body pos="0 -0.77 0" euler="0 0 180">
+        <geom name="detail-214" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-215" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-216" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-217" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-218" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-219" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-220" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-221" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-222" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-223" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-224" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-225" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-226" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-214-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-214-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-214-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-214-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <geom name="desk-private-desk-deskmat" type="box" size="0.36 0.19 0.003" material="felt" group="0" contype="0" conaffinity="0" pos="0.03 -0.12 0.804" />
+      <geom name="desk-private-desk-mouse" type="ellipsoid" size="0.035 0.05 0.013" material="metal" group="0" contype="0" conaffinity="0" pos="0.37 -0.18 0.827" />
+      <geom name="desk-private-desk-lamp-base" type="cylinder" size="0.08 0.012" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.815" />
+      <geom name="desk-private-desk-lamp-arm" type="cylinder" size="0.012 0.16" material="bronze" group="0" contype="0" conaffinity="0" pos="-0.61 0.19 0.98" />
+      <geom name="desk-private-desk-lamp-shade" type="box" size="0.14 0.07 0.018" material="metal" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.14" />
+      <geom name="desk-private-desk-lamp-light" type="box" size="0.12 0.055 0.004" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="-0.54 0.18 1.119" />
+    </body>
+    <body name="meeting-room" pos="0 4.4 0" euler="0 0 0">
+      <geom name="detail-227" type="box" pos="0 0 0.77" size="1.12 0.62 0.055" material="wood" group="0" />
+      <geom name="detail-228" type="box" pos="-0.8 0 0.36" size="0.08 0.42 0.36" material="metal" group="0" />
+      <geom name="detail-229" type="box" pos="0.8 0 0.36" size="0.08 0.42 0.36" material="metal" group="0" />
+      <body pos="-0.72 -1 0" euler="0 0 180">
+        <geom name="detail-230" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-231" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-232" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-233" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-234" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-235" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-236" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-237" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-238" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-239" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-240" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-241" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-242" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-230-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-230-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-230-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-230-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <body pos="-0.72 1 0" euler="0 0 0">
+        <geom name="detail-243" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-244" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-245" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-246" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-247" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-248" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-249" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-250" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-251" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-252" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-253" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-254" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-255" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-243-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-243-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-243-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-243-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <body pos="0 -1 0" euler="0 0 180">
+        <geom name="detail-256" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-257" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-258" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-259" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-260" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-261" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-262" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-263" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-264" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-265" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-266" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-267" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-268" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-256-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-256-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-256-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-256-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <body pos="0 1 0" euler="0 0 0">
+        <geom name="detail-269" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-270" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-271" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-272" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-273" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-274" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-275" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-276" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-277" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-278" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-279" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-280" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-281" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-269-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-269-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-269-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-269-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <body pos="0.72 -1 0" euler="0 0 180">
+        <geom name="detail-282" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-283" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-284" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-285" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-286" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-287" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-288" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-289" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-290" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-291" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-292" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-293" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-294" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-282-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-282-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-282-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-282-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <body pos="0.72 1 0" euler="0 0 0">
+        <geom name="detail-295" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-296" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-297" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-298" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-299" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-300" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-301" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-302" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-303" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-304" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-305" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-306" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-307" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-295-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-295-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-295-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-295-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+      <geom name="detail-308" type="box" pos="0.0 1.3399999999999999 1.6" size="0.85 0.025 0.48" material="screen" group="0" />
+      <geom name="detail-309" type="box" pos="-0.25 1.31 1.65" size="0.38 0.008 0.2" material="ui" group="0" />
+      <geom name="detail-310" type="box" pos="0.43 1.31 1.55" size="0.16 0.008 0.3" material="blue" group="0" />
+      <geom name="detail-311" type="box" pos="-0.4 -0.1 0.84" size="0.22 0.15 0.01" material="paper" euler="0 0 10" group="0" />
+      <geom name="meeting-speaker" type="cylinder" size="0.13 0.035" material="metal" group="0" contype="0" conaffinity="0" pos="0 0 0.86" />
+      <geom name="meeting-laptop-0" type="box" size="0.19 0.14 0.012" material="metal" group="0" contype="0" conaffinity="0" pos="-0.72 0.15 0.845" />
+      <geom name="meeting-laptop-screen-0" type="box" size="0.19 0.012 0.14" material="screen" group="0" contype="0" conaffinity="0" euler="-12 0 0" pos="-0.72 0.28 0.99" />
+      <geom name="meeting-glass-0" type="cylinder" size="0.04 0.07" material="glass" group="0" contype="0" conaffinity="0" pos="-0.72 -0.35 0.91" />
+      <geom name="meeting-laptop-1" type="box" size="0.19 0.14 0.012" material="metal" group="0" contype="0" conaffinity="0" pos="0.72 0.15 0.845" />
+      <geom name="meeting-laptop-screen-1" type="box" size="0.19 0.012 0.14" material="screen" group="0" contype="0" conaffinity="0" euler="-12 0 0" pos="0.72 0.28 0.99" />
+      <geom name="meeting-glass-1" type="cylinder" size="0.04 0.07" material="glass" group="0" contype="0" conaffinity="0" pos="0.72 -0.35 0.91" />
+    </body>
+    <geom name="detail-312" type="box" pos="-1.5 -4.05 0.45" size="0.07 1.9 0.45" material="wall" group="0" />
+    <geom name="detail-313" type="box" pos="-1.5 -4.05 0.06" size="0.082 1.912 0.06" material="edge" group="0" />
+    <geom name="detail-314" type="box" pos="-1.5 -4.05 0.925" size="0.095 1.925 0.025" material="white" group="0" />
+    <body name="lounge-sofa--4.8" pos="-4.8 -4.9 0" euler="0 0 0">
+      <geom name="detail-315" type="box" pos="0 0 0.4" size="1.18 0.43 0.23" material="sofa" group="0" />
+      <geom name="detail-316" type="box" pos="0 0.36 0.77" size="1.18 0.1 0.3" material="sofa" group="0" />
+      <geom name="detail-317" type="box" pos="-1.1 0 0.63" size="0.1 0.43 0.18" material="sofa" group="0" />
+      <geom name="detail-318" type="box" pos="1.1 0 0.63" size="0.1 0.43 0.18" material="sofa" group="0" />
+      <geom name="detail-319" type="box" pos="-0.7 -0.02 0.64" size=".32 .30 .055" material="linen" group="0" />
+      <geom name="detail-320" type="box" pos="0 -0.02 0.64" size=".32 .30 .055" material="linen" group="0" />
+      <geom name="detail-321" type="box" pos="0.7 -0.02 0.64" size=".32 .30 .055" material="linen" group="0" />
+      <geom name="textile-lounge-sofa--4.8-pillow" type="ellipsoid" size="0.22 0.065 0.2" material="clay" group="0" contype="0" conaffinity="0" euler="12 0 -8" pos="-0.73 0.22 0.8" />
+    </body>
+    <body name="lounge-sofa--6.7" pos="-6.7 -3.6 0" euler="0 0 90">
+      <geom name="detail-322" type="box" pos="0 0 0.4" size="1.18 0.43 0.23" material="sofa" group="0" />
+      <geom name="detail-323" type="box" pos="0 0.36 0.77" size="1.18 0.1 0.3" material="sofa" group="0" />
+      <geom name="detail-324" type="box" pos="-1.1 0 0.63" size="0.1 0.43 0.18" material="sofa" group="0" />
+      <geom name="detail-325" type="box" pos="1.1 0 0.63" size="0.1 0.43 0.18" material="sofa" group="0" />
+      <geom name="detail-326" type="box" pos="-0.7 -0.02 0.64" size=".32 .30 .055" material="linen" group="0" />
+      <geom name="detail-327" type="box" pos="0 -0.02 0.64" size=".32 .30 .055" material="linen" group="0" />
+      <geom name="detail-328" type="box" pos="0.7 -0.02 0.64" size=".32 .30 .055" material="linen" group="0" />
+      <geom name="textile-lounge-sofa--6.7-pillow" type="ellipsoid" size="0.22 0.065 0.2" material="clay" group="0" contype="0" conaffinity="0" euler="12 0 -8" pos="-0.73 0.22 0.8" />
+    </body>
+    <geom name="detail-329" type="box" pos="-4.7 -3.2 0.4" size="0.85 0.52 0.055" material="wood" group="0" />
+    <geom name="detail-330" type="box" pos="-5.35 -3.2 0.2" size="0.045 0.4 0.2" material="metal" group="0" />
+    <geom name="detail-331" type="box" pos="-4.05 -3.2 0.2" size="0.045 0.4 0.2" material="metal" group="0" />
+    <geom name="detail-332" type="box" pos="-4.8 -3.2 0.465" size="0.22 0.16 0.012" material="paper" group="0" />
+    <body name="lounge-plant" pos="-2.2 -5.1 0" euler="0 0 0">
+      <geom name="detail-333" type="cylinder" pos="0 0 0.264" size="0.24 0.264" material="pot" group="0" />
+      <geom name="detail-334" type="cylinder" pos="0 0 0.78" size="0.03 0.54" material="wood" group="0" />
+      <geom name="detail-335" type="ellipsoid" pos="0.24 0 0.84" size="0.192 0.102 0.324" material="leaf-light" euler="20 -25 0" group="0" />
+      <geom name="detail-336" type="ellipsoid" pos="-0.17695 0.16214 0.93" size="0.192 0.102 0.324" material="leaf" euler="20 -25 137.5" group="0" />
+      <geom name="detail-337" type="ellipsoid" pos="0.020917 -0.23909 1.02" size="0.192 0.102 0.324" material="leaf-light" euler="20 -25 275" group="0" />
+      <geom name="detail-338" type="ellipsoid" pos="0.1461 0.1904 1.11" size="0.192 0.102 0.324" material="leaf" euler="20 -25 412.5" group="0" />
+      <geom name="detail-339" type="ellipsoid" pos="-0.23635 -0.041676 1.2" size="0.192 0.102 0.324" material="leaf-light" euler="20 -25 550" group="0" />
+      <geom name="detail-340" type="ellipsoid" pos="0.20241 -0.12895 1.29" size="0.192 0.102 0.324" material="leaf" euler="20 -25 687.5" group="0" />
+      <geom name="detail-341" type="ellipsoid" pos="-0.062117 0.23182 1.38" size="0.192 0.102 0.324" material="leaf-light" euler="20 -25 825" group="0" />
+      <geom name="plant-lounge-plant-vein-2" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 0" pos="0.24 0.0 0.84" />
+      <geom name="plant-lounge-plant-vein-3" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 137.5" pos="-0.17695 0.16214 0.93" />
+      <geom name="plant-lounge-plant-vein-4" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 275" pos="0.020917 -0.23909 1.02" />
+      <geom name="plant-lounge-plant-vein-5" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 412.5" pos="0.1461 0.1904 1.11" />
+      <geom name="plant-lounge-plant-vein-6" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 550" pos="-0.23635 -0.041676 1.2" />
+      <geom name="plant-lounge-plant-vein-7" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 687.5" pos="0.20241 -0.12895 1.29" />
+      <geom name="plant-lounge-plant-vein-8" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 825" pos="-0.062117 0.23182 1.38" />
+    </body>
+    <body name="reception" pos="1.2 -2.75 0" euler="0 0 0">
+      <geom name="detail-342" type="box" pos="0 0 0.5" size="1.65 0.48 0.5" material="white" group="0" />
+      <geom name="detail-343" type="box" pos="0 -0.5 0.55" size="1.65 0.025 0.45" material="wood" group="0" />
+      <geom name="detail-344" type="box" pos="-1.5 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-345" type="box" pos="-1.33 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-346" type="box" pos="-1.16 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-347" type="box" pos="-0.99 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-348" type="box" pos="-0.82 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-349" type="box" pos="-0.65 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-350" type="box" pos="-0.48 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-351" type="box" pos="-0.31 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-352" type="box" pos="-0.14 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-353" type="box" pos="0.03 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-354" type="box" pos="0.2 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-355" type="box" pos="0.37 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-356" type="box" pos="0.54 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-357" type="box" pos="0.71 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-358" type="box" pos="0.88 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-359" type="box" pos="1.05 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-360" type="box" pos="1.22 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-361" type="box" pos="1.39 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-362" type="box" pos="1.56 -0.535 0.55" size="0.022 0.017 0.43" material="birch" group="0" />
+      <geom name="detail-363" type="box" pos="0 0 1.025" size="1.72 0.54 0.025" material="white" group="0" />
+      <geom name="detail-364" type="box" pos="0.45 0.15 1.23" size="0.3 0.025 0.17" material="screen" group="0" />
+      <body pos="0.45 0.9 0" euler="0 0 0">
+        <geom name="detail-365" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+        <geom name="detail-366" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+        <geom name="detail-367" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+        <geom name="detail-368" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+        <geom name="detail-369" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-370" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+        <geom name="detail-371" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-372" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+        <geom name="detail-373" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-374" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+        <geom name="detail-375" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+        <geom name="detail-376" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+        <geom name="detail-377" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+        <geom name="chair-detail-365-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+        <geom name="chair-detail-365-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+        <geom name="chair-detail-365-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+        <geom name="chair-detail-365-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+      </body>
+    </body>
+    <geom name="detail-378" type="box" pos="4.5 -5.45 0.45" size="0.57 0.4 0.45" material="blue" group="0" />
+    <geom name="detail-379" type="box" pos="4.5 -5.45 0.925" size="0.59 0.43 0.025" material="birch" group="0" />
+    <geom name="detail-380" type="box" pos="4.5 -5.865 0.5" size="0.5 0.015 0.39" material="white" group="0" />
+    <geom name="detail-381" type="box" pos="4.5 -5.89 0.68" size="0.2 0.02 0.015" material="metal" group="0" />
+    <geom name="detail-382" type="box" pos="5.7 -5.45 0.45" size="0.57 0.4 0.45" material="blue" group="0" />
+    <geom name="detail-383" type="box" pos="5.7 -5.45 0.925" size="0.59 0.43 0.025" material="birch" group="0" />
+    <geom name="detail-384" type="box" pos="5.7 -5.865 0.5" size="0.5 0.015 0.39" material="white" group="0" />
+    <geom name="detail-385" type="box" pos="5.7 -5.89 0.68" size="0.2 0.02 0.015" material="metal" group="0" />
+    <geom name="detail-386" type="box" pos="6.9 -5.45 0.45" size="0.57 0.4 0.45" material="blue" group="0" />
+    <geom name="detail-387" type="box" pos="6.9 -5.45 0.925" size="0.59 0.43 0.025" material="birch" group="0" />
+    <geom name="detail-388" type="box" pos="6.9 -5.865 0.5" size="0.5 0.015 0.39" material="white" group="0" />
+    <geom name="detail-389" type="box" pos="6.9 -5.89 0.68" size="0.2 0.02 0.015" material="metal" group="0" />
+    <geom name="detail-390" type="box" pos="4.55 -5.45 1.15" size="0.22 0.25 0.2" material="metal" group="0" />
+    <geom name="detail-391" type="box" pos="4.55 -5.18 1.18" size="0.15 0.02 0.1" material="screen" group="0" />
+    <geom name="detail-392" type="cylinder" pos="6 -3.5 0.77" size="0.6 0.045" material="birch" group="0" />
+    <geom name="detail-393" type="cylinder" pos="6 -3.5 0.36" size="0.065 0.36" material="metal" group="0" />
+    <body pos="5.15 -3.5 0" euler="0 0 90">
+      <geom name="detail-394" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+      <geom name="detail-395" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+      <geom name="detail-396" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+      <geom name="detail-397" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+      <geom name="detail-398" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-399" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+      <geom name="detail-400" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-401" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+      <geom name="detail-402" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-403" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+      <geom name="detail-404" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-405" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+      <geom name="detail-406" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+      <geom name="chair-detail-394-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+      <geom name="chair-detail-394-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+      <geom name="chair-detail-394-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+      <geom name="chair-detail-394-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+    </body>
+    <body pos="6.85 -3.5 0" euler="0 0 -90">
+      <geom name="detail-407" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+      <geom name="detail-408" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+      <geom name="detail-409" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+      <geom name="detail-410" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+      <geom name="detail-411" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-412" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+      <geom name="detail-413" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-414" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+      <geom name="detail-415" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-416" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+      <geom name="detail-417" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-418" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+      <geom name="detail-419" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+      <geom name="chair-detail-407-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+      <geom name="chair-detail-407-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+      <geom name="chair-detail-407-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+      <geom name="chair-detail-407-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+    </body>
+    <body pos="6 -2.65 0" euler="0 0 0">
+      <geom name="detail-420" type="box" pos="0 0 0.48" size="0.24 0.23 0.065" material="seat" group="0" />
+      <geom name="detail-421" type="box" pos="0 0.21 0.77" size="0.25 0.045 0.24" material="seat" group="0" />
+      <geom name="detail-422" type="cylinder" pos="0 0 0.24" size="0.045 0.22" material="metal" group="0" />
+      <geom name="detail-423" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.22 0 0.08" group="0" />
+      <geom name="detail-424" type="sphere" pos="0.22 0 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-425" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 0.20923 0.08" group="0" />
+      <geom name="detail-426" type="sphere" pos="0.067984 0.20923 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-427" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 0.12931 0.08" group="0" />
+      <geom name="detail-428" type="sphere" pos="-0.17798 0.12931 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-429" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 -0.17798 -0.12931 0.08" group="0" />
+      <geom name="detail-430" type="sphere" pos="-0.17798 -0.12931 0.055" size="0.045" material="metal" group="0" />
+      <geom name="detail-431" type="capsule" pos="0 0 0" size="0.025" material="metal" fromto="0 0 0.08 0.067984 -0.20923 0.08" group="0" />
+      <geom name="detail-432" type="sphere" pos="0.067984 -0.20923 0.055" size="0.045" material="metal" group="0" />
+      <geom name="chair-detail-420-arm--1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="-0.265 0 0.66" />
+      <geom name="chair-detail-420-support--1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="-0.265 0.1 0.56" />
+      <geom name="chair-detail-420-arm-1" type="box" size="0.028 0.18 0.025" material="rubber" group="0" contype="0" conaffinity="0" pos="0.265 0 0.66" />
+      <geom name="chair-detail-420-support-1" type="box" size="0.014 0.02 0.08" material="metal" group="0" contype="0" conaffinity="0" pos="0.265 0.1 0.56" />
+    </body>
+    <geom name="detail-433" type="box" pos="3.5 5.5 0.92" size="0.5 0.27 0.92" material="wood" group="0" />
+    <geom name="detail-434" type="box" pos="3.5 5.2 0.15" size="0.48 0.03 0.025" material="birch" group="0" />
+    <geom name="detail-435" type="box" pos="3.14 5.2 0.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-436" type="box" pos="3.31 5.2 0.35" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-437" type="box" pos="3.48 5.2 0.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-438" type="box" pos="3.65 5.2 0.35" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-439" type="box" pos="3.82 5.2 0.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-440" type="box" pos="3.5 5.2 0.65" size="0.48 0.03 0.025" material="birch" group="0" />
+    <geom name="detail-441" type="box" pos="3.14 5.2 0.85" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-442" type="box" pos="3.31 5.2 0.85" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-443" type="box" pos="3.48 5.2 0.85" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-444" type="box" pos="3.65 5.2 0.85" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-445" type="box" pos="3.82 5.2 0.85" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-446" type="box" pos="3.5 5.2 1.15" size="0.48 0.03 0.025" material="birch" group="0" />
+    <geom name="detail-447" type="box" pos="3.14 5.2 1.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-448" type="box" pos="3.31 5.2 1.35" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-449" type="box" pos="3.48 5.2 1.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-450" type="box" pos="3.65 5.2 1.35" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-451" type="box" pos="3.82 5.2 1.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-452" type="box" pos="3.5 5.2 1.7" size="0.48 0.03 0.025" material="birch" group="0" />
+    <geom name="detail-453" type="box" pos="3.14 5.2 1.9" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-454" type="box" pos="3.31 5.2 1.9" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-455" type="box" pos="3.48 5.2 1.9" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-456" type="box" pos="3.65 5.2 1.9" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-457" type="box" pos="3.82 5.2 1.9" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-458" type="box" pos="7.05 5.5 0.92" size="0.5 0.27 0.92" material="wood" group="0" />
+    <geom name="detail-459" type="box" pos="7.05 5.2 0.15" size="0.48 0.03 0.025" material="birch" group="0" />
+    <geom name="detail-460" type="box" pos="6.69 5.2 0.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-461" type="box" pos="6.86 5.2 0.35" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-462" type="box" pos="7.03 5.2 0.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-463" type="box" pos="7.2 5.2 0.35" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-464" type="box" pos="7.37 5.2 0.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-465" type="box" pos="7.05 5.2 0.65" size="0.48 0.03 0.025" material="birch" group="0" />
+    <geom name="detail-466" type="box" pos="6.69 5.2 0.85" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-467" type="box" pos="6.86 5.2 0.85" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-468" type="box" pos="7.03 5.2 0.85" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-469" type="box" pos="7.2 5.2 0.85" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-470" type="box" pos="7.37 5.2 0.85" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-471" type="box" pos="7.05 5.2 1.15" size="0.48 0.03 0.025" material="birch" group="0" />
+    <geom name="detail-472" type="box" pos="6.69 5.2 1.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-473" type="box" pos="6.86 5.2 1.35" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-474" type="box" pos="7.03 5.2 1.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-475" type="box" pos="7.2 5.2 1.35" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-476" type="box" pos="7.37 5.2 1.35" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-477" type="box" pos="7.05 5.2 1.7" size="0.48 0.03 0.025" material="birch" group="0" />
+    <geom name="detail-478" type="box" pos="6.69 5.2 1.9" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-479" type="box" pos="6.86 5.2 1.9" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-480" type="box" pos="7.03 5.2 1.9" size="0.045 0.13 0.17" material="white" group="0" />
+    <geom name="detail-481" type="box" pos="7.2 5.2 1.9" size="0.045 0.13 0.17" material="blue" group="0" />
+    <geom name="detail-482" type="box" pos="7.37 5.2 1.9" size="0.045 0.13 0.17" material="white" group="0" />
+    <body name="workspace-plant" pos="-7.4 5.2 0" euler="0 0 0">
+      <geom name="detail-483" type="cylinder" pos="0 0 0.22" size="0.2 0.22" material="pot" group="0" />
+      <geom name="detail-484" type="cylinder" pos="0 0 0.65" size="0.025 0.45" material="wood" group="0" />
+      <geom name="detail-485" type="ellipsoid" pos="0.2 0 0.7" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 0" group="0" />
+      <geom name="detail-486" type="ellipsoid" pos="-0.14746 0.13512 0.775" size="0.16 0.085 0.27" material="leaf" euler="20 -25 137.5" group="0" />
+      <geom name="detail-487" type="ellipsoid" pos="0.017431 -0.19924 0.85" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 275" group="0" />
+      <geom name="detail-488" type="ellipsoid" pos="0.12175 0.15867 0.925" size="0.16 0.085 0.27" material="leaf" euler="20 -25 412.5" group="0" />
+      <geom name="detail-489" type="ellipsoid" pos="-0.19696 -0.03473 1" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 550" group="0" />
+      <geom name="detail-490" type="ellipsoid" pos="0.16868 -0.10746 1.075" size="0.16 0.085 0.27" material="leaf" euler="20 -25 687.5" group="0" />
+      <geom name="detail-491" type="ellipsoid" pos="-0.051764 0.19319 1.15" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 825" group="0" />
+      <geom name="plant-workspace-plant-vein-2" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 0" pos="0.2 0.0 0.7" />
+      <geom name="plant-workspace-plant-vein-3" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 137.5" pos="-0.14746 0.13512 0.775" />
+      <geom name="plant-workspace-plant-vein-4" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 275" pos="0.017431 -0.19924 0.85" />
+      <geom name="plant-workspace-plant-vein-5" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 412.5" pos="0.12175 0.15867 0.925" />
+      <geom name="plant-workspace-plant-vein-6" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 550" pos="-0.19696 -0.03473 1.0" />
+      <geom name="plant-workspace-plant-vein-7" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 687.5" pos="0.16868 -0.10746 1.075" />
+      <geom name="plant-workspace-plant-vein-8" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 825" pos="-0.051764 0.19319 1.15" />
+    </body>
+    <body name="meeting-plant" pos="2.1 5.3 0" euler="0 0 0">
+      <geom name="detail-492" type="cylinder" pos="0 0 0.22" size="0.2 0.22" material="pot" group="0" />
+      <geom name="detail-493" type="cylinder" pos="0 0 0.65" size="0.025 0.45" material="wood" group="0" />
+      <geom name="detail-494" type="ellipsoid" pos="0.2 0 0.7" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 0" group="0" />
+      <geom name="detail-495" type="ellipsoid" pos="-0.14746 0.13512 0.775" size="0.16 0.085 0.27" material="leaf" euler="20 -25 137.5" group="0" />
+      <geom name="detail-496" type="ellipsoid" pos="0.017431 -0.19924 0.85" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 275" group="0" />
+      <geom name="detail-497" type="ellipsoid" pos="0.12175 0.15867 0.925" size="0.16 0.085 0.27" material="leaf" euler="20 -25 412.5" group="0" />
+      <geom name="detail-498" type="ellipsoid" pos="-0.19696 -0.03473 1" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 550" group="0" />
+      <geom name="detail-499" type="ellipsoid" pos="0.16868 -0.10746 1.075" size="0.16 0.085 0.27" material="leaf" euler="20 -25 687.5" group="0" />
+      <geom name="detail-500" type="ellipsoid" pos="-0.051764 0.19319 1.15" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 825" group="0" />
+      <geom name="plant-meeting-plant-vein-2" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 0" pos="0.2 0.0 0.7" />
+      <geom name="plant-meeting-plant-vein-3" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 137.5" pos="-0.14746 0.13512 0.775" />
+      <geom name="plant-meeting-plant-vein-4" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 275" pos="0.017431 -0.19924 0.85" />
+      <geom name="plant-meeting-plant-vein-5" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 412.5" pos="0.12175 0.15867 0.925" />
+      <geom name="plant-meeting-plant-vein-6" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 550" pos="-0.19696 -0.03473 1.0" />
+      <geom name="plant-meeting-plant-vein-7" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 687.5" pos="0.16868 -0.10746 1.075" />
+      <geom name="plant-meeting-plant-vein-8" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 825" pos="-0.051764 0.19319 1.15" />
+    </body>
+    <body name="private-plant" pos="7.3 2.3 0" euler="0 0 0">
+      <geom name="detail-501" type="cylinder" pos="0 0 0.242" size="0.22 0.242" material="pot" group="0" />
+      <geom name="detail-502" type="cylinder" pos="0 0 0.715" size="0.0275 0.495" material="wood" group="0" />
+      <geom name="detail-503" type="ellipsoid" pos="0.22 0 0.77" size="0.176 0.0935 0.297" material="leaf-light" euler="20 -25 0" group="0" />
+      <geom name="detail-504" type="ellipsoid" pos="-0.1622 0.14863 0.8525" size="0.176 0.0935 0.297" material="leaf" euler="20 -25 137.5" group="0" />
+      <geom name="detail-505" type="ellipsoid" pos="0.019174 -0.21916 0.935" size="0.176 0.0935 0.297" material="leaf-light" euler="20 -25 275" group="0" />
+      <geom name="detail-506" type="ellipsoid" pos="0.13393 0.17454 1.0175" size="0.176 0.0935 0.297" material="leaf" euler="20 -25 412.5" group="0" />
+      <geom name="detail-507" type="ellipsoid" pos="-0.21666 -0.038203 1.1" size="0.176 0.0935 0.297" material="leaf-light" euler="20 -25 550" group="0" />
+      <geom name="detail-508" type="ellipsoid" pos="0.18555 -0.11821 1.1825" size="0.176 0.0935 0.297" material="leaf" euler="20 -25 687.5" group="0" />
+      <geom name="detail-509" type="ellipsoid" pos="-0.05694 0.2125 1.265" size="0.176 0.0935 0.297" material="leaf-light" euler="20 -25 825" group="0" />
+      <geom name="plant-private-plant-vein-2" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 0" pos="0.22 0.0 0.77" />
+      <geom name="plant-private-plant-vein-3" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 137.5" pos="-0.1622 0.14863 0.8525" />
+      <geom name="plant-private-plant-vein-4" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 275" pos="0.019174 -0.21916 0.935" />
+      <geom name="plant-private-plant-vein-5" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 412.5" pos="0.13393 0.17454 1.0175" />
+      <geom name="plant-private-plant-vein-6" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 550" pos="-0.21666 -0.038203 1.1" />
+      <geom name="plant-private-plant-vein-7" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 687.5" pos="0.18555 -0.11821 1.1825" />
+      <geom name="plant-private-plant-vein-8" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 825" pos="-0.05694 0.2125 1.265" />
+    </body>
+    <body name="entrance-plant" pos="-7.25 -1.9 0" euler="0 0 0">
+      <geom name="detail-510" type="cylinder" pos="0 0 0.22" size="0.2 0.22" material="pot" group="0" />
+      <geom name="detail-511" type="cylinder" pos="0 0 0.65" size="0.025 0.45" material="wood" group="0" />
+      <geom name="detail-512" type="ellipsoid" pos="0.2 0 0.7" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 0" group="0" />
+      <geom name="detail-513" type="ellipsoid" pos="-0.14746 0.13512 0.775" size="0.16 0.085 0.27" material="leaf" euler="20 -25 137.5" group="0" />
+      <geom name="detail-514" type="ellipsoid" pos="0.017431 -0.19924 0.85" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 275" group="0" />
+      <geom name="detail-515" type="ellipsoid" pos="0.12175 0.15867 0.925" size="0.16 0.085 0.27" material="leaf" euler="20 -25 412.5" group="0" />
+      <geom name="detail-516" type="ellipsoid" pos="-0.19696 -0.03473 1" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 550" group="0" />
+      <geom name="detail-517" type="ellipsoid" pos="0.16868 -0.10746 1.075" size="0.16 0.085 0.27" material="leaf" euler="20 -25 687.5" group="0" />
+      <geom name="detail-518" type="ellipsoid" pos="-0.051764 0.19319 1.15" size="0.16 0.085 0.27" material="leaf-light" euler="20 -25 825" group="0" />
+      <geom name="plant-entrance-plant-vein-2" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 0" pos="0.2 0.0 0.7" />
+      <geom name="plant-entrance-plant-vein-3" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 137.5" pos="-0.14746 0.13512 0.775" />
+      <geom name="plant-entrance-plant-vein-4" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 275" pos="0.017431 -0.19924 0.85" />
+      <geom name="plant-entrance-plant-vein-5" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 412.5" pos="0.12175 0.15867 0.925" />
+      <geom name="plant-entrance-plant-vein-6" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 550" pos="-0.19696 -0.03473 1.0" />
+      <geom name="plant-entrance-plant-vein-7" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 687.5" pos="0.16868 -0.10746 1.075" />
+      <geom name="plant-entrance-plant-vein-8" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 825" pos="-0.051764 0.19319 1.15" />
+    </body>
+    <body name="reception-plant" pos="3.1 -1.95 0" euler="0 0 0">
+      <geom name="detail-519" type="cylinder" pos="0 0 0.187" size="0.17 0.187" material="pot" group="0" />
+      <geom name="detail-520" type="cylinder" pos="0 0 0.5525" size="0.02125 0.3825" material="wood" group="0" />
+      <geom name="detail-521" type="ellipsoid" pos="0.17 0 0.595" size="0.136 0.07225 0.2295" material="leaf-light" euler="20 -25 0" group="0" />
+      <geom name="detail-522" type="ellipsoid" pos="-0.12534 0.11485 0.65875" size="0.136 0.07225 0.2295" material="leaf" euler="20 -25 137.5" group="0" />
+      <geom name="detail-523" type="ellipsoid" pos="0.014816 -0.16935 0.7225" size="0.136 0.07225 0.2295" material="leaf-light" euler="20 -25 275" group="0" />
+      <geom name="detail-524" type="ellipsoid" pos="0.10349 0.13487 0.78625" size="0.136 0.07225 0.2295" material="leaf" euler="20 -25 412.5" group="0" />
+      <geom name="detail-525" type="ellipsoid" pos="-0.16742 -0.02952 0.85" size="0.136 0.07225 0.2295" material="leaf-light" euler="20 -25 550" group="0" />
+      <geom name="detail-526" type="ellipsoid" pos="0.14338 -0.091341 0.91375" size="0.136 0.07225 0.2295" material="leaf" euler="20 -25 687.5" group="0" />
+      <geom name="detail-527" type="ellipsoid" pos="-0.043999 0.16421 0.9775" size="0.136 0.07225 0.2295" material="leaf-light" euler="20 -25 825" group="0" />
+      <geom name="plant-reception-plant-vein-2" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 0" pos="0.17 0.0 0.595" />
+      <geom name="plant-reception-plant-vein-3" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 137.5" pos="-0.12534 0.11485 0.65875" />
+      <geom name="plant-reception-plant-vein-4" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 275" pos="0.014816 -0.16935 0.7225" />
+      <geom name="plant-reception-plant-vein-5" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 412.5" pos="0.10349 0.13487 0.78625" />
+      <geom name="plant-reception-plant-vein-6" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 550" pos="-0.16742 -0.02952 0.85" />
+      <geom name="plant-reception-plant-vein-7" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 687.5" pos="0.14338 -0.091341 0.91375" />
+      <geom name="plant-reception-plant-vein-8" type="ellipsoid" size="0.009 0.008 0.16" material="leaf" group="0" contype="0" conaffinity="0" euler="20 -25 825" pos="-0.043999 0.16421 0.9775" />
+    </body>
+    <body name="indicator" pos="-7.3 .9 .65">
+      <geom name="alarm-cabinet" type="box" pos="0 0.08 0" size="0.39 0.18 0.39" material="edge" group="0" />
+      <geom name="indicator-housing" type="box" pos="0 -0.115 0" size="0.33 0.024 0.31" material="indicator-material" group="0" />
+      <geom name="detail-530" type="box" pos="0 -0.145 0.39" size="0.28 0.018 0.035" material="white" group="0" />
+      <geom name="detail-531" type="cylinder" pos="-0.28 0 -0.5" size="0.035 0.16" material="metal" group="0" />
+      <geom name="detail-532" type="cylinder" pos="0.28 0 -0.5" size="0.035 0.16" material="metal" group="0" />
+    </body>
+    <camera name="camera-a" pos="-3.7 -1.1 2.3" mode="targetbody" target="indicator" fovy="55" />
+    <body name="overview-target" pos="0 0 0.4" />
+    <camera name="overview" pos="12 -16 17" mode="targetbody" target="overview-target" fovy="46" />
+    <camera name="corridor-view" pos="-7.3 -0.9 2.1" mode="targetbody" target="indicator" fovy="65" />
+    <light name="daylight" pos="-4 5 9" dir=".35 -.6 -1" directional="true" diffuse=".70 .73 .76" ambient=".10 .10 .10" castshadow="true" />
+    <light name="interior-fill" pos="3 -3 6" dir="0 0 -1" diffuse=".38 .35 .30" castshadow="false" />
+    <geom name="finish-oak-0-0" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-7.125 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-1" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-5.575 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-2" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-4.025 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-3" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-2.475000000000001 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-4" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-0.9250000000000008 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-5" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="0.6249999999999992 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-6" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="2.1749999999999994 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-7" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="3.724999999999999 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-8" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="5.2749999999999995 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-9" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="6.824999999999999 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-0-10" type="box" size="0.1450000000000008 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="7.75 -1.0999999999999999 0.014" />
+    <geom name="finish-oak-1-0" type="box" size="0.52 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-7.375 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-1" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-6.075 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-2" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-4.525 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-3" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-2.975000000000001 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-4" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-1.4250000000000012 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-5" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="0.124999999999999 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-6" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="1.674999999999999 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-7" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="3.224999999999999 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-8" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="4.7749999999999995 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-9" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="6.324999999999999 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-1-10" type="box" size="0.3950000000000008 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="7.5 -0.8999999999999999 0.014" />
+    <geom name="finish-oak-2-0" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-7.125 -0.7 0.014" />
+    <geom name="finish-oak-2-1" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-5.575 -0.7 0.014" />
+    <geom name="finish-oak-2-2" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-4.025 -0.7 0.014" />
+    <geom name="finish-oak-2-3" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-2.475000000000001 -0.7 0.014" />
+    <geom name="finish-oak-2-4" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-0.9250000000000008 -0.7 0.014" />
+    <geom name="finish-oak-2-5" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="0.6249999999999992 -0.7 0.014" />
+    <geom name="finish-oak-2-6" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="2.1749999999999994 -0.7 0.014" />
+    <geom name="finish-oak-2-7" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="3.724999999999999 -0.7 0.014" />
+    <geom name="finish-oak-2-8" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="5.2749999999999995 -0.7 0.014" />
+    <geom name="finish-oak-2-9" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="6.824999999999999 -0.7 0.014" />
+    <geom name="finish-oak-2-10" type="box" size="0.1450000000000008 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="7.75 -0.7 0.014" />
+    <geom name="finish-oak-3-0" type="box" size="0.52 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-7.375 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-1" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-6.075 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-2" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-4.525 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-3" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-2.975000000000001 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-4" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-1.4250000000000012 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-5" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="0.124999999999999 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-6" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="1.674999999999999 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-7" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="3.224999999999999 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-8" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="4.7749999999999995 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-9" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="6.324999999999999 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-3-10" type="box" size="0.3950000000000008 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="7.5 -0.4999999999999999 0.014" />
+    <geom name="finish-oak-4-0" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-7.125 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-1" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-5.575 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-2" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-4.025 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-3" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-2.475000000000001 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-4" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-0.9250000000000008 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-5" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="0.6249999999999992 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-6" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="2.1749999999999994 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-7" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="3.724999999999999 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-8" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="5.2749999999999995 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-9" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="6.824999999999999 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-4-10" type="box" size="0.1450000000000008 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="7.75 -0.29999999999999993 0.014" />
+    <geom name="finish-oak-5-0" type="box" size="0.52 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-7.375 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-1" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-6.075 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-2" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-4.525 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-3" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-2.975000000000001 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-4" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-1.4250000000000012 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-5" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="0.124999999999999 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-6" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="1.674999999999999 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-7" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="3.224999999999999 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-8" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="4.7749999999999995 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-9" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="6.324999999999999 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-5-10" type="box" size="0.3950000000000008 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="7.5 -0.09999999999999987 0.014" />
+    <geom name="finish-oak-6-0" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-7.125 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-1" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-5.575 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-2" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-4.025 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-3" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-2.475000000000001 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-4" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-0.9250000000000008 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-5" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="0.6249999999999992 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-6" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="2.1749999999999994 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-7" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="3.724999999999999 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-8" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="5.2749999999999995 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-9" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="6.824999999999999 0.10000000000000009 0.014" />
+    <geom name="finish-oak-6-10" type="box" size="0.1450000000000008 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="7.75 0.10000000000000009 0.014" />
+    <geom name="finish-oak-7-0" type="box" size="0.52 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-7.375 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-1" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-6.075 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-2" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-4.525 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-3" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-2.975000000000001 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-4" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-1.4250000000000012 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-5" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="0.124999999999999 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-6" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="1.674999999999999 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-7" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="3.224999999999999 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-8" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="4.7749999999999995 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-9" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="6.324999999999999 0.30000000000000004 0.014" />
+    <geom name="finish-oak-7-10" type="box" size="0.3950000000000008 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="7.5 0.30000000000000004 0.014" />
+    <geom name="finish-oak-8-0" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-7.125 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-1" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-5.575 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-2" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-4.025 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-3" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-2.475000000000001 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-4" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-0.9250000000000008 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-5" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="0.6249999999999992 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-6" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="2.1749999999999994 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-7" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="3.724999999999999 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-8" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="5.2749999999999995 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-9" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="6.824999999999999 0.5000000000000002 0.014" />
+    <geom name="finish-oak-8-10" type="box" size="0.1450000000000008 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="7.75 0.5000000000000002 0.014" />
+    <geom name="finish-oak-9-0" type="box" size="0.52 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-7.375 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-1" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-6.075 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-2" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-4.525 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-3" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-2.975000000000001 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-4" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-1.4250000000000012 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-5" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="0.124999999999999 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-6" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="1.674999999999999 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-7" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="3.224999999999999 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-8" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="4.7749999999999995 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-9" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="6.324999999999999 0.7000000000000002 0.014" />
+    <geom name="finish-oak-9-10" type="box" size="0.3950000000000008 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="7.5 0.7000000000000002 0.014" />
+    <geom name="finish-oak-10-0" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-7.125 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-1" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-5.575 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-2" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-4.025 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-3" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-2.475000000000001 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-4" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-0.9250000000000008 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-5" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="0.6249999999999992 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-6" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="2.1749999999999994 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-7" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="3.724999999999999 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-8" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="5.2749999999999995 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-9" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="6.824999999999999 0.9000000000000001 0.014" />
+    <geom name="finish-oak-10-10" type="box" size="0.1450000000000008 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="7.75 0.9000000000000001 0.014" />
+    <geom name="finish-oak-11-0" type="box" size="0.52 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-7.375 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-1" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="-6.075 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-2" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="-4.525 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-3" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="-2.975000000000001 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-4" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="-1.4250000000000012 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-5" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="0.124999999999999 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-6" type="box" size="0.77 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="1.674999999999999 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-7" type="box" size="0.77 0.097 0.004" material="oak-board-2" group="2" contype="0" conaffinity="0" pos="3.224999999999999 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-8" type="box" size="0.77 0.097 0.004" material="oak-board-3" group="2" contype="0" conaffinity="0" pos="4.7749999999999995 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-9" type="box" size="0.77 0.097 0.004" material="oak-board-0" group="2" contype="0" conaffinity="0" pos="6.324999999999999 1.1000000000000003 0.014" />
+    <geom name="finish-oak-11-10" type="box" size="0.3950000000000008 0.097 0.004" material="oak-board-1" group="2" contype="0" conaffinity="0" pos="7.5 1.1000000000000003 0.014" />
+    <geom name="architecture-rear-sill-wall" type="box" size="8 0.1 0.46" material="wall" group="0" contype="1" conaffinity="1" pos="0 6 0.46" />
+    <geom name="architecture-rear-header" type="box" size="8 0.1 0.19" material="wall" group="0" contype="1" conaffinity="1" pos="0 6 2.51" />
+    <geom name="architecture-window-pier-0" type="box" size="0.4750000000000001 0.1 0.7" material="wall" group="0" contype="1" conaffinity="1" pos="-7.525 6 1.62" />
+    <geom name="architecture-window-pier-1" type="box" size="0.4500000000000002 0.1 0.7" material="wall" group="0" contype="1" conaffinity="1" pos="-4.5 6 1.62" />
+    <geom name="architecture-window-pier-2" type="box" size="0.44999999999999996 0.1 0.7" material="wall" group="0" contype="1" conaffinity="1" pos="-1.5 6 1.62" />
+    <geom name="architecture-window-pier-3" type="box" size="0.44999999999999996 0.1 0.7" material="wall" group="0" contype="1" conaffinity="1" pos="1.5 6 1.62" />
+    <geom name="architecture-window-pier-4" type="box" size="0.4500000000000002 0.1 0.7" material="wall" group="0" contype="1" conaffinity="1" pos="4.5 6 1.62" />
+    <geom name="architecture-window-pier-5" type="box" size="0.4750000000000001 0.1 0.7" material="wall" group="0" contype="1" conaffinity="1" pos="7.525 6 1.62" />
+    <geom name="window-0-glass" type="box" size="1.025 0.015 0.67" material="glass" group="0" contype="1" conaffinity="1" pos="-6 6 1.62" />
+    <geom name="window-0-left" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="-7.035 5.965 1.62" />
+    <geom name="window-0-right" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="-4.965 5.965 1.62" />
+    <geom name="window-0-mullion" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="-6 5.965 1.62" />
+    <geom name="window-0-bottom" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="-6 5.965 0.94" />
+    <geom name="window-0-top" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="-6 5.965 2.3" />
+    <geom name="window-0-sill" type="box" size="1.12 0.2 0.025" material="stone" group="0" contype="0" conaffinity="0" pos="-6 5.83 0.925" />
+    <geom name="window-0-blind" type="box" size="1.0 0.025 0.055" material="linen" group="0" contype="0" conaffinity="0" pos="-6 5.88 2.24" />
+    <geom name="window-1-glass" type="box" size="1.025 0.015 0.67" material="glass" group="0" contype="1" conaffinity="1" pos="-3 6 1.62" />
+    <geom name="window-1-left" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="-4.035 5.965 1.62" />
+    <geom name="window-1-right" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="-1.965 5.965 1.62" />
+    <geom name="window-1-mullion" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="-3 5.965 1.62" />
+    <geom name="window-1-bottom" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="-3 5.965 0.94" />
+    <geom name="window-1-top" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="-3 5.965 2.3" />
+    <geom name="window-1-sill" type="box" size="1.12 0.2 0.025" material="stone" group="0" contype="0" conaffinity="0" pos="-3 5.83 0.925" />
+    <geom name="window-1-blind" type="box" size="1.0 0.025 0.055" material="linen" group="0" contype="0" conaffinity="0" pos="-3 5.88 2.24" />
+    <geom name="window-2-glass" type="box" size="1.025 0.015 0.67" material="glass" group="0" contype="1" conaffinity="1" pos="0 6 1.62" />
+    <geom name="window-2-left" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="-1.035 5.965 1.62" />
+    <geom name="window-2-right" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="1.035 5.965 1.62" />
+    <geom name="window-2-mullion" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="0 5.965 1.62" />
+    <geom name="window-2-bottom" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="0 5.965 0.94" />
+    <geom name="window-2-top" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="0 5.965 2.3" />
+    <geom name="window-2-sill" type="box" size="1.12 0.2 0.025" material="stone" group="0" contype="0" conaffinity="0" pos="0 5.83 0.925" />
+    <geom name="window-2-blind" type="box" size="1.0 0.025 0.055" material="linen" group="0" contype="0" conaffinity="0" pos="0 5.88 2.24" />
+    <geom name="window-3-glass" type="box" size="1.025 0.015 0.67" material="glass" group="0" contype="1" conaffinity="1" pos="3 6 1.62" />
+    <geom name="window-3-left" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="1.965 5.965 1.62" />
+    <geom name="window-3-right" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="4.035 5.965 1.62" />
+    <geom name="window-3-mullion" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="3 5.965 1.62" />
+    <geom name="window-3-bottom" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="3 5.965 0.94" />
+    <geom name="window-3-top" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="3 5.965 2.3" />
+    <geom name="window-3-sill" type="box" size="1.12 0.2 0.025" material="stone" group="0" contype="0" conaffinity="0" pos="3 5.83 0.925" />
+    <geom name="window-3-blind" type="box" size="1.0 0.025 0.055" material="linen" group="0" contype="0" conaffinity="0" pos="3 5.88 2.24" />
+    <geom name="window-4-glass" type="box" size="1.025 0.015 0.67" material="glass" group="0" contype="1" conaffinity="1" pos="6 6 1.62" />
+    <geom name="window-4-left" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="4.965 5.965 1.62" />
+    <geom name="window-4-right" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="7.035 5.965 1.62" />
+    <geom name="window-4-mullion" type="box" size="0.022 0.045 0.7" material="metal" group="0" contype="1" conaffinity="1" pos="6 5.965 1.62" />
+    <geom name="window-4-bottom" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="6 5.965 0.94" />
+    <geom name="window-4-top" type="box" size="1.055 0.045 0.025" material="metal" group="0" contype="1" conaffinity="1" pos="6 5.965 2.3" />
+    <geom name="window-4-sill" type="box" size="1.12 0.2 0.025" material="stone" group="0" contype="0" conaffinity="0" pos="6 5.83 0.925" />
+    <geom name="window-4-blind" type="box" size="1.0 0.025 0.055" material="linen" group="0" contype="0" conaffinity="0" pos="6 5.88 2.24" />
+    <geom name="acoustic--2.55-0" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="-2.55 2.15 1.31" />
+    <geom name="acoustic--2.55-1" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="-2.55 2.51 1.31" />
+    <geom name="acoustic--2.55-2" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="-2.55 2.87 1.31" />
+    <geom name="acoustic--2.55-3" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="-2.55 3.23 1.31" />
+    <geom name="acoustic--2.55-4" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="-2.55 3.59 1.31" />
+    <geom name="acoustic--2.55-5" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="-2.55 3.9499999999999997 1.31" />
+    <geom name="acoustic--2.55-6" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="-2.55 4.3100000000000005 1.31" />
+    <geom name="acoustic--2.55-7" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="-2.55 4.67 1.31" />
+    <geom name="acoustic--2.55-8" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="-2.55 5.029999999999999 1.31" />
+    <geom name="acoustic-2.55-0" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="2.55 2.15 1.31" />
+    <geom name="acoustic-2.55-1" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="2.55 2.51 1.31" />
+    <geom name="acoustic-2.55-2" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="2.55 2.87 1.31" />
+    <geom name="acoustic-2.55-3" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="2.55 3.23 1.31" />
+    <geom name="acoustic-2.55-4" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="2.55 3.59 1.31" />
+    <geom name="acoustic-2.55-5" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="2.55 3.9499999999999997 1.31" />
+    <geom name="acoustic-2.55-6" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="2.55 4.3100000000000005 1.31" />
+    <geom name="acoustic-2.55-7" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="2.55 4.67 1.31" />
+    <geom name="acoustic-2.55-8" type="box" size="0.025 0.14 0.37" material="felt" group="0" contype="0" conaffinity="0" pos="2.55 5.029999999999999 1.31" />
+    <geom name="lighting-rear-0" type="box" size="0.76 0.05 0.018" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="-6 5.76 2.48" />
+    <geom name="lighting-rear-1" type="box" size="0.76 0.05 0.018" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="-3 5.76 2.48" />
+    <geom name="lighting-rear-2" type="box" size="0.76 0.05 0.018" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="0 5.76 2.48" />
+    <geom name="lighting-rear-3" type="box" size="0.76 0.05 0.018" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="3 5.76 2.48" />
+    <geom name="lighting-rear-4" type="box" size="0.76 0.05 0.018" material="light-diffuser" group="0" contype="0" conaffinity="0" pos="6 5.76 2.48" />
+    <geom name="sign-studio" type="box" size="0.25 0.014 0.1" material="metal" group="0" contype="0" conaffinity="0" pos="-6.62 1.413 0.87" />
+    <geom name="sign-studio-mark-0" type="box" size="0.035 0.008 0.035" material="birch" group="0" contype="0" conaffinity="0" pos="-6.75 1.395 0.87" />
+    <geom name="sign-studio-mark-1" type="box" size="0.035 0.008 0.035" material="birch" group="0" contype="0" conaffinity="0" pos="-6.62 1.395 0.87" />
+    <geom name="sign-studio-mark-2" type="box" size="0.035 0.008 0.035" material="birch" group="0" contype="0" conaffinity="0" pos="-6.49 1.395 0.87" />
+    <geom name="sign-meeting" type="box" size="0.25 0.014 0.1" material="metal" group="0" contype="0" conaffinity="0" pos="-1.65 1.413 0.87" />
+    <geom name="sign-meeting-mark-0" type="box" size="0.035 0.008 0.035" material="birch" group="0" contype="0" conaffinity="0" pos="-1.7799999999999998 1.395 0.87" />
+    <geom name="sign-meeting-mark-1" type="box" size="0.035 0.008 0.035" material="birch" group="0" contype="0" conaffinity="0" pos="-1.65 1.395 0.87" />
+    <geom name="sign-meeting-mark-2" type="box" size="0.035 0.008 0.035" material="birch" group="0" contype="0" conaffinity="0" pos="-1.5199999999999998 1.395 0.87" />
+    <geom name="sign-focus" type="box" size="0.25 0.014 0.1" material="metal" group="0" contype="0" conaffinity="0" pos="6.62 1.413 0.87" />
+    <geom name="sign-focus-mark-0" type="box" size="0.035 0.008 0.035" material="birch" group="0" contype="0" conaffinity="0" pos="6.49 1.395 0.87" />
+    <geom name="sign-focus-mark-1" type="box" size="0.035 0.008 0.035" material="birch" group="0" contype="0" conaffinity="0" pos="6.62 1.395 0.87" />
+    <geom name="sign-focus-mark-2" type="box" size="0.035 0.008 0.035" material="birch" group="0" contype="0" conaffinity="0" pos="6.75 1.395 0.87" />
+    <geom name="kitchen-door-0" type="box" size="0.55 0.012 0.38" material="felt" group="0" contype="0" conaffinity="0" pos="4.5 -5.035 0.48" />
+    <geom name="kitchen-handle-0" type="box" size="0.17 0.018 0.012" material="bronze" group="0" contype="0" conaffinity="0" pos="4.5 -5.01 0.72" />
+    <geom name="kitchen-door-1" type="box" size="0.55 0.012 0.38" material="felt" group="0" contype="0" conaffinity="0" pos="5.7 -5.035 0.48" />
+    <geom name="kitchen-handle-1" type="box" size="0.17 0.018 0.012" material="bronze" group="0" contype="0" conaffinity="0" pos="5.7 -5.01 0.72" />
+    <geom name="kitchen-door-2" type="box" size="0.55 0.012 0.38" material="felt" group="0" contype="0" conaffinity="0" pos="6.9 -5.035 0.48" />
+    <geom name="kitchen-handle-2" type="box" size="0.17 0.018 0.012" material="bronze" group="0" contype="0" conaffinity="0" pos="6.9 -5.01 0.72" />
+    <geom name="kitchen-sink-rim" type="box" size="0.29 0.24 0.008" material="metal" group="0" contype="0" conaffinity="0" pos="6.9 -5.4 0.956" />
+    <geom name="kitchen-sink-basin" type="box" size="0.255 0.205 0.006" material="lens" group="0" contype="0" conaffinity="0" pos="6.9 -5.4 0.966" />
+    <geom name="kitchen-mixer-upright" type="cylinder" size="0.018 0.13" material="metal" group="0" contype="0" conaffinity="0" pos="6.9 -5.68 1.08" />
+    <geom name="kitchen-mixer-spout" type="capsule" size="0.018" material="metal" group="0" contype="0" conaffinity="0" fromto="6.9 -5.68 1.2 6.9 -5.48 1.2" />
+    <geom name="kitchen-coffee-tray" type="box" size="0.2 0.09 0.014" material="metal" group="0" contype="0" conaffinity="0" pos="4.55 -5.12 0.97" />
+    <geom name="kitchen-coffee-spout-0" type="cylinder" size="0.012 0.022" material="metal" group="0" contype="0" conaffinity="0" pos="4.46 -5.17 1.1" />
+    <geom name="kitchen-cup-0" type="cylinder" size="0.037 0.04" material="white" group="0" contype="0" conaffinity="0" pos="4.46 -5.1 1.01" />
+    <geom name="kitchen-coffee-spout-1" type="cylinder" size="0.012 0.022" material="metal" group="0" contype="0" conaffinity="0" pos="4.64 -5.17 1.1" />
+    <geom name="kitchen-cup-1" type="cylinder" size="0.037 0.04" material="white" group="0" contype="0" conaffinity="0" pos="4.64 -5.1 1.01" />
+    <geom name="kitchen-serving-tray" type="box" size="0.34 0.23 0.012" material="wood" group="0" contype="0" conaffinity="0" pos="5.7 -5.4 0.96" />
+    <geom name="kitchen-water-carafe" type="cylinder" size="0.055 0.12" material="glass" group="0" contype="0" conaffinity="0" pos="5.62 -5.4 1.08" />
+    <body name="corridor-camera-west" pos="-7.7 1.1 2.1">
+      <geom name="sensor-corridor-camera-west-mount" type="box" size="0.055 0.07 0.035" material="white" group="0" contype="0" conaffinity="0" pos="0 0 0" />
+      <geom name="sensor-corridor-camera-west-dome" type="ellipsoid" size="0.065 0.065 0.045" material="lens" group="0" contype="0" conaffinity="0" pos="0 0 -0.055" />
+    </body>
+    <body name="corridor-camera-east" pos="7.7 -0.7 2.1">
+      <geom name="sensor-corridor-camera-east-mount" type="box" size="0.055 0.07 0.035" material="white" group="0" contype="0" conaffinity="0" pos="0 0 0" />
+      <geom name="sensor-corridor-camera-east-dome" type="ellipsoid" size="0.065 0.065 0.045" material="lens" group="0" contype="0" conaffinity="0" pos="0 0 -0.055" />
+    </body>
+    <geom name="sensor-gas-housing" type="box" size="0.065 0.08 0.11" material="white" group="0" contype="0" conaffinity="0" pos="7.78 -4.7 1.3" />
+    <geom name="sensor-gas-status" type="box" size="0.006 0.028 0.014" material="ui" group="0" contype="0" conaffinity="0" pos="7.7 -4.7 1.35" />
+    <body name="robot-atlas" pos="-4.2 -1.8 .24">
+      <inertial pos="0 0 0" mass="4" diaginertia="0.08 0.08 0.08" />
+      <joint name="robot-atlas-x" type="slide" axis="1 0 0" damping="1" armature="0" />
+      <joint name="robot-atlas-y" type="slide" axis="0 1 0" damping="1" armature="0" />
+      <geom name="robot-atlas-collision" type="sphere" size=".24" rgba="0 0 0 0" mass="0" group="1" />
+      <geom name="robot-atlas-chassis" type="box" pos="0 0 -.035" size=".20 .15 .09" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-body" type="box" pos="0 0 .065" size=".20 .15 .045" material="robot-atlas-color" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-front" type="box" pos=".207 0 0" size=".008 .13 .03" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-status" type="box" pos=".217 0 .04" size=".005 .08 .012" material="ui" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-bumper--1" type="capsule" pos="0 0 0" size=".025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" fromto="-.17 -0.15 -.04 .17 -0.15 -.04" />
+      <geom name="robot-atlas-service-panel--1" type="box" pos="0 -0.152 .025" size=".12 .004 .025" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-panel-fastener--1--0.1" type="sphere" pos="-0.1 -0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-panel-fastener--1-0.1" type="sphere" pos="0.1 -0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-bumper-1" type="capsule" pos="0 0 0" size=".025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" fromto="-.17 0.15 -.04 .17 0.15 -.04" />
+      <geom name="robot-atlas-service-panel-1" type="box" pos="0 0.152 .025" size=".12 .004 .025" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-panel-fastener-1--0.1" type="sphere" pos="-0.1 0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-panel-fastener-1-0.1" type="sphere" pos="0.1 0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-wheel--0.13--0.17" type="cylinder" pos="-0.13 -0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-atlas-hub--0.13--0.17" type="cylinder" pos="-0.13 -0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-atlas-wheel--0.13-0.17" type="cylinder" pos="-0.13 0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-atlas-hub--0.13-0.17" type="cylinder" pos="-0.13 0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-atlas-wheel-0.13--0.17" type="cylinder" pos="0.13 -0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-atlas-hub-0.13--0.17" type="cylinder" pos="0.13 -0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-atlas-wheel-0.13-0.17" type="cylinder" pos="0.13 0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-atlas-hub-0.13-0.17" type="cylinder" pos="0.13 0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-atlas-front-optics" type="box" pos=".211 0 .07" size=".012 .066 .018" material="lens" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-front-lens--0.04" type="sphere" pos=".224 -0.04 .07" size=".011" material="lens" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-front-lens-0.04" type="sphere" pos=".224 0.04 .07" size=".011" material="lens" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-stop-base" type="cylinder" pos="-.13 .075 .12" size=".024 .007" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-stop-button" type="cylinder" pos="-.13 .075 .13" size=".016 .006" material="indicator-material" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-lidar-base" type="cylinder" pos="0 0 .15" size=".065 .035" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-atlas-lidar" type="cylinder" pos="0 0 .23" size=".07 .04" material="robot-atlas-color" mass="0" contype="0" conaffinity="0" group="1" />
+      <site name="robot-atlas-lidar" pos="0 0 .27" size=".012" rgba="1.0 0.64 0.12 1" />
+    </body>
+    <body name="robot-iris" pos="0.0 -4.8 .24">
+      <inertial pos="0 0 0" mass="4" diaginertia="0.08 0.08 0.08" />
+      <joint name="robot-iris-x" type="slide" axis="1 0 0" damping="1" armature="0" />
+      <joint name="robot-iris-y" type="slide" axis="0 1 0" damping="1" armature="0" />
+      <geom name="robot-iris-collision" type="sphere" size=".24" rgba="0 0 0 0" mass="0" group="1" />
+      <geom name="robot-iris-chassis" type="box" pos="0 0 -.035" size=".20 .15 .09" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-body" type="box" pos="0 0 .065" size=".20 .15 .045" material="robot-iris-color" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-front" type="box" pos=".207 0 0" size=".008 .13 .03" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-status" type="box" pos=".217 0 .04" size=".005 .08 .012" material="ui" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-bumper--1" type="capsule" pos="0 0 0" size=".025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" fromto="-.17 -0.15 -.04 .17 -0.15 -.04" />
+      <geom name="robot-iris-service-panel--1" type="box" pos="0 -0.152 .025" size=".12 .004 .025" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-panel-fastener--1--0.1" type="sphere" pos="-0.1 -0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-panel-fastener--1-0.1" type="sphere" pos="0.1 -0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-bumper-1" type="capsule" pos="0 0 0" size=".025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" fromto="-.17 0.15 -.04 .17 0.15 -.04" />
+      <geom name="robot-iris-service-panel-1" type="box" pos="0 0.152 .025" size=".12 .004 .025" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-panel-fastener-1--0.1" type="sphere" pos="-0.1 0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-panel-fastener-1-0.1" type="sphere" pos="0.1 0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-wheel--0.13--0.17" type="cylinder" pos="-0.13 -0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-iris-hub--0.13--0.17" type="cylinder" pos="-0.13 -0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-iris-wheel--0.13-0.17" type="cylinder" pos="-0.13 0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-iris-hub--0.13-0.17" type="cylinder" pos="-0.13 0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-iris-wheel-0.13--0.17" type="cylinder" pos="0.13 -0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-iris-hub-0.13--0.17" type="cylinder" pos="0.13 -0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-iris-wheel-0.13-0.17" type="cylinder" pos="0.13 0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-iris-hub-0.13-0.17" type="cylinder" pos="0.13 0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-iris-front-optics" type="box" pos=".211 0 .07" size=".012 .066 .018" material="lens" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-front-lens--0.04" type="sphere" pos=".224 -0.04 .07" size=".011" material="lens" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-front-lens-0.04" type="sphere" pos=".224 0.04 .07" size=".011" material="lens" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-stop-base" type="cylinder" pos="-.13 .075 .12" size=".024 .007" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-stop-button" type="cylinder" pos="-.13 .075 .13" size=".016 .006" material="indicator-material" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-lidar-base" type="cylinder" pos="0 0 .15" size=".065 .035" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-iris-lidar" type="cylinder" pos="0 0 .23" size=".07 .04" material="robot-iris-color" mass="0" contype="0" conaffinity="0" group="1" />
+      <site name="robot-iris-lidar" pos="0 0 .27" size=".012" rgba="0.08 0.77 0.69 1" />
+    </body>
+    <body name="robot-echo" pos="3.9 -2.7 .24">
+      <inertial pos="0 0 0" mass="4" diaginertia="0.08 0.08 0.08" />
+      <joint name="robot-echo-x" type="slide" axis="1 0 0" damping="1" armature="0" />
+      <joint name="robot-echo-y" type="slide" axis="0 1 0" damping="1" armature="0" />
+      <geom name="robot-echo-collision" type="sphere" size=".24" rgba="0 0 0 0" mass="0" group="1" />
+      <geom name="robot-echo-chassis" type="box" pos="0 0 -.035" size=".20 .15 .09" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-body" type="box" pos="0 0 .065" size=".20 .15 .045" material="robot-echo-color" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-front" type="box" pos=".207 0 0" size=".008 .13 .03" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-status" type="box" pos=".217 0 .04" size=".005 .08 .012" material="ui" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-bumper--1" type="capsule" pos="0 0 0" size=".025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" fromto="-.17 -0.15 -.04 .17 -0.15 -.04" />
+      <geom name="robot-echo-service-panel--1" type="box" pos="0 -0.152 .025" size=".12 .004 .025" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-panel-fastener--1--0.1" type="sphere" pos="-0.1 -0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-panel-fastener--1-0.1" type="sphere" pos="0.1 -0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-bumper-1" type="capsule" pos="0 0 0" size=".025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" fromto="-.17 0.15 -.04 .17 0.15 -.04" />
+      <geom name="robot-echo-service-panel-1" type="box" pos="0 0.152 .025" size=".12 .004 .025" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-panel-fastener-1--0.1" type="sphere" pos="-0.1 0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-panel-fastener-1-0.1" type="sphere" pos="0.1 0.158 .025" size=".007" material="white" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-wheel--0.13--0.17" type="cylinder" pos="-0.13 -0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-echo-hub--0.13--0.17" type="cylinder" pos="-0.13 -0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-echo-wheel--0.13-0.17" type="cylinder" pos="-0.13 0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-echo-hub--0.13-0.17" type="cylinder" pos="-0.13 0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-echo-wheel-0.13--0.17" type="cylinder" pos="0.13 -0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-echo-hub-0.13--0.17" type="cylinder" pos="0.13 -0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-echo-wheel-0.13-0.17" type="cylinder" pos="0.13 0.17 -.15" size=".085 .025" material="rubber" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-echo-hub-0.13-0.17" type="cylinder" pos="0.13 0.196 -.15" size=".032 .003" material="metal" mass="0" contype="0" conaffinity="0" group="1" euler="90 0 0" />
+      <geom name="robot-echo-front-optics" type="box" pos=".211 0 .07" size=".012 .066 .018" material="lens" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-front-lens--0.04" type="sphere" pos=".224 -0.04 .07" size=".011" material="lens" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-front-lens-0.04" type="sphere" pos=".224 0.04 .07" size=".011" material="lens" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-stop-base" type="cylinder" pos="-.13 .075 .12" size=".024 .007" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-stop-button" type="cylinder" pos="-.13 .075 .13" size=".016 .006" material="indicator-material" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-lidar-base" type="cylinder" pos="0 0 .15" size=".065 .035" material="metal" mass="0" contype="0" conaffinity="0" group="1" />
+      <geom name="robot-echo-lidar" type="cylinder" pos="0 0 .23" size=".07 .04" material="robot-echo-color" mass="0" contype="0" conaffinity="0" group="1" />
+      <site name="robot-echo-lidar" pos="0 0 .27" size=".012" rgba="0.65 0.42 0.96 1" />
+    </body>
+  </worldbody>
+  <actuator>
+    <velocity name="robot-atlas-x" joint="robot-atlas-x" kv="80" ctrlrange="-.65 .65" ctrllimited="true" />
+    <velocity name="robot-atlas-y" joint="robot-atlas-y" kv="80" ctrlrange="-.65 .65" ctrllimited="true" />
+    <velocity name="robot-iris-x" joint="robot-iris-x" kv="80" ctrlrange="-.65 .65" ctrllimited="true" />
+    <velocity name="robot-iris-y" joint="robot-iris-y" kv="80" ctrlrange="-.65 .65" ctrllimited="true" />
+    <velocity name="robot-echo-x" joint="robot-echo-x" kv="80" ctrlrange="-.65 .65" ctrllimited="true" />
+    <velocity name="robot-echo-y" joint="robot-echo-y" kv="80" ctrlrange="-.65 .65" ctrllimited="true" />
+  </actuator>
+</mujoco>

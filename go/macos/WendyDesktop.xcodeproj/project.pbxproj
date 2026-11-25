@@ -72,6 +72,7 @@
 		3328E3ADBD51C86460BC5F8B /* LiteTemperatureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBC0B11A4A7AAAF5F0758714 /* LiteTemperatureView.swift */; };
 		3329EDF5CE8BF76ABB9C58D0 /* CampaignEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83ADC08CA4A40489983BE485 /* CampaignEventTests.swift */; };
 		349726133520742C203814D7 /* InstallGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 671BA86D948522533FE7CC9D /* InstallGuide.swift */; };
+		3545F19729154214C27C954A /* WorldWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99EBA9D269600205C923DCFF /* WorldWorkspaceView.swift */; };
 		36ABCD2BDD34D7B61468F7C2 /* CampaignRecordingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2CB41B67FAE017DE765E2F8 /* CampaignRecordingsView.swift */; };
 		37CD9AD08E158AFD5D0A1BF1 /* UnitreePairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE99209CE4290965133EBC3F /* UnitreePairingView.swift */; };
 		383ECC2E48DFADB704DB2FA9 /* ScreenLensCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0B565A410E3EAD5C517D6C /* ScreenLensCalibration.swift */; };
@@ -150,7 +151,7 @@
 		6FD3EF6A632B76884FA7319E /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0DDA1A07827F3064598323B /* ActivityView.swift */; };
 		6FE367532D1AF4A4ED353037 /* SiteRealityProjection.metal in Sources */ = {isa = PBXBuildFile; fileRef = B300B334EB44105C3A135D2D /* SiteRealityProjection.metal */; };
 		71846A8760424BBAF272EE30 /* SiteChaseViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D378D671FEBCE8A8FB471E83 /* SiteChaseViewTests.swift */; };
-		72F278CD4596A3810B62747E /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = F7E321F63953AD979A129C4F /* SwiftTerm */; };
+		72F278CD4596A3810B62747E /* WorldOperator in Frameworks */ = {isa = PBXBuildFile; productRef = 21BA138168AE526E1A20AB4F /* WorldOperator */; };
 		76A42584B2D5A4BCA51FAFA9 /* DeviceAudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0038357CF8976FBB01A9221 /* DeviceAudioView.swift */; };
 		76E5D9279EC8FE76BB7AE4BC /* H264VideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C93776C64F09D31D72C65AD /* H264VideoDecoder.swift */; };
 		76ED347836313F4943096CA6 /* InstallGuidanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB84175F336A9BF4A9505CB /* InstallGuidanceView.swift */; };
@@ -221,10 +222,12 @@
 		A2F4D7B8E98BECD9FFED7C78 /* SiteArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECAA28D11C8E08FA5A802CB4 /* SiteArchive.swift */; };
 		A34D6AEC822A1CE2B0C29A3A /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2DEE3E46A9E3BB11B73526 /* main.swift */; };
 		A3AEBCE5A011225AEF27648E /* MobileSiteCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF1766729028084A6D2883CA /* MobileSiteCalibration.swift */; };
+		A401836ADA8B2C2399C643EF /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = F7E321F63953AD979A129C4F /* SwiftTerm */; };
 		A4BBEB92874CDA4E6FFB5BDB /* MobileRecordingPosters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C385F83B0B5AD396BE0685C /* MobileRecordingPosters.swift */; };
 		A4C924EB2A9009CF1900F394 /* DeviceChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4CC89666184527D86018FD /* DeviceChatView.swift */; };
 		A56638785222B16E4AE365D9 /* UnitreeExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C9324008F7F9FD0C92E45A /* UnitreeExtras.swift */; };
 		A640420891322DEAC7DA2208 /* PaneRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 586213F4C9CD3726515B5EBF /* PaneRefresh.swift */; };
+		A6648666191D0B7ECC165EC9 /* WorldTwin in Frameworks */ = {isa = PBXBuildFile; productRef = 613B2F754BE5998B7EE8A055 /* WorldTwin */; };
 		A789A504088C208FE124EBF3 /* NearbySetupClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E75A157CBBD32C6A883151B3 /* NearbySetupClient.swift */; };
 		A7F9535A5662E954697A5784 /* DeviceManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 666549CB8CB8A73AB8642E7D /* DeviceManagementView.swift */; };
 		A854B9C8B11F9F6B55D88B81 /* DeviceEnrollmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E539BE71A9E784220ACB1D8A /* DeviceEnrollmentView.swift */; };
@@ -331,6 +334,7 @@
 		EEA26B2B7DC7568228EFA193 /* VPNConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA6AB0A619B578B06B3173D9 /* VPNConfiguration.swift */; };
 		EEA3D0EAE34F96FF0B0527D7 /* DeviceOSUpdateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCB1B83279E3EC9D25CA5F00 /* DeviceOSUpdateView.swift */; };
 		EFBA74E5277959F7AF2DAF37 /* MobileVPNView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5614EC4C3387E7E193E9BE32 /* MobileVPNView.swift */; };
+		F02E52AA98B8CCE3794EC033 /* WorldWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99EBA9D269600205C923DCFF /* WorldWorkspaceView.swift */; };
 		F11E1744956905F3C08BEB7F /* SiteCameraColorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37814D56A945DF55B3199567 /* SiteCameraColorTests.swift */; };
 		F1C015CFB0B33DA98C73936F /* RealityProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5B2D6E09E17A33A168BD805 /* RealityProjectionTests.swift */; };
 		F28763DEF197CB9BFCFE4DEB /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
@@ -432,6 +436,7 @@
 		0B2BBF5239DC522DEC32DDF6 /* CameraDisplayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDisplayView.swift; sourceTree = "<group>"; };
 		0D2DEE3E46A9E3BB11B73526 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		0E245D3AB2FE090DD5A1D0D4 /* RobotLensCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RobotLensCalibration.swift; sourceTree = "<group>"; };
+		0EC1C9B454F7D8BA2813B494 /* WorldClient */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WorldClient; path = WorldClient; sourceTree = SOURCE_ROOT; };
 		0F13D570193EF9CC9CB12330 /* MobileRecordingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRecordingTests.swift; sourceTree = "<group>"; };
 		1097F49EB713F0CFB90322DB /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		10A956DDF27C46E379646AA3 /* SiteWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteWorkspace.swift; sourceTree = "<group>"; };
@@ -549,6 +554,7 @@
 		97B878F9B8525136814A1077 /* WendyMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WendyMobileApp.swift; sourceTree = "<group>"; };
 		997174D2436A34109AF1823C /* MobileRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRootView.swift; sourceTree = "<group>"; };
 		99B2A869864F58FBEBFD1692 /* SitePersonMarkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitePersonMarkerTests.swift; sourceTree = "<group>"; };
+		99EBA9D269600205C923DCFF /* WorldWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldWorkspaceView.swift; sourceTree = "<group>"; };
 		9B2C1C2097478D8363CB556C /* WendyDesktop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WendyDesktop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9B40B4FDD87C60533F0559A6 /* ModelHardwareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHardwareTests.swift; sourceTree = "<group>"; };
 		9C1822E9898ED00F382F90EF /* SiteFogOfWar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteFogOfWar.swift; sourceTree = "<group>"; };
@@ -674,7 +680,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				72F278CD4596A3810B62747E /* SwiftTerm in Frameworks */,
+				72F278CD4596A3810B62747E /* WorldOperator in Frameworks */,
+				A6648666191D0B7ECC165EC9 /* WorldTwin in Frameworks */,
+				A401836ADA8B2C2399C643EF /* SwiftTerm in Frameworks */,
 				E54F34FCA4D2C425D1D646CE /* NetworkExtension.framework in Frameworks */,
 				8E4B067D54CBFF75C5FEAADB /* SystemExtensions.framework in Frameworks */,
 				B755A7544C278B994D81687B /* CoreBluetooth.framework in Frameworks */,
@@ -804,6 +812,7 @@
 				6F559A36FB62C81768A4EC94 /* VPNController.swift */,
 				16082719BD2BF75BBBF59D09 /* VPNControls.swift */,
 				CDFEB9D50B027C252EBE8CDC /* WendyDesktopApp.swift */,
+				99EBA9D269600205C923DCFF /* WorldWorkspaceView.swift */,
 				7D18D28F107D97095C08E7F8 /* SiteTwin */,
 			);
 			path = App;
@@ -813,6 +822,7 @@
 			isa = PBXGroup;
 			children = (
 				0DB8417C2A50FE33FE87A72C /* go */,
+				CB830EECC8B266DBAF8FB1BB /* Packages */,
 				BFFA2085CFD68C26188636EF /* Resources */,
 				5EDCD13DC5A01C0586B8D8FA /* Sources */,
 				444F0C4441C02DF2AA6E16F1 /* Tests */,
@@ -1039,6 +1049,14 @@
 			path = Shared;
 			sourceTree = "<group>";
 		};
+		CB830EECC8B266DBAF8FB1BB /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				0EC1C9B454F7D8BA2813B494 /* WorldClient */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
 		D51E31CA50168A01713F29BA /* Extension */ = {
 			isa = PBXGroup;
 			children = (
@@ -1101,6 +1119,8 @@
 			);
 			name = WendyDesktop;
 			packageProductDependencies = (
+				21BA138168AE526E1A20AB4F /* WorldOperator */,
+				613B2F754BE5998B7EE8A055 /* WorldTwin */,
 				F7E321F63953AD979A129C4F /* SwiftTerm */,
 			);
 			productName = WendyDesktop;
@@ -1276,6 +1296,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				2D71DB882E30FB79D4B2E8B7 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				E3CEADE2909D532FCECD64F6 /* XCLocalSwiftPackageReference "WorldClient" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 45F39591A87CEA48A518A2D2 /* Products */;
@@ -1731,6 +1752,7 @@
 				1921AF77AED0B2287A8DF215 /* VPNController.swift in Sources */,
 				A0816368E809449ABE7348D1 /* VisualRecognition.cpp in Sources */,
 				B47059228CF53913171E4472 /* WendyMobileApp.swift in Sources */,
+				3545F19729154214C27C954A /* WorldWorkspaceView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1891,6 +1913,7 @@
 				60B5F00D61E666108B8E604C /* VPNControls.swift in Sources */,
 				FB48E10CF00E8A52FE5F0EDA /* VisualRecognition.cpp in Sources */,
 				61FF0099ACA858AA71168092 /* WendyDesktopApp.swift in Sources */,
+				F02E52AA98B8CCE3794EC033 /* WorldWorkspaceView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2570,6 +2593,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		E3CEADE2909D532FCECD64F6 /* XCLocalSwiftPackageReference "WorldClient" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = WorldClient;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		2D71DB882E30FB79D4B2E8B7 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -2582,6 +2612,14 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		21BA138168AE526E1A20AB4F /* WorldOperator */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WorldOperator;
+		};
+		613B2F754BE5998B7EE8A055 /* WorldTwin */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WorldTwin;
+		};
 		F7E321F63953AD979A129C4F /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 2D71DB882E30FB79D4B2E8B7 /* XCRemoteSwiftPackageReference "SwiftTerm" */;

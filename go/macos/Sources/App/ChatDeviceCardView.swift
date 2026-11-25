@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import WorldOperator
+#endif
 
 struct ChatDeviceCardsView: View {
     let cards: [ChatDeviceCard]
@@ -50,6 +53,19 @@ struct ChatDeviceCardView: View {
                     Label(card.title, systemImage: "video.slash")
                     Text(error ?? "Camera is no longer available.").font(.caption).foregroundStyle(.secondary)
                 }
+            } else if card.kind == "world" {
+                Label(card.title, systemImage: "globe.americas").font(.headline)
+                Text("Open the separate simulation workspace. The selected chat device is unchanged.")
+                    .font(.caption).foregroundStyle(.secondary)
+                #if os(macOS)
+                if let section = WorldWorkspaceSection(rawValue: card.episode) {
+                    Button("Open World workspace") { model.requestedWorldSection = section }
+                } else {
+                    Text("This World section is unavailable.").font(.caption)
+                }
+                #else
+                Text("World workspace is available in Wendy for macOS.").font(.caption)
+                #endif
             } else if card.kind == "recording" {
                 Label(card.title, systemImage: "play.rectangle").font(.headline)
                 Text(card.episode).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)

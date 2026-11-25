@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>wendy_exact_goal_planner</name>
+  <version>0.1.0</version>
+  <description>Private World adapter preserving an exact requested terminal heading.</description>
+  <maintainer email="engineering@wendylabs.com">Wendy Labs</maintainer>
+  <license>Proprietary</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>nav2_smac_planner</depend>
+  <depend>nav2_core</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>pluginlib</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>tf2_ros</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

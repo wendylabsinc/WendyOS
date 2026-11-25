@@ -1,0 +1,33 @@
+{
+  "mujoco": "4.0.0",
+  "model_sha256": "5e558cb84da0a17a382f8a9ffdfa1327e8649cfa5195ff70b4c3b974f1bac42b",
+  "compiled_geoms": 958,
+  "static_obstacle_bounds": 325,
+  "blocked_cells": 1444,
+  "free_cells": 811,
+  "reachable_cells": 770,
+  "four_neighbor_route_lengths": {
+    "atlas/workspace": 15,
+    "atlas/meeting": 38,
+    "atlas/private-office": 46,
+    "atlas/lounge": 10,
+    "atlas/reception": 56,
+    "atlas/kitchen": 42,
+    "iris/workspace": 67,
+    "iris/meeting": 62,
+    "iris/private-office": 42,
+    "iris/lounge": 60,
+    "iris/reception": 2,
+    "iris/kitchen": 16,
+    "echo/workspace": 47,
+    "echo/meeting": 42,
+    "echo/private-office": 22,
+    "echo/lounge": 40,
+    "echo/reception": 18,
+    "echo/kitchen": 4
+  },
+  "synthetic_office": true,
+  "external_assets": 0,
+  "spaces": 6,
+  "visual_sensor_housings": 3
+}

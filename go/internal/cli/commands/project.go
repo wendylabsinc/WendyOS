@@ -14,6 +14,7 @@ import (
 )
 
 var entitlementDescriptions = map[string]string{
+	appconfig.EntitlementWorld:         "Publish and read scoped World observations through the agent",
 	appconfig.EntitlementNetwork:       "Access network interfaces",
 	appconfig.EntitlementBluetooth:     "Access Bluetooth peripherals",
 	appconfig.EntitlementAvahi:         "Run a private Avahi mDNS daemon for the app",
@@ -408,7 +409,10 @@ func pickFromItemsWithColumns(title string, items []tui.PickerItem, columns []tu
 		return "", fmt.Errorf("picker: %w", err)
 	}
 
-	pm := finalModel.(tui.PickerModel)
+	pm, ok := finalModel.(tui.PickerModel)
+	if !ok {
+		return "", fmt.Errorf("picker returned an unexpected model")
+	}
 	if pm.Cancelled() {
 		return "", ErrUserCancelled
 	}
@@ -416,7 +420,11 @@ func pickFromItemsWithColumns(title string, items []tui.PickerItem, columns []tu
 		return "", fmt.Errorf("no selection")
 	}
 
-	return pm.Selected().Value.(string), nil
+	value, ok := pm.Selected().Value.(string)
+	if !ok {
+		return "", fmt.Errorf("picker returned an invalid selection")
+	}
+	return value, nil
 }
 
 func loadProjectConfig() (*appconfig.AppConfig, string, error) {

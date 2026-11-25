@@ -7,7 +7,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -46,16 +45,15 @@ func main() {
 	}
 	defer conn.Close()
 	service := &twin.Server{Store: store, Conn: conn, Context: ctx}
-	server := &http.Server{Addr: "127.0.0.1:8791", Handler: service.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
-	go service.RunMapping()
-	go func() {
-		<-ctx.Done()
-		shutdown, done := context.WithTimeout(context.Background(), 5*time.Second)
-		defer done()
-		server.Shutdown(shutdown)
-	}()
+	listener, err := net.Listen("tcp", "127.0.0.1:8791")
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Print("digital twin listening on 127.0.0.1:8791")
-	if err = server.ListenAndServe(); err != http.ErrServerClosed {
+	if err = service.ServeWithWorld(ctx, listener, twin.WorldOptions{
+		ConfigPath: os.Getenv("WENDY_TWIN_WORLD_CONFIG"),
+		Ready:      func(address string) { log.Printf("digital twin World simulation service listening on %s", address) },
+	}); err != nil {
 		log.Fatal(err)
 	}
 }

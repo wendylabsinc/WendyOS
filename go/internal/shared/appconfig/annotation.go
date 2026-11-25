@@ -38,6 +38,9 @@ const EntitlementAnnotationKeyPrefix = "sh.wendy/entitlement."
 //	mcp(port=8080)           → "port=8080"
 //	network(host,[8080:80])  → "mode=host,ports=8080:80"
 func EntitlementAnnotationValue(e Entitlement) string {
+	if e.Type == EntitlementWorld {
+		return worldAnnotation(e.WorldPublish, e.WorldSubscribe)
+	}
 	var parts []string
 	if e.Mode != "" {
 		parts = append(parts, "mode="+e.Mode)
@@ -86,6 +89,9 @@ func EntitlementAnnotationValue(e Entitlement) string {
 // ParseEntitlementAnnotation decodes a comma-separated key=value string (as
 // produced by EntitlementAnnotationValue) into an Entitlement of the given type.
 func ParseEntitlementAnnotation(entType, value string) Entitlement {
+	if entType == EntitlementWorld {
+		return parseWorldAnnotation(value)
+	}
 	ent := Entitlement{Type: entType}
 	for _, param := range splitAnnotationParams(value) {
 		eq := strings.IndexByte(param, '=')

@@ -130,6 +130,7 @@ type Client struct {
 	outputOwners            map[string]*taskOutputOwner
 	recoveredOutput         map[string]*recoveredTaskOutput
 	outputClosed            bool
+	worldSocketProvider     AppWorldSocketProvider
 	systemAPISocketProvider AppSystemAPISocketProvider
 	dataSocketProvider      AppDataSocketProvider
 
@@ -349,7 +350,7 @@ func appSystemAPIOwnersFromLabels(labelSets []map[string]string) []appSystemAPIO
 // persisted container labels after an Agent restart. Stopped containers count
 // too because they retain the socket directory mount and may be started later.
 func (c *Client) RestoreAppSystemAPISockets(ctx context.Context) {
-	if c.systemAPISocketProvider == nil && c.dataSocketProvider == nil {
+	if c.systemAPISocketProvider == nil && c.dataSocketProvider == nil && c.worldSocketProvider == nil {
 		return
 	}
 	ctx = c.withNamespace(ctx)
@@ -381,6 +382,11 @@ func (c *Client) RestoreAppSystemAPISockets(ctx context.Context) {
 			if _, err := ensureDataSockets(c.dataSocketProvider, appID, serviceName, entitlements); err != nil {
 				c.logger.Warn("restore app data socket failed", zap.String(logfields.AppID, appID), zap.Error(err))
 			}
+		}
+	}
+	for _, labels := range labelSets {
+		if err := c.validateWorldMount(labels); err != nil {
+			c.logger.Warn("World socket not restored; redeploy required", zap.String(logfields.AppID, labels[labelKeyAppID]), zap.Error(err))
 		}
 	}
 	c.sweepOrphanedSocketRoots(appIDsFromLabels(labelSets))
@@ -1352,6 +1358,24 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		return fmt.Errorf("episode-write entitlement unavailable: app data socket manager is not configured")
 	}
 
+	worldPublish, worldSubscribe, worldEnabled, err := appconfig.WorldAccess(appCfg.Entitlements)
+	if err != nil {
+		return err
+	}
+	var worldDeployment uint64
+	if worldEnabled {
+		if c.worldSocketProvider == nil {
+			return fmt.Errorf("world publication provider unavailable")
+		}
+		worldDeployment, err = worldGeneration()
+		if err != nil {
+			return fmt.Errorf("allocating world deployment identity: %w", err)
+		}
+		if _, err = appconfig.WorldCgroupSuffix(appID, serviceName, worldDeployment); err != nil {
+			return err
+		}
+	}
+
 	// Try the local image store first. The device-local registry shares
 	// containerd's content store, so anything just pushed to it is already
 	// available via GetImage — pulling would just round-trip bytes over
@@ -1603,6 +1627,15 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		return fmt.Errorf("security: CgroupsPath was unexpectedly set before assignment (%q); ApplyEntitlements or CDI must not set it", spec.Linux.CgroupsPath)
 	}
 	spec.Linux.CgroupsPath = appcgroup.ContainerPath(appID, serviceName, appcgroup.Unified())
+	if worldEnabled {
+		suffix, err := appconfig.WorldCgroupSuffix(appID, serviceName, worldDeployment)
+		if err != nil {
+			return err
+		}
+		// Preserve the shared cgroup v2 memory budget while identifying the
+		// exact World service deployment to its Unix socket.
+		spec.Linux.CgroupsPath = appcgroup.ContainerPath(suffix, "", appcgroup.Unified())
+	}
 
 	// Apply CPU/memory/PID ceilings from wendy.json (per-service overrides
 	// the app-level default). Malformed values are rejected here rather than
@@ -1624,6 +1657,9 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 	}
 	labels := wendyLabels(appID, serviceName, version, req.GetRestartPolicy(), appCfg.Entitlements, appCfg.Isolation, dependsOn)
+	if worldEnabled {
+		labels[worldGenerationLabel] = strconv.FormatUint(worldDeployment, 10)
+	}
 	addReleaseIdentity(labels, image.Target().Digest.String(), req.ReleaseId)
 	if identities := captureSerialIdentities(appCfg.Entitlements); len(identities) > 0 {
 		encoded, err := json.Marshal(identities)
@@ -1752,6 +1788,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 			}
 		}()
 
+		var oldWorldGeneration uint64
 		oldHadSystemAPI := false
 		oldHadData := false
 		retiredMesh := false
@@ -1761,6 +1798,12 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		if oldLabels, labelErr := existing.Labels(ctx); labelErr == nil {
 			oldSharedCamera = sharesCamera(oldLabels)
 			oldEntitlements := parseEntitlementsFromAnnotations(oldLabels)
+			if entitlementsContain(oldEntitlements, appconfig.EntitlementWorld) {
+				oldWorldGeneration, err = worldGenerationFromLabels(oldLabels)
+				if err != nil {
+					return err
+				}
+			}
 			oldHadSystemAPI = entitlementsContain(oldEntitlements, appconfig.EntitlementNotifications)
 			oldHadData = entitlementsContain(oldEntitlements, appconfig.EntitlementEpisodeWrite)
 			oldHadNAN = hasNANEntitlement(oldEntitlements)
@@ -1872,6 +1915,9 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		if delErr != nil && !errdefs.IsNotFound(delErr) {
 			return fmt.Errorf("deleting existing container %q during replace: %w", containerName, delErr)
 		}
+		if oldWorldGeneration != 0 && c.worldSocketProvider != nil {
+			c.worldSocketProvider.Release(appID, serviceName, oldWorldGeneration)
+		}
 		// The old container's shares go before the new container's are made,
 		// and on this goroutine, so the removal never races the new
 		// container's CreateCameraShares for the same ID (Review Focus 1).
@@ -1956,6 +2002,28 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	}
 
 	// The providers were checked before the swap.
+	var worldSocketDir string
+	worldRefOwned := false
+	if worldEnabled {
+		worldSocketDir, err = c.worldSocketProvider.EnsureAccess(appID, serviceName, worldDeployment, worldPublish, worldSubscribe)
+		if err != nil {
+			return fmt.Errorf("preparing world socket: %w", err)
+		}
+		worldRefOwned = true
+		defer func() {
+			if worldRefOwned {
+				c.worldSocketProvider.Release(appID, serviceName, worldDeployment)
+			}
+		}()
+		labels[worldDirectoryLabel] = worldSocketDir
+		if err = localoci.ValidateWorldSocketDirectory(worldSocketDir); err != nil {
+			return err
+		}
+		if err = c.validateWorldMount(labels); err != nil {
+			return err
+		}
+	}
+
 	var systemAPISocketDir string
 	systemAPIRefOwned := false
 	var dataSocketDir string
@@ -1990,6 +2058,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	}
 	localoci.ApplyHostSockets(spec, &entCfg, localoci.ApplyOptions{
 		DBusProxySocketDir: dbusProxySocketDir,
+		WorldSocketDir:     worldSocketDir,
 		SystemAPISocketDir: systemAPISocketDir,
 		DataSocketDir:      dataSocketDir,
 	})
@@ -2100,6 +2169,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// Container created successfully; keep its external socket resources running.
 	dbusProxyStarted = false
 	avahiPrepared = false
+	worldRefOwned = false
 	systemAPIRefOwned = false
 	dataRefOwned = false
 
@@ -2437,6 +2507,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		c.hydrateIsolationLocked(appID, labels)
 	} else {
 		return nil, fmt.Errorf("reading container labels before start: %w", lerr)
+	}
+	if err := c.validateWorldMount(containerLabels); err != nil {
+		return nil, err
 	}
 	// The parsed name above can be ambiguous when app IDs contain underscores;
 	// repeat the check after authoritative labels resolve the actual app ID.
@@ -5123,6 +5196,9 @@ func (c *Client) releaseSocketsAfterDelete(appID string, deletedServices []strin
 		return
 	}
 	if wholeApp {
+		if c.worldSocketProvider != nil {
+			c.worldSocketProvider.ReleaseApp(appID)
+		}
 		if c.systemAPISocketProvider != nil {
 			c.systemAPISocketProvider.ReleaseApp(appID)
 		}
@@ -5196,8 +5272,10 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 		// record of which socket owner this container was, and releaseSockets
 		// below needs it.
 		serviceName := ""
+		var deletedWorldGeneration uint64
 		if labels, labelErr := ctr.Labels(ctx); labelErr == nil {
 			serviceName = labels[labelKeyServiceName]
+			deletedWorldGeneration, _ = worldGenerationFromLabels(labels)
 		}
 		imgName, delErr := c.deleteOne(ctx, ctr, deleteImage)
 		if delErr != nil {
@@ -5206,6 +5284,9 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 				zap.Error(delErr))
 			errs = append(errs, delErr)
 			continue
+		}
+		if deletedWorldGeneration != 0 && c.worldSocketProvider != nil {
+			c.worldSocketProvider.Release(appID, serviceName, deletedWorldGeneration)
 		}
 		deletedServices = append(deletedServices, serviceName)
 		if imgName != "" && !seen[imgName] {

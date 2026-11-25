@@ -35,13 +35,15 @@ type AudioLoop interface {
 // Supervisor runs one reconcile goroutine per pairing: dial the source, mount
 // its camera, microphone and generic channels, and pump frames with backoff.
 type Supervisor struct {
-	generic       GenericSink
-	logger        *zap.Logger
-	lb            Loopback
-	transportFor  TransportFactory
-	newWriter     func(path string) ros2camera.CameraWriter
-	audioLoop     AudioLoop
-	resolveSource SourceResolver
+	cameraObserver      CameraFrameObserver
+	cameraObserverWants func(SensorPairing, uint32) bool
+	generic             GenericSink
+	logger              *zap.Logger
+	lb                  Loopback
+	transportFor        TransportFactory
+	newWriter           func(path string) ros2camera.CameraWriter
+	audioLoop           AudioLoop
+	resolveSource       SourceResolver
 
 	statusMu  sync.Mutex
 	connected map[string]bool
@@ -338,6 +340,7 @@ func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr st
 	// Assign a stable per-(source,channel) MCU-band node id to each camera
 	// channel, and a snd-aloop subdevice to each microphone channel.
 	writers := make(map[uint32]ros2camera.CameraWriter, len(cams))
+	var observerOnly map[uint32]bool
 	defer func() {
 		for _, w := range writers {
 			w.Close()
@@ -351,6 +354,19 @@ func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr st
 	}()
 	subs := make([]uint32, 0, len(cams)+len(mics))
 	usedInputs := make(map[uint32]bool)
+	// Only explicitly commissioned World sources can bypass a missing loopback
+	// node. They still share this pairing's one native transport subscription.
+	observeWithoutWriter := func(ch *sensorlinkpb.SensorDescriptor) {
+		if !s.wantsCameraObservation(p, ch.ChannelId) {
+			return
+		}
+		if observerOnly == nil {
+			observerOnly = make(map[uint32]bool)
+		}
+		observerOnly[ch.ChannelId] = true
+		subs = append(subs, ch.ChannelId)
+		usedInputs[ch.InputId] = true
+	}
 	for _, ch := range cams {
 		if exclusiveInputs && usedInputs[ch.InputId] {
 			continue
@@ -358,6 +374,7 @@ func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr st
 		id, err := s.nodeIDForKey(p.Key(), ch.ChannelId)
 		if err != nil {
 			s.logger.Warn("skipping sensor channel", zap.String("source", p.Key()), zap.Uint32("channel", ch.ChannelId), zap.Error(err))
+			observeWithoutWriter(ch)
 			continue
 		}
 		if err := s.lb.EnsureNode(ctx, id, nodeLabel(p, ch)); err != nil {
@@ -365,6 +382,7 @@ func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr st
 			// consumer kernel lacks v4l2loopback) must not tear down the whole
 			// pairing — skip it so other sensors (mic) still mount.
 			s.logger.Warn("skipping camera channel (loopback node unavailable)", zap.String("source", p.Key()), zap.Uint32("channel", ch.ChannelId), zap.Error(err))
+			observeWithoutWriter(ch)
 			continue
 		}
 		path, _ := s.lb.NodePath(id)
@@ -428,7 +446,7 @@ func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr st
 	for _, ch := range cams {
 		// H.264 frames can depend on earlier frames. Only independent JPEG
 		// frames may replace pending frames, and only for mounted cameras.
-		if writers[ch.ChannelId] != nil && ch.GetVideo().Codec == sensorlinkpb.VideoFormat_MJPEG {
+		if (writers[ch.ChannelId] != nil || observerOnly[ch.ChannelId]) && ch.GetVideo().Codec == sensorlinkpb.VideoFormat_MJPEG {
 			latest = append(latest, ch.ChannelId)
 		}
 	}
@@ -441,6 +459,14 @@ func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr st
 	}
 	closeStream = sync.OnceValue(closeStream)
 	defer closeStream()
+	var observe func(*sensorlink.SensorFrame, ros2camera.Frame)
+	if s.cameraObserver != nil {
+		var closeObserver func()
+		observe, closeObserver = s.cameraObserver(ctx, p)
+		if closeObserver != nil {
+			defer closeObserver()
+		}
+	}
 	// Close the upstream stream on cancellation to interrupt an idle read
 	// and unblock transports whose FIFO only wakes on delivery or close.
 	stop := make(chan struct{})
@@ -457,13 +483,18 @@ func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr st
 		if !ok {
 			break
 		}
-		if w := writers[f.ChannelID]; w != nil {
+		if w := writers[f.ChannelID]; w != nil || observerOnly[f.ChannelID] {
 			frame, ok := frameToCamera(f, cams)
 			if !ok {
 				continue
 			}
-			if err := w.WriteFrame(frame); err != nil {
-				return delivered, err
+			if observe != nil {
+				observe(f, frame)
+			}
+			if w != nil {
+				if err := w.WriteFrame(frame); err != nil {
+					return delivered, err
+				}
 			}
 			if !delivered {
 				s.setConnected(p, true)

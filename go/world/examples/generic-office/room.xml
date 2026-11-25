@@ -1,0 +1,7 @@
+<mujocoinclude>
+  <worldbody>
+    <geom name="floor" type="plane" size="3 3 0.1"/>
+    <geom name="north-wall" type="box" pos="0 3 1" size="3 0.05 1"/>
+    <geom name="east-wall" type="box" pos="3 0 1" size="0.05 3 1"/>
+  </worldbody>
+</mujocoinclude>
