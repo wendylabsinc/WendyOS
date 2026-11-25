@@ -113,13 +113,6 @@ func TestDiscoverTrustUsesVerifiedHTTPS(t *testing.T) {
 	if cfg.EstUrl != "" {
 		t.Fatalf("PEM bootstrap URL was saved as EST: %q", cfg.EstUrl)
 	}
-	const explicit = "https://mesh-pki.local:8443/distinct/cacerts?realm=lab"
-	if err := SetESTURL(cfg, explicit); err != nil {
-		t.Fatal(err)
-	}
-	if err := discoverTrust(context.Background(), srv.Client(), cfg, srv.URL); err != nil || cfg.EstUrl != explicit {
-		t.Fatalf("explicit EST URL = %q, err=%v", cfg.EstUrl, err)
-	}
 	// Even a transport deliberately skipping verification must not supply roots.
 	unsafe := srv.Client().Transport.(*http.Transport).Clone()
 	unsafe.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -129,6 +122,42 @@ func TestDiscoverTrustUsesVerifiedHTTPS(t *testing.T) {
 	}
 	if cfg.ProvisionTrust {
 		t.Fatal("published unverified trust")
+	}
+}
+
+func TestExplicitESTURLAndBootstrapDiscovery(t *testing.T) {
+	root := testTrustPEM(t, true, time.Now().Add(time.Hour))
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(root)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	refresh := srv.URL + "/est/cacerts?realm=lab"
+	for _, tc := range []struct{ name, bootstrap, expected string }{
+		{"automatic discovery uses EST", "", refresh},
+		{"explicit bootstrap takes precedence", srv.URL + "/legacy/root.pem", srv.URL + "/legacy/root.pem"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &litepb.WendyConfEnrollment{CsrUrl: srv.URL + "/csr", TimeUrl: "roughtime"}
+			if err := SetESTURL(cfg, refresh); err != nil {
+				t.Fatal(err)
+			}
+			var discovered string
+			transport := srv.Client().Transport
+			client := &http.Client{Transport: discoveryRoundTripper(func(req *http.Request) (*http.Response, error) {
+				if req.Method == http.MethodGet {
+					discovered = req.URL.String()
+				}
+				return transport.RoundTrip(req)
+			})}
+			if err := discoverTrustForProfile(t.Context(), client, cfg, tc.bootstrap, TrustProfile{mldsa: true}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if discovered != tc.expected || cfg.EstUrl != refresh {
+				t.Fatalf("discovered at %q and saved %q, want %q and %q", discovered, cfg.EstUrl, tc.expected, refresh)
+			}
+		})
 	}
 }
 

@@ -62,6 +62,8 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 	}
 	discoverDevice := len(cfg.DeviceRoots) == 0
 	if endpoint == "" {
+		// Automatic discovery can also use the configured EST service and
+		// capture its HTTPS root. An explicit bootstrap URL takes precedence.
 		endpoint = cfg.EstUrl
 	}
 	if endpoint == "" {
