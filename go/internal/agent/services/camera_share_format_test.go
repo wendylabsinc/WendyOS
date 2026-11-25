@@ -1400,7 +1400,7 @@ func TestJoinHubForShare_TakesAViewersCameraOverForEveryNodeFormat(t *testing.T)
 				defer oldHub.unsubscribe(viewerID)
 				refuse(oldHub)
 
-				share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, tc.mode)
+				share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, tc.mode, noPreset)
 				if err != nil {
 					t.Fatalf("share join: %v", err)
 				}
@@ -1438,7 +1438,7 @@ func TestJoinHubForShare_ARefusalAtTheSharedModeIsReportedNotTakenOver(t *testin
 	defer hub.unsubscribe(id)
 	hub.nativeNotOffered(fixedReason("JPEG: the camera offers no JPEG at 1280x720"))
 
-	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, sfNativeMode)
+	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, sfNativeMode, noPreset)
 	if !isNativeRefusal(err) || refusalText(err) != "native frames are not available for this camera: JPEG: the camera offers no JPEG at 1280x720" {
 		t.Fatalf("share join: %v, want the hub's refusal", err)
 	}
@@ -2332,8 +2332,8 @@ func TestCreateCameraShares_ACreateThatStopsBeforeTheCamerasDropsTheEarlierManif
 
 const (
 	sfSoftwareEncoderNote    = "fed by the software encoder x264enc"
-	sfSoftwareEncoderIdle    = sfSoftwareEncoderNote + " when the app reads"
-	sfSoftwareEncoderWarning = `camera share: cv-a: C920 (/dev/video4): its h264 node is fed by the software encoder x264enc for as long as the app reads it; "format": "native" or "pixels" run no encoder`
+	sfSoftwareEncoderIdle    = sfSoftwareEncoderNote + " when the app reads, at preset ultrafast or the fastest one a consumer of the camera states"
+	sfSoftwareEncoderWarning = `camera share: cv-a: C920 (/dev/video4): its h264 node is fed by the software encoder x264enc, at preset ultrafast or the fastest one a consumer of the camera states, for as long as the app reads it; "format": "native" or "pixels" run no encoder`
 )
 
 // An h264 node of a webcam is filled by an encoder this device runs. Where

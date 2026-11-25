@@ -406,7 +406,7 @@ func TestParameterlessCaptureFallsBackToExistingParameters(t *testing.T) {
 	adapter := &cameraDataAdapter{video: video}
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0}
-	hub, id, ch, w, h, fps, restarted, err := adapter.subscribeHub(context.Background(), "/dev/video0", req, encodedFrames)
+	hub, id, ch, w, h, fps, restarted, err := adapter.subscribeHub(context.Background(), "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatalf("collision failed the episode: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestExplicitCaptureRefusedAgainstExplicitlyHeldHub(t *testing.T) {
 	adapter := &cameraDataAdapter{video: video}
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1280, Height: 720, Framerate: 15}
-	_, _, _, _, _, _, _, err := adapter.subscribeHub(context.Background(), "/dev/video0", req, encodedFrames)
+	_, _, _, _, _, _, _, err := adapter.subscribeHub(context.Background(), "/dev/video0", req, encodedFrames, noPreset)
 	if !errors.Is(err, errCameraHeldExplicitly) {
 		t.Fatalf("expected errCameraHeldExplicitly, got %v", err)
 	}

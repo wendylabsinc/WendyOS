@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -178,8 +179,10 @@ type fakeEncodeDemand struct {
 	encoded  bool
 	raw      bool
 	native   bool
+	stated   appconfig.EncodePreset
 	restarts int
 	encodes  []bool
+	presets  []appconfig.EncodePreset
 	changed  chan struct{}
 }
 
@@ -203,6 +206,36 @@ func (d *fakeEncodeDemand) wantNative() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.native
+}
+
+func (d *fakeEncodeDemand) statedPreset() appconfig.EncodePreset {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.stated
+}
+
+func (d *fakeEncodeDemand) setEncoderPreset(preset appconfig.EncodePreset) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.presets = append(d.presets, preset)
+}
+
+// state changes the fastest preset the subscribers state and pokes
+// demandChanged, as a hub does when one that states a preset joins or leaves.
+func (d *fakeEncodeDemand) state(preset appconfig.EncodePreset) {
+	d.mu.Lock()
+	d.stated = preset
+	d.mu.Unlock()
+	select {
+	case d.changed <- struct{}{}:
+	default:
+	}
+}
+
+func (d *fakeEncodeDemand) reportedPresets() []appconfig.EncodePreset {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]appconfig.EncodePreset(nil), d.presets...)
 }
 
 func (d *fakeEncodeDemand) demandChanged() <-chan struct{} { return d.changed }
@@ -300,7 +333,7 @@ func runShaped(t *testing.T, demand encodeDemand, grace time.Duration, l *record
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
-	go func() { result <- runShapedPipelines(ctx, demand, grace, l.launch) }()
+	go func() { result <- runShapedPipelines(ctx, demand, grace, "", l.launch) }()
 	var once sync.Once
 	var err error
 	stop = func() error {
@@ -445,7 +478,7 @@ func TestRunShapedPipelines_FallsBackWhenThereIsNoTap(t *testing.T) {
 func TestRunShapedPipelines_NilDemandLaunchesOnceEncoded(t *testing.T) {
 	boom := errors.New("boom")
 	var shapes []pipelineShape
-	err := runShapedPipelines(context.Background(), nil, time.Millisecond, func(_ context.Context, shape pipelineShape) error {
+	err := runShapedPipelines(context.Background(), nil, time.Millisecond, "", func(_ context.Context, shape pipelineShape) error {
 		shapes = append(shapes, shape)
 		return boom
 	})
@@ -465,7 +498,7 @@ func TestRunShapedPipelines_ReturnsTheLaunchError(t *testing.T) {
 			launches.failWith = func(pipelineShape) error { return boom }
 			result := make(chan error, 1)
 			go func() {
-				result <- runShapedPipelines(context.Background(), newFakeEncodeDemand(encoded, true), time.Millisecond, launches.launch)
+				result <- runShapedPipelines(context.Background(), newFakeEncodeDemand(encoded, true), time.Millisecond, "", launches.launch)
 			}()
 			select {
 			case err := <-result:
@@ -948,5 +981,223 @@ func TestRunCameraPipeline_TapOnlyFailureNamesNoEncoder(t *testing.T) {
 	failed := logs.FilterMessage("GStreamer pipeline failed").All()
 	if len(failed) != 1 || failed[0].ContextMap()["encoder"] != label {
 		t.Errorf("failure logs = %v, want one with encoder=%q", failed, label)
+	}
+}
+
+// --- the preset the encoder runs at ---
+
+func presetsOf(shapes []pipelineShape) []appconfig.EncodePreset {
+	presets := make([]appconfig.EncodePreset, len(shapes))
+	for i, shape := range shapes {
+		presets[i] = shape.preset
+	}
+	return presets
+}
+
+// runShapedWith is runShaped for a pipeline whose encode branch runs encoder.
+func runShapedWith(t *testing.T, encoder string, demand encodeDemand, grace time.Duration, l *recordedLaunches) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- runShapedPipelines(ctx, demand, grace, encoder, l.launch) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-result:
+		case <-time.After(5 * time.Second):
+			t.Error("runShapedPipelines did not return after its ctx was cancelled")
+		}
+	})
+}
+
+func TestRunShapedPipelines_TheEncoderStartsAtTheFastestStatedPresetAndAtTheDefaultWithNone(t *testing.T) {
+	for stated, want := range map[appconfig.EncodePreset]appconfig.EncodePreset{
+		noPreset:                       appconfig.DefaultEncodePreset,
+		appconfig.EncodePresetMedium:   appconfig.EncodePresetMedium,
+		appconfig.EncodePresetVeryfast: appconfig.EncodePresetVeryfast,
+	} {
+		demand := newFakeEncodeDemand(true, false)
+		demand.stated = stated
+		launches := newRecordedLaunches()
+		runShapedWith(t, "x264enc", demand, time.Minute, launches)
+		if shape := launches.next(t, time.Second); !shape.encode || shape.preset != want {
+			t.Errorf("with %q stated the first launch is %+v, want the encoder at %q", stated, shape, want)
+		}
+		if got := demand.reportedPresets(); !reflect.DeepEqual(got, []appconfig.EncodePreset{want}) {
+			t.Errorf("with %q stated the hub was told %q, want %q", stated, got, want)
+		}
+	}
+}
+
+func TestRunShapedPipelines_AFasterPresetRelaunchesAtOnce(t *testing.T) {
+	demand := newFakeEncodeDemand(true, true)
+	demand.stated = appconfig.EncodePresetMedium
+	launches := newRecordedLaunches()
+	runShapedWith(t, "x264enc", demand, time.Minute, launches)
+	launches.next(t, time.Second)
+	demand.state(appconfig.EncodePresetVeryfast)
+	if shape := launches.next(t, 500*time.Millisecond); !shape.encode || shape.preset != appconfig.EncodePresetVeryfast {
+		t.Fatalf("relaunch for a consumer that states veryfast is %+v", shape)
+	}
+	_, ctxs := launches.recorded()
+	if ctxs[0].Err() == nil {
+		t.Error("the launch at medium is still running")
+	}
+	if restarts, _ := demand.reported(); restarts != 1 {
+		t.Errorf("the encoded stream was restarted %d times, want once", restarts)
+	}
+	want := []appconfig.EncodePreset{appconfig.EncodePresetMedium, appconfig.EncodePresetVeryfast}
+	if got := demand.reportedPresets(); !reflect.DeepEqual(got, want) {
+		t.Errorf("the hub was told %q, want %q", got, want)
+	}
+}
+
+func TestRunShapedPipelines_AConsumerThatStatesNoPresetDoesNotChangeTheOneThatRuns(t *testing.T) {
+	demand := newFakeEncodeDemand(true, true)
+	demand.stated = appconfig.EncodePresetMedium
+	launches := newRecordedLaunches()
+	runShapedWith(t, "x264enc", demand, 50*time.Millisecond, launches)
+	launches.next(t, time.Second)
+	demand.set(true, false) // a viewer that states nothing joins or leaves
+	launches.none(t, 300*time.Millisecond)
+	if shapes, _ := launches.recorded(); !reflect.DeepEqual(presetsOf(shapes), []appconfig.EncodePreset{appconfig.EncodePresetMedium}) {
+		t.Errorf("launches ran at %q, want one at medium", presetsOf(shapes))
+	}
+}
+
+func TestRunShapedPipelines_ASlowerPresetIsTakenOnlyAfterTheGrace(t *testing.T) {
+	const grace = 150 * time.Millisecond
+	demand := newFakeEncodeDemand(true, true)
+	demand.stated = appconfig.EncodePresetVeryfast
+	launches := newRecordedLaunches()
+	runShapedWith(t, "x264enc", demand, grace, launches)
+	launches.next(t, time.Second)
+	demand.state(appconfig.EncodePresetMedium) // the consumer that stated veryfast left
+	launches.none(t, grace/2)
+	if shape := launches.next(t, grace+2*time.Second); !shape.encode || shape.preset != appconfig.EncodePresetMedium {
+		t.Fatalf("relaunch after the grace is %+v, want the encoder at medium", shape)
+	}
+	want := []appconfig.EncodePreset{appconfig.EncodePresetVeryfast, appconfig.EncodePresetMedium}
+	if got := demand.reportedPresets(); !reflect.DeepEqual(got, want) {
+		t.Errorf("the hub was told %q, want %q", got, want)
+	}
+}
+
+// The default is the fastest preset, so going back to it is a faster preset.
+func TestRunShapedPipelines_OnceNobodyStatesAPresetTheDefaultIsTakenAtOnce(t *testing.T) {
+	demand := newFakeEncodeDemand(true, true)
+	demand.stated = appconfig.EncodePresetMedium
+	launches := newRecordedLaunches()
+	runShapedWith(t, "x264enc", demand, time.Minute, launches)
+	launches.next(t, time.Second)
+	demand.state(noPreset)
+	if shape := launches.next(t, 500*time.Millisecond); shape.preset != appconfig.DefaultEncodePreset {
+		t.Fatalf("relaunch once nobody states a preset is %+v, want the default", shape)
+	}
+}
+
+func TestRunShapedPipelines_AConsumerThatReturnsWithinTheGraceKeepsThePipeline(t *testing.T) {
+	const grace = time.Second
+	demand := newFakeEncodeDemand(true, true)
+	demand.stated = appconfig.EncodePresetVeryfast
+	launches := newRecordedLaunches()
+	runShapedWith(t, "x264enc", demand, grace, launches)
+	launches.next(t, time.Second)
+	demand.state(appconfig.EncodePresetMedium)
+	launches.none(t, 600*time.Millisecond)
+	demand.state(appconfig.EncodePresetVeryfast)
+	launches.none(t, grace+50*time.Millisecond)
+	if shapes, _ := launches.recorded(); len(shapes) != 1 {
+		t.Errorf("%d launches, want exactly one: %+v", len(shapes), shapes)
+	}
+}
+
+func TestRunShapedPipelines_APresetNeverRelaunchesAPipelineThatDoesNotEncode(t *testing.T) {
+	const grace = 50 * time.Millisecond
+	demand := newFakeEncodeDemand(false, true)
+	launches := newRecordedLaunches()
+	runShapedWith(t, "x264enc", demand, grace, launches)
+	if shape := launches.next(t, time.Second); shape.encode || shape.preset != noPreset {
+		t.Fatalf("first launch is %+v, want no encoder and no preset", shape)
+	}
+	for _, preset := range []appconfig.EncodePreset{appconfig.EncodePresetMedium, appconfig.EncodePresetUltrafast, noPreset, appconfig.EncodePresetFast} {
+		demand.state(preset)
+		launches.none(t, 4*grace)
+	}
+	if got := demand.reportedPresets(); !reflect.DeepEqual(got, []appconfig.EncodePreset{noPreset}) {
+		t.Errorf("the hub was told %q, want one unset preset", got)
+	}
+}
+
+func TestRunShapedPipelines_APresetNeverRelaunchesAnEncoderThatTakesNone(t *testing.T) {
+	const grace = 50 * time.Millisecond
+	for _, encoder := range []string{"nvv4l2h264enc", "v4l2h264enc", "vtenc_h264", "openh264enc", "vp8enc", ""} {
+		demand := newFakeEncodeDemand(true, true)
+		demand.stated = appconfig.EncodePresetMedium
+		launches := newRecordedLaunches()
+		runShapedWith(t, encoder, demand, grace, launches)
+		if shape := launches.next(t, time.Second); !shape.encode || shape.preset != noPreset {
+			t.Fatalf("%q: first launch is %+v, want the encoder and no preset", encoder, shape)
+		}
+		for _, preset := range []appconfig.EncodePreset{appconfig.EncodePresetUltrafast, noPreset, appconfig.EncodePresetFast} {
+			demand.state(preset)
+			launches.none(t, 4*grace)
+		}
+	}
+}
+
+// The encoder kept through its idle grace keeps its preset too, and a viewer
+// that returns finds it running.
+func TestRunShapedPipelines_AnEncoderNobodyWantsIsDroppedAfterTheGraceWhateverItsPreset(t *testing.T) {
+	const grace = 150 * time.Millisecond
+	demand := newFakeEncodeDemand(true, true)
+	demand.stated = appconfig.EncodePresetMedium
+	launches := newRecordedLaunches()
+	runShapedWith(t, "x264enc", demand, grace, launches)
+	launches.next(t, time.Second)
+	demand.mu.Lock()
+	demand.stated = noPreset
+	demand.mu.Unlock()
+	demand.set(false, true)
+	launches.none(t, grace/2)
+	if shape := launches.next(t, grace+2*time.Second); shape.encode || shape.preset != noPreset {
+		t.Fatalf("relaunch after the grace is %+v, want no encoder", shape)
+	}
+}
+
+func TestRunShapedPipelines_NilDemandRunsTheEncoderAtTheDefault(t *testing.T) {
+	var shapes []pipelineShape
+	_ = runShapedPipelines(context.Background(), nil, time.Millisecond, "x264enc", func(_ context.Context, shape pipelineShape) error {
+		shapes = append(shapes, shape)
+		return errors.New("done")
+	})
+	if len(shapes) != 1 || !shapes[0].encode {
+		t.Fatalf("launches = %+v, want one with the encoder", shapes)
+	}
+	if stage := encoderSegment("x264enc", true, 30, shapes[0].preset); !strings.Contains(stage, " speed-preset=ultrafast ") {
+		t.Errorf("the encoder stage of that launch is %q, want the default preset", stage)
+	}
+}
+
+func TestAlwaysEncoding_IsLaunchedAgainOnlyForAnotherPreset(t *testing.T) {
+	const grace = 50 * time.Millisecond
+	demand := newFakeEncodeDemand(false, false)
+	demand.native = true
+	launches := newRecordedLaunches()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- runPipelinesShapedBy(ctx, demand, grace, alwaysEncoding, "x264enc", launches.launch) }()
+	t.Cleanup(func() { cancel(); <-result })
+	if shape := launches.next(t, time.Second); !shape.encode || shape.preset != appconfig.DefaultEncodePreset {
+		t.Fatalf("first launch is %+v, want the encoder at the default", shape)
+	}
+	demand.set(true, true)
+	demand.set(false, false)
+	launches.none(t, 6*grace)
+	demand.set(true, false)
+	demand.state(appconfig.EncodePresetMedium)
+	launches.none(t, grace/2)
+	if shape := launches.next(t, grace+2*time.Second); !shape.encode || shape.preset != appconfig.EncodePresetMedium {
+		t.Fatalf("second launch is %+v, want the encoder at medium", shape)
 	}
 }

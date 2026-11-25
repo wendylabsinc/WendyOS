@@ -457,7 +457,7 @@ func (a *armedCameraSource) fill(ctx context.Context) {
 func (a *armedCameraSource) join(ctx context.Context) error {
 	atDefaults := &agentpb.StreamVideoRequest{DeviceId: a.devID}
 	hub, subID, frames, kind, refusal, err := joinWithVideoFallback(a.primaryKind, a.video.refusingOwnFramesKnownAbsent(a.key, atDefaults, func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
-		return a.video.joinHubKind(ctx, a.key, atDefaults, kind)
+		return a.video.joinHubKind(ctx, a.key, atDefaults, kind, a.source.Capture.EncodePreset())
 	}))
 	if err != nil {
 		return err
@@ -603,7 +603,7 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	rejoin := func(ctx context.Context, kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
 		atDefaults := &agentpb.StreamVideoRequest{DeviceId: devID}
 		return a.video.refusingOwnFramesKnownAbsent(a.key, atDefaults, func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
-			return a.video.joinHubKind(ctx, a.key, atDefaults, kind)
+			return a.video.joinHubKind(ctx, a.key, atDefaults, kind, a.source.Capture.EncodePreset())
 		})(kind)
 	}
 	// Everything the hub dropped for this subscription up to now happened

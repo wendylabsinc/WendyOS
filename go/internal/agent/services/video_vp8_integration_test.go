@@ -37,7 +37,7 @@ func TestGStreamerVP8DecodesAcrossLostReadsForViewersAndEpisodes(t *testing.T) {
 
 	const pictures = 90
 	producer := fmt.Sprintf("videotestsrc num-buffers=%d ! video/x-raw,width=320,height=240,framerate=30/1 ! %s ! fdsink fd=1",
-		pictures, encoderSegment("vp8enc", false, keyframeIntervalFrames(30)))
+		pictures, encoderSegment("vp8enc", false, keyframeIntervalFrames(30), noPreset))
 	var producerErr bytes.Buffer
 	produce := exec.CommandContext(ctx, launch, append([]string{"-q"}, strings.Fields(producer)...)...)
 	produce.Stderr = &producerErr

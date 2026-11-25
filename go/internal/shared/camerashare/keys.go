@@ -2,7 +2,10 @@
 // the agent reports camera sharing, so the agent and the CLI agree on them.
 package camerashare
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
 	// KeyMode is how a shared camera is captured, e.g. "1280x720 YUYV, 30 fps".
@@ -51,6 +54,17 @@ func SoftwareEncoder(element string) string { return element + softwareEncoderSu
 func SoftwareEncoderOf(value string) (element string, ok bool) {
 	element, ok = strings.CutSuffix(value, softwareEncoderSuffix)
 	return element, ok && element != ""
+}
+
+// DescribeEncoderPreset says at which preset a camera's software encoder will
+// run for a consumer that states the preset stated, or none (""): the camera
+// has one encoder for all its consumers, so what the others state then is not
+// known beforehand. fallback is what it runs at when no consumer states one.
+func DescribeEncoderPreset(stated, fallback string) string {
+	if stated == "" {
+		return fmt.Sprintf("at preset %s or the fastest one a consumer of the camera states", fallback)
+	}
+	return fmt.Sprintf("at preset %s or a faster one another consumer of the camera states", stated)
 }
 
 // KeyModeOfFormat is the mode of the node an app gets for the camera when its

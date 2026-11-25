@@ -201,11 +201,12 @@ func TestCameraShareReport_NamesTheSoftwareEncoderOfACamerasH264(t *testing.T) {
 		h := newCSHarness(t, csC920())
 		sfCanDeriveFrames(h.s)
 		want := map[string]string{
-			"share_mode":        "1280x720 YUYV, 30 fps",
-			"share_mode_native": "1280x720 MJPG, 30 fps",
-			"share_mode_h264":   h264Mode,
-			"h264_encoder":      "x264enc (software)",
-			"stable_id":         "",
+			"share_mode":          "1280x720 YUYV, 30 fps",
+			"share_mode_native":   "1280x720 MJPG, 30 fps",
+			"share_mode_h264":     h264Mode,
+			"h264_encoder":        "x264enc (software)",
+			"h264_default_preset": "ultrafast",
+			"stable_id":           "",
 		}
 		if got := h.reportOf("/dev/video4"); !reflect.DeepEqual(got, want) {
 			t.Errorf("report = %#v\nwant     %#v", got, want)

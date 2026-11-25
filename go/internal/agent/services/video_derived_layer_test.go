@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -358,6 +359,57 @@ func TestDerivedLayer_RestartsOnlyWhenTheEncoderIsAddedOrDropped(t *testing.T) {
 	restarts, encodes := demand.reported()
 	if restarts != 2 || !reflect.DeepEqual(encodes, []bool{false, true, false}) {
 		t.Errorf("restarts=%d setPipelineEncodes=%v, want 2 and [false true false]", restarts, encodes)
+	}
+}
+
+func derivedPicturesAndEncoderAt(preset string) string {
+	return strings.Replace(derivedPicturesAndEncoder, "speed-preset=ultrafast", "speed-preset="+preset, 1)
+}
+
+func TestDerivedLayer_RunsItsEncoderAtTheFastestStatedPreset(t *testing.T) {
+	launchLog := fakeGStreamer(t, 0, derivedLayerElements...)
+	demand := newFakeEncodeDemand(true, true)
+	demand.stated = appconfig.EncodePresetMedium
+	const grace = 400 * time.Millisecond
+	layer, _ := fakeDerivedLayer(t, demand, grace)
+	runDerivedLayer(t, layer)
+	if launched := waitForLaunches(t, launchLog, 1); launched[0] != derivedPicturesAndEncoderAt("medium") {
+		t.Fatalf("with medium stated the child is %q", launched[0])
+	}
+
+	demand.state(appconfig.EncodePresetVeryfast)
+	if launched := waitForLaunches(t, launchLog, 2); launched[1] != derivedPicturesAndEncoderAt("veryfast") {
+		t.Fatalf("a consumer stating veryfast did not restart the child at it: %q", launched[1])
+	}
+
+	left := time.Now()
+	demand.state(appconfig.EncodePresetMedium)
+	time.Sleep(grace / 2)
+	if launched := launchedPipelines(t, launchLog); len(launched) != 2 {
+		t.Fatalf("the encoder was slowed down %v after the consumer left, inside the %v grace", time.Since(left), grace)
+	}
+	if launched := waitForLaunches(t, launchLog, 3); launched[2] != derivedPicturesAndEncoderAt("medium") {
+		t.Fatalf("after the grace the child is not back at medium: %q", launched[2])
+	}
+	want := []appconfig.EncodePreset{appconfig.EncodePresetMedium, appconfig.EncodePresetVeryfast, appconfig.EncodePresetMedium}
+	if got := demand.reportedPresets(); !reflect.DeepEqual(got, want) {
+		t.Errorf("the hub was told %q, want %q", got, want)
+	}
+}
+
+func TestDerivedLayer_APicturesOnlyChildIsNotRestartedForAPreset(t *testing.T) {
+	launchLog := fakeGStreamer(t, 0, derivedLayerElements...)
+	demand := newFakeEncodeDemand(false, true)
+	const grace = 100 * time.Millisecond
+	layer, _ := fakeDerivedLayer(t, demand, grace)
+	runDerivedLayer(t, layer)
+	waitForLaunches(t, launchLog, 1)
+	for _, preset := range []appconfig.EncodePreset{appconfig.EncodePresetMedium, appconfig.EncodePresetUltrafast, noPreset} {
+		demand.state(preset)
+		time.Sleep(2 * grace)
+		if launched := launchedPipelines(t, launchLog); len(launched) != 1 || launched[0] != derivedPicturesOnly {
+			t.Fatalf("stating %q restarted a child that does not encode: %q", preset, launched)
+		}
 	}
 }
 
@@ -795,7 +847,7 @@ func TestRunPipelinesShapedBy_PixelReadersNeverRestartAPipelineThatEncodes(t *te
 	defer cancel()
 	result := make(chan error, 1)
 	const grace = 100 * time.Millisecond
-	go func() { result <- runPipelinesShapedBy(ctx, demand, grace, branchesOnDemand, launches.launch) }()
+	go func() { result <- runPipelinesShapedBy(ctx, demand, grace, branchesOnDemand, "", launches.launch) }()
 
 	if shape := launches.next(t, time.Second); shape != (pipelineShape{}) {
 		t.Fatalf("first launch %+v, want no branch for native subscribers alone", shape)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -17,6 +18,10 @@ type pipelineShape struct {
 	// pixels adds a branch of decoded pictures. Only a derived layer's pipeline
 	// reads it: a camera pipeline tees its tap whenever it has one.
 	pixels bool
+	// preset is what the encode branch's encoder runs at. Unset without that
+	// branch and for an encoder that takes none, so that a preset never tells
+	// two shapes apart unless both run an encoder it changes.
+	preset appconfig.EncodePreset
 }
 
 func (s pipelineShape) lacksBranchOf(wanted pipelineShape) bool {
@@ -27,6 +32,14 @@ func (s pipelineShape) hasBranchNotIn(wanted pipelineShape) bool {
 	return (s.encode && !wanted.encode) || (s.pixels && !wanted.pixels)
 }
 
+func (s pipelineShape) encodesSlowerThan(wanted pipelineShape) bool {
+	return wanted.preset.FasterThan(s.preset)
+}
+
+func (s pipelineShape) encodesFasterThan(wanted pipelineShape) bool {
+	return s.preset.FasterThan(wanted.preset)
+}
+
 var errPipelineEndedRestartable = errors.New("pipeline ended and can be restarted")
 
 type shapeNeeds func(demand encodeDemand) pipelineShape
@@ -34,6 +47,8 @@ type shapeNeeds func(demand encodeDemand) pipelineShape
 func encoderOnDemand(demand encodeDemand) pipelineShape {
 	return pipelineShape{encode: demand.wantEncoded()}
 }
+
+func alwaysEncoding(encodeDemand) pipelineShape { return pipelineShape{encode: true} }
 
 // A pipeline that encodes keeps its pictures, as a camera pipeline keeps its
 // tap, so a pixel subscriber joining or leaving never restarts it under a
@@ -94,6 +109,13 @@ const defaultEncoderIdleGrace = 30 * time.Second
 // recording among the subscribers that remain. With nobody at all the hub
 // cancels ctx, so there is nothing to switch to.
 //
+// encoder is the element the encode branch runs. It runs at the fastest preset
+// a subscriber to encoded frames states, so that it never costs more than the
+// cheapest request on the camera allows: a pipeline that encodes is launched
+// again at once for a faster preset than it runs at, and for a slower one only
+// after grace, like a branch nobody wants any more. An encoder that takes no
+// preset is never launched again for one.
+//
 // launch runs one pipeline until its ctx ends or the pipeline does. Each launch
 // returns before the next starts, so the device is released in between. A
 // launch without the encoder that returns errNoTapOnlyPipeline says this camera
@@ -102,12 +124,12 @@ const defaultEncoderIdleGrace = 30 * time.Second
 // with that launch's error, as a single pipeline's end did before.
 //
 // With no demand to read (a producer whose sink is not a hub), launch runs once
-// with the encoder: today's behaviour.
-func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Duration, launch func(ctx context.Context, shape pipelineShape) error) error {
-	return runPipelinesShapedBy(ctx, demand, grace, encoderOnDemand, launch)
+// with the encoder, at the default preset.
+func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Duration, encoder string, launch func(ctx context.Context, shape pipelineShape) error) error {
+	return runPipelinesShapedBy(ctx, demand, grace, encoderOnDemand, encoder, launch)
 }
 
-func runPipelinesShapedBy(ctx context.Context, demand encodeDemand, grace time.Duration, needs shapeNeeds, launch func(ctx context.Context, shape pipelineShape) error) error {
+func runPipelinesShapedBy(ctx context.Context, demand encodeDemand, grace time.Duration, needs shapeNeeds, encoder string, launch func(ctx context.Context, shape pipelineShape) error) error {
 	if demand == nil {
 		return launch(ctx, pipelineShape{encode: true})
 	}
@@ -118,6 +140,9 @@ func runPipelinesShapedBy(ctx context.Context, demand encodeDemand, grace time.D
 	wanted := func() pipelineShape {
 		shape := needs(demand)
 		shape.encode = shape.encode || noTap
+		if shape.encode {
+			shape.preset = encoderPreset(encoder, demand.statedPreset())
+		}
 		return shape
 	}
 	for launches := 0; ; launches++ {
@@ -131,6 +156,7 @@ func runPipelinesShapedBy(ctx context.Context, demand encodeDemand, grace time.D
 			demand.encodedStreamRestarted()
 		}
 		demand.setPipelineEncodes(shape.encode)
+		demand.setEncoderPreset(shape.preset)
 		switched, err := superviseShape(ctx, demand, grace, shape, wanted, launch)
 		if switched {
 			continue
@@ -171,17 +197,19 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 	}
 	defer stopGrace()
 	// branchIdle is the one condition for dropping a branch, the encoder or a
-	// derived layer's pictures: the hub still has an audience, and the shape it
-	// calls for lacks a branch this launch runs.
+	// derived layer's pictures, and for slowing the encoder down: the hub still
+	// has an audience, and the shape it calls for lacks a branch this launch
+	// runs, or encodes at a slower preset.
 	branchIdle := func() bool {
-		return shape.hasBranchNotIn(wanted()) && (demand.wantEncoded() || demand.wantRaw() || demand.wantNative())
+		wanted := wanted()
+		return (shape.hasBranchNotIn(wanted) || shape.encodesFasterThan(wanted)) && (demand.wantEncoded() || demand.wantRaw() || demand.wantNative())
 	}
 
 	for {
 		// Re-read the hub on every pass, starting with the first: a change that
 		// landed between the shape decision and this launch is acted on too.
-		switch {
-		case shape.lacksBranchOf(wanted()):
+		switch wanted := wanted(); {
+		case shape.lacksBranchOf(wanted) || shape.encodesSlowerThan(wanted):
 			stop()
 			return true, nil
 		case branchIdle():

@@ -61,6 +61,16 @@ func hcOwnFrame(sampleID uint64, randomAccess bool, kernelNs int64) *videoFrame 
 	return f
 }
 
+// hcPresetIgnoredFor is what the decision for a node of format says of a
+// preset on a camera that produces H.264: its h264 node carries the camera's
+// own frames, so no encoder is there to take one.
+func hcPresetIgnoredFor(format string) string {
+	if format == appconfig.CameraFormatH264 {
+		return presetIgnoredOwnH264
+	}
+	return ""
+}
+
 func TestShareDecision_H264CameraWithADecoderIsDeclaredInEveryFormat(t *testing.T) {
 	s := hcService(t, "avdec_h264")
 	for format, want := range map[string]sharedMode{
@@ -69,7 +79,7 @@ func TestShareDecision_H264CameraWithADecoderIsDeclaredInEveryFormat(t *testing.
 		appconfig.CameraFormatH264:   hcH264Mode,
 	} {
 		d := s.shareDecisionFor(context.Background(), usbCam(), format)
-		if d != (shareDecision{Shared: true, Mode: want}) {
+		if d != (shareDecision{Shared: true, Mode: want, PresetIgnored: hcPresetIgnoredFor(format)}) {
 			t.Errorf("%s: decision = %+v, want %+v as asked", format, d, want)
 		}
 		wantPixelFormat, wantBufferBytes := uint32(v4l2PixFmtH264), maxFrameBytes
@@ -137,7 +147,7 @@ func TestShareDecision_H264CameraWithoutPicturesServesItsOwnFramesAndSaysWhy(t *
 			for _, format := range []string{appconfig.CameraFormatNative, appconfig.CameraFormatH264} {
 				asked := tc.native
 				asked.Format = format
-				if d := s.shareDecisionFor(context.Background(), usbCam(), format); d != (shareDecision{Shared: true, Mode: asked}) {
+				if d := s.shareDecisionFor(context.Background(), usbCam(), format); d != (shareDecision{Shared: true, Mode: asked, PresetIgnored: hcPresetIgnoredFor(format)}) {
 					t.Errorf("%s: decision = %+v, want %+v as asked", format, d, asked)
 				}
 			}

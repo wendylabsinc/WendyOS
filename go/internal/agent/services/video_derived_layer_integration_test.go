@@ -994,7 +994,7 @@ func TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame(t *testi
 	if err != nil {
 		skip("this GStreamer has no H.264 encoder to make a test stream with: " + err.Error())
 	}
-	encoderStages := encoderSegment(encoder.element, encoder.hasH264Parse, 15)
+	encoderStages := encoderSegment(encoder.element, encoder.hasH264Parse, 15, noPreset)
 	if available["x264enc"] {
 		// Without scene cuts every 15th frame alone is one decoding can start on.
 		encoderStages = "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=15 bframes=0 option-string=scenecut=0" + h264TestByteStream

@@ -25,11 +25,14 @@ type nodeFrames struct {
 	pictures       *agentpb.RawFormat
 	pictureRate    uint32
 	picturesWhyNot string
-	// softwareEncoder names the software element this device makes H.264 with
-	// from the camera's own frames; empty for a camera whose own frames need
-	// no encoder and for an encoder not known to be software.
-	softwareEncoder string
+	// h264Encoder names the element this device makes H.264 with from the
+	// camera's own frames; empty for a camera whose own frames need no encoder
+	// and for a device that cannot encode them.
+	h264Encoder string
 }
+
+// softwareEncoder is h264Encoder when it is known to encode in software.
+func (f nodeFrames) softwareEncoder() string { return softwareEncoderAmong(f.h264Encoder) }
 
 // isDepthOrInfraredNode is behind a var so tests can describe a RealSense node
 // without sysfs.
@@ -81,9 +84,9 @@ func (s *VideoService) framesForNodes(dev *agentpb.VideoDevice) nodeFrames {
 		// The layer that decodes the pictures has chosen the encoder too. A
 		// camera with no pictures has no layer to ask.
 		if layer, whyNot := s.pictureLayerFor(nil, dev.GetPath(), frames.own); layer != nil {
-			frames.pictures, frames.softwareEncoder = layer.pictures, layer.softwareEncoder()
+			frames.pictures, frames.h264Encoder = layer.pictures, layer.h264Encoder()
 		} else {
-			frames.picturesWhyNot, frames.softwareEncoder = whyNot, softwareEncoderOfH264From(frames.own.codec, available)
+			frames.picturesWhyNot, frames.h264Encoder = whyNot, h264EncoderFrom(frames.own.codec, available)
 		}
 		frames.pictureRate = frames.own.framerate
 	}

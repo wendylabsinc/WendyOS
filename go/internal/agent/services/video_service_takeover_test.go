@@ -85,7 +85,7 @@ func TestCaptureTakesOverDefaultedHub(t *testing.T) {
 	defer oldHub.unsubscribe(sensorID)
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	newHub, captureID, _, w, h, fps, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames)
+	newHub, captureID, _, w, h, fps, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatalf("takeover failed: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestCaptureRefusedWhenHubHeldExplicitly(t *testing.T) {
 	defer viewerHub.unsubscribe(viewerID)
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	_, _, _, _, _, _, _, err = svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames)
+	_, _, _, _, _, _, _, err = svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if !errors.Is(err, errCameraHeldExplicitly) {
 		t.Fatalf("expected errCameraHeldExplicitly, got %v", err)
 	}
@@ -197,7 +197,7 @@ func TestTakeoverAllowedAfterExplicitHolderLeaves(t *testing.T) {
 	viewerHub.unsubscribe(viewerID)
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames)
+	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatalf("takeover after the explicit holder left failed: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestParameterlessCaptureReattachesAcrossTakeover(t *testing.T) {
 
 	// A concurrent campaign takes the camera over at explicit parameters.
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames)
+	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil || !restarted {
 		t.Fatalf("takeover failed: restarted=%v err=%v", restarted, err)
 	}
@@ -393,7 +393,7 @@ func TestTakeoverAbortsWhenTheCameraDoesNotReleaseInTime(t *testing.T) {
 	defer oldHub.unsubscribe(sensorID)
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	_, _, _, _, _, _, _, err = svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames)
+	_, _, _, _, _, _, _, err = svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if !errors.Is(err, errCameraReleaseTimeout) {
 		t.Fatalf("takeover returned %v, want a refusal wrapping errCameraReleaseTimeout", err)
 	}

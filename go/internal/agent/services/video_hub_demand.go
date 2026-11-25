@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -61,9 +62,16 @@ type encodeDemand interface {
 	wantEncoded() bool
 	wantRaw() bool
 	wantNative() bool
+	// statedPreset is the fastest preset the subscribers to encoded frames
+	// state, and unset when none states one.
+	statedPreset() appconfig.EncodePreset
 	demandChanged() <-chan struct{}
 	encodedStreamRestarted()
 	setPipelineEncodes(bool)
+	// setEncoderPreset records the preset the producer's encoder runs at from
+	// here on: unset for a pipeline that does not encode or whose encoder
+	// takes none.
+	setEncoderPreset(appconfig.EncodePreset)
 }
 
 // nativeSink is the part of a hub a producer tells, on every start, whether
@@ -109,6 +117,8 @@ type hubDemand struct {
 	// encoderOff mirrors setPipelineEncodes, inverted so that the zero value
 	// matches every producer that never calls it: they all encode.
 	encoderOff bool
+	// preset is what setEncoderPreset last recorded.
+	preset appconfig.EncodePreset
 }
 
 // subscribePixels adds an in-agent consumer of the tap's uncompressed frames.
@@ -116,7 +126,7 @@ type hubDemand struct {
 // as rawRefusal does for a raw subscriber, rather than leaving the consumer
 // waiting on frames that will never come.
 func (h *deviceHub) subscribePixels() (int, chan *videoFrame, error) {
-	return h.subscribeAsKind("", pixelFrames)
+	return h.subscribeAsKind("", pixelFrames, noPreset)
 }
 
 // pixelRefusal builds the error a refused pixel subscriber is given. held says
@@ -154,6 +164,32 @@ func (h *deviceHub) wantKind(kind frameKind) bool {
 		}
 	}
 	return false
+}
+
+func (h *deviceHub) statedPreset() appconfig.EncodePreset {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	stated := noPreset
+	for _, sub := range h.subs {
+		if sub.kind == encodedFrames && !sub.closed {
+			stated = appconfig.FastestEncodePreset(stated, sub.preset)
+		}
+	}
+	return stated
+}
+
+func (h *deviceHub) setEncoderPreset(preset appconfig.EncodePreset) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.demand.preset = preset
+}
+
+// encoderPreset is the preset the producer's encoder runs at now, and unset
+// while it runs none that takes a preset.
+func (h *deviceHub) encoderPreset() appconfig.EncodePreset {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.demand.preset
 }
 
 // nativeUnavailable is the refusal a native subscriber is given. It reads and
@@ -197,9 +233,10 @@ func (h *deviceHub) nativeNotOffered(reason func() string) {
 	}
 }
 
-// demandChanged returns the channel poked whenever wantEncoded or wantRaw may
-// have changed: on every subscribe and unsubscribe, and when the producer closes
-// a subscriber early. A receive means "read the hub again", not what changed.
+// demandChanged returns the channel poked whenever wantEncoded, wantRaw or
+// statedPreset may have changed: on every subscribe and unsubscribe, and when
+// the producer closes a subscriber early. A receive means "read the hub
+// again", not what changed.
 func (h *deviceHub) demandChanged() <-chan struct{} {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -295,7 +332,7 @@ func (h *deviceHub) pipelineEncodes() bool {
 // whose producer has no tap answers with errPixelsUnavailable.
 func (s *VideoService) joinHubPixels(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (*deviceHub, int, chan *videoFrame, error) {
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
-		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderStreamClient, pixelFrames)
+		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderStreamClient, pixelFrames, noPreset)
 		if err == nil {
 			return hub, id, ch, nil
 		}

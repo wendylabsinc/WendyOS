@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/camerashare"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -48,6 +49,14 @@ func describeShareNode(mode sharedMode, stamp string) string {
 
 func describeShareSettings(format, stamp string) string {
 	return fmt.Sprintf("format %s, stamp %s", format, stamp)
+}
+
+// describeStatedPreset follows a node's settings when its app states a preset.
+func describeStatedPreset(preset appconfig.EncodePreset) string {
+	if preset == noPreset {
+		return ""
+	}
+	return ", preset " + preset.String()
 }
 
 func (m sharedMode) frameBytes() int { return int(m.BytesPerLine) * int(m.Height) }
@@ -144,27 +153,81 @@ func (m sharedMode) admits(req *agentpb.StreamVideoRequest) bool {
 // in that one, and AskedWhyNot says why it cannot. SoftwareEncoder names the
 // software element that makes the node's frames on this device, and is empty
 // for a node that carries what the camera produces, for pictures, and for an
-// encoder not known to be software.
+// encoder not known to be software. PresetIgnored is why a preset stated for
+// an h264 node is not applied, and is empty for an h264 node whose encoder
+// takes one and for a node of another format.
 type shareDecision struct {
 	Shared                   bool
 	Mode                     sharedMode
 	Reason                   string
 	AskedFormat, AskedWhyNot string
 	SoftwareEncoder          string
+	PresetIgnored            string
+}
+
+// describePresetWhenRead says at which preset an encoder that takes one will
+// run for a consumer that states stated, or none, in the words the command
+// line uses too. It is "" for an encoder that takes no preset.
+func describePresetWhenRead(element string, stated appconfig.EncodePreset) string {
+	fallback := encoderPreset(element, noPreset)
+	if fallback == noPreset {
+		return ""
+	}
+	return camerashare.DescribeEncoderPreset(stated.String(), fallback.String())
+}
+
+// betweenCommas sets a clause off inside a sentence, and is "" for none.
+func betweenCommas(clause string) string {
+	if clause == "" {
+		return ""
+	}
+	return ", " + clause + ","
 }
 
 // describeSoftwareEncoder is what a node in this phase says of the software
 // element that makes its frames: that it feeds the node while the app reads,
-// and that it will once the app does. In every other phase nothing feeds it.
-func describeSoftwareEncoder(element string, phase sharePhase) string {
+// at the preset it runs at, and that it will once the app does, at the preset
+// the app's statement leaves it. In every other phase nothing feeds it.
+func describeSoftwareEncoder(element string, phase sharePhase, stated, running appconfig.EncodePreset) string {
+	fed := "fed by the software encoder " + element
 	switch phase {
 	case shareReading:
-		return "fed by the software encoder " + element
+		if running != noPreset {
+			fed += " at preset " + running.String()
+		}
+		return fed
 	case shareIdle:
-		return "fed by the software encoder " + element + " when the app reads"
+		fed += " when the app reads"
+		if when := describePresetWhenRead(element, stated); when != "" {
+			fed += ", " + when
+		}
+		return fed
 	}
 	return ""
 }
+
+// describePresetNotRunning is what a node that is read says when its app
+// stated a preset and the camera's encoder runs at another.
+func describePresetNotRunning(stated, running appconfig.EncodePreset) string {
+	if stated == noPreset || running == noPreset || stated == running {
+		return ""
+	}
+	return fmt.Sprintf("asked for preset %s; the camera's one encoder serves all its consumers and runs at %s", stated, running)
+}
+
+func describePresetIgnored(stated appconfig.EncodePreset, why string) string {
+	if stated == noPreset || why == "" {
+		return ""
+	}
+	return fmt.Sprintf("preset %s is not applied: %s", stated, why)
+}
+
+// Why a preset stated for an h264 node is not applied.
+const (
+	presetIgnoredOwnH264   = "the camera produces H.264 itself, so no encoder runs for its node"
+	presetIgnoredByEncoder = "this device encodes H.264 with %s, which takes no preset"
+	presetIgnoredNoEncoder = "no H.264 encoder that takes one was found on this device"
+)
 
 func describeServedInstead(askedFormat, servedFormat, whyNot string) string {
 	return fmt.Sprintf("asked for %s; serving %s because %s", askedFormat, servedFormat, whyNot)
@@ -208,7 +271,7 @@ func (s *VideoService) shareDecisionsFor(dev *agentpb.VideoDevice, formats ...st
 	}
 	frames := s.framesForNodes(dev)
 	for _, format := range formats {
-		decisions[format] = shareDecisionOf(frames, format).namingSoftwareEncoderOf(frames)
+		decisions[format] = shareDecisionOf(frames, format).namingSoftwareEncoderOf(frames).sayingWhyAPresetIsIgnoredOf(frames)
 	}
 	return decisions
 }
@@ -218,7 +281,22 @@ func (s *VideoService) shareDecisionsFor(dev *agentpb.VideoDevice, formats ...st
 // codec is not the camera's.
 func (d shareDecision) namingSoftwareEncoderOf(frames nodeFrames) shareDecision {
 	if d.Shared && d.Mode.compressed() && frames.nodeCodec(d.Mode.Format) != frames.own.codec {
-		d.SoftwareEncoder = frames.softwareEncoder
+		d.SoftwareEncoder = frames.softwareEncoder()
+	}
+	return d
+}
+
+func (d shareDecision) sayingWhyAPresetIsIgnoredOf(frames nodeFrames) shareDecision {
+	if !d.Shared || d.Mode.Format != appconfig.CameraFormatH264 {
+		return d
+	}
+	switch {
+	case frames.nodeCodec(d.Mode.Format) == frames.own.codec:
+		d.PresetIgnored = presetIgnoredOwnH264
+	case frames.h264Encoder == "":
+		d.PresetIgnored = presetIgnoredNoEncoder
+	case encoderPreset(frames.h264Encoder, noPreset) == noPreset:
+		d.PresetIgnored = fmt.Sprintf(presetIgnoredByEncoder, frames.h264Encoder)
 	}
 	return d
 }

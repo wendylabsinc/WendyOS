@@ -170,7 +170,7 @@ func TestSampleIdentitiesGoOnWhenACameraComesBackAtAnotherPath(t *testing.T) {
 				t.Fatalf("the viewer's hub numbered its frame %v, want [3]", ids)
 			}
 			req := &agentpb.StreamVideoRequest{Width: 640, Height: 480, Framerate: 30}
-			hub, id, _, _, _, _, _, err := s.joinHubForCapture(context.Background(), "/dev/video2", req, encodedFrames)
+			hub, id, _, _, _, _, _, err := s.joinHubForCapture(context.Background(), "/dev/video2", req, encodedFrames, noPreset)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -186,7 +186,7 @@ func TestSampleIdentitiesGoOnWhenACameraComesBackAtAnotherPath(t *testing.T) {
 			if ids := numberFrames(held, 1); !slices.Equal(ids, []uint64{3}) {
 				t.Fatalf("the viewer's hub numbered its frame %v, want [3]", ids)
 			}
-			share, err := s.joinHubForShare(context.Background(), "/dev/video2", 2, testSharedMode)
+			share, err := s.joinHubForShare(context.Background(), "/dev/video2", 2, testSharedMode, noPreset)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -619,7 +619,7 @@ func TestSensorSubscriptionReattachesAfterCaptureTakeover(t *testing.T) {
 
 	// Episode capture takes the camera over at explicit campaign parameters.
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames)
+	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil || !restarted {
 		t.Fatalf("takeover failed: restarted=%v err=%v", restarted, err)
 	}
@@ -693,7 +693,7 @@ func TestSensorReattachCarriesTailDrops(t *testing.T) {
 	hub.mu.Unlock()
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames)
+	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil || !restarted {
 		t.Fatalf("takeover failed: restarted=%v err=%v", restarted, err)
 	}

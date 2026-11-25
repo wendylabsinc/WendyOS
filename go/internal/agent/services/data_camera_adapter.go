@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -317,7 +318,7 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 	var achievedW, achievedH, achievedFPS uint32
 	var restarted bool
 	hub, subID, frames, primaryKind, ownFramesRefusal, err := joinWithVideoFallback(primaryKind, a.video.refusingOwnFramesKnownAbsent(src.key, req, func(kind frameKind) (hub *deviceHub, id int, ch chan *videoFrame, err error) {
-		hub, id, ch, achievedW, achievedH, achievedFPS, restarted, err = a.subscribeHub(ctx, src.key, req, kind)
+		hub, id, ch, achievedW, achievedH, achievedFPS, restarted, err = a.subscribeHub(ctx, src.key, req, kind, capture.EncodePreset())
 		return hub, id, ch, err
 	}))
 	if err != nil {
@@ -336,7 +337,7 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 	rejoin := func(ctx context.Context, kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
 		atDefaults := &agentpb.StreamVideoRequest{DeviceId: devID}
 		return a.video.refusingOwnFramesKnownAbsent(src.key, atDefaults, func(kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
-			return a.video.joinHubKind(ctx, src.key, atDefaults, kind)
+			return a.video.joinHubKind(ctx, src.key, atDefaults, kind, capture.EncodePreset())
 		})(kind)
 	}
 	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, primaryKind: primaryKind, wantsNativeBeside: nativeBeside, monotonicMapping: a.monotonicMapping, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, lastSnapshotIdx: -1}
@@ -429,9 +430,10 @@ func describeStreamParams(w, h, fps uint32) string {
 // subscribers (the producer is restarted, reported via the restarted return),
 // an explicit conflict with another explicit-parameter consumer is a named
 // error rather than a silent downgrade, and a capture that asserts no
-// parameters joins whatever runs and reports requested-vs-achieved.
-func (a *cameraDataAdapter) subscribeHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (*deviceHub, int, chan *videoFrame, uint32, uint32, uint32, bool, error) {
-	return a.video.joinHubForCapture(ctx, key, req, kind)
+// parameters joins whatever runs and reports requested-vs-achieved. preset is
+// what the source's capture block states for the encoder.
+func (a *cameraDataAdapter) subscribeHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind, preset appconfig.EncodePreset) (*deviceHub, int, chan *videoFrame, uint32, uint32, uint32, bool, error) {
+	return a.video.joinHubForCapture(ctx, key, req, kind, preset)
 }
 
 type cameraCaptureGroup struct {

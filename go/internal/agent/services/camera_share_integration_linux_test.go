@@ -700,7 +700,8 @@ func checkShareCellStamps(t *testing.T, fx *shareCaptureFixture, cells []shareCe
 
 // softwareEncoderNoteOnThisDevice is what an h264 node says of the encoder
 // that feeds it from a webcam's JPEG frames here: the note for the software
-// encoders, and nothing on a device whose encoder is hardware.
+// encoders, with the preset x264enc runs at when no cell states one, and
+// nothing on a device whose encoder is hardware.
 func softwareEncoderNoteOnThisDevice(t *testing.T, available map[string]bool) string {
 	t.Helper()
 	enc, err := derivedLayerEncoder(available)
@@ -708,7 +709,9 @@ func softwareEncoderNoteOnThisDevice(t *testing.T, available map[string]bool) st
 		t.Fatalf("no encoder for the camera's H.264: %v", err)
 	}
 	switch enc.element {
-	case "x264enc", "openh264enc", "avenc_h264":
+	case "x264enc":
+		return "; fed by the software encoder x264enc at preset ultrafast"
+	case "openh264enc", "avenc_h264":
 		return "; fed by the software encoder " + enc.element
 	}
 	return ""

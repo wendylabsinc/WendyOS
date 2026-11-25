@@ -123,7 +123,7 @@ func TestSharedMode_ViewerAskingTheSharedModeJoinsAsDefault(t *testing.T) {
 	shareForTest(svc, "/dev/video0", "cv-b", "cv-a")
 
 	// The share's capture, at defaults.
-	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestSharedMode_RecordingAtOtherParametersIsRefusedByName(t *testing.T) {
 			}
 
 			req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
-			_, _, _, _, _, _, _, err := h.s.joinHubForCapture(context.Background(), "/dev/video0", req, encodedFrames)
+			_, _, _, _, _, _, _, err := h.s.joinHubForCapture(context.Background(), "/dev/video0", req, encodedFrames, noPreset)
 			if !errors.Is(err, errCameraShared) {
 				t.Fatalf("err = %v, want errCameraShared", err)
 			}
@@ -235,13 +235,13 @@ func TestSharedMode_RecordingWithoutParametersRecordsAtTheSharedMode(t *testing.
 	ctx := context.Background()
 	shareForTest(svc, "/dev/video0", "cv-a")
 
-	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer share.Leave()
 
-	hub, id, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", &agentpb.StreamVideoRequest{DeviceId: 0}, encodedFrames)
+	hub, id, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", &agentpb.StreamVideoRequest{DeviceId: 0}, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,14 +269,14 @@ func TestSharedMode_RecordingAskingTheSharedModeJoinsAsDefault(t *testing.T) {
 	ctx := context.Background()
 	shareForTest(svc, "/dev/video0", "cv-a")
 
-	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer share.Leave()
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1280, Height: 720, Framerate: 30}
-	hub, id, _, w, h, fps, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames)
+	hub, id, _, w, h, fps, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestSharedMode_RulesLiftWhenTheLastRecordGoes(t *testing.T) {
 	}
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
-	hub, id, _, _, _, _, _, err := svc.joinHubForCapture(context.Background(), "/dev/video0", req, encodedFrames)
+	hub, id, _, _, _, _, _, err := svc.joinHubForCapture(context.Background(), "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatalf("explicit recording refused after the last share went: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestJoinHubForShare_EndsAViewerHoldingAnotherMode(t *testing.T) {
 
 	// An app starts reading its share node.
 	shareForTest(svc, "/dev/video0", "cv-a")
-	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	if err != nil {
 		t.Fatalf("share join: %v", err)
 	}
@@ -432,13 +432,13 @@ func TestJoinHubForShare_WaitsForARecordingHoldingAnotherMode(t *testing.T) {
 
 			// A recording runs at 1920x1080 explicitly before the camera is shared.
 			recReq := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
-			recHub, recID, recCh, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", recReq, encodedFrames)
+			recHub, recID, recCh, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", recReq, encodedFrames, noPreset)
 			if err != nil {
 				t.Fatal(err)
 			}
 			shareModeForTest(svc, "/dev/video0", mode, "cv-a")
 
-			_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, mode)
+			_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, mode, noPreset)
 			var wait *shareWaitError
 			if !errors.As(err, &wait) {
 				recHub.unsubscribe(recID)
@@ -469,7 +469,7 @@ func TestJoinHubForShare_WaitsForARecordingHoldingAnotherMode(t *testing.T) {
 				t.Fatal("Done did not close once the recording left")
 			}
 
-			share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, mode)
+			share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, mode, noPreset)
 			if err != nil {
 				t.Fatalf("join after the recording left: %v", err)
 			}
@@ -504,7 +504,7 @@ func TestJoinHubForShare_WaitsWhenARecordingSharesTheHoldWithAViewer(t *testing.
 		t.Fatal(err)
 	}
 	defer viewerHub.unsubscribe(viewerID)
-	recHub, recID, recCh, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", params, encodedFrames)
+	recHub, recID, recCh, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", params, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +514,7 @@ func TestJoinHubForShare_WaitsWhenARecordingSharesTheHoldWithAViewer(t *testing.
 	}
 	shareForTest(svc, "/dev/video0", "cv-a")
 
-	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	var wait *shareWaitError
 	if !errors.As(err, &wait) || wait.Holder != hubHolderEpisodeCapture {
 		t.Fatalf("err = %v, want a wait on the episode capture", err)
@@ -540,7 +540,7 @@ func TestJoinHubForShare_AbortsWhenTheCameraDoesNotReleaseInTime(t *testing.T) {
 	shareForTest(svc, "/dev/video0", "cv-a")
 
 	started := time.Now()
-	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	if !errors.Is(err, errCameraReleaseTimeout) {
 		t.Fatalf("err = %v, want errCameraReleaseTimeout", err)
 	}
@@ -564,7 +564,7 @@ func TestJoinHubForShare_StartsWhenTheRecordingLeavesAndAViewerStays(t *testing.
 	ctx := context.Background()
 
 	recReq := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1920, Height: 1080, Framerate: 30}
-	recHub, recID, _, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", recReq, encodedFrames)
+	recHub, recID, _, _, _, _, _, err := svc.joinHubForCapture(ctx, "/dev/video0", recReq, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,7 +582,7 @@ func TestJoinHubForShare_StartsWhenTheRecordingLeavesAndAViewerStays(t *testing.
 	}()
 	shareForTest(svc, "/dev/video0", "cv-a")
 
-	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	var wait *shareWaitError
 	if !errors.As(err, &wait) {
 		recHub.unsubscribe(recID)
@@ -604,7 +604,7 @@ func TestJoinHubForShare_StartsWhenTheRecordingLeavesAndAViewerStays(t *testing.
 		t.Fatal("the test needs the viewer still on the recording's hub")
 	}
 
-	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	if err != nil {
 		t.Fatalf("join after the recording left: %v", err)
 	}
@@ -646,7 +646,7 @@ func TestJoinHubForShare_JoinsAViewerHubTheModeAdmits(t *testing.T) {
 			t.Fatal(err)
 		}
 		shareForTest(svc, "/dev/video0", "cv-a")
-		share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+		share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 		if err != nil {
 			t.Fatalf("hub at %v: %v", hubParams(hub), err)
 		}
@@ -691,7 +691,7 @@ func TestJoinHubForShare_TakesOverAViewerModeWithNoTap(t *testing.T) {
 	}()
 	shareForTest(svc, "/dev/video0", "cv-a")
 
-	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	share, err := svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	if err != nil {
 		t.Fatalf("share join: %v", err)
 	}
@@ -724,7 +724,7 @@ func TestJoinHubForShare_NoTapAtTheSharedModeIsReported(t *testing.T) {
 	defer hub.unsubscribe(id)
 	shareForTest(svc, "/dev/video0", "cv-a")
 
-	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode)
+	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
 	if !errors.Is(err, errPixelsUnavailable) {
 		t.Fatalf("err = %v, want errPixelsUnavailable", err)
 	}

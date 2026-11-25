@@ -32,6 +32,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -527,6 +528,9 @@ type videoFrame struct {
 	// stream's own parameter sets prepended stays native, because a consumer
 	// needs them to decode it.
 	native bool
+	// encodedAt is the preset the agent's encoder made this frame at, as its
+	// producer reported it to the hub; unset for a frame no such encoder made.
+	encodedAt appconfig.EncodePreset
 }
 
 type frameTimestamp struct {
@@ -577,6 +581,9 @@ func (k frameKind) readsTap() bool { return k == rawFrames || k == pixelFrames }
 type hubSubscriber struct {
 	ch   chan *videoFrame
 	kind frameKind
+	// preset is what the subscriber states for the camera's encoder. Only an
+	// encoded subscriber's counts (statedPreset).
+	preset appconfig.EncodePreset
 	// closed and err are set together, under h.mu, when the producer closes this
 	// subscriber early (its kind was asked for and is not offered). closed keeps
 	// broadcast and the final teardown from touching the channel twice.
@@ -677,7 +684,7 @@ const maxSubscribersPerHub = 16
 // (checked atomically under h.mu so no subscriber can be added to a dying hub),
 // or codes.ResourceExhausted if the hub already has maxSubscribersPerHub active subscribers.
 func (h *deviceHub) subscribe() (int, chan *videoFrame, error) {
-	return h.subscribeAsKind("", encodedFrames)
+	return h.subscribeAsKind("", encodedFrames, noPreset)
 }
 
 // subscribeAs is subscribe, additionally recording that this subscriber's join
@@ -685,17 +692,20 @@ func (h *deviceHub) subscribe() (int, chan *videoFrame, error) {
 // non-empty. The label names the kind of consumer (see the hubHolder
 // constants) so a refused campaign can be told exactly who holds the camera.
 func (h *deviceHub) subscribeAs(explicitHolder string) (int, chan *videoFrame, error) {
-	return h.subscribeAsKind(explicitHolder, encodedFrames)
+	return h.subscribeAsKind(explicitHolder, encodedFrames, noPreset)
 }
 
 func (h *deviceHub) subscribeKind(kind frameKind) (int, chan *videoFrame, error) {
-	return h.subscribeAsKind("", kind)
+	return h.subscribeAsKind("", kind, noPreset)
 }
 
 // subscribeAsKind is the single implementation behind subscribe, subscribeAs,
 // subscribeKind and subscribePixels. The dimensions are independent:
 // explicitHolder records who, if anyone, asserted the hub's stream parameters,
-// while kind selects which frames this subscriber receives.
+// kind selects which frames this subscriber receives, and preset is what it
+// states for the encoder. The preset is taken with the subscription, under one
+// lock: stated a moment later, the producer could start the encoder at the
+// default in between and switch again after the idle grace.
 //
 // A join on a hub whose producer has already refused its kind is turned away
 // here, under h.mu, so it cannot slip in after the refusal closed the others.
@@ -704,7 +714,7 @@ func (h *deviceHub) subscribeKind(kind frameKind) (int, chan *videoFrame, error)
 // hands those to every open raw subscriber. getOrCreateHub's up-front
 // rawRefusal check runs in a separate h.mu section, so a producer's
 // rawNotOffered can land between it and this one.
-func (h *deviceHub) subscribeAsKind(explicitHolder string, kind frameKind) (int, chan *videoFrame, error) {
+func (h *deviceHub) subscribeAsKind(explicitHolder string, kind frameKind, preset appconfig.EncodePreset) (int, chan *videoFrame, error) {
 	ch := make(chan *videoFrame, 4)
 	h.mu.Lock()
 	if h.ctx.Err() != nil {
@@ -730,7 +740,7 @@ func (h *deviceHub) subscribeAsKind(explicitHolder string, kind frameKind) (int,
 	}
 	id := h.nextID
 	h.nextID++
-	h.subs[id] = &hubSubscriber{ch: ch, kind: kind}
+	h.subs[id] = &hubSubscriber{ch: ch, kind: kind, preset: preset}
 	if h.subDrops == nil {
 		h.subDrops = make(map[int]uint64)
 	}
@@ -996,6 +1006,9 @@ func (h *deviceHub) broadcast(frame *videoFrame) bool {
 		frame.decoderInit = h.webmInit.feed(frame.data)
 		frame.webmJoin = h.webmJoins.feed(frame.data, frame.decoderInit)
 		frame.webmWhole = h.webmJoins.whole
+	}
+	if !frame.native && encodedFrames.receives(frame) {
+		frame.encodedAt = h.demand.preset
 	}
 	for id, sub := range h.subs {
 		if sub.closed || !sub.kind.receives(frame) {
@@ -2006,10 +2019,10 @@ func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *age
 	if req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW {
 		kind = rawFrames
 	}
-	return s.getOrCreateHubKind(ctx, path, req, origin, kind)
+	return s.getOrCreateHubKind(ctx, path, req, origin, kind, noPreset)
 }
 
-func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req *agentpb.StreamVideoRequest, origin string, kind frameKind) (h *deviceHub, id int, ch chan *videoFrame, err error) {
+func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req *agentpb.StreamVideoRequest, origin string, kind frameKind, preset appconfig.EncodePreset) (h *deviceHub, id int, ch chan *videoFrame, err error) {
 	explicitHolder := ""
 	if streamRequestAssertsParams(req) {
 		explicitHolder = origin
@@ -2049,7 +2062,7 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 			// subscribeAsKind checks every refusal again under h.mu: the
 			// producer may refuse raw after the check above, and refuses
 			// the other kinds only there.
-			id, ch, err = h.subscribeAsKind(explicitHolder, kind)
+			id, ch, err = h.subscribeAsKind(explicitHolder, kind, preset)
 			s.mu.Unlock()
 			if err != nil {
 				if st, _ := status.FromError(err); st.Code() == codes.Unavailable {
@@ -2118,7 +2131,7 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 	}
 	// New hub: the first subscriber is always within the cap, and nothing has
 	// been refused yet.
-	id, ch, _ = h.subscribeAsKind(explicitHolder, kind)
+	id, ch, _ = h.subscribeAsKind(explicitHolder, kind, preset)
 	s.hubs[path] = h
 	s.mu.Unlock()
 
@@ -2133,19 +2146,19 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 // joining the running hub as it is. Callers that care about the difference
 // compare the returned parameters against what they asked for and report it.
 func (s *VideoService) joinHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (*deviceHub, int, chan *videoFrame, error) {
-	return s.joinHubKind(ctx, key, req, encodedFrames)
+	return s.joinHubKind(ctx, key, req, encodedFrames, noPreset)
 }
 
-func (s *VideoService) joinHubKind(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (*deviceHub, int, chan *videoFrame, error) {
-	hub, id, ch, _, _, _, err := s.joinHubReportingParams(ctx, key, req, kind)
+func (s *VideoService) joinHubKind(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind, preset appconfig.EncodePreset) (*deviceHub, int, chan *videoFrame, error) {
+	hub, id, ch, _, _, _, err := s.joinHubReportingParams(ctx, key, req, kind, preset)
 	return hub, id, ch, err
 }
 
 // joinHubReportingParams is joinHub, additionally reporting the stream
 // parameters the subscription actually runs at.
-func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (*deviceHub, int, chan *videoFrame, uint32, uint32, uint32, error) {
+func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind, preset appconfig.EncodePreset) (*deviceHub, int, chan *videoFrame, uint32, uint32, uint32, error) {
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
-		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderStreamClient, kind)
+		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderStreamClient, kind, preset)
 		if err == nil {
 			// Report the hub's ACTUAL parameters, never the request's. A
 			// request that asserts none now joins whatever the camera is
@@ -2159,7 +2172,7 @@ func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, r
 		if status.Code(err) != codes.InvalidArgument {
 			return nil, 0, nil, 0, 0, 0, err
 		}
-		hub, id, ch, w, h, fps, ok, err := s.subscribeExistingHub(key, kind)
+		hub, id, ch, w, h, fps, ok, err := s.subscribeExistingHub(key, kind, preset)
 		if err != nil {
 			return nil, 0, nil, 0, 0, 0, err
 		}
@@ -2215,13 +2228,13 @@ func isCameraCaptureRefusal(err error) bool {
 //   - On a camera apps share, explicit parameters other than the shared mode
 //     are refused with errCameraShared, and the shared mode itself joins as a
 //     parameter-less capture (applySharedModeToCapture).
-func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
+func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind, preset appconfig.EncodePreset) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
 	req, admitted, err := s.applySharedModeToCapture(key, req)
 	if err != nil {
 		return nil, 0, nil, 0, 0, 0, false, err
 	}
 	if !streamRequestAssertsParams(req) {
-		hub, id, ch, width, height, framerate, err = s.joinHubReportingParams(ctx, key, req, kind)
+		hub, id, ch, width, height, framerate, err = s.joinHubReportingParams(ctx, key, req, kind, preset)
 		if err == nil && admitted != nil && width == 0 && height == 0 && framerate == 0 {
 			// A shared camera's defaults are its shared mode, which is what this
 			// capture asked for; reporting 0x0@0 would note a mismatch that is not.
@@ -2230,14 +2243,14 @@ func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *a
 		return hub, id, ch, width, height, framerate, false, err
 	}
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
-		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderEpisodeCapture, kind)
+		hub, id, ch, err := s.getOrCreateHubKind(ctx, key, req, hubHolderEpisodeCapture, kind, preset)
 		if err == nil {
 			return hub, id, ch, req.GetWidth(), req.GetHeight(), req.GetFramerate(), false, nil
 		}
 		if status.Code(err) != codes.InvalidArgument {
 			return nil, 0, nil, 0, 0, 0, false, err
 		}
-		hub, id, ch, retry, err := s.takeOverDefaultedHub(ctx, key, req, kind)
+		hub, id, ch, retry, err := s.takeOverDefaultedHub(ctx, key, req, kind, preset)
 		if err != nil {
 			return nil, 0, nil, 0, 0, 0, false, err
 		}
@@ -2269,7 +2282,7 @@ func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *a
 // The replacement hub is installed in s.hubs BEFORE the old producer is
 // cancelled, so every reattaching subscriber lands on it rather than racing
 // this takeover to create a competing defaulted hub.
-func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind) (h *deviceHub, id int, ch chan *videoFrame, retry bool, err error) {
+func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind, preset appconfig.EncodePreset) (h *deviceHub, id int, ch chan *videoFrame, retry bool, err error) {
 	seqKey := s.sampleSeqKey(key)
 	s.mu.Lock()
 	old, exists := s.hubs[key]
@@ -2304,7 +2317,7 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		framerate: req.GetFramerate(),
 		sampleSeq: s.sampleSeqLocked(seqKey),
 	}
-	id, ch, _ = h.subscribeAsKind(hubHolderEpisodeCapture, kind)
+	id, ch, _ = h.subscribeAsKind(hubHolderEpisodeCapture, kind, preset)
 	s.hubs[key] = h
 	old.mu.Lock()
 	old.restarted = true
@@ -2429,14 +2442,14 @@ func (s *VideoService) sampleSeqLocked(key string) *atomic.Uint64 {
 // in which case the caller should create one via getOrCreateHub. Episode
 // capture uses this to coexist with a live viewer instead of failing the
 // episode when the viewer's stream parameters differ from the campaign's caps.
-func (s *VideoService) subscribeExistingHub(path string, kind frameKind) (h *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, ok bool, err error) {
+func (s *VideoService) subscribeExistingHub(path string, kind frameKind, preset appconfig.EncodePreset) (h *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, ok bool, err error) {
 	s.mu.Lock()
 	h, exists := s.hubs[path]
 	if !exists || h.ctx.Err() != nil {
 		s.mu.Unlock()
 		return nil, 0, nil, 0, 0, 0, false, nil
 	}
-	id, ch, err = h.subscribeKind(kind)
+	id, ch, err = h.subscribeAsKind("", kind, preset)
 	s.mu.Unlock()
 	if err != nil {
 		if st, _ := status.FromError(err); st.Code() == codes.Unavailable {
@@ -3713,11 +3726,16 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 		sensorID := int(req.GetDeviceId())
 		s.logger.Info("CSI camera on Jetson — capturing via nvarguscamerasrc (Argus)",
 			zap.Int("sensor_id", sensorID), zap.String("encoder", enc.element))
-		var plan gstPipelinePlan
-		plan.args = buildArgusGStreamerArgs(gstPath, req, sensorID, enc.element, enc.hasH264Parse, available)
-		plan.rawWhy = "CSI cameras on Jetson are captured through Argus; raw frames are not offered"
-		// Argus has no tap, so it always encodes: one launch, as before.
-		return run(ctx, plan)
+		// Argus has no tap, so it always encodes: it is launched again only for
+		// another preset.
+		demand, _ := sink.(encodeDemand)
+		return runPipelinesShapedBy(ctx, demand, s.encoderGrace(), alwaysEncoding, enc.element, func(ctx context.Context, shape pipelineShape) error {
+			var plan gstPipelinePlan
+			plan.args = buildArgusGStreamerArgs(gstPath, req, sensorID, enc.element, enc.hasH264Parse, available, shape.preset)
+			plan.rawWhy = "CSI cameras on Jetson are captured through Argus; raw frames are not offered"
+			s.logger.Info("starting camera pipeline", zap.String("device", path), zap.Bool("encodes", shape.encode), zap.Stringer("preset", shape.preset))
+			return run(ctx, plan)
+		})
 	}
 
 	// The element set and the encoder stay as chosen above; only the shape is
@@ -3727,7 +3745,7 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 	// started counts the pipelines this call has run. Launches happen one after
 	// another (runShapedPipelines waits for each to return), so it needs no lock.
 	started := 0
-	return runShapedPipelines(ctx, demand, s.encoderGrace(), func(ctx context.Context, shape pipelineShape) error {
+	return runShapedPipelines(ctx, demand, s.encoderGrace(), enc.element, func(ctx context.Context, shape pipelineShape) error {
 		plan, err := planGStreamerPipelineShaped(shape, gstPath, path, req, enc.element, enc.hasH264Parse, transport, libcameraID, pw, available)
 		if errors.Is(err, errNoTapOnlyPipeline) {
 			return err // unwrapped: runShapedPipelines relaunches with the encoder
@@ -3745,7 +3763,7 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 			// captureNode.
 			s.applyStoredCameraControls(path)
 		}
-		s.logger.Info("starting camera pipeline", zap.String("device", path), zap.Bool("encodes", shape.encode))
+		s.logger.Info("starting camera pipeline", zap.String("device", path), zap.Bool("encodes", shape.encode), zap.Stringer("preset", shape.preset))
 		err = run(ctx, plan)
 		if relaunch && isCameraInUse(err) {
 			// The camera was free between the two pipelines, for about a second,
@@ -4480,7 +4498,7 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 	var pipeline string
 	if shape.encode {
 		stages = append(stages, convertStages...)
-		stages = append(stages, encoderSegment(encoder, hasH264Parse, gop), "fdsink fd=1")
+		stages = append(stages, encoderSegment(encoder, hasH264Parse, gop, shape.preset), "fdsink fd=1")
 		pipeline = strings.Join(stages, " ! ")
 		if plan.raw != nil {
 			pipeline += fmt.Sprintf(" %s. ! %s ! fdsink fd=%d", rawTeeName, rawTapQueue, rawTapFD)
@@ -4597,7 +4615,7 @@ const (
 // first via nvvidconv. sensorID is the Argus sensor index (derived from the
 // /dev/videoN suffix by the caller; correct for the common single-CSI-camera
 // case).
-func buildArgusGStreamerArgs(gstPath string, req *agentpb.StreamVideoRequest, sensorID int, encoder string, hasH264Parse bool, available map[string]bool) []string {
+func buildArgusGStreamerArgs(gstPath string, req *agentpb.StreamVideoRequest, sensorID int, encoder string, hasH264Parse bool, available map[string]bool, preset appconfig.EncodePreset) []string {
 	width := req.GetWidth()
 	if width == 0 {
 		width = argusDefaultWidth
@@ -4625,7 +4643,7 @@ func buildArgusGStreamerArgs(gstPath string, req *agentpb.StreamVideoRequest, se
 	} else {
 		// Any other encoder needs frames in system memory; nvvidconv does the
 		// NVMM->CPU copy, then the shared encoderSegment handles the rest.
-		tail = "nvvidconv ! video/x-raw,format=NV12 ! " + encoderSegment(encoder, hasH264Parse, gop)
+		tail = "nvvidconv ! video/x-raw,format=NV12 ! " + encoderSegment(encoder, hasH264Parse, gop, preset)
 	}
 
 	pipeline := fmt.Sprintf("nvarguscamerasrc sensor-id=%d ! %s ! %s ! fdsink fd=1", sensorID, nvmmCaps, tail)
@@ -4649,10 +4667,33 @@ const h264ByteStream = " ! h264parse config-interval=-1 ! video/x-h264,stream-fo
 // x264Settings are what every x264enc stage the agent builds starts with.
 // tune=zerolatency hands each picture back as it comes, which the derived
 // layer's frame numbering rests on, together with bframes=0 in keyframeArg.
-// speed-preset=ultrafast is x264's fastest: at its default, medium, the
-// encoder cannot keep up with 1280x720 at 30 frames per second on a Jetson
-// Orin Nano and drops frames.
-const x264Settings = " tune=zerolatency speed-preset=ultrafast"
+const x264Settings = " tune=zerolatency"
+
+// noPreset is what a consumer that states no encoder preset passes.
+const noPreset = appconfig.EncodePresetUnset
+
+// presetArg is the property through which an encoder takes a preset, and ""
+// for an encoder that takes none. x264enc's speed-preset takes the names of
+// appconfig.EncodePresets as they are; without a stated one it runs at the
+// default, because at x264's own default, medium, it cannot keep up with
+// 1280x720 at 30 frames per second on a Jetson Orin Nano and drops frames.
+func presetArg(encoder string, preset appconfig.EncodePreset) string {
+	switch encoder {
+	case "x264enc":
+		return " speed-preset=" + preset.OrDefault().String()
+	default:
+		return ""
+	}
+}
+
+// encoderPreset is the preset an encoder runs at when stated is the fastest
+// one its consumers state: unset for an encoder that takes none.
+func encoderPreset(encoder string, stated appconfig.EncodePreset) appconfig.EncodePreset {
+	if presetArg(encoder, stated) == "" {
+		return noPreset
+	}
+	return stated.OrDefault()
+}
 
 func keyframeArg(encoder string, gop int) string {
 	switch encoder {
@@ -4720,7 +4761,7 @@ func isValidGSTElementName(name string) bool {
 // VideoToolbox and most hardware decoders reject. This input cap does not by itself
 // enforce a specific H.264 output profile; explicit profile caps are added only where needed
 // (for example, v4l2h264enc is capped to baseline below).
-func encoderSegment(encoder string, hasH264Parse bool, gop int) string {
+func encoderSegment(encoder string, hasH264Parse bool, gop int, preset appconfig.EncodePreset) string {
 	if encoder == "vp8enc" {
 		// webmmux streamable=true writes headers that matroskademux can parse from a pipe.
 		// keyframe-max-dist caps the GOP so a dropped frame self-heals quickly.
@@ -4753,7 +4794,7 @@ func encoderSegment(encoder string, hasH264Parse bool, gop int) string {
 			// emit Annex B itself; it then repeats SPS/PPS before every IDR.
 			caps += ",stream-format=byte-stream,alignment=au"
 		}
-		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc" + x264Settings + kf + " ! " + caps
+		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc" + x264Settings + presetArg(encoder, preset) + kf + " ! " + caps
 	case "openh264enc":
 		enc = "videoconvert ! video/x-raw,format=I420 ! openh264enc" + kf
 	case "avenc_h264":

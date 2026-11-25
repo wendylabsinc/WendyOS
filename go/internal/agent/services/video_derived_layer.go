@@ -149,28 +149,48 @@ func derivedLayerEncoder(available map[string]bool) (gstEncoderResult, error) {
 	return enc, nil
 }
 
-// softwareEncoder names the software element the layer makes H.264 with, or
-// "": for a layer that encodes nothing, and for an encoder not known to be
-// software.
-func (l *derivedLayer) softwareEncoder() string {
-	if !l.transform.encodes || !encodesH264InSoftware(l.encoder.element) {
+// h264Encoder names the element the layer makes H.264 with, or "" for a layer
+// that encodes nothing.
+func (l *derivedLayer) h264Encoder() string {
+	if !l.transform.encodes {
 		return ""
 	}
 	return l.encoder.element
 }
 
-// softwareEncoderOfH264From is softwareEncoder of the layer a device with
-// these elements derives from frames of codec, without building it; "" also
-// for a device that cannot encode.
-func softwareEncoderOfH264From(codec agentpb.VideoCodec, available map[string]bool) string {
+// h264EncoderFrom is h264Encoder of the layer a device with these elements
+// derives from frames of codec, without building it; "" also for a device
+// that cannot encode.
+func h264EncoderFrom(codec agentpb.VideoCodec, available map[string]bool) string {
 	if !derivedTransforms[codec].encodes {
 		return ""
 	}
 	enc, err := derivedLayerEncoder(available)
-	if err != nil || !encodesH264InSoftware(enc.element) {
+	if err != nil {
 		return ""
 	}
 	return enc.element
+}
+
+// softwareEncoderAmong is element when it is known to encode in software, and
+// "" otherwise.
+func softwareEncoderAmong(element string) string {
+	if !encodesH264InSoftware(element) {
+		return ""
+	}
+	return element
+}
+
+// softwareEncoder names the software element the layer makes H.264 with, or
+// "": for a layer that encodes nothing, and for an encoder not known to be
+// software.
+func (l *derivedLayer) softwareEncoder() string { return softwareEncoderAmong(l.h264Encoder()) }
+
+// softwareEncoderOfH264From is softwareEncoder of the layer a device with
+// these elements derives from frames of codec, without building it; "" also
+// for a device that cannot encode.
+func softwareEncoderOfH264From(codec agentpb.VideoCodec, available map[string]bool) string {
+	return softwareEncoderAmong(h264EncoderFrom(codec, available))
 }
 
 type derivedLayerGaveUp struct {
@@ -311,7 +331,7 @@ func (l *derivedLayer) needs(demand encodeDemand) pipelineShape {
 }
 
 func (l *derivedLayer) run(ctx context.Context) error {
-	err := runPipelinesShapedBy(ctx, l.demand, l.grace, l.needs, l.launch)
+	err := runPipelinesShapedBy(ctx, l.demand, l.grace, l.needs, l.h264Encoder(), l.launch)
 	l.logger.Info("derived layer stopped", append(l.counts().fields(), zap.String("device", l.device))...)
 	return err
 }
@@ -331,7 +351,7 @@ func (l *derivedLayer) pipelineArgs(shape pipelineShape) []string {
 	decode := "fdsrc fd=0 ! gdpdepay ! " + l.decoder.stages
 	pictures := fmt.Sprintf("%s ! %s ! gdppay ! fdsink fd=%d", rawTapQueue, l.transform.pictureStages, picturesFD)
 	encoded := fmt.Sprintf("%s ! %s ! gdppay ! fdsink fd=%d", leakyRawQueue,
-		encoderSegment(l.encoder.element, l.encoder.hasH264Parse, keyframeIntervalFrames(l.framerate)), encodedFD)
+		encoderSegment(l.encoder.element, l.encoder.hasH264Parse, keyframeIntervalFrames(l.framerate), shape.preset), encodedFD)
 	var pipeline string
 	switch {
 	case shape.encode && shape.pixels:

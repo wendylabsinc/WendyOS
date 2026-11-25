@@ -236,9 +236,12 @@ func joinWithVideoFallback(kind frameKind, join hubJoin) (hub *deviceHub, id int
 // subscriber leaves stops its producer.
 func (h *deviceHub) resubscribeAs(id int, kind frameKind) (newID int, ch chan *videoFrame, drops uint64, err error) {
 	h.mu.Lock()
-	holder := h.subExplicit[id]
+	holder, preset := h.subExplicit[id], noPreset
+	if sub := h.subs[id]; sub != nil {
+		preset = sub.preset
+	}
 	h.mu.Unlock()
-	newID, ch, err = h.subscribeAsKind(holder, kind)
+	newID, ch, err = h.subscribeAsKind(holder, kind, preset)
 	if err != nil {
 		return 0, nil, 0, err
 	}

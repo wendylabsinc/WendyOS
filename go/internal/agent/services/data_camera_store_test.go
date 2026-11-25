@@ -1851,7 +1851,7 @@ func installPipelineCamera(t *testing.T, video *VideoService, why string) *pipel
 	camerasHandOnNoFrames(t, why)
 	launches := &pipelineLaunches{}
 	installScriptedProducers(video, func(ctx context.Context, hub *deviceHub) {
-		_ = runShapedPipelines(ctx, hub, time.Minute, func(ctx context.Context, shape pipelineShape) error {
+		_ = runShapedPipelines(ctx, hub, time.Minute, "", func(ctx context.Context, shape pipelineShape) error {
 			launches.mu.Lock()
 			launches.encodes = append(launches.encodes, shape.encode)
 			launches.mu.Unlock()

@@ -54,10 +54,10 @@ const cameraShareCreateBudget = 2 * time.Second
 // the state file or made at least this long ago.
 const cameraShareSyncGrace = time.Minute
 
-// The state file formats this agent reads and writes. Version 1 has no format
-// or stamp: its shares are pixels with capture times. An agent that knows only
-// version 1 ignores a version 2 file, and the nodes of running apps then get no
-// writer, so version 2 is written only while some share needs it.
+// The state file formats this agent reads and writes. Version 1 has no format,
+// stamp or preset: its shares are pixels with capture times. An agent that
+// knows only version 1 ignores a version 2 file, and the nodes of running apps
+// then get no writer, so version 2 is written only while some share needs it.
 const (
 	cameraShareStateVersion                = 2
 	cameraShareStateVersionWithoutSettings = 1
@@ -313,7 +313,7 @@ func (s *VideoService) noteFreshStartSupport(err error) {
 
 // createCameraShare shares one camera with a container, or logs why not.
 func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID string, dev *agentpb.VideoDevice, entitlements []appconfig.Entitlement, creation *shareCreation) {
-	format, stamp, _, conflicts := appconfig.CameraNodeSettings(entitlements,
+	format, stamp, preset, conflicts := appconfig.CameraNodeSettings(entitlements,
 		appconfig.CameraIdentity{Path: dev.GetPath(), StableID: dev.GetStableId(), Name: dev.GetName()})
 	settingsNote := strings.Join(conflicts, "; ")
 	noted := s.noteSettingsOnRecord(containerID, dev, settingsNote, creation)
@@ -340,8 +340,12 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		s.logRealCamera(true, containerID, dev, "its sysfs identity could not be read: "+err.Error())
 		return
 	}
+	if decision.Mode.Format != appconfig.CameraFormatH264 {
+		preset = noPreset
+	}
 	if existing := s.shareOfCamera(containerID, id); existing != nil {
 		if existing.mode.asksWhat(decision.Mode) && existing.stamp == stamp && existing.askedFormat == decision.AskedFormat {
+			s.restateSharePreset(containerID, existing, preset)
 			return
 		}
 		// A record left from an earlier container of this name: this
@@ -351,7 +355,8 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 			return
 		}
 		s.shareLogger().Info(fmt.Sprintf("camera share: %s was created again: its share of %s was %s and is made again as %s",
-			containerID, dev.GetName(), describeShareNode(existing.mode, existing.stamp), describeShareNode(decision.Mode, stamp)))
+			containerID, dev.GetName(), describeShareNode(existing.mode, existing.stamp)+describeStatedPreset(s.sharePreset(existing)),
+			describeShareNode(decision.Mode, stamp)+describeStatedPreset(preset)))
 	}
 
 	nr, made, reason := s.makeShareNode(ctx, dev.GetName())
@@ -375,7 +380,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 	}
 
 	decision.Mode = node.Mode()
-	r := &shareRecord{cameraName: dev.GetName(), cameraPath: dev.GetPath(), mode: decision.Mode, stamp: stamp,
+	r := &shareRecord{cameraName: dev.GetName(), cameraPath: dev.GetPath(), mode: decision.Mode, stamp: stamp, preset: preset,
 		askedFormat: decision.AskedFormat, askedWhyNot: decision.AskedWhyNot, settingsNote: settingsNote, node: nr, camera: id, nodeMade: made,
 		siblings: sameModelPorts(id, s.presentCameraIdentities())}
 	start, refused := s.storeShare(containerID, appID, r, node, creation)
@@ -388,18 +393,44 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 	s.persistCameraShares()
 	start()
 	s.shareLogger().Info(fmt.Sprintf("camera share: %s shares %s (%s) through %s at %s",
-		containerID, dev.GetName(), dev.GetPath(), path, describeShareNode(decision.Mode, stamp)))
+		containerID, dev.GetName(), dev.GetPath(), path, describeShareNode(decision.Mode, stamp)+describeStatedPreset(preset)))
 	if decision.AskedFormat != "" {
 		s.shareLogger().Warn(fmt.Sprintf("camera share: %s: %s (%s): %s", containerID, dev.GetName(), dev.GetPath(),
 			describeServedInstead(decision.AskedFormat, decision.Mode.Format, decision.AskedWhyNot)))
 	}
 	if decision.SoftwareEncoder != "" {
-		s.shareLogger().Warn(fmt.Sprintf(`camera share: %s: %s (%s): its %s node is fed by the software encoder %s for as long as the app reads it; "format": "native" or "pixels" run no encoder`,
-			containerID, dev.GetName(), dev.GetPath(), decision.Mode.Format, decision.SoftwareEncoder))
+		s.shareLogger().Warn(fmt.Sprintf(`camera share: %s: %s (%s): its %s node is fed by the software encoder %s%s for as long as the app reads it; "format": "native" or "pixels" run no encoder`,
+			containerID, dev.GetName(), dev.GetPath(), decision.Mode.Format, decision.SoftwareEncoder, betweenCommas(describePresetWhenRead(decision.SoftwareEncoder, preset))))
+	}
+	if ignored := describePresetIgnored(preset, decision.PresetIgnored); ignored != "" {
+		s.shareLogger().Warn(fmt.Sprintf("camera share: %s: %s (%s): %s", containerID, dev.GetName(), dev.GetPath(), ignored))
 	}
 	if !noted {
 		s.warnOfSettingsNote(containerID, dev, settingsNote)
 	}
+}
+
+func (s *VideoService) sharePreset(r *shareRecord) appconfig.EncodePreset {
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	return r.preset
+}
+
+// restateSharePreset gives a record a create found again the preset the
+// container's entitlements state now. The node declares nothing of the preset,
+// so it stays as it is; the pump states the record's preset at each join, so
+// one that is reading keeps the preset it joined with until it joins again.
+func (s *VideoService) restateSharePreset(containerID string, r *shareRecord, preset appconfig.EncodePreset) {
+	s.shares.mu.Lock()
+	before := r.preset
+	r.preset = preset
+	s.shares.mu.Unlock()
+	if before == preset {
+		return
+	}
+	s.persistCameraShares()
+	s.shareLogger().Info(fmt.Sprintf("camera share: %s was created again: its share of %s was %s and is now %s; its node stays as it is",
+		containerID, r.cameraName, describeShareNode(r.mode, r.stamp)+describeStatedPreset(before), describeShareNode(r.mode, r.stamp)+describeStatedPreset(preset)))
 }
 
 // noteSettingsOnRecord gives the container's record of a camera, when it has
@@ -1010,7 +1041,7 @@ func (s *VideoService) joinShare(ctx context.Context, r *shareRecord) (shareSubs
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "camera %s is at %s, which is not a video node", r.cameraName, path)
 	}
-	return s.joinHubForShare(ctx, path, uint32(devID), r.mode)
+	return s.joinHubForShare(ctx, path, uint32(devID), r.mode, s.sharePreset(r))
 }
 
 // currentSharePath resolves the record's camera to its present /dev path. When
@@ -1544,7 +1575,7 @@ func (s *VideoService) adoptShare(containerID string, r *shareRecord) {
 	start := s.attachSharePumpLocked(containerID, r, node)
 	s.shares.mu.Unlock()
 	start()
-	s.shareLogger().Info(fmt.Sprintf("camera share: %s adopted %s for %s at %s", containerID, path, r.cameraName, describeShareNode(r.mode, r.stamp)))
+	s.shareLogger().Info(fmt.Sprintf("camera share: %s adopted %s for %s at %s", containerID, path, r.cameraName, describeShareNode(r.mode, r.stamp)+describeStatedPreset(s.sharePreset(r))))
 	s.checkAdoptedModeLater(containerID, r)
 }
 
@@ -1934,6 +1965,9 @@ type cameraShareStateShare struct {
 	Mode   cameraShareStateMode   `json:"mode"`
 	Format string                 `json:"format,omitempty"`
 	Stamp  string                 `json:"stamp,omitempty"`
+	// Preset is the record's; a version 2 file from before presets has none,
+	// and the share then states none.
+	Preset string `json:"preset,omitempty"`
 	// AskedFormat and AskedWhyNot are the record's; an agent that does not
 	// know them ignores them, so they are written in either version.
 	AskedFormat string `json:"askedFormat,omitempty"`
@@ -1986,7 +2020,7 @@ func (s *VideoService) persistCameraShares() {
 	for id, c := range s.shares.containers {
 		sc := cameraShareStateContainer{App: c.app, Shares: make([]cameraShareStateShare, 0, len(c.shares))}
 		for _, r := range c.shares {
-			if r.mode.Format != appconfig.CameraFormatPixels || r.stamp != appconfig.CameraStampTime {
+			if r.mode.Format != appconfig.CameraFormatPixels || r.stamp != appconfig.CameraStampTime || r.preset != noPreset {
 				state.Version = cameraShareStateVersion
 			}
 			sc.Shares = append(sc.Shares, cameraShareStateShare{
@@ -1996,6 +2030,7 @@ func (s *VideoService) persistCameraShares() {
 					BytesPerLine: r.mode.BytesPerLine, FPS: r.mode.FPS, MaxFrameBytes: r.mode.MaxFrameBytes},
 				Format:         r.mode.Format,
 				Stamp:          r.stamp,
+				Preset:         r.preset.String(),
 				AskedFormat:    r.askedFormat,
 				AskedWhyNot:    r.askedWhyNot,
 				SettingsNote:   r.settingsNote,
@@ -2088,12 +2123,17 @@ func (s *VideoService) loadCameraShares() {
 			if state.Version == cameraShareStateVersionWithoutSettings {
 				format, stamp = appconfig.CameraFormatPixels, appconfig.CameraStampTime
 			}
+			preset := noPreset
+			if format == appconfig.CameraFormatH264 {
+				preset = appconfig.ParseEncodePreset(sh.Preset)
+			}
 			r := &shareRecord{
 				cameraName: sh.Camera.Name,
 				cameraPath: sh.Path,
 				mode: sharedMode{Width: sh.Mode.Width, Height: sh.Mode.Height, Fourcc: sh.Mode.Fourcc,
 					BytesPerLine: sh.Mode.BytesPerLine, FPS: sh.Mode.FPS, Format: format, MaxFrameBytes: sh.Mode.MaxFrameBytes},
 				stamp:        stamp,
+				preset:       preset,
 				askedFormat:  sh.AskedFormat,
 				askedWhyNot:  sh.AskedWhyNot,
 				settingsNote: sh.SettingsNote,
@@ -2105,7 +2145,7 @@ func (s *VideoService) loadCameraShares() {
 			if r.node < ipcam.IDBandStart || r.node > ipcam.IDBandEnd || r.mode.pixelFormat() == 0 || r.mode.bufferBytes() <= 0 ||
 				!formatKnown || !slices.Contains(appconfig.CameraStamps, stamp) {
 				log.Warn(fmt.Sprintf("camera share: %s: dropping %s's share of %q at node %d with mode %s; this agent could not have made it",
-					path, id, sh.Camera.Name, sh.Node, describeShareNode(r.mode, stamp)))
+					path, id, sh.Camera.Name, sh.Node, describeShareNode(r.mode, stamp)+describeStatedPreset(preset)))
 				continue
 			}
 			sc.shares = append(sc.shares, r)
@@ -3382,7 +3422,7 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 			continue
 		}
 		props := map[string]string{camerashare.KeyStableID: dev.GetStableId()}
-		softwareEncoder := ""
+		var h264 shareDecision
 		if ctx.Err() == nil {
 			if decisions, ok := withinBudget(ctx, func() map[string]shareDecision {
 				return s.shareDecisionsFor(dev, appconfig.CameraFormats...)
@@ -3412,8 +3452,16 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 							props[camerashare.KeyModeOfFormat(format)] = decision.Mode.String()
 						}
 					}
-					if softwareEncoder = decisions[appconfig.CameraFormatH264].SoftwareEncoder; softwareEncoder != "" {
-						props[camerashare.KeyH264Encoder] = camerashare.SoftwareEncoder(softwareEncoder)
+					h264 = decisions[appconfig.CameraFormatH264]
+					if h264.SoftwareEncoder != "" {
+						props[camerashare.KeyH264Encoder] = camerashare.SoftwareEncoder(h264.SoftwareEncoder)
+					}
+					switch {
+					case !h264.Shared:
+					case h264.PresetIgnored != "":
+						props[camerashare.KeyH264PresetIgnored] = h264.PresetIgnored
+					default:
+						props[camerashare.KeyH264DefaultPreset] = appconfig.DefaultEncodePreset.String()
 					}
 				}
 			}
@@ -3421,7 +3469,7 @@ func (s *VideoService) CameraShareReport(ctx context.Context) map[string]map[str
 		// Who shares a camera comes from the records, not from a decision, so
 		// a decision that misses the budget costs only the mode or reason, and
 		// what an h264 node says of its encoder.
-		if with, state := s.shareStatesOf(dev.GetPath(), softwareEncoder); len(with) > 0 {
+		if with, state := s.shareStatesOf(dev.GetPath(), h264); len(with) > 0 {
 			props[camerashare.KeyWith] = strings.Join(with, ", ")
 			props[camerashare.KeyState] = strings.Join(state, ", ")
 		}
@@ -3446,20 +3494,36 @@ func (s *VideoService) pictureDecoderAt(path string) string {
 	return ""
 }
 
+// encoderPresetAt is the preset the encoder of the camera at path runs at now,
+// and unset while it runs none that takes a preset.
+func (s *VideoService) encoderPresetAt(path string) appconfig.EncodePreset {
+	s.mu.Lock()
+	hub := s.hubs[path]
+	s.mu.Unlock()
+	if hub == nil {
+		return noPreset
+	}
+	return hub.encoderPreset()
+}
+
 // shareStatesOf returns the sorted IDs of the containers sharing the camera at
 // path and, in the same order,
-// "<id> [format <format>, stamp <stamp>] (<phase>[: <detail>][; <note>]...)"
+// "<id> [format <format>, stamp <stamp>[, preset <preset>]] (<phase>[: <detail>][; <note>]...)"
 // for each. A record whose camera was absent at its last resolve is not the
-// camera at path (sharedModeOf). softwareEncoder is the element the camera's
-// row names under h264_encoder, or "": an h264 node that is read, or idle,
-// says of it what describeSoftwareEncoder says.
-func (s *VideoService) shareStatesOf(path, softwareEncoder string) (ids, states []string) {
+// camera at path (sharedModeOf). h264 is the decision for the camera's h264
+// node, or the zero value when none was made in time: an h264 node that is
+// read, or idle, says of the software encoder it names what
+// describeSoftwareEncoder says, and of a stated preset it gives a reason to
+// ignore that it is not applied. One that is read says so too when the
+// encoder runs at another preset than its app stated.
+func (s *VideoService) shareStatesOf(path string, h264 shareDecision) (ids, states []string) {
 	type snap struct {
 		id                 string
 		pump               *sharePump
 		tookB, coverFailed string
 		modeNote           string
 		format, stamp      string
+		preset             appconfig.EncodePreset
 		asked, askedWhyNot string
 		settingsNote       string
 	}
@@ -3471,7 +3535,7 @@ func (s *VideoService) shareStatesOf(path, softwareEncoder string) (ids, states 
 		}
 		for _, r := range c.shares {
 			if r != nil && r.cameraPath == path && !r.cameraAbsent {
-				snaps = append(snaps, snap{id, r.pump, r.tookRealCamera, r.coverFailed, r.modeNote, r.mode.Format, r.stamp, r.askedFormat, r.askedWhyNot, r.settingsNote})
+				snaps = append(snaps, snap{id, r.pump, r.tookRealCamera, r.coverFailed, r.modeNote, r.mode.Format, r.stamp, r.preset, r.askedFormat, r.askedWhyNot, r.settingsNote})
 				break
 			}
 		}
@@ -3502,9 +3566,20 @@ func (s *VideoService) shareStatesOf(path, softwareEncoder string) (ids, states 
 				text += "; pictures decoded by " + decoder
 			}
 		}
-		if softwareEncoder != "" && sn.format == appconfig.CameraFormatH264 {
-			if note := describeSoftwareEncoder(softwareEncoder, phase); note != "" {
-				text += "; " + note
+		if sn.format == appconfig.CameraFormatH264 && (phase == shareReading || phase == shareIdle) {
+			running := noPreset
+			if phase == shareReading {
+				running = s.encoderPresetAt(path)
+			}
+			var notes []string
+			if h264.SoftwareEncoder != "" {
+				notes = append(notes, describeSoftwareEncoder(h264.SoftwareEncoder, phase, sn.preset, running))
+			}
+			notes = append(notes, describePresetNotRunning(sn.preset, running), describePresetIgnored(sn.preset, h264.PresetIgnored))
+			for _, note := range notes {
+				if note != "" {
+					text += "; " + note
+				}
 			}
 		}
 		if sn.modeNote != "" {
@@ -3517,7 +3592,7 @@ func (s *VideoService) shareStatesOf(path, softwareEncoder string) (ids, states 
 			text += "; " + sn.settingsNote
 		}
 		ids = append(ids, sn.id)
-		states = append(states, fmt.Sprintf("%s [%s] (%s)", sn.id, describeShareSettings(sn.format, sn.stamp), text))
+		states = append(states, fmt.Sprintf("%s [%s] (%s)", sn.id, describeShareSettings(sn.format, sn.stamp)+describeStatedPreset(sn.preset), text))
 	}
 	return ids, states
 }

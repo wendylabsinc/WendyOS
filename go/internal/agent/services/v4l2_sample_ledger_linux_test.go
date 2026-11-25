@@ -170,7 +170,7 @@ func TestV4L2ExamplePredictionJoinsRecordedCameraPayload(t *testing.T) {
 	// The pump joins the hub when the reader below starts streaming.
 	pump := newSharePump(zap.NewNop(), "sh.wendy.sample-ledger", "Generated sample ledger source", shareNode, shareNode.Mode(), appconfig.CameraStampFrame,
 		func(ctx context.Context) (shareSubscription, error) {
-			return video.joinHubForShare(ctx, "/dev/video1890", 1890, mode)
+			return video.joinHubForShare(ctx, "/dev/video1890", 1890, mode, noPreset)
 		})
 	pumpCtx, stopPump := context.WithCancel(ctx)
 	pumpDone := make(chan struct{})

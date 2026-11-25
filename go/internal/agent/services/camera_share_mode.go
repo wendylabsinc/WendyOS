@@ -124,6 +124,10 @@ type shareRecord struct {
 	cameraAbsent bool
 	mode         sharedMode
 	stamp        string
+	// preset is what the app states for the encoder of its h264 node; unset
+	// for a node of another format. A create that finds the record again may
+	// change it (restateSharePreset), so it is read under cameraShares.mu.
+	preset appconfig.EncodePreset
 	// askedFormat is the format the app's entitlement asked for when the
 	// camera could not be declared in it and the node serves another format
 	// instead; askedWhyNot is why it could not. Both are empty otherwise.
@@ -341,14 +345,14 @@ func hubLacksFramesFor(err error) bool {
 // to maxHubRetries × hubTeardownTimeout), and a takeover waits up to one more
 // hubTeardownTimeout for the old producer to let go. With today's constants
 // the worst case is about 6 s; the usual case is no wait, or one takeover.
-func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID uint32, mode sharedMode) (shareSubscription, error) {
+func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID uint32, mode sharedMode, preset appconfig.EncodePreset) (shareSubscription, error) {
 	kind, known := shareFrameKinds[mode.Format]
 	if !known {
 		return nil, status.Errorf(codes.Internal, "camera share has no subscription for format %q", mode.Format)
 	}
 	req := &agentpb.StreamVideoRequest{DeviceId: devID}
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
-		h, id, ch, err := s.getOrCreateHubKind(ctx, path, req, hubHolderStreamClient, kind)
+		h, id, ch, err := s.getOrCreateHubKind(ctx, path, req, hubHolderStreamClient, kind, preset)
 		switch {
 		case err == nil && runsAtSharedMode(h, mode):
 			return &hubShareSubscription{hub: h, id: id, ch: ch}, nil
@@ -365,7 +369,7 @@ func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID u
 			// takeover would change nothing, so the pump is told why.
 			return nil, err
 		}
-		sub, retry, err := s.takeOverHubForShare(ctx, path, req, mode, kind)
+		sub, retry, err := s.takeOverHubForShare(ctx, path, req, mode, kind, preset)
 		if err != nil {
 			return nil, err
 		}
@@ -391,7 +395,7 @@ func (s *VideoService) liveHubAtOtherMode(path string, mode sharedMode) bool {
 // mode. It returns retry when the hub is gone or no longer conflicts, and a
 // *shareWaitError when a recording holds it. The check and the takeover happen
 // under s.mu and the old hub's mu, so no recording can join between them.
-func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req *agentpb.StreamVideoRequest, mode sharedMode, kind frameKind) (sub shareSubscription, retry bool, err error) {
+func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req *agentpb.StreamVideoRequest, mode sharedMode, kind frameKind, preset appconfig.EncodePreset) (sub shareSubscription, retry bool, err error) {
 	// Read before s.mu: the share records have their own lock, never nested.
 	_, apps, _ := s.sharedModeOf(path)
 	seqKey := s.sampleSeqKey(path)
@@ -429,7 +433,7 @@ func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req
 		done:      make(chan struct{}),
 		sampleSeq: s.sampleSeqLocked(seqKey),
 	}
-	id, ch, _ := h.subscribeKind(kind)
+	id, ch, _ := h.subscribeAsKind("", kind, preset)
 	s.hubs[path] = h
 	// End each viewer that asked for its mode, with the reason; it is told
 	// before the producer stops, so pumpFrames reads this, not a restart.
