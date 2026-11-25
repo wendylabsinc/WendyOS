@@ -57,7 +57,7 @@ absolute_dir_path() {
   local path
   path="$(expand_local_path "$1")"
   mkdir -p "$path"
-  (cd "$path" && pwd)
+  (cd "$path" && pwd -P)
 }
 
 while [[ $# -gt 0 ]]; do

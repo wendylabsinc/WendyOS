@@ -156,9 +156,21 @@ check_forwarding() {
   done
 }
 
-check_forwarding E2EAnalyze.sh bash "$SCRIPTS/E2EAnalyze.sh"
+output_alias="$TEST_DIR/output alias"
+ln -s "$OUTPUT_DIR" "$output_alias"
+OUTPUT_DIR="$output_alias" check_forwarding E2EAnalyze.sh bash "$SCRIPTS/E2EAnalyze.sh"
 if command -v pwsh > /dev/null; then
   check_forwarding E2EAnalyze.ps1 pwsh -NoLogo -NoProfile -File "$SCRIPTS/E2EAnalyze.ps1"
+fi
+
+# Exercise run discovery through the same alias when only the saved report matches.
+mv "$OUTPUT_DIR/$RUN_ID.a" "$OUTPUT_DIR/$RUN_ID.saved"
+: > "$REPORT_LOG"
+if ! WITH_REPO=no bash "$SCRIPTS/E2EAnalyze.sh" --output-dir "$output_alias" \
+  --run-id "$RUN_ID.saved" --stage report --no-open > "$TEST_DIR/output.log" 2>&1 \
+  || [[ "$(cat "$REPORT_LOG")" != report ]]; then
+  fail "E2EAnalyze.sh: did not render the saved run through the output symlink"
+  cat "$TEST_DIR/output.log" >&2
 fi
 
 if [[ "$failures" -ne 0 ]]; then
