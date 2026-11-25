@@ -997,7 +997,7 @@ func TestRotateResignsAtTheCurrentRevisionWithTheNewKey(t *testing.T) {
 	if len(fake.assigned) != 2 || fake.assigned[1].GetDeploymentKeyId() != fake.sealed[1].GetDeploymentKeyId() || fake.assigned[1].GetRevision() != 1 {
 		t.Fatalf("rotation re-signed %v", fake.assigned)
 	}
-	kd, err := op.current(ctx, depID)
+	kd, err := op.current(ctx, depID, false)
 	if err != nil || registrycrypto.KeyID(kd.key) != fake.sealed[1].GetDeploymentKeyId() {
 		t.Fatalf("current key after rotation: %v", err)
 	}
@@ -1017,16 +1017,16 @@ func TestRegistryRefusesWithoutCustodianPin(t *testing.T) {
 }
 
 // The digest signed is the manifest of the release the deployment uses now:
-// after a change Cloud recorded before its key (release B, newest key sealed
-// for A), B's key is made and only B's digest is signed, never A's.
-func TestSigningNeverUsesAKeyForAnotherRelease(t *testing.T) {
+// a change Cloud recorded before its key (release B, newest key sealed for
+// A) is refused by rotate, and nothing is signed or made.
+func TestSigningRefusesAKeyForAnotherRelease(t *testing.T) {
 	op, fake, _, _, depID := deployFixture(t)
-	releaseB, mB := publishFixture(t, op)
+	releaseB, _ := publishFixture(t, op)
 	fake.deploys[depID].AppReleaseId = releaseB
-	n := len(fake.assigned)
+	n, sealed := len(fake.assigned), len(fake.sealed)
 	err := op.rotate(context.Background(), depID, "sh.wendy.example", []string{vectorDevice})
-	if err != nil || len(fake.assigned) != n+1 || fake.assigned[n].GetManifestDigest() != mB.GetManifestDigest() {
-		t.Fatalf("a key for another release: %v, signed %v", err, fake.assigned[n:])
+	if err == nil || !strings.Contains(err.Error(), "nothing was signed") || len(fake.assigned) != n || len(fake.sealed) != sealed {
+		t.Fatalf("a key for another release: %v, %d signed", err, len(fake.assigned)-n)
 	}
 }
 

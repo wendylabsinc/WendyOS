@@ -890,10 +890,13 @@ func (op *registryOp) releases(ctx context.Context, appID string) ([]*cloudpb.Ap
 }
 
 // current is a deployment with this machine's newest deployment key sealed
-// for the release the deployment uses now. With none, the key is made now:
-// a change recorded in Cloud whose key upload failed left it out, and
-// Cloud takes a key only for the deployment's current release.
-func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedDeployment, error) {
+// for the release the deployment uses now. With repair (resume and a
+// configuration-only update), a missing key is made now: a change recorded
+// in Cloud whose key upload failed left it out, and Cloud takes a key only
+// for the deployment's current release. Without (rotate), a newest key
+// sealed for another release refuses: Cloud's unsigned release is not
+// trusted to name what gets signed.
+func (op *registryOp) current(ctx context.Context, deploymentID string, repair bool) (*keyedDeployment, error) {
 	d, err := cloudpb.NewDeploymentServiceClient(op.conn).GetDeployment(ctx, &cloudpb.GetDeploymentRequest{Id: deploymentID})
 	if err != nil {
 		return nil, fmt.Errorf("reading deployment %s: %w", deploymentID, err)
@@ -914,8 +917,14 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 	for i := len(wraps) - 1; i >= 0; i-- { // newest last
 		w := wraps[i]
 		j := slices.IndexFunc(resp.GetSealedContentKeys(), func(s *cloudpb.SealedContentKey) bool { return s.GetDeploymentKeyId() == w.GetScope().GetKeyId() })
-		if w.GetRecipientKeyId() != op.keyID || j < 0 || resp.GetSealedContentKeys()[j].GetManifestDigest() != m.GetManifestDigest() {
+		if w.GetRecipientKeyId() != op.keyID || j < 0 {
 			continue
+		}
+		if resp.GetSealedContentKeys()[j].GetManifestDigest() != m.GetManifestDigest() {
+			if repair {
+				continue
+			}
+			return nil, fmt.Errorf("deployment %s: its key does not match release %s, so nothing was signed. Update it to a release with wendy app deployment update --release <version> to make a key for that release", deploymentID, d.GetAppReleaseId())
 		}
 		key, err := op.open(w, registrycrypto.ScopeDeployment, deploymentID)
 		if err != nil {
@@ -934,9 +943,12 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 		clear(contentKey)
 		return &keyedDeployment{deployment: d, manifestDigest: sealed.GetManifestDigest(), key: key, sealed: sealed}, nil
 	}
+	if !repair {
+		return nil, fmt.Errorf("deployment %s has no key wrapped to this machine's registry key %s", deploymentID, op.keyID)
+	}
 	contentKey, err := op.contentKey(ctx, d.GetAppReleaseId(), m)
 	if err != nil {
-		return nil, fmt.Errorf("deployment %s has no key wrapped to this machine's registry key %s", deploymentID, op.keyID)
+		return nil, fmt.Errorf("deployment %s has no key for its release yet, and making one failed: %w", deploymentID, err)
 	}
 	defer clear(contentKey)
 	kd, err := op.newDeploymentKey(ctx, d, m, contentKey)
@@ -1065,7 +1077,7 @@ func (op *registryOp) signAssign(ctx context.Context, d *cloudpb.Deployment, kd 
 // are not re-encrypted) and re-signs the named devices' statements at it, at
 // the deployment's current revision with its current content.
 func (op *registryOp) rotate(ctx context.Context, deploymentID, appID string, devices []string) error {
-	old, err := op.current(ctx, deploymentID)
+	old, err := op.current(ctx, deploymentID, false)
 	if err != nil {
 		return err
 	}

@@ -490,7 +490,7 @@ func runResume(ctx context.Context, op *registryOp, appID, name string, c change
 		if conf.assign, err = op.deviceKeys(ctx, gets); err != nil {
 			return err
 		}
-		if conf.kd, err = op.current(ctx, d.GetId()); err != nil {
+		if conf.kd, err = op.current(ctx, d.GetId(), true); err != nil {
 			return err
 		}
 		conf.kd.validity = d.GetValidity().AsDuration()
@@ -579,7 +579,7 @@ func (op *registryOp) change(ctx context.Context, d *cloudpb.Deployment, newRel 
 				return err
 			}
 			defer clear(contentKey)
-		} else if conf.kd, err = op.current(ctx, d.GetId()); err != nil {
+		} else if conf.kd, err = op.current(ctx, d.GetId(), true); err != nil {
 			return err
 		}
 	}
