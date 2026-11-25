@@ -213,7 +213,7 @@ confirmed during the current scan.
 | Address | IP address (or hostname) and port |
 | Agent | Running agent version; `⚠` marks an agent older than the CLI; blank when the metadata probe hasn't succeeded |
 | OS | OS version reported by the agent |
-| Provisioned | `Provisioned` or `Unprovisioned` for LAN devices, from the mDNS-advertised mTLS state; blank for transports that don't report it (BLE-only, USB, external providers) |
+| Provisioned | `Provisioned` (`●`), `Unprovisioned` (`○`) or `Closed` (`◐`, a device that is not enrolled and only admits trusted keys; see [`wendy device access`](./device/access.md)) for LAN devices, from the mDNS-advertised mTLS state and access shape; blank for transports that don't report it (BLE-only, USB, external providers) |
 
 ### Connection hints
 
@@ -237,7 +237,7 @@ devices as a JSON array. Each object contains:
 | `usb` | string | USB interface summary (omitted when not connected over USB) |
 | `address` | string | IP address (or hostname) and port |
 | `version` | string | Agent version (omitted when unknown) |
-| `provisioned` | string | `Provisioned` or `Unprovisioned` for LAN devices (omitted for other transports) |
+| `provisioned` | string | `Provisioned`, `Unprovisioned` or `Closed` for LAN devices (omitted for other transports) |
 | `probeFailure` | object (optional) | Details of a failed connection and suggested recovery steps |
 
 When provided, `probeFailure` contains a `code` identifying the failure, a

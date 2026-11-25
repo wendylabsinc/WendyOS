@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
 )
@@ -89,5 +92,43 @@ func TestClearRemoteSeenRemovesOnlyThisAgentsMark(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(mark); string(got) != "1" {
 		t.Fatalf("another agent's mark must stay, got %q", got)
+	}
+}
+
+// On a Closed device's keyless listener, wired as main does (authorizer, then
+// remote-seen), neither a refused call nor GetAccess approves an agent on
+// trial; a call the keyless set admits does.
+func TestClosedRemoteSeenCountsOnlyAdmittedCalls(t *testing.T) {
+	keys, err := trustedkeys.Open(filepath.Join(t.TempDir(), trustedkeys.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := keys.Close(spkiOf(t), "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	authz := (&ClosedAuthorizer{Logger: zap.NewNop(), Listener: ClosedKeylessListener, Keys: keys}).Unary()
+	seen := UnaryRemoteSeen(dir)
+	lan := withPeer(&net.TCPAddr{IP: net.ParseIP("192.168.1.50"), Port: 4000})
+	call := func(method string) {
+		info := &grpc.UnaryServerInfo{FullMethod: method}
+		_, _ = authz(lan, nil, info, func(ctx context.Context, req any) (any, error) {
+			return seen(ctx, req, info, func(context.Context, any) (any, error) { return nil, nil })
+		})
+	}
+	marked := func() bool { e, _ := os.ReadDir(dir); return len(e) > 0 }
+
+	call("/wendy.agent.services.v1.WendyContainerService/ListContainers")
+	call("/wendy.agent.services.v2.WendyAccessService/GetAccess")
+	if marked() {
+		t.Fatal("a refused call or GetAccess approved the agent on trial")
+	}
+	if err := keys.SetKeylessApps(true, owner.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	call("/wendy.agent.services.v1.WendyContainerService/ListContainers")
+	if !marked() {
+		t.Fatal("a call the keyless set admitted did not count")
 	}
 }

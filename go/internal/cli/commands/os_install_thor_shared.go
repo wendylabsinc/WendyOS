@@ -179,7 +179,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 			if err != nil {
 				return false, err
 			}
-			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail, agentSeed{local: agent, nightly: nightly, arch: "arm64"})
+			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail, agentSeed{local: agent, nightly: nightly, arch: "arm64", ownerKeys: preOpts.ownerKeys})
 		}},
 		{id: stepStage1, label: "Stage 1  RCM boot", run: func(out io.Writer, _ func(string)) (bool, error) {
 			return false, thorStageOne(fp, dev, out)

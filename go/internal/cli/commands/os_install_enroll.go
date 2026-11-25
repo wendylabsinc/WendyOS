@@ -18,6 +18,9 @@ import (
 type preEnrollOptions struct {
 	mode      preEnrollMode
 	cloudGRPC string // --cloud-grpc: auth session to enroll with when several exist
+	// ownerKeys (--close) is the access file the config partition carries:
+	// the device starts Closed with this computer's local key as its owner.
+	ownerKeys []byte
 }
 
 // skipEnrollmentValue is the picker value for the explicit skip option.

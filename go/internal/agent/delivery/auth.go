@@ -47,6 +47,11 @@ func RPC(ctx context.Context, source Source, mode interceptor.OrgMode, imageName
 	if leaf == nil {
 		return ctx, nil, nil
 	}
+	// A trusted key on a Closed device carries no Wendy identity; the access
+	// table already admitted it at operator, like a user certificate here.
+	if _, ok := interceptor.TrustedKeyCaller(ctx); ok {
+		return ctx, nil, nil
+	}
 	identity, found, err := certs.IdentityFromCert(leaf)
 	if err != nil {
 		return ctx, nil, status.Error(codes.PermissionDenied, "invalid delivery caller")

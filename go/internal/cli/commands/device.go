@@ -26,6 +26,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -88,6 +89,8 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceShellCmd(),
 		newDeprecatedDeviceVersionCmd(),
 		newDeviceUnpinCmd(),
+		newDeviceAccessCmd(),
+		newDeviceKeysCmd(),
 		newDeviceBuildHostCmd(),
 		newRemovedDeviceDefaultCmd("set-default"),
 		newRemovedDeviceDefaultCmd("get-default"),
@@ -898,6 +901,15 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	return err
 }
 
+// requireClosedDeviceOwner is cloudenroll.RequireClosedDeviceOwner on this
+// connection.
+func requireClosedDeviceOwner(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	if conn == nil || conn.Conn == nil {
+		return nil
+	}
+	return cloudenroll.RequireClosedDeviceOwner(ctx, conn.Conn)
+}
+
 func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, error) {
 	if auth == nil || len(auth.Certificates) == 0 {
 		return nil, validateEnrollmentCertificate(auth)
@@ -910,6 +922,9 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		return nil, fmt.Errorf("--acme-directory-url requires an OIDC login session")
 	}
 	if err := validateEnrollmentCertificate(auth); err != nil {
+		return nil, err
+	}
+	if err := requireClosedDeviceOwner(ctx, conn); err != nil {
 		return nil, err
 	}
 	// Only the new login flow uses direct PKI enrollment. Imported certificates

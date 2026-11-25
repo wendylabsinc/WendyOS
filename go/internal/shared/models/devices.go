@@ -101,6 +101,10 @@ type LANDevice struct {
 	// record, or the legacy `sensorlink=true` TXT record it supersedes),
 	// meaning the device can act as a remote sensor source for pairing.
 	Sensorlink bool `json:"sensorlink,omitempty"`
+	// Access is the access shape of a device that is not enrolled, from the
+	// `access=` TXT record: "open", "closed" or "enrolled"; empty when an
+	// older agent does not advertise it.
+	Access string `json:"access,omitempty"`
 	// Caps is the device's advertised capability list from the `caps=`
 	// comma-separated TXT record (e.g. "sensors,foo"); nil when unadvertised.
 	Caps []string `json:"caps,omitempty"`

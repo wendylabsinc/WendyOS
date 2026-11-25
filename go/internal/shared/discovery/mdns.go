@@ -102,6 +102,7 @@ func lanDeviceFromService(svc MDNSService) models.LANDevice {
 	if v, ok := svc.TXTRecords["devicetype"]; ok {
 		dev.DeviceType = v
 	}
+	dev.Access = svc.TXTRecords["access"]
 	if v, ok := svc.TXTRecords["wired"]; ok {
 		dev.WiredAddresses = ParseWiredTXT(v)
 	}

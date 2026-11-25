@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"io"
 	"net"
 	"net/netip"
@@ -1571,6 +1572,9 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 	}
 
+	if err := entitlementRoleError(ctx, &entCfg); err != nil {
+		return err
+	}
 	if err := localoci.ApplyEntitlements(spec, &entCfg, opts); err != nil {
 		return fmt.Errorf("applying entitlements: %w", err)
 	}
@@ -3125,7 +3129,30 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 // StartContainerWithStdin uses the same validated task-start lifecycle as
 // StartContainer and only changes the task's stdin stream.
 func (c *Client) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan services.ContainerOutput, error) {
+	// Attach restarts the app with the caller's stdin. A lookup failure is
+	// left to startContainer to report; Open and Enrolled devices skip it.
+	if _, closed := trustedkeys.CallerRole(ctx); closed {
+		if ctr, err := c.runningContainerForApp(c.withNamespace(ctx), appName); err == nil {
+			if err := roleMayDrive(c.withNamespace(ctx), ctr); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return c.startContainer(ctx, appName, stdin, postStartAgentCommand, restartPolicy)
+}
+
+// roleMayDrive refuses, on a Closed device, an exec into or an attach to an
+// app whose entitlements the caller's role could not deploy: exec copies the
+// container's process spec, so the command runs with its privileges.
+func roleMayDrive(ctx context.Context, ctr containerd.Container) error {
+	if _, closed := trustedkeys.CallerRole(ctx); !closed {
+		return nil
+	}
+	labels, err := ctr.Labels(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the app's entitlements: %w", err)
+	}
+	return entitlementRoleError(ctx, &appconfig.AppConfig{Entitlements: parseEntitlementsFromAnnotations(labels)})
 }
 
 // execCounter disambiguates concurrent exec IDs within the agent process.
@@ -3168,6 +3195,9 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 
 	container, err := c.runningContainerForApp(ctx, appName)
 	if err != nil {
+		return -1, err
+	}
+	if err := roleMayDrive(ctx, container); err != nil {
 		return -1, err
 	}
 	task, err := container.Task(ctx, nil)
@@ -6108,4 +6138,34 @@ func ensureDataSockets(provider AppDataSocketProvider, appID, service string, en
 		return "", fmt.Errorf("agent does not support recording streams")
 	}
 	return p.EnsureStreams(appID, service, streams)
+}
+
+// entitlementRoleError refuses, on a Closed device, the entitlements the
+// caller's role must not grant: admin needs a key (operator), and build, which
+// is privileged-equivalent, needs the owner. Open and Enrolled devices carry no
+// role and are not checked.
+func entitlementRoleError(ctx context.Context, cfg *appconfig.AppConfig) error {
+	role, closed := trustedkeys.CallerRole(ctx)
+	if !closed {
+		return nil
+	}
+	for _, e := range []struct {
+		name string
+		min  trustedkeys.Role
+	}{
+		{appconfig.EntitlementAdmin, trustedkeys.RoleOperator},
+		{appconfig.EntitlementBuild, trustedkeys.RoleOwner},
+	} {
+		if role < e.min && cfg.HasEntitlement(e.name) {
+			return fmt.Errorf("the %s entitlement needs the %s key and this deploy has %s; remove it from wendy.json or deploy with the %s key", e.name, e.min, describeRole(role), e.min)
+		}
+	}
+	return nil
+}
+
+func describeRole(r trustedkeys.Role) string {
+	if r == trustedkeys.RoleNone {
+		return "no key"
+	}
+	return "the " + r.String() + " role"
 }

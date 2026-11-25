@@ -2,7 +2,9 @@ package commands
 
 import (
 	"context"
+	"crypto"
 	"errors"
+	"io/fs"
 	"os"
 	"testing"
 	"time"
@@ -53,6 +55,9 @@ func TestMain(m *testing.M) {
 	// machine's interfaces nor dials a board plugged into it. Tests of the USB
 	// paths install their own candidates.
 	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
+	// Ladder tests dial fake and unroutable endpoints; the local-key rung
+	// would dial each of them again. Tests of that rung install a key.
+	localOperatorKeyFn = func() (crypto.Signer, error) { return nil, fs.ErrNotExist }
 	// Every os install with --device-type reads install aliases first. Tests
 	// that exercise an alias install a manifest; the rest must not reach GCS.
 	fetchInstallMainManifest = func(context.Context, int) (*mainManifest, error) {

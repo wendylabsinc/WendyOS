@@ -45,17 +45,17 @@ func resolveSeedAgent(out io.Writer, detail func(string), seed agentSeed) (confi
 	if local := seed.local; local != nil {
 		detail("local agent " + local.path)
 		fmt.Fprintf(out, "Using local wendy-agent %s (%s)\n", local.path, local.arch)
-		return configAgent{data: local.data, local: true}, ""
+		return configAgent{data: local.data, local: true, ownerKeys: seed.ownerKeys}, ""
 	}
 	detail("downloading agent")
 	agent, version, err := seedAgent(seed)
 	if err != nil {
 		// Written to out as well, so the flash log keeps it for a post-mortem.
 		fmt.Fprintf(out, "warning: could not download wendy-agent (%v)\n", err)
-		return configAgent{}, fmt.Sprintf("could not download wendy-agent (%v); the board keeps the agent baked into its image", err)
+		return configAgent{ownerKeys: seed.ownerKeys}, fmt.Sprintf("could not download wendy-agent (%v); the board keeps the agent baked into its image", err)
 	}
 	detail("agent " + version)
-	return configAgent{data: agent}, ""
+	return configAgent{data: agent, ownerKeys: seed.ownerKeys}, ""
 }
 
 // newConfigFS creates and formats a bare FAT32 config image. The caller closes

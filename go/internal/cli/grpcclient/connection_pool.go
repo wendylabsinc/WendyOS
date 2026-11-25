@@ -258,6 +258,8 @@ func (c *AgentConnection) sharedHandle(release func() error) *AgentConnection {
 		observedServerOrg: c.observedServerOrg, observedServerTenant: c.observedServerTenant,
 		observedServerIdentity: c.observedServerIdentity, identityMismatch: c.identityMismatch,
 		pinMismatch: c.pinMismatch, tcpDial: c.tcpDial, release: release,
+		IsLocalOperator: c.IsLocalOperator, notLocalDevice: c.notLocalDevice, localDeviceVerified: c.localDeviceVerified,
+		deviceRefusedKey: c.deviceRefusedKey,
 	}
 	h.cachedAgentVersion.Store(c.cachedAgentVersion.Load())
 	return h
