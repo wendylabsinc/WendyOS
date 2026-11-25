@@ -48,8 +48,6 @@ func encoderOnDemand(demand encodeDemand) pipelineShape {
 	return pipelineShape{encode: demand.wantEncoded()}
 }
 
-func alwaysEncoding(encodeDemand) pipelineShape { return pipelineShape{encode: true} }
-
 // A pipeline that encodes keeps its pictures, as a camera pipeline keeps its
 // tap, so a pixel subscriber joining or leaving never restarts it under a
 // viewer or a recording.

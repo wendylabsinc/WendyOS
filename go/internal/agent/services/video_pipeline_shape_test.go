@@ -1178,26 +1178,3 @@ func TestRunShapedPipelines_NilDemandRunsTheEncoderAtTheDefault(t *testing.T) {
 		t.Errorf("the encoder stage of that launch is %q, want the default preset", stage)
 	}
 }
-
-func TestAlwaysEncoding_IsLaunchedAgainOnlyForAnotherPreset(t *testing.T) {
-	const grace = 50 * time.Millisecond
-	demand := newFakeEncodeDemand(false, false)
-	demand.native = true
-	launches := newRecordedLaunches()
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan error, 1)
-	go func() { result <- runPipelinesShapedBy(ctx, demand, grace, alwaysEncoding, "x264enc", launches.launch) }()
-	t.Cleanup(func() { cancel(); <-result })
-	if shape := launches.next(t, time.Second); !shape.encode || shape.preset != appconfig.DefaultEncodePreset {
-		t.Fatalf("first launch is %+v, want the encoder at the default", shape)
-	}
-	demand.set(true, true)
-	demand.set(false, false)
-	launches.none(t, 6*grace)
-	demand.set(true, false)
-	demand.state(appconfig.EncodePresetMedium)
-	launches.none(t, grace/2)
-	if shape := launches.next(t, grace+2*time.Second); !shape.encode || shape.preset != appconfig.EncodePresetMedium {
-		t.Fatalf("second launch is %+v, want the encoder at medium", shape)
-	}
-}

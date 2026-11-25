@@ -5,11 +5,9 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -261,51 +259,6 @@ func TestJoins_StateThePresetWithTheSubscription(t *testing.T) {
 			t.Fatalf("a pump that reads pictures states %q", got)
 		}
 	})
-}
-
-// A Jetson sensor captured through Argus has no tap, so its pipeline always
-// encodes: it is launched again only for another preset, in the loop every
-// other camera pipeline runs in.
-func TestStreamGStreamer_AnArgusPipelineIsLaunchedAgainOnlyForAnotherPreset(t *testing.T) {
-	const grace = 300 * time.Millisecond
-	launchLog := fakeGStreamer(t, 0, "nvarguscamerasrc")
-	h, cancelHub := newTestHub(t)
-	defer cancelHub()
-	recording, frames, err := h.subscribeAsKind("", encodedFrames, appconfig.EncodePresetMedium)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer h.unsubscribe(recording)
-	svc := &VideoService{logger: zap.NewNop(), encoderIdleGrace: grace, isJetson: func() bool { return true }}
-	streamIntoHub(t, svc, h, &agentpb.StreamVideoRequest{}, camera.TransportCSI)
-
-	waitForFrame(t, frames, "encoded chunk")
-	launched := launchedPipelines(t, launchLog)
-	if len(launched) != 1 || !strings.Contains(launched[0], "nvarguscamerasrc") || !strings.Contains(launched[0], " speed-preset=medium ") {
-		t.Fatalf("launches = %q, want one Argus pipeline with x264enc at medium", launched)
-	}
-	if got := h.encoderPreset(); got != appconfig.EncodePresetMedium {
-		t.Errorf("the hub says its encoder runs at %q, want medium", got)
-	}
-
-	app := subscribeEncodedAt(t, h, appconfig.EncodePresetVeryfast)
-	waitUntil(t, "the pipeline is launched again at veryfast", func() bool { return len(launchedPipelines(t, launchLog)) == 2 })
-	if launched = launchedPipelines(t, launchLog); !strings.Contains(launched[1], "nvarguscamerasrc") || !strings.Contains(launched[1], " speed-preset=veryfast ") {
-		t.Fatalf("the second launch is %q, want the Argus pipeline with x264enc at veryfast", launched[1])
-	}
-
-	viewer := subscribeEncodedAt(t, h, noPreset)
-	h.unsubscribe(viewer)
-	left := time.Now()
-	h.unsubscribe(app)
-	time.Sleep(grace / 2)
-	if launched = launchedPipelines(t, launchLog); len(launched) != 2 {
-		t.Fatalf("%v after the app left, inside the %v grace, the launches are %q", time.Since(left), grace, launched)
-	}
-	waitUntil(t, "the pipeline is launched again at medium", func() bool { return len(launchedPipelines(t, launchLog)) == 3 })
-	if launched = launchedPipelines(t, launchLog); !strings.Contains(launched[2], " speed-preset=medium ") {
-		t.Fatalf("the third launch is %q, want x264enc back at medium", launched[2])
-	}
 }
 
 // A feed of JPEG frames is not run in the shape its subscribers need, so its

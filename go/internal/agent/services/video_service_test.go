@@ -293,7 +293,8 @@ func TestBuildGStreamerArgs_WithoutH264Parse(t *testing.T) {
 // x264enc is the one encoder the agent sets a speed for. Every pipeline it
 // builds with x264enc runs it at the preset the pipeline's shape holds, and at
 // the default, x264's fastest, when the shape holds none; a feed of JPEG
-// frames is not shaped and always runs at the default. Beside the preset come
+// frames and a Jetson sensor captured through Argus are not shaped and always
+// run at the default. Beside the preset come
 // the settings the derived layer's frame numbering rests on: no frame delay
 // and no B-frames. No pipeline built with another encoder is given a preset
 // or a tune, whatever is stated.
@@ -315,8 +316,8 @@ func TestPipelines_OnlyX264RunsAtAPresetAndEveryPipelineWithItRunsAtTheOneItsSha
 			}
 			return strings.Join(plan.args, " ")
 		}},
-		"a Jetson sensor captured through Argus": {true, func(_ *testing.T, encoder string, hasH264Parse bool, preset appconfig.EncodePreset) string {
-			return strings.Join(buildArgusGStreamerArgs("gst", request, 0, encoder, hasH264Parse, map[string]bool{"nvarguscamerasrc": true, encoder: true}, preset), " ")
+		"a Jetson sensor captured through Argus": {false, func(_ *testing.T, encoder string, hasH264Parse bool, _ appconfig.EncodePreset) string {
+			return strings.Join(buildArgusGStreamerArgs("gst", request, 0, encoder, hasH264Parse, map[string]bool{"nvarguscamerasrc": true, encoder: true}), " ")
 		}},
 		"a feed of JPEG frames": {false, func(t *testing.T, encoder string, hasH264Parse bool, _ appconfig.EncodePreset) string {
 			plan, err := planSharedJPEGPipeline("gst", "", request, gstEncoderResult{element: encoder, hasH264Parse: hasH264Parse}, sharedCameraJPEG{width: 640, height: 480})
@@ -436,7 +437,7 @@ func TestEncoderSegment_ByteStreamCapsOnlyForX264WithoutH264Parse(t *testing.T) 
 }
 
 func TestBuildArgusGStreamerArgs_X264WithoutH264ParsePinsByteStream(t *testing.T) {
-	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "x264enc", false, nil, noPreset)
+	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "x264enc", false, nil)
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "h264parse") {
 		t.Errorf("must not add h264parse when unavailable: %v", args)
@@ -1372,7 +1373,7 @@ func TestBuildSourceElement_RejectsInjectableLibcameraID(t *testing.T) {
 
 func TestBuildArgusGStreamerArgs_NVV4L2DirectNVMM(t *testing.T) {
 	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "nvv4l2h264enc", true,
-		map[string]bool{"nvarguscamerasrc": true, "nvv4l2h264enc": true}, noPreset)
+		map[string]bool{"nvarguscamerasrc": true, "nvv4l2h264enc": true})
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "nvarguscamerasrc sensor-id=0") {
 		t.Errorf("expected nvarguscamerasrc with sensor-id=0: %v", args)
@@ -1398,7 +1399,7 @@ func TestBuildArgusGStreamerArgs_NVV4L2DirectNVMM(t *testing.T) {
 }
 
 func TestBuildArgusGStreamerArgs_DefaultDimensions(t *testing.T) {
-	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "nvv4l2h264enc", true, nil, noPreset)
+	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "nvv4l2h264enc", true, nil)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "width=1920") || !strings.Contains(joined, "height=1080") || !strings.Contains(joined, "framerate=30/1") {
 		t.Errorf("expected default 1920x1080@30 caps: %v", args)
@@ -1407,7 +1408,7 @@ func TestBuildArgusGStreamerArgs_DefaultDimensions(t *testing.T) {
 
 func TestBuildArgusGStreamerArgs_RequestDimensionsOverrideDefaults(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{Width: 1280, Height: 720, Framerate: 60}
-	args := buildArgusGStreamerArgs("gst", req, 0, "nvv4l2h264enc", true, nil, noPreset)
+	args := buildArgusGStreamerArgs("gst", req, 0, "nvv4l2h264enc", true, nil)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "width=1280") || !strings.Contains(joined, "height=720") || !strings.Contains(joined, "framerate=60/1") {
 		t.Errorf("expected requested caps to override defaults: %v", args)
@@ -1415,21 +1416,21 @@ func TestBuildArgusGStreamerArgs_RequestDimensionsOverrideDefaults(t *testing.T)
 }
 
 func TestBuildArgusGStreamerArgs_SensorID(t *testing.T) {
-	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 1, "nvv4l2h264enc", false, nil, noPreset)
+	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 1, "nvv4l2h264enc", false, nil)
 	if !strings.Contains(strings.Join(args, " "), "sensor-id=1") {
 		t.Errorf("expected sensor-id=1: %v", args)
 	}
 }
 
 func TestBuildArgusGStreamerArgs_NoH264ParseOmitsByteStream(t *testing.T) {
-	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "nvv4l2h264enc", false, nil, noPreset)
+	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "nvv4l2h264enc", false, nil)
 	if strings.Contains(strings.Join(args, " "), "h264parse") {
 		t.Errorf("must not add h264parse when unavailable: %v", args)
 	}
 }
 
 func TestBuildArgusGStreamerArgs_NonNVEncoderUsesNvvidconv(t *testing.T) {
-	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "x264enc", true, nil, noPreset)
+	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "x264enc", true, nil)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "video/x-raw(memory:NVMM)") {
 		t.Errorf("expected NVMM source caps: %v", args)

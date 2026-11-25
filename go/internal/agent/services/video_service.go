@@ -3726,16 +3726,11 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 		sensorID := int(req.GetDeviceId())
 		s.logger.Info("CSI camera on Jetson — capturing via nvarguscamerasrc (Argus)",
 			zap.Int("sensor_id", sensorID), zap.String("encoder", enc.element))
-		// Argus has no tap, so it always encodes: it is launched again only for
-		// another preset.
-		demand, _ := sink.(encodeDemand)
-		return runPipelinesShapedBy(ctx, demand, s.encoderGrace(), alwaysEncoding, enc.element, func(ctx context.Context, shape pipelineShape) error {
-			var plan gstPipelinePlan
-			plan.args = buildArgusGStreamerArgs(gstPath, req, sensorID, enc.element, enc.hasH264Parse, available, shape.preset)
-			plan.rawWhy = "CSI cameras on Jetson are captured through Argus; raw frames are not offered"
-			s.logger.Info("starting camera pipeline", zap.String("device", path), zap.Bool("encodes", shape.encode), zap.Stringer("preset", shape.preset))
-			return run(ctx, plan)
-		})
+		var plan gstPipelinePlan
+		plan.args = buildArgusGStreamerArgs(gstPath, req, sensorID, enc.element, enc.hasH264Parse, available)
+		plan.rawWhy = "CSI cameras on Jetson are captured through Argus; raw frames are not offered"
+		// Argus has no tap, so it always encodes: one launch, as before.
+		return run(ctx, plan)
 	}
 
 	// The element set and the encoder stay as chosen above; only the shape is
@@ -4615,7 +4610,7 @@ const (
 // first via nvvidconv. sensorID is the Argus sensor index (derived from the
 // /dev/videoN suffix by the caller; correct for the common single-CSI-camera
 // case).
-func buildArgusGStreamerArgs(gstPath string, req *agentpb.StreamVideoRequest, sensorID int, encoder string, hasH264Parse bool, available map[string]bool, preset appconfig.EncodePreset) []string {
+func buildArgusGStreamerArgs(gstPath string, req *agentpb.StreamVideoRequest, sensorID int, encoder string, hasH264Parse bool, available map[string]bool) []string {
 	width := req.GetWidth()
 	if width == 0 {
 		width = argusDefaultWidth
@@ -4643,7 +4638,7 @@ func buildArgusGStreamerArgs(gstPath string, req *agentpb.StreamVideoRequest, se
 	} else {
 		// Any other encoder needs frames in system memory; nvvidconv does the
 		// NVMM->CPU copy, then the shared encoderSegment handles the rest.
-		tail = "nvvidconv ! video/x-raw,format=NV12 ! " + encoderSegment(encoder, hasH264Parse, gop, preset)
+		tail = "nvvidconv ! video/x-raw,format=NV12 ! " + encoderSegment(encoder, hasH264Parse, gop, noPreset)
 	}
 
 	pipeline := fmt.Sprintf("nvarguscamerasrc sensor-id=%d ! %s ! %s ! fdsink fd=1", sensorID, nvmmCaps, tail)
