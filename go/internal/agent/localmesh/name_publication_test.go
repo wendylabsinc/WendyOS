@@ -48,6 +48,15 @@ func TestNodeFriendlyNameUsesSignedPublicationGate(t *testing.T) {
 	if n.advertisement.Name != renamed.Name {
 		t.Fatal("invalid source replaced last valid name")
 	}
+	name = ""
+	n.nextPublication = time.Now().Add(-time.Millisecond)
+	if err := n.refreshName(); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn := n.directory.Snapshot(time.Now())[0]
+	if withdrawn.Name != "" || withdrawn.Route == nil || withdrawn.Revision != renamed.Revision+1 {
+		t.Fatalf("withdrawing a name removed or failed to refresh its route: %+v", withdrawn)
+	}
 }
 
 func TestNodeRefreshesFriendlyNameDuringRun(t *testing.T) {

@@ -28,6 +28,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
 	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 )
@@ -723,7 +724,8 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 // principal is what mesh peers dial: it is the full device identity, so a
 // sighting cannot be spoofed by re-advertising someone else's id.
 func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, principal string) {
-	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, principal, func() bool {
+	localName, _ := meshname.FriendlyLabel(services.DeviceName())
+	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, principal, localName, func() bool {
 		return restartAvahiDaemon(logger, nil)
 	})
 }
@@ -734,7 +736,8 @@ func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, principal stri
 // UpdateAvahiForProvisioning, used when a device is unprovisioned so it is
 // rediscoverable for re-enrollment.
 func UpdateAvahiForUnprovisioning(logger *zap.Logger, plaintextPort int) {
-	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, "", func() bool {
+	localName, _ := meshname.FriendlyLabel(services.DeviceName())
+	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, "", localName, func() bool {
 		return restartAvahiDaemon(logger, nil)
 	})
 }
@@ -771,7 +774,7 @@ const defaultAvahiServiceDir = "/etc/avahi/services"
 // temporary directory, so every guard passes and the restart is reached for
 // real. Left un-injected it prompts for polkit authorization on a developer
 // machine and blocks the package's tests for the length of that timeout.
-func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, principal string, restartAvahi func() bool) {
+func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, principal, localName string, restartAvahi func() bool) {
 	unlock := services.LockAvahiServiceFile()
 	defer unlock()
 
@@ -794,7 +797,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 			continue
 		}
 
-		content := updateWendyOSServicePort(string(data), port, tls, principal)
+		content := updateWendyOSServicePort(string(data), port, tls, principal, localName)
 		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
 			logger.Warn("Could not write avahi service file",
 				zap.String("path", serviceFile), zap.Error(err))
@@ -815,7 +818,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 // its port, tls TXT record, and principal TXT record. Other service blocks
 // (SSH, HTTP, etc.) are left untouched. When principal is empty, the TXT
 // record is removed (used on unprovisioning).
-func updateWendyOSServicePort(content string, port int, tls bool, principal string) string {
+func updateWendyOSServicePort(content string, port int, tls bool, principal, localName string) string {
 	const typeTag = "<type>_wendyos._udp</type>"
 	portRe := regexp.MustCompile(`<port>\d+</port>`)
 
@@ -854,6 +857,11 @@ func updateWendyOSServicePort(content string, port int, tls bool, principal stri
 			"    <txt-record>tls="+tlsValue+"</txt-record>\n  </service>", 1)
 	}
 
+	if principal == "" || !strings.Contains(block, "<txt-record>principal="+principal+"</txt-record>") {
+		// Discard the previous enrollment's Cloud name before advertising a
+		// new enrollment or returning the device to local discovery.
+		block = replaceTXTRecord(block, "name", localName)
+	}
 	block = updatePrincipalTXTRecord(block, principal)
 
 	return content[:serviceStart] + block + content[serviceEnd:]
