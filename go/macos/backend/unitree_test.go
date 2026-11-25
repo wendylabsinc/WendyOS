@@ -3,14 +3,17 @@ package backend
 import (
 	"context"
 	"errors"
-	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
-	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
-	"google.golang.org/grpc"
 	"math"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type fakeUnitreeControl struct {
@@ -222,6 +225,27 @@ func TestUnitreePairRequiresAuthenticatedAgentAndRedactsFailures(t *testing.T) {
 	}
 	if f.request == nil || f.request.Token != "" || f.request.EncryptionKey != "" {
 		t.Fatal("unexpected credential in reconnect request")
+	}
+}
+
+func TestUnitreePairPreservesSafeAgentDiagnostic(t *testing.T) {
+	const busy = "Go2 is already connected to another controller. Disconnect the Unitree Go app or ask the other operator to disconnect, then retry."
+	for _, tc := range []struct {
+		name, message, want string
+	}{
+		{"busy", busy, busy},
+		{"older agent busy", "Go2 is already connected to another controller. Arrange a handoff with its operator before retrying.", busy},
+		{"unanswered", "The robot did not answer the connection request. Check its IP address and network.", "did not answer"},
+		{"unknown", "remote-secret", "connection setup failed"},
+		{"appended secret", busy + " remote-secret", "connection setup failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &desktopUnitreeService{pairErr: status.Error(codes.Unavailable, tc.message)}
+			err := unitreePairingBackend(f).PairUnitree(1, "GO2-123", "Go2", "192.168.1.2", "global", "", "")
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "remote-secret") {
+				t.Fatalf("unsafe or missing agent diagnostic: %v", err)
+			}
+		})
 	}
 }
 

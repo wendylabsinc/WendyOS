@@ -345,7 +345,7 @@ func (s *UnitreeService) PairUnitree(ctx context.Context, req *agentpbv2.PairUni
 		if ctx.Err() != nil {
 			return nil, status.FromContextError(ctx.Err()).Err()
 		}
-		return nil, status.Error(codes.Unavailable, "Go2 connection failed; check the IP, account, and that the robot is on the agent's LAN")
+		return nil, status.Error(codes.Unavailable, unitree.ConnectionFailureMessage(err))
 	}
 	if !link.Connected() || connectCtx.Err() != nil {
 		_ = link.Close()

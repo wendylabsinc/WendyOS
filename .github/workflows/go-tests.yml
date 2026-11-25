@@ -1931,3 +1931,5 @@ jobs:
           python3 .github/ci-tests/host-sensor-loopback/check_test.py
       - name: release priority tests
         run: node --test .github/scripts/release-priority.test.cjs
+      - name: macOS app publication gating tests
+        run: python3 .github/scripts/package-macos-app_test.py

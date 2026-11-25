@@ -76,7 +76,7 @@ private func measuredRobotLens() -> SiteCameraLens {
     let takeTurn = { (date: Date) in search.takeTurn(now: date) }
     #expect(!takeTurn(now))
     search.start(now: now)
-    for _ in 0..<12 { #expect(takeTurn(now)) }
+    for _ in 0..<6 { #expect(takeTurn(now)) }
     #expect(!takeTurn(now))
     #expect(!search.active)
     search.start(now: now)
@@ -109,7 +109,7 @@ private func measuredRobotLens() -> SiteCameraLens {
     let now = Date(timeIntervalSince1970: 1000)
     var search = RobotPositionSearch()
     search.start(now: now)
-    for _ in 0..<12 { #expect({ search.takeTurn(now: now) }()) }
+    for _ in 0..<6 { #expect({ search.takeTurn(now: now) }()) }
     // The final view still gets matched before declaring failure.
     #expect({ search.shouldRetryLocalization(pose: true, scanReady: true, measurementsReady: true, aligned: false,
                                             rematchAfterLook: true, attempts: 0, now: now) }())
@@ -251,7 +251,7 @@ private func measuredRobotLens() -> SiteCameraLens {
     #expect({ search.shouldRetryLocalization(pose: true, scanReady: false, measurementsReady: true, aligned: true,
                                          rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(15)) }())
     #expect({ search.takeTurn(now: now.addingTimeInterval(16)) }())
-    #expect(search.remainingTurns == 10)
+    #expect(search.remainingTurns == 4)
     #expect(search.direction == -1)
     #expect({ !search.shouldRetryLocalization(pose: false, scanReady: false, measurementsReady: true, aligned: false,
                                           rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(17)) }())
@@ -297,11 +297,11 @@ private func measuredRobotLens() -> SiteCameraLens {
     #expect({ !search.shouldRetryLocalization(pose: true, scanReady: false, measurementsReady: false, aligned: false,
         rematchAfterLook: true, attempts: 5, now: now.addingTimeInterval(20)) }())
     #expect(search.active)
-    #expect(search.remainingTurns == 12)
+    #expect(search.remainingTurns == 6)
     #expect({ search.shouldRetryLocalization(pose: true, scanReady: false, measurementsReady: true, aligned: false,
         rematchAfterLook: true, attempts: 5, now: now.addingTimeInterval(21)) }())
     #expect({ search.takeTurn(now: now.addingTimeInterval(21)) }())
-    #expect(search.remainingTurns == 11)
+    #expect(search.remainingTurns == 5)
     #expect({ !search.shouldRetryLocalization(pose: true, scanReady: false, measurementsReady: false, aligned: false,
         rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(301)) }())
     #expect(search.outcome == .timedOut)
@@ -949,4 +949,39 @@ private final class PresetTestMatcher: RobotVisualMatching {
             if !retry { #expect(model.rotationState == .idle) }
         }
     }
+}
+
+
+@MainActor @Test func restartDiscoveryCanReplaceAnActiveStationarySearch() async throws {
+    try await withRotationModel { model, robot in
+        model.startRotationSearch()
+        for _ in 0..<100 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        try #require(model.localizing)
+        try #require(model.reading?.moving == false)
+        #expect(model.canRestartDiscovery)
+        model.restartDiscovery()
+        for _ in 0..<100 { if await robot.searches.count == 2 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await robot.resets.count == 1)
+        #expect(await robot.searches.count == 2)
+        #expect(model.error == nil)
+    }
+}
+
+@MainActor @Test func reconnectRobotRequestsTelemetryWithoutStartingDiscovery() async throws {
+    let robot = RotationTestRobot(measurements: true, rejectTurns: false)
+    let model = SiteRobotMapModel(observationClient: robot, turningClient: robot, searchClient: robot)
+    model.serial = "reconnect-test"
+    model.localizing = true
+    model.error = "The robot session expired."
+    #expect(model.canReconnectRobot)
+    model.reconnectRobot()
+    #expect(model.reconnectGeneration == 1)
+    #expect(!model.localizing)
+    #expect(model.rotationState == .idle)
+    #expect(model.error == nil)
+    #expect(await robot.searches.isEmpty)
+    #expect(await robot.turns.isEmpty)
+    model.connecting = true
+    model.reconnectRobot()
+    #expect(model.reconnectGeneration == 1)
 }

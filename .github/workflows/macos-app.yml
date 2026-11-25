@@ -1,0 +1,202 @@
+name: macOS app release
+run-name: macOS app · ${{ github.ref_name }}
+
+on:
+  push:
+    tags: ['macos-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-app-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-info:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - name: Validate release tag
+        env:
+          TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [[ "$REF_TYPE" != tag || ! "$TAG" =~ ^macos-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo '::error::Run this workflow from a macos-vX.Y.Z tag'
+            exit 1
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check publication failure handling
+        run: python3 .github/scripts/package-macos-app_test.py
+      - name: Record the tagged commit
+        id: release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          {
+            echo "tag=$TAG"
+            echo "version=${TAG#macos-v}"
+            echo "sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+  linux-bundles:
+    needs: release-info
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      # Release builds do not share Go caches with other workflows.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build and test bundled Linux runtimes
+        env:
+          WENDY_TWIN_BUILD_ARCH: ${{ matrix.arch }}
+          TARGET_BUILD_DIR: ${{ runner.temp }}/twin-bundle
+          UNLOCALIZED_RESOURCES_FOLDER_PATH: ''
+        run: python3 go/macos/Scripts/bundle-twin.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-app-twin-${{ matrix.arch }}
+          path: ${{ runner.temp }}/twin-bundle/DigitalTwin/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-sign-notarize:
+    needs: [release-info, linux-bundles]
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      WENDY_TWIN_BUNDLE_DIR: ${{ github.workspace }}/go/macos/Build/PrebuiltDigitalTwin
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      # Release builds do not share Go caches with other workflows.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install native build tools
+        run: |
+          test "$(uname -m)" = arm64
+          brew install xcodegen pkg-config libusb cmake ninja
+          xcodebuild -version
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: macos-app-twin-*
+          merge-multiple: true
+          path: go/macos/Build/PrebuiltDigitalTwin
+      - name: Build Release app and VPN extension
+        working-directory: go/macos
+        env:
+          VERSION: ${{ needs.release-info.outputs.version }}
+        run: |
+          xcodegen generate
+          xcodebuild -project WendyDesktop.xcodeproj -scheme WendyDesktop \
+            -configuration Release -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath Build/ReleaseDerivedData \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" build
+      - name: Import Developer ID and notary credentials
+        id: signing
+        env:
+          DEVELOPER_ID_CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERTIFICATE }}
+          DEVELOPER_ID_KEY: ${{ secrets.DEVELOPER_ID_KEY }}
+          # Reuse the signing setup, but supply the desktop bundle profiles.
+          WENDY_AGENT_MAC_PROVISIONING_PROFILE: ${{ secrets.WENDY_DESKTOP_MAC_PROVISIONING_PROFILE }}
+          WENDY_AGENT_MAC_NET_PROXY_PROVISIONING_PROFILE: ${{ secrets.WENDY_DESKTOP_NETWORK_PROVISIONING_PROFILE }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: bash swift/Scripts/SetupSigningCI.sh
+      - name: Sign, notarize and package
+        env:
+          VERSION: ${{ needs.release-info.outputs.version }}
+          WENDY_SIGNING_IDENTITY: ${{ steps.signing.outputs.signing_identity }}
+          KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
+          NOTARY_PROFILE: ${{ steps.signing.outputs.notary_profile }}
+          APP_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.app_provisioning_profile_path }}
+          NET_PROXY_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.net_proxy_provisioning_profile_path }}
+        run: |
+          bash .github/scripts/package-macos-app.sh \
+            go/macos/Build/ReleaseDerivedData/Build/Products/Release/WendyDesktop.app \
+            "$RUNNER_TEMP/macos-app-release" "$VERSION"
+      - name: Upload notarized release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-app-release
+          path: |
+            ${{ runner.temp }}/macos-app-release/*.zip
+            ${{ runner.temp }}/macos-app-release/*.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Keep notarization diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-app-notarization
+          path: ${{ runner.temp }}/macos-app-release/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/wendy-signing.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/wendy-signing.keychain-db"
+          fi
+          rm -f "$RUNNER_TEMP/WendyAgentMac.provisionprofile" \
+            "$RUNNER_TEMP/WendyAgentMacNetProxy.provisionprofile" \
+            "$RUNNER_TEMP/developer-id-application.cer" \
+            "$RUNNER_TEMP/developer-id-application.key"
+
+  publish:
+    needs: [release-info, build-sign-notarize]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: macos-app-release
+          path: release
+      - name: Publish GitHub release
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-info.outputs.tag }}
+          VERSION: ${{ needs.release-info.outputs.version }}
+          SOURCE_SHA: ${{ needs.release-info.outputs.sha }}
+        run: |
+          sha256sum --check "wendy-macos-arm64-${VERSION}.zip.sha256"
+          # Keep an incomplete upload private. Existing releases are never overwritten.
+          gh release create "$TAG" "wendy-macos-arm64-${VERSION}.zip" \
+            "wendy-macos-arm64-${VERSION}.zip.sha256" --verify-tag --draft \
+            --title "Wendy for macOS $VERSION" \
+            --notes "Developer ID signed and notarized Wendy desktop app for Apple Silicon, macOS 26 or later. Extract the ZIP and move WendyDesktop.app to /Applications. Built from commit $SOURCE_SHA."
+          gh release edit "$TAG" --draft=false --latest=false

@@ -30,3 +30,27 @@ func TestConnectionFailureMessageRedactsUnknownPeerErrors(t *testing.T) {
 		t.Fatalf("unsafe message: %s", message)
 	}
 }
+
+func TestSafeConnectionFailureMessage(t *testing.T) {
+	for cause, message := range connectionFailureMessages {
+		t.Run(cause, func(t *testing.T) {
+			if got := SafeConnectionFailureMessage(ConnectionFailureMessage(errors.New(cause))); got != message {
+				t.Fatalf("known diagnostic = %q, want %q", got, message)
+			}
+			if got := SafeConnectionFailureMessage(message + " echoed-secret"); got != connectionFailureFallback {
+				t.Fatalf("accepted extra remote text: %q", got)
+			}
+		})
+	}
+	for _, err := range []error{context.DeadlineExceeded, context.Canceled, errors.New("unknown-secret")} {
+		message := ConnectionFailureMessage(err)
+		if got := SafeConnectionFailureMessage(message); got != message {
+			t.Fatalf("safe diagnostic = %q, want %q", got, message)
+		}
+	}
+	for _, message := range []string{"", "echoed-secret", "rpc error: echoed-secret"} {
+		if got := SafeConnectionFailureMessage(message); got != connectionFailureFallback {
+			t.Fatalf("accepted arbitrary remote text: %q", got)
+		}
+	}
+}

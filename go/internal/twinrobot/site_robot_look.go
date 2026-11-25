@@ -19,7 +19,11 @@ type siteLookTurn struct {
 	progressAt                     time.Time
 }
 
-const lookAngle = math.Pi / 6
+// LocalizationTurnCount bounds a full search rotation. Each look combines two
+// former 30-degree steps, with one stop and localization attempt after 60 degrees.
+const LocalizationTurnCount = 6
+
+const lookAngle = 2 * math.Pi / LocalizationTurnCount
 
 // Use the navigation turning rate. The previous 0.5 rad/s look rate was
 // rejected on hardware; stop at the bounded angle instead of tapering.
@@ -41,7 +45,7 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 		}
 	}
 	if direction != -1 && direction != 0 && direction != 1 {
-		return errors.New("Choose left or right for a 30-degree look turn.")
+		return errors.New("Choose left or right for a 60-degree look turn.")
 	}
 	now := time.Now()
 	if r.closed || r.ctx.Err() != nil || now.Sub(r.heartbeat) > 600*time.Millisecond {
@@ -78,7 +82,7 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	r.localizations = nil
 	r.started = now
 	r.moving = true
-	r.message = "Looking around · turning 30°"
+	r.message = "Looking around · turning 60°"
 	return nil
 }
 
