@@ -223,7 +223,7 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 			say("     tag %s  %s", tag, plural(len(withTag(assets, tag)), "device"))
 		}
 		for _, d := range assets {
-			say("     %s  %s", assetName(d), deviceNote(d, online, states, a.app))
+			say("     %s (%s)  %s", assetName(d), d.GetId(), deviceNote(d, online, states, a.app))
 		}
 		answer, err := askText("Devices", "Device names, site:<site> and tag:<tag>, separated by commas.", "", nil)
 		if err != nil {

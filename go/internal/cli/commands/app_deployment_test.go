@@ -282,8 +282,9 @@ func TestConfigIsCheckedLikeTheDevice(t *testing.T) {
 	}
 }
 
-// M12: a device is found by id, then name, then a display name only one
-// device carries; a shared display name is refused with each device's id.
+// M12: a device is found by id, else by a name or display name only one
+// device carries; a shared display name, and one device's name that is
+// another's display name, are refused with each device's id.
 func TestAssetIDPrefersIDThenNameAndRefusesASharedDisplayName(t *testing.T) {
 	assets := []*cloudpb.Asset{
 		{Id: "id-a", Name: "cam-a", DisplayName: proto.String("cam-b")},
@@ -291,7 +292,7 @@ func TestAssetIDPrefersIDThenNameAndRefusesASharedDisplayName(t *testing.T) {
 		{Id: "id-c", Name: "cam-c", DisplayName: proto.String("Lobby")},
 		{Id: "id-d", Name: "cam-d", DisplayName: proto.String("Dock")},
 	}
-	for in, want := range map[string]string{"id-c": "id-c", "cam-b": "id-b", "Dock": "id-d"} {
+	for in, want := range map[string]string{"id-c": "id-c", "cam-c": "id-c", "Dock": "id-d"} {
 		if got, err := assetID(assets, in); err != nil || got != want {
 			t.Errorf("assetID(%q) = %q, %v; want %q", in, got, err, want)
 		}
@@ -299,6 +300,11 @@ func TestAssetIDPrefersIDThenNameAndRefusesASharedDisplayName(t *testing.T) {
 	_, err := assetID(assets, "Lobby")
 	if err == nil || !strings.Contains(err.Error(), "cam-b (id-b)") || !strings.Contains(err.Error(), "cam-c (id-c)") || !strings.Contains(err.Error(), "Use the device id") {
 		t.Fatalf("shared display name: err %v, want both devices listed with their ids", err)
+	}
+	// cam-b is id-b's name and id-a's display name.
+	_, err = assetID(assets, "cam-b")
+	if err == nil || !strings.Contains(err.Error(), "cam-a (id-a)") || !strings.Contains(err.Error(), "cam-b (id-b)") {
+		t.Fatalf("a name that is another device's display name: err %v, want both devices listed with their ids", err)
 	}
 	if _, err := assetID(assets, "nope"); err == nil {
 		t.Fatal("unknown device: want an error")

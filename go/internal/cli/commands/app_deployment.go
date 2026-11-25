@@ -678,22 +678,21 @@ func (op *registryOp) revisionDevices(ctx context.Context, deploymentID string, 
 	return out, nil
 }
 
-// assetID resolves a device by its id, then its name (unique in the
-// organization), then its display name, a free label: only when exactly one
-// device carries it.
+// assetID resolves a device by its id, else by its name (unique in the
+// organization) or its display name, a free label: only when exactly one
+// device carries the string as either, so one device's name that is
+// another's display name is refused, as a shared display name is.
 func assetID(assets []*cloudpb.Asset, name string) (string, error) {
 	if name == "" {
 		return "", usageErrorf("No device %q in this organization.", name)
 	}
-	for _, field := range []func(*cloudpb.Asset) string{(*cloudpb.Asset).GetId, (*cloudpb.Asset).GetName} {
-		if i := slices.IndexFunc(assets, func(d *cloudpb.Asset) bool { return field(d) == name }); i >= 0 {
-			return assets[i].GetId(), nil
-		}
+	if i := slices.IndexFunc(assets, func(d *cloudpb.Asset) bool { return d.GetId() == name }); i >= 0 {
+		return assets[i].GetId(), nil
 	}
 	var same []string
 	id := ""
 	for _, d := range assets {
-		if d.GetDisplayName() == name {
+		if d.GetName() == name || d.GetDisplayName() == name {
 			id = d.GetId()
 			same = append(same, fmt.Sprintf("%s (%s)", d.GetName(), d.GetId()))
 		}
@@ -704,7 +703,7 @@ func assetID(assets []*cloudpb.Asset, name string) (string, error) {
 	case 1:
 		return id, nil
 	}
-	return "", usageErrorf("%d devices are shown as %q: %s. Use the device id.", len(same), name, strings.Join(same, ", "))
+	return "", usageErrorf("%d devices are named or shown as %q: %s. Use the device id.", len(same), name, strings.Join(same, ", "))
 }
 
 func resolveSelection(assets []*cloudpb.Asset, sel *cloudpb.DeviceSelection) []string {
