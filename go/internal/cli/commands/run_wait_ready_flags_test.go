@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -283,6 +285,15 @@ func checkFailedWaitReadyObject(t *testing.T, stdout string, runErr error, app, 
 	}
 }
 
+// unansweringAgent is an agent whose version request fails.
+type unansweringAgent struct {
+	agentpb.WendyAgentServiceClient
+}
+
+func (unansweringAgent) GetAgentVersion(context.Context, *agentpb.GetAgentVersionRequest, ...grpc.CallOption) (*agentpb.GetAgentVersionResponse, error) {
+	return nil, fmt.Errorf("agent did not answer")
+}
+
 // A `--json --detach --wait-ready` run promises exactly one JSON object on
 // stdout, failures included — also when it fails before the wait: config,
 // device, build, push, or start. That object has status "failed" and names
@@ -310,9 +321,9 @@ func TestWaitReadyJSONFailureBeforeTheWaitPrintsOneFailedObject(t *testing.T) {
 		{name: "failure after the device resolved", app: "a", device: "dev.local", run: func(ctx context.Context) error {
 			o := opts
 			o.prefix = docker
-			// A resolved target with no provisioning service: the run fails
-			// at cloud registration, after it knows the app and device.
-			o.watchTarget = &SelectedDevice{Agent: &grpcclient.AgentConnection{Host: "dev.local"}}
+			// A resolved target whose agent does not answer: the run fails
+			// after it knows the app and device.
+			o.watchTarget = &SelectedDevice{Agent: &grpcclient.AgentConnection{Host: "dev.local", AgentService: unansweringAgent{}}}
 			return runCommand(ctx, o)
 		}},
 		{name: "on the device, no device name", app: "a", run: func(ctx context.Context) error {

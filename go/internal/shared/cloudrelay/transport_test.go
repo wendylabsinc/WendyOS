@@ -164,3 +164,23 @@ func TestBrokerDialsUseCloudKeepalive(t *testing.T) {
 		})
 	}
 }
+
+// One registry name per environment, the "registry." sibling of the API host;
+// WENDY_REGISTRY overrides it; nothing is guessed for another host.
+func TestRegistryEndpoint(t *testing.T) {
+	for cloud, want := range map[string]string{
+		"api.dev.wendy.sh:443":      "registry.dev.wendy.sh:443",
+		"https://api.dev.wendy.dev": "registry.dev.wendy.sh:443",
+		"api.wendy.dev:443":         "registry.wendy.dev:443",
+	} {
+		if got, err := RegistryEndpoint(cloud, ""); err != nil || got != want {
+			t.Errorf("%s: %q %v, want %q", cloud, got, err, want)
+		}
+	}
+	if got, err := RegistryEndpoint("api.dev.wendy.sh:443", "localhost:9443"); err != nil || got != "localhost:9443" {
+		t.Errorf("override: %q %v", got, err)
+	}
+	if _, err := RegistryEndpoint("cloud.example.test:443", ""); err == nil {
+		t.Error("a host without api. got a registry address")
+	}
+}

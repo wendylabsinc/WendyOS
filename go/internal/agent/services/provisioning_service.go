@@ -168,6 +168,17 @@ func NewProvisioningService(logger *zap.Logger, configPath string, clock ...*tim
 	svc.resetRecoveryErr = svc.recoverProvisioningReset()
 	if svc.resetRecoveryErr == nil {
 		svc.loadState()
+		if !svc.enrolled {
+			// The registry encryption key belongs to an enrollment. A registration
+			// retry during a reset's cleanup window can write it again after
+			// clearCredentialFiles; an unenrolled start removes that orphan.
+			// A postbox pull finishing in that window can rewrite its state.
+			for _, f := range []string{deviceEncryptionKeyFile, postboxStateFile} {
+				if err := os.Remove(filepath.Join(configPath, f)); err != nil && !os.IsNotExist(err) {
+					logger.Error("Removing a file of a past enrollment failed", zap.String("file", f), zap.Error(err))
+				}
+			}
+		}
 	} else {
 		logger.Error("Enrollment state recovery failed", zap.Error(svc.resetRecoveryErr))
 	}
@@ -547,10 +558,13 @@ func (s *ProvisioningService) clearCredentialFiles() error {
 	files := []string{
 		filepath.Join(s.configPath, "device-key.pem"),
 		filepath.Join(s.configPath, pendingDeviceKeyFile),
+		filepath.Join(s.configPath, deviceEncryptionKeyFile),
 		filepath.Join(s.configPath, "device.pem"),
 		filepath.Join(s.configPath, "ca.pem"),
 		filepath.Join(s.configPath, ".provisioned"),
 		filepath.Join(s.configPath, "acme-account-key.pem"),
+		// Held deployment statements, config values in plaintext included.
+		filepath.Join(s.configPath, postboxStateFile),
 	}
 	for _, f := range files {
 		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
@@ -559,6 +573,10 @@ func (s *ProvisioningService) clearCredentialFiles() error {
 	}
 	if err := os.RemoveAll(filepath.Join(s.configPath, "cloud-relay")); err != nil {
 		return err
+	}
+	// An interrupted registry pull's staged ciphertext and decrypted layers.
+	if err := os.RemoveAll(filepath.Join(s.configPath, registryPullDir)); err != nil {
+		return fmt.Errorf("removing registry pull staging: %w", err)
 	}
 	if err := os.RemoveAll(filepath.Join(s.configPath, "acme-account-key.pem.d")); err != nil {
 		return fmt.Errorf("removing scoped ACME account keys: %w", err)

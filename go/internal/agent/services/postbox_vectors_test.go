@@ -25,7 +25,7 @@ import (
 )
 
 // readVectors regenerates a service-protos conformance file with its own
-// deterministic generator (vendored from 65830a0a under testdata/postbox; the
+// deterministic generator (vendored from 061f1ba5 under testdata/postbox; the
 // files themselves are too large for the PR review budgets) and checks the
 // output is byte for byte the file at that commit.
 func readVectors(t *testing.T, gen, file, sha string, v any) {
@@ -40,7 +40,7 @@ func readVectors(t *testing.T, gen, file, sha string, v any) {
 		t.Fatal(err)
 	}
 	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != sha {
-		t.Fatalf("%s is not service-protos 65830a0a's (sha256 %x)", file, sum)
+		t.Fatalf("%s is not service-protos 061f1ba5's (sha256 %x)", file, sum)
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
 		t.Fatal(err)
@@ -130,6 +130,7 @@ type postboxEntryVectors struct {
 	OperatorCA     string `json:"operator_ca_cert_der_b64"`
 	VerifyAt       int64  `json:"verify_at"`
 	PlatformCap    int64  `json:"platform_cap_seconds"`
+	CapTolerance   int64  `json:"device_cap_tolerance_seconds"`
 	OrgCAVectors   []struct {
 		Name     string `json:"name"`
 		Expect   string `json:"expect"`
@@ -163,15 +164,15 @@ func (c *orgCAClient) GetOrgCAs(_ context.Context, in *cloudpbv2.GetOrgCAsReques
 	return c.resp, c.err
 }
 
-// The 12 vectors of conformance/postbox-entry: 4 GetOrgCAs answers through
-// the device's resolveIssuer, 8 validity cases through its signature, chain
+// The 13 vectors of conformance/postbox-entry: 4 GetOrgCAs answers through
+// the device's resolveIssuer, 9 validity cases through its signature, chain
 // and validity checks.
 func TestPostboxEntryVectors(t *testing.T) {
 	var doc postboxEntryVectors
-	readVectors(t, "entry", "postbox-entry/postbox-entry-vectors-v1.json", "582c7013f35f84c302af586aad5ae9a184715d3c40be36ffc36682b50128e3fa", &doc)
+	readVectors(t, "entry", "postbox-entry/postbox-entry-vectors-v1.json", "0efab9298df96d7a5ce8bf37cf323a5684103150731363f272d6c2f7791f4f94", &doc)
 	orgCA := b64Cert(t, doc.OrgCA)
-	if len(doc.OrgCAVectors)+len(doc.ValidityVectors) != 12 || doc.PlatformCap != int64(postboxPlatformCap/time.Second) {
-		t.Fatalf("%d+%d vectors, platform cap %d", len(doc.OrgCAVectors), len(doc.ValidityVectors), doc.PlatformCap)
+	if len(doc.OrgCAVectors)+len(doc.ValidityVectors) != 13 || doc.PlatformCap != int64(postboxPlatformCap/time.Second) || doc.CapTolerance != int64(postboxCapTolerance/time.Second) {
+		t.Fatalf("%d+%d vectors, platform cap %d, cap tolerance %d", len(doc.OrgCAVectors), len(doc.ValidityVectors), doc.PlatformCap, doc.CapTolerance)
 	}
 	deviceUUID := doc.Device[strings.LastIndex(doc.Device, "/")+1:]
 	ident := func() *postboxIdentity {
@@ -277,9 +278,12 @@ func TestPostboxEntryVectors(t *testing.T) {
 			}
 			code, err := postboxValidity(req, time.Unix(desc.Iat, 0), now)
 			if err == nil && v.Stage == "accept" {
-				// The tenant cap is cloud's accept check, on top of the
-				// platform cap the device shares.
-				if postboxValidUntil(req).AsTime().Unix()-desc.Iat > v.TenantCap {
+				// Cloud's accept check: the platform cap exactly (the
+				// device's tolerance is not Cloud's), then the tenant cap.
+				switch over := postboxValidUntil(req).AsTime().Unix() - desc.Iat; {
+				case over > int64(postboxPlatformCap/time.Second):
+					code, err = "above_platform_cap", errors.New("above the platform cap")
+				case over > v.TenantCap:
 					code, err = "above_tenant_cap", errors.New("above the tenant cap")
 				}
 			}

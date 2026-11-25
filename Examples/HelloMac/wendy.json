@@ -1,5 +1,5 @@
 {
-  "appId": "sh.wendy.examples.HelloMac",
+  "appId": "sh.wendy.examples.hellomac",
   "version": "1.0.0",
   "language": "swift",
   "platform": "darwin"

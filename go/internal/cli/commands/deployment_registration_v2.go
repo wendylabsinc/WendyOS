@@ -6,6 +6,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -166,4 +167,38 @@ func registerAppsWithCloudV2(ctx context.Context, conn grpc.ClientConnInterface,
 		}
 	}
 	return nil
+}
+
+// noticeReplacedDeployment tells a signed-in operator that a direct run
+// replaces an app a deployment put on the device. Best effort: no session, an
+// unenrolled device or any error prints nothing and never fails the run.
+func noticeReplacedDeployment(ctx context.Context, conn *grpcclient.AgentConnection, appID string) {
+	if conn == nil || strings.HasPrefix(conn.Host, "unix:") {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_ = withCampaignCloud(ctx, conn, func(ctx context.Context, cloud grpc.ClientConnInterface, _ *config.AuthConfig, device *agentpb.ProvisionedResponse) error {
+		identity, err := certs.ParsePrincipal(device.GetPrincipalUri())
+		if err != nil || identity.TenantUUID == "" || device.GetAssetUuid() == "" {
+			return err
+		}
+		client := cloudpb.NewDeploymentServiceClient(cloud)
+		apps, err := client.ListAssetApps(ctx, &cloudpb.ListAssetAppsRequest{AssetId: device.GetAssetUuid(), OrganizationId: identity.TenantUUID})
+		if err != nil {
+			return err
+		}
+		for _, app := range apps.GetAssetApps() {
+			if app.GetAppId() != appID || app.GetDeploymentId() == "" || app.GetUnassigned() {
+				continue
+			}
+			deployment, err := client.GetDeployment(ctx, &cloudpb.GetDeploymentRequest{Id: app.GetDeploymentId()})
+			if err != nil {
+				return err
+			}
+			cliLogln("This replaces %s from deployment %s on %s. Cloud shows the difference until that deployment's next change.", appID, deployment.GetName(), conn.Host)
+			return nil
+		}
+		return nil
+	})
 }

@@ -109,8 +109,8 @@ By default, the app configuration includes:
 At startup the app prints its final runtime configuration to stdout, for example:
 
 ```text
-Container sh.wendy.examples.HelloMLX created.
-Application sh.wendy.examples.HelloMLX started.
+Container sh.wendy.examples.hellomlx created.
+Application sh.wendy.examples.hellomlx started.
 Final app config:
 {
   "fps" : 2,
@@ -121,7 +121,7 @@ Final app config:
   "resolution" : 256
 }
 HELLO_MLX_URL=http://konstantins-macbook-pro-m5.local:8080/
-HELLO_MLX_DATA_DIR=/Users/konstantinbe/Library/Application Support/sh.wendy.WendyAgentMac/apps/sh.wendy.examples.HelloMLX/Runs
+HELLO_MLX_DATA_DIR=/Users/konstantinbe/Library/Application Support/sh.wendy.WendyAgentMac/apps/sh.wendy.examples.hellomlx/Runs
 Available cameras:
   - Studio Display Camera [0x2014000015bc0000]
 ```
@@ -133,7 +133,7 @@ The key line is `HELLO_MLX_URL=...`. Open that URL in a browser to access the de
 To stop the deployed app:
 
 ```sh
-wendy device apps stop sh.wendy.examples.HelloMLX
+wendy device apps stop sh.wendy.examples.hellomlx
 ```
 
 ## Useful note

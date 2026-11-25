@@ -66,6 +66,10 @@ type fakePostboxCloud struct {
 	// tenantWide and maxID (0: the tip) shape the checkpoint notarize binds.
 	tenantWide bool
 	maxID      int64
+	// pageSize > 0 caps a page as cloud's 2 MiB byte cap does: fewer
+	// entries, has_more set.
+	pageSize int
+	onPull   func(*cloudpbv2.PullChangesRequest) // nil: none
 }
 
 func (c *fakePostboxCloud) GetOrgCAs(_ context.Context, in *cloudpbv2.GetOrgCAsRequest, _ ...grpc.CallOption) (*cloudpbv2.GetOrgCAsResponse, error) {
@@ -86,6 +90,9 @@ func (c *fakePostboxCloud) GetOrgCAs(_ context.Context, in *cloudpbv2.GetOrgCAsR
 func (c *fakePostboxCloud) PullChanges(_ context.Context, in *cloudpbv2.PullChangesRequest, _ ...grpc.CallOption) (*cloudpbv2.PullChangesResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.onPull != nil {
+		c.onPull(in)
+	}
 	select {
 	case c.pulls <- in.GetAfterEntryId():
 	default:
@@ -93,6 +100,10 @@ func (c *fakePostboxCloud) PullChanges(_ context.Context, in *cloudpbv2.PullChan
 	resp := &cloudpbv2.PullChangesResponse{Checkpoint: []byte("checkpoint")}
 	for _, e := range c.entries {
 		if e.GetEntryId() > in.GetAfterEntryId() {
+			if c.pageSize > 0 && len(resp.Entries) == c.pageSize {
+				resp.HasMore = true
+				break
+			}
 			resp.Entries = append(resp.Entries, e)
 		}
 	}
@@ -275,6 +286,7 @@ func (f *pbFixture) newPostbox() *Postbox {
 		return f.cloud, io.NopCloser(nil), nil
 	}
 	p.checkpoint = f.cloud.notarize
+	p.dialArtifacts = refuseArtifacts
 	p.UpdateIdentity("https://cloud.test", f.certPEM, f.keyPEM, f.chainPEM)
 	return p
 }
@@ -409,6 +421,7 @@ func (f *pbFixture) cycle() {
 	if err := f.p.cycle(context.Background()); err != nil {
 		f.t.Fatal(err)
 	}
+	f.p.waitPulls()
 }
 
 func (f *pbFixture) outcome(app string) postboxOutcome {
@@ -548,7 +561,7 @@ func TestPostboxRefusesNamedAndRunsNothing(t *testing.T) {
 			f.cloud.add(jws, payload, typ)
 		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_SIGNATURE, true},
 		{"valid_until beyond the platform cap", func(f *pbFixture) {
-			f.controlUntil("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, timestamppb.New(f.now.Add(postboxPlatformCap+time.Second)), []*x509.Certificate{f.opLeaf, f.opCA}, nil)
+			f.controlUntil("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, timestamppb.New(f.now.Add(postboxPlatformCap+postboxCapTolerance+time.Second)), []*x509.Certificate{f.opLeaf, f.opCA}, nil)
 		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE, true},
 		{"header alg is not the leaf's", func(f *pbFixture) {
 			f.alg = "ML-DSA-87"
@@ -660,9 +673,24 @@ func TestPostboxFailedSaveLeavesEntryForNextCycle(t *testing.T) {
 
 type crashingControl struct{}
 
-func (crashingControl) StartApp(context.Context, string) error      { panic("agent killed") }
-func (crashingControl) StopApp(context.Context, string) error       { panic("agent killed") }
-func (crashingControl) AppOf(_ context.Context, name string) string { return name }
+func (crashingControl) StartApp(context.Context, string) error                  { panic("agent killed") }
+func (crashingControl) StopApp(context.Context, string) error                   { panic("agent killed") }
+func (crashingControl) AppOf(_ context.Context, name string) string             { return name }
+func (crashingControl) RemoveReleaseImages(context.Context) error               { panic("agent killed") }
+func (crashingControl) HasRelease(context.Context, string, string, string) bool { return false }
+func (crashingControl) ReleaseAppConfig(context.Context, string, string, string) ([]byte, error) {
+	panic("agent killed")
+}
+func (crashingControl) StartRelease(context.Context, ReleaseStart) (bool, error) {
+	panic("agent killed")
+}
+func (crashingControl) AppState(context.Context, string) AppContainerState {
+	return AppContainerState{}
+}
+func (crashingControl) PruneReleases(context.Context, string, []string) error { panic("agent killed") }
+func (crashingControl) RemoveReleases(context.Context, string, []string) error {
+	panic("agent killed")
+}
 
 func TestPostboxReportsEntryInterruptedByCrash(t *testing.T) {
 	f := newPBFixture(t)
@@ -703,14 +731,15 @@ func TestPostboxHoldsWithoutVerifiedCheckpoint(t *testing.T) {
 	}
 }
 
-func TestPostboxAssignmentHeldUntilMaterialPull(t *testing.T) {
+func TestPostboxAssignmentHeldWhenThePullIsRefused(t *testing.T) {
 	f := newPBFixture(t)
 	dep := uuid.NewString()
 	resource := "org/" + f.tenant + "/deployment/" + dep + "/device/" + f.uuid
 	assign := &cloudpbv2.DeviceAssignment{
-		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "web", AppReleaseId: "rel",
+		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "web", AppReleaseId: uuid.NewString(),
 		ManifestDigest: "sha256:ab", DeploymentKeyId: "k1", DesiredState: cloudpbv2.Running_RUNNING,
 		ExpiresAt: timestamppb.New(f.now.Add(time.Hour)),
+		Revision:  1, ConfigJson: "{}",
 	}
 	jws, payload, typ := f.sign(cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, assign, resource, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
 	f.cloud.add(jws, payload, typ)
@@ -719,10 +748,10 @@ func TestPostboxAssignmentHeldUntilMaterialPull(t *testing.T) {
 		t.Fatalf("assignment not held: %+v", f.p.snapshot().Assignments)
 	}
 	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED {
-		t.Fatalf("outcome = %+v, want the T14 seam's pull refusal", o)
+		t.Fatalf("outcome = %+v, want the registry's refusal", o)
 	}
 
-	unassign := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, ValidUntil: timestamppb.New(f.now.Add(time.Hour))}
+	unassign := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, ValidUntil: timestamppb.New(f.now.Add(time.Hour)), Revision: maxRevision}
 	jws, payload, typ = f.sign(cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, unassign, resource, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
 	f.cloud.add(jws, payload, typ)
 	f.cycle()
@@ -895,9 +924,9 @@ func TestPostboxValidityEdges(t *testing.T) {
 			t.Fatalf("outcome = %+v", f.outcome("web"))
 		}
 	})
-	t.Run("valid_until at the platform cap passes", func(t *testing.T) {
+	t.Run("valid_until at the platform cap plus the tolerance passes", func(t *testing.T) {
 		f := newPBFixture(t)
-		f.controlUntil("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, timestamppb.New(f.now.Add(postboxPlatformCap)), []*x509.Certificate{f.opLeaf, f.opCA}, nil) // the cap counts from the entry's timestamp
+		f.controlUntil("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, timestamppb.New(f.now.Add(postboxPlatformCap+postboxCapTolerance)), []*x509.Certificate{f.opLeaf, f.opCA}, nil) // the cap counts from the entry's timestamp
 		f.cycle()
 		if f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
 			t.Fatalf("outcome = %+v", f.outcome("web"))
@@ -921,7 +950,7 @@ func TestPostboxValidityEdges(t *testing.T) {
 	}{
 		{"missing", "validity_missing", func(*pbFixture) *timestamppb.Timestamp { return nil }},
 		{"above platform cap", "above_platform_cap", func(f *pbFixture) *timestamppb.Timestamp {
-			return timestamppb.New(f.now.Add(postboxPlatformCap + time.Second))
+			return timestamppb.New(f.now.Add(postboxPlatformCap + postboxCapTolerance + time.Second))
 		}},
 		{"at trusted now", "stale", func(f *pbFixture) *timestamppb.Timestamp { return timestamppb.New(f.now) }},
 	} {
@@ -1166,6 +1195,7 @@ func TestReportedStateOutcomeHygiene(t *testing.T) {
 	assign := &cloudpbv2.DeviceAssignment{
 		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "bad app", AppReleaseId: "rel",
 		DesiredState: cloudpbv2.Running_RUNNING, ExpiresAt: timestamppb.New(f.now.Add(time.Hour)),
+		Revision: 1, ConfigJson: "{}",
 	}
 	jws, payload, typ := f.sign(cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, assign,
 		"org/"+f.tenant+"/deployment/"+dep+"/device/"+f.uuid, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)

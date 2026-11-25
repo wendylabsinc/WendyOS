@@ -700,7 +700,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().Lookup("build-host").NoOptDefVal = optionalDevicePickerValue
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
-	cmd.Flags().BoolVar(&opts.skipCloudRegistration, "skip-cloud-registration", false, "Deploy without registering apps in Cloud (offline use)")
+	cmd.Flags().BoolVar(&opts.skipCloudRegistration, "skip-cloud-registration", false, "Offline use: skip the Cloud lookup for a replaced deployment (wendy run no longer registers apps in Cloud)")
 	cmd.Flags().StringVar(&opts.recordRelease, "record-release", "", "Record this deploy in Cloud as a release with this tag (off by default)")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container and return without streaming logs or opening the app URL; waits for readiness only with --wait-ready")
 	addReadinessFlags(cmd, &opts)
@@ -1156,6 +1156,9 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 
 	if err := appCfg.Validate(); err != nil {
 		return invalidAppConfigError(err)
+	}
+	if err := checkAppID(appCfg.AppID); err != nil {
+		cliNotice("Warning: %v. It runs here, but wendy app publish will refuse it until you rename appId in wendy.json.", err)
 	}
 	activationStep(ctx, "connect", map[string]string{"project_recognized": "true"})
 	if err := warnAppConfigFile(cfgPath); err != nil {
@@ -2225,8 +2228,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	if err != nil {
 		return err
 	}
-	if err := registerCloudAppsFn(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
-		return err
+	// Offline use: no Cloud lookup either.
+	if !opts.skipCloudRegistration {
+		noticeReplacedDeployment(ctx, conn, appCfg.AppID)
 	}
 	if opts.release != nil {
 		if err := opts.release.prepare(ctx, deploymentProvisioningService{conn}, config.Load); err != nil {
