@@ -125,7 +125,9 @@ func armsStandbyRing(source data.Source) bool {
 }
 
 // DeployWarnings names each camera of the campaign present now whose video
-// this device encodes in software for the campaign. It lists the cameras for
+// this device encodes in software for the campaign, with the preset where the
+// encoder takes one: the one the camera's recording states, since inference
+// states none. It lists the cameras for
 // any plan with a camera source, and resolves the plan's selectors with
 // data.Campaign.CamerasAmong. A camera is read as its recording asks; with a
 // buffer, the last listing Arm keeps a ring for decides instead, because the
@@ -169,7 +171,11 @@ func (a *cameraDataAdapter) DeployWarnings(ctx context.Context, campaign data.Ca
 		if encoder == "" || (!inference && !video && ownFrames) {
 			continue
 		}
-		encoded := fmt.Sprintf("encoded in software (%s) on this device while ", encoder)
+		stated := noPreset
+		if video && !inference {
+			stated = readAs[source.ID].EncodePreset()
+		}
+		encoded := fmt.Sprintf("encoded in software (%s)%s on this device while ", encoder, betweenCommas(describePresetWhenRead(encoder, stated)))
 		switch {
 		case inference:
 			encoded = "its video is " + encoded + "the campaign's inference runs"

@@ -103,10 +103,11 @@ func deployedOn(t *testing.T, h *csHarness, plan encoderPlan) (*DataService, *ag
 }
 
 const (
-	encodedInSoftware     = ": its video is encoded in software (x264enc) on this device while "
+	atTheDefaultPreset    = ", at preset ultrafast or the fastest one a consumer of the camera states,"
+	encodedInSoftware     = ": its video is encoded in software (x264enc)" + atTheDefaultPreset + " on this device while "
 	c920RecordedWarning   = "camera v4l2:/dev/video4" + encodedInSoftware + "the campaign records or buffers; store: frames keeps the camera's own frames without encoding"
 	rawCamRecordedWarning = "camera v4l2:/dev/video6" + encodedInSoftware + "the campaign records or buffers"
-	noFramesOfItsOwn      = ": it hands on no frames of its own, so what its source asks to store is recorded as video, encoded in software (x264enc) on this device while the campaign records or buffers"
+	noFramesOfItsOwn      = ": it hands on no frames of its own, so what its source asks to store is recorded as video, encoded in software (x264enc)" + atTheDefaultPreset + " on this device while the campaign records or buffers"
 	c920InferenceWarning  = "camera v4l2:/dev/video4" + encodedInSoftware + "the campaign's inference runs"
 )
 
@@ -469,5 +470,39 @@ func TestCampaignDeployWarnings_AnAdapterNobodyWaitsForStopsBetweenCameras(t *te
 	cancel()
 	if got := adapter.DeployWarnings(done, campaign); len(got) != 0 {
 		t.Errorf("after the deploy stopped waiting: warnings = %q, want none", got)
+	}
+}
+
+// The warning names the preset the camera's recording states, where the
+// encoder takes one: the camera has one encoder for all its consumers, so
+// another may state a faster one. A campaign's inference states none.
+func TestCampaignDeployWarnings_NameThePresetTheSoftwareEncoderWillRunAt(t *testing.T) {
+	const (
+		atVeryfast = ", at preset veryfast or a faster one another consumer of the camera states,"
+		recorded   = "the campaign records or buffers; store: frames keeps the camera's own frames without encoding"
+	)
+	for name, tc := range map[string]struct {
+		elements []string
+		plan     encoderPlan
+		want     string
+	}{
+		"the recording states a preset": {softwareEncoderElements, recording(cameraSource("/dev/video4", "store: video", "preset: veryfast")),
+			"camera v4l2:/dev/video4: its video is encoded in software (x264enc)" + atVeryfast + " on this device while " + recorded},
+		"store both states a preset": {softwareEncoderElements, recording(cameraSource("/dev/video4", "store: both", "preset: veryfast")),
+			"camera v4l2:/dev/video4: its video is encoded in software (x264enc)" + atVeryfast + " on this device while " + recorded},
+		"a buffered camera states it through its ring": {softwareEncoderElements, encoderPlan{buffer: "2s", sources: [][]string{cameraSource("/dev/video4", "preset: veryfast")}},
+			"camera v4l2:/dev/video4: its video is encoded in software (x264enc)" + atVeryfast + " on this device while " + recorded},
+		"the recording states none": {softwareEncoderElements, recording(cameraSource("/dev/video4", "store: video")), c920RecordedWarning},
+		"the campaign's inference states none": {softwareEncoderElements, encoderPlan{inference: true, sources: [][]string{cameraSource("/dev/video4", "preset: veryfast")}},
+			c920InferenceWarning},
+		"a software encoder that takes no preset": {[]string{"avdec_h264", "jpegdec", "openh264enc"}, recording(cameraSource("/dev/video4", "preset: veryfast")),
+			"camera v4l2:/dev/video4: its video is encoded in software (openh264enc) on this device while " + recorded},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := encoderCameras(t, tc.elements...)
+			if got := deployWarningsOf(t, h, tc.plan); !slices.Equal(got, []string{tc.want}) {
+				t.Errorf("warnings = %q\nwant       %q", got, []string{tc.want})
+			}
+		})
 	}
 }
