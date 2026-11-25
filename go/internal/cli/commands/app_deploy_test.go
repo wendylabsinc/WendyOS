@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -385,4 +387,37 @@ func TestDeployCtrlCLeavesProgressAndExitsZero(t *testing.T) {
 	if !strings.Contains(out.String(), "The deployment continues; follow it with: wendy app deployment show sh.wendy.example/line-3") {
 		t.Fatalf("output:\n%s", out.String())
 	}
+}
+
+// A deploy where some devices were never sent their instruction exits
+// non-zero, with and without --wait, as a made deployment, so promote does
+// not report success and points to deployment show.
+func TestDeployWithAnUnsentDeviceFails(t *testing.T) {
+	unsent := []*cloudpb.PendingDeviceStatement{{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: certs.DeviceSPIFFEURI(testOperatorTenant, vectorOtherDevice), Revision: 1}}
+	t.Run("deploy", func(t *testing.T) {
+		op, fake, releaseID := stepsFixture(t)
+		prevPoll := deployPoll
+		deployPoll = time.Millisecond
+		t.Cleanup(func() { deployPoll = prevPoll })
+		fake.extra = unsent // signing it fails: it was not asked for
+		for _, wait := range []bool{false, true} {
+			a := allFlags(releaseID)
+			a.name, a.wait, a.waitTimeout = fmt.Sprintf("line-3-%v", wait), wait, time.Minute
+			var out bytes.Buffer
+			err := runDeploy(context.Background(), op, a, &out, false)
+			if _, ok := errors.AsType[*deployedError](err); !ok || !strings.Contains(err.Error(), "1 devices not sent their instruction") ||
+				!strings.Contains(out.String(), "Send them later with: wendy app deployment resume sh.wendy.example/"+a.name) {
+				t.Fatalf("--wait=%v: %v\n%s", wait, err, out.String())
+			}
+		}
+	})
+	t.Run("promote", func(t *testing.T) {
+		_, fake := promoteFixture(t)
+		keepRunImage(t)
+		fake.extra = unsent
+		_, err := runApp(newAppPromoteCmd(), promoteArgs...)
+		if err == nil || !strings.Contains(err.Error(), "deployment sh.wendy.example/bench was made, but:") {
+			t.Fatalf("promote: %v", err)
+		}
+	})
 }

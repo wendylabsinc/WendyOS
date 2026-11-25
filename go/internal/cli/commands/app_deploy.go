@@ -353,12 +353,12 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 		usageErrorf("Not confirmed. Add --yes to deploy without a terminal."), errors.New("nothing was deployed")); err != nil {
 		return err
 	}
-	d, err := op.deploy(ctx, plan)
+	d, sendErr := op.deploy(ctx, plan)
 	if d == nil {
-		return err
+		return sendErr
 	}
-	if err != nil {
-		say("Some devices did not get their instruction: %v", err)
+	if sendErr != nil {
+		say("Some devices did not get their instruction: %v", sendErr)
 		say("Send them later with: wendy app deployment resume %s/%s", a.app, plan.name)
 	}
 
@@ -376,7 +376,10 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 		return &deployedError{a.app, plan.name, fmt.Errorf("%s failed. The reason is next to each device above; fix it, then update the deployment", plural(failed, "device"))}
 	}
 	say("Follow it later with: wendy app deployment show %s/%s", a.app, plan.name)
-	return err
+	if sendErr != nil {
+		return &deployedError{a.app, plan.name, sendErr}
+	}
+	return nil
 }
 
 // deployedError is a deploy error after the deployment app/name was
