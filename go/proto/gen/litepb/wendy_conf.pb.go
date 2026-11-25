@@ -308,8 +308,10 @@ type WendyConfEnrollment struct {
 	// Parent-signed Lite Device CA path, excluding the platform root.
 	// Candidate issuers for mesh verification; these are never trust anchors.
 	LiteDeviceIntermediates []byte `protobuf:"bytes,13,opt,name=lite_device_intermediates,json=liteDeviceIntermediates,proto3" json:"lite_device_intermediates,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// HTTPS CA discovery URL. The firmware selects the query for its identity.
+	EstUrl        string `protobuf:"bytes,14,opt,name=est_url,json=estUrl,proto3" json:"est_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WendyConfEnrollment) Reset() {
@@ -433,6 +435,13 @@ func (x *WendyConfEnrollment) GetLiteDeviceIntermediates() []byte {
 	return nil
 }
 
+func (x *WendyConfEnrollment) GetEstUrl() string {
+	if x != nil {
+		return x.EstUrl
+	}
+	return ""
+}
+
 type WendyConf struct {
 	state         protoimpl.MessageState      `protogen:"open.v1"`
 	DeviceName    *string                     `protobuf:"bytes,1,opt,name=device_name,json=deviceName,proto3,oneof" json:"device_name,omitempty"`
@@ -522,7 +531,7 @@ const file_wendy_conf_proto_rawDesc = "" +
 	"\basset_id\x18\x04 \x01(\x05R\aassetId\x12\x10\n" +
 	"\x03key\x18\x05 \x01(\fR\x03key\x12\x12\n" +
 	"\x04cert\x18\x06 \x01(\fR\x04cert\x12\x14\n" +
-	"\x05chain\x18\a \x01(\fR\x05chain\"\xc2\x03\n" +
+	"\x05chain\x18\a \x01(\fR\x05chain\"\xdb\x03\n" +
 	"\x13WendyConfEnrollment\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x14\n" +
@@ -541,7 +550,8 @@ const file_wendy_conf_proto_rawDesc = "" +
 	"\vhttps_roots\x18\v \x01(\fR\n" +
 	"httpsRoots\x12'\n" +
 	"\x0fprovision_trust\x18\f \x01(\bR\x0eprovisionTrust\x12:\n" +
-	"\x19lite_device_intermediates\x18\r \x01(\fR\x17liteDeviceIntermediates\"\xdc\x01\n" +
+	"\x19lite_device_intermediates\x18\r \x01(\fR\x17liteDeviceIntermediates\x12\x17\n" +
+	"\aest_url\x18\x0e \x01(\tR\x06estUrl\"\xdc\x01\n" +
 	"\tWendyConf\x12$\n" +
 	"\vdevice_name\x18\x01 \x01(\tH\x00R\n" +
 	"deviceName\x88\x01\x01\x12\"\n" +

@@ -60,16 +60,18 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 		}
 	}
 	discoverDevice := len(cfg.DeviceRoots) == 0
+	if endpoint == "" {
+		endpoint = cfg.EstUrl
+	}
+	if endpoint == "" {
+		endpoint = defaultESTURL(cfg.CsrUrl, cfg.TenantId)
+	}
 	if discoverDevice && endpoint == "" {
-		csr, err := url.Parse(cfg.CsrUrl)
-		if err != nil {
-			return err
-		}
-		suffix, ok := strings.CutPrefix(csr.Host, "csr.")
-		if !ok || suffix == "" {
-			return fmt.Errorf("pass --ca-certs-url for this PKI deployment, or supply --device-roots and --https-roots")
-		}
-		endpoint = "https://est." + suffix + "/.well-known/est/" + cfg.TenantId + "/cacerts"
+		return fmt.Errorf("pass --ca-certs-url for this PKI deployment, or supply --device-roots and --https-roots")
+	}
+	refreshURL, err := estRefreshURL(endpoint)
+	if err != nil {
+		return err
 	}
 	deviceRoots := cfg.DeviceRoots
 	httpsRoots := bytes.Clone(cfg.HttpsRoots)
@@ -184,8 +186,49 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 		return fmt.Errorf("discovered HTTPS roots: %w", err)
 	}
 	cfg.DeviceRoots, cfg.TsaRoots, cfg.HttpsRoots = deviceRoots, tsaRoots, httpsRoots
+	cfg.EstUrl = refreshURL
 	cfg.ProvisionTrust = true
 	return nil
+}
+
+func defaultESTURL(csrURL, tenant string) string {
+	csr, err := url.Parse(csrURL)
+	if err != nil {
+		return ""
+	}
+	suffix, ok := strings.CutPrefix(csr.Host, "csr.")
+	if !ok || suffix == "" {
+		return ""
+	}
+	return (&url.URL{Scheme: "https", Host: "est." + suffix,
+		Path: "/.well-known/est/" + tenant + "/cacerts"}).String()
+}
+
+func estRefreshURL(endpoint string) (string, error) {
+	if endpoint == "" {
+		return "", nil
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return "", fmt.Errorf("CA discovery requires an HTTPS URL without credentials or fragment")
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "", fmt.Errorf("invalid CA discovery query: %w", err)
+	}
+	// These two selectors depend on the enrolled identity. Leave deployment
+	// query parameters intact and let the board select its requested chain.
+	query.Del("chain_algorithm")
+	query.Del("full_chain")
+	u.RawQuery = query.Encode()
+	u.ForceQuery = false
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	if len(u.String()) > 256 {
+		return "", fmt.Errorf("CA discovery URL exceeds the board's 256-byte limit")
+	}
+	return u.String(), nil
 }
 
 // EST responses contain untrusted intermediates as well as roots. Install only

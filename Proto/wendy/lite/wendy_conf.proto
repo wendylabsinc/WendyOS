@@ -51,6 +51,8 @@ message WendyConfEnrollment {
     // Parent-signed Lite Device CA path, excluding the platform root.
     // Candidate issuers for mesh verification; these are never trust anchors.
     bytes lite_device_intermediates = 13;
+    // HTTPS CA discovery URL. The firmware selects the query for its identity.
+    string est_url = 14;
 }
 
 message WendyConf {

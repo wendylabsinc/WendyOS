@@ -81,7 +81,7 @@ func Config(auth *config.AuthConfig, deviceID, csrURL, timeURL, brokerHost strin
 	if len(brokerHost) == 0 || len(brokerHost) > 253 || strings.ContainsAny(brokerHost, "/\\@ \t\r\n") || brokerPort == 0 || brokerPort > 65535 {
 		return nil, fmt.Errorf("pass a broker hostname and port between 1 and 65535")
 	}
-	return &litepb.WendyConfEnrollment{TenantId: tenant, DeviceId: deviceID, CsrUrl: csrURL, TimeUrl: timeURL, BrokerHost: brokerHost, BrokerPort: brokerPort}, nil
+	return &litepb.WendyConfEnrollment{TenantId: tenant, DeviceId: deviceID, CsrUrl: csrURL, EstUrl: defaultESTURL(csrURL, tenant), TimeUrl: timeURL, BrokerHost: brokerHost, BrokerPort: brokerPort}, nil
 }
 
 // Mint obtains the single-use credential after Cloud reserves the device asset.

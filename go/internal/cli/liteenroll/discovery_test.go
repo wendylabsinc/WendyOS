@@ -91,6 +91,9 @@ func TestDiscoverTrustUsesVerifiedHTTPS(t *testing.T) {
 	if !cfg.ProvisionTrust || !bytes.Equal(cfg.DeviceRoots, root) || len(cfg.HttpsRoots) == 0 {
 		t.Fatal("missing USB trust")
 	}
+	if cfg.EstUrl != srv.URL+"/" {
+		t.Fatalf("saved EST URL = %q, want %q", cfg.EstUrl, srv.URL+"/")
+	}
 	// Even a transport deliberately skipping verification must not supply roots.
 	unsafe := srv.Client().Transport.(*http.Transport).Clone()
 	unsafe.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -305,5 +308,12 @@ func TestDiscoverTrustRejectsMLDSABeforePublishingConfiguration(t *testing.T) {
 				t.Fatal("failed discovery continued or changed enrollment configuration")
 			}
 		})
+	}
+}
+
+func TestESTRefreshURLPreservesCustomEndpoint(t *testing.T) {
+	got, err := estRefreshURL("https://est.example:8443/custom/cacerts?chain_algorithm=ECDSA_P256&full_chain=true&realm=lab")
+	if err != nil || got != "https://est.example:8443/custom/cacerts?realm=lab" {
+		t.Fatalf("EST refresh URL = %q, %v", got, err)
 	}
 }
