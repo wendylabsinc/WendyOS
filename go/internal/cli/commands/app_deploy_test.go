@@ -330,8 +330,9 @@ func TestDeployAsksARequiredSettingAgain(t *testing.T) {
 }
 
 // Progress and --wait count a device's outcome only for the statement sent
-// (its entry, and "applied" only for the release sent); a failed device or
-// --wait running out of time exits non-zero.
+// (its entry, and "applied" only for the release sent). --wait running out
+// of time exits non-zero naming the devices still waiting, and a failed device
+// fails deploy; deployment show still exits 0, since it showed the state.
 func TestProgressMatchesTheStatementSent(t *testing.T) {
 	other := "00000000-0000-4000-8000-000000000001"
 	if got, _ := deviceState(&cloudpb.AssetApp{Outcome: cloudpb.ApplyOutcome_APPLY_OUTCOME_APPLIED, AppReleaseId: proto.String("b"), ReportedReleaseId: &other}, true, 0); got != "waiting" {
@@ -345,7 +346,7 @@ func TestProgressMatchesTheStatementSent(t *testing.T) {
 	a.wait, a.waitTimeout = true, 20*time.Millisecond
 	fake.report = func(s *cloudpb.AssetApp) { s.PostboxEntryId-- } // still reports the entry before the one sent
 	var out bytes.Buffer
-	if err := runDeploy(context.Background(), op, a, &out, false); err == nil || !strings.Contains(err.Error(), "stopped waiting after 20ms") || !strings.Contains(out.String(), "1 waiting") {
+	if err := runDeploy(context.Background(), op, a, &out, false); err == nil || !strings.Contains(err.Error(), "stopped waiting after 20ms; still waiting: dev-"+vectorDevice[:4]+". The deployment continues") || !strings.Contains(out.String(), "1 waiting") {
 		t.Fatalf("an earlier entry's outcome: %v\n%s", err, out.String())
 	}
 	fake.report = func(s *cloudpb.AssetApp) { s.Outcome = cloudpb.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED }
@@ -353,8 +354,9 @@ func TestProgressMatchesTheStatementSent(t *testing.T) {
 	if err := runDeploy(context.Background(), op, a, io.Discard, false); err == nil || !strings.Contains(err.Error(), "1 device failed") {
 		t.Fatalf("a failed device: %v", err)
 	}
-	if err := op.showDeployment(context.Background(), "sh.wendy.example", "line-4", io.Discard); err == nil {
-		t.Fatal("show exits 0 with a failed device")
+	out.Reset()
+	if err := op.showDeployment(context.Background(), "sh.wendy.example", "line-4", &out); err != nil || !strings.Contains(out.String(), "1 failed") {
+		t.Fatalf("show with a failed device: %v\n%s", err, out.String())
 	}
 }
 

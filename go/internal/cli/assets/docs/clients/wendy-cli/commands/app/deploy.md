@@ -32,8 +32,10 @@ wendy app rotate --deployment <deployment-id> --device <device-uuid> [--device .
   limit (an offline device is a normal state); Ctrl-C leaves it and the
   deployment continues. `--wait` stays until every device is done, for at
   most `--wait-timeout` (30m by default). A device counts only once it reports
-  the instruction just sent. deploy and deployment show exit non-zero when
-  a device failed or the wait ran out.
+  the instruction just sent. deploy exits non-zero when a device failed or
+  the wait ran out; the message names the devices still waiting, and the
+  deployment continues. deployment show exits 0 when it could show the
+  state, a failed device included.
 - The devices are every named device, every device with a chosen tag and
   every device in a chosen site. They are worked out once, when the
   deployment or a later revision is made, and the review names each one: a

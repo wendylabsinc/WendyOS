@@ -363,8 +363,12 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 	if a.wait {
 		timeout = a.waitTimeout
 	}
-	if err := op.progress(ctx, d, rel.GetName(), online, interactive || a.wait, timeout, say); err != nil {
+	failed, err := op.progress(ctx, d, rel.GetName(), online, interactive || a.wait, timeout, say)
+	if err != nil {
 		return err
+	}
+	if failed > 0 {
+		return fmt.Errorf("%s failed. The reason is next to each device above; fix it, then update the deployment", plural(failed, "device"))
 	}
 	say("Follow it later with: wendy app deployment show %s/%s", a.app, plan.name)
 	return err
@@ -482,33 +486,38 @@ func emptyRequired(config string, required []string) (string, error) {
 
 // progress shows each device's state in the dashboard's words; with follow
 // it stays until every device is done, printing changes, or until timeout
-// (above 0) has passed. Ctrl-C leaves it: the deployment goes on. Any failed
-// device, or a device not done in time, is an error.
-func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, release string, online map[string]bool, follow bool, timeout time.Duration, say func(string, ...any)) error {
+// (above 0) has passed, which is an error naming the devices not done.
+// Ctrl-C leaves it: the deployment goes on. It returns how many devices
+// failed; whether that is a command failure is the caller's to say.
+func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, release string, online map[string]bool, follow bool, timeout time.Duration, say func(string, ...any)) (int, error) {
 	shown := map[string]string{}
 	deadline := time.Now().Add(timeout)
-	left := func(err error) error {
+	left := func(err error) (int, error) {
 		if !interruptedByUser(ctx) {
-			return err
+			return 0, err
 		}
 		say("Stopped following. The deployment continues; follow it with: wendy app deployment show %s/%s", d.GetAppId(), d.GetName())
-		return nil
+		return 0, nil
 	}
 	for {
 		rows, err := op.appDeviceStates(ctx, d.GetAppId(), d.GetId())
 		if err != nil {
 			return left(err)
 		}
-		counts, done := map[string]int{}, true
+		counts := map[string]int{}
+		var notDone []string
 		for _, r := range rows {
 			state, detail := deviceState(r.GetState(), online[r.GetAssetId()], op.sent[certs.DeviceSPIFFEURI(op.org, r.GetAssetId())])
 			counts[state]++
-			done = done && (state == "running" || state == "installed" || state == "failed")
+			if state != "running" && state != "installed" && state != "failed" {
+				notDone = append(notDone, r.GetAssetName())
+			}
 			if line := fmt.Sprintf("     %-14s %-12s %s", r.GetAssetName(), state, detail); shown[r.GetAssetId()] != line {
 				shown[r.GetAssetId()] = line
 				say("%s", strings.TrimRight(line, " "))
 			}
 		}
+		done := len(notDone) == 0
 		late := follow && timeout > 0 && !done && !time.Now().Before(deadline)
 		if !follow || done || late {
 			var parts []string
@@ -519,12 +528,10 @@ func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, relea
 			}
 			say("Deployed %s: %s %s to %s. %s.", d.GetName(), d.GetAppId(), release, plural(len(rows), "device"), strings.Join(parts, ", "))
 			if late {
-				return fmt.Errorf("stopped waiting after %s with devices not done. Check again with wendy app deployment show %s/%s, or wait longer with --wait-timeout", timeout, d.GetAppId(), d.GetName())
+				return counts["failed"], fmt.Errorf("stopped waiting after %s; still waiting: %s. The deployment continues: check it with wendy app deployment show %s/%s, or wait longer with --wait-timeout",
+					timeout, strings.Join(notDone, ", "), d.GetAppId(), d.GetName())
 			}
-			if counts["failed"] > 0 {
-				return fmt.Errorf("%s failed. The reason is next to each device above; fix it, then update the deployment", plural(counts["failed"], "device"))
-			}
-			return nil
+			return counts["failed"], nil
 		}
 		wait := deployPoll
 		if timeout > 0 {
@@ -830,5 +837,7 @@ func (op *registryOp) showDeployment(ctx context.Context, appID, name string, ou
 	if err != nil {
 		return err
 	}
-	return op.progress(ctx, d, release, online, false, 0, say)
+	// A failed device is information here, not a command failure.
+	_, err = op.progress(ctx, d, release, online, false, 0, say)
+	return err
 }
