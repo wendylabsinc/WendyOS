@@ -498,7 +498,7 @@ func c920RowEncodedAtAPreset() *hwCap {
 	return row
 }
 
-const c920EncodedSoftwareAt = `Camera: HD Pro Webcam C920: HD Pro Webc (video0): its H.264 is encoded in software (x264enc) `
+const c920EncodedSoftwareAt = `Camera: HD Pro Webcam C920: HD Pro Webc (video0): its H.264 is encoded in software (x264enc), `
 
 const noEncoderOtherwise = ` on this device for as long as this app reads its node. "format": "native" or "pixels" run no encoder.`
 
@@ -510,15 +510,15 @@ func TestCameraSoftwareEncoderNotices_NameThePresetTheEncoderWillRunAt(t *testin
 	}{
 		"the app states a preset": {
 			h264CfgAt("veryfast"),
-			c920EncodedSoftwareAt + `at preset veryfast, or at a faster one that another consumer of the camera states,` + noEncoderOtherwise,
+			c920EncodedSoftwareAt + `at preset veryfast or a faster one another consumer of the camera states,` + noEncoderOtherwise,
 		},
 		"the app states none": {
 			h264CfgAt(""),
-			c920EncodedSoftwareAt + `at preset ultrafast, or at the fastest one that a consumer of the camera states,` + noEncoderOtherwise,
+			c920EncodedSoftwareAt + `at preset ultrafast or the fastest one a consumer of the camera states,` + noEncoderOtherwise,
 		},
 		"the entry naming the camera decides": {
 			&appconfig.AppConfig{Entitlements: append(h264CfgAt("medium", c920StableID).Entitlements, h264CfgAt("fast", "/dev/video9").Entitlements...)},
-			c920EncodedSoftwareAt + `at preset medium, or at a faster one that another consumer of the camera states,` + noEncoderOtherwise,
+			c920EncodedSoftwareAt + `at preset medium or a faster one another consumer of the camera states,` + noEncoderOtherwise,
 		},
 	} {
 		if got := cameraSoftwareEncoderNotices([]*appconfig.AppConfig{tc.cfg}, rows); !slices.Equal(got, []string{tc.want}) {
@@ -532,7 +532,7 @@ func TestCameraSoftwareEncoderNotices_NameThePresetTheEncoderWillRunAt(t *testin
 func TestCameraSoftwareEncoderNotices_TheDefaultPresetIsTheOneTheAgentReports(t *testing.T) {
 	row := c920RowEncodedAtAPreset()
 	row.Properties[camerashare.KeyH264DefaultPreset] = "superfast"
-	want := c920EncodedSoftwareAt + `at preset superfast, or at the fastest one that a consumer of the camera states,` + noEncoderOtherwise
+	want := c920EncodedSoftwareAt + `at preset superfast or the fastest one a consumer of the camera states,` + noEncoderOtherwise
 	if got := cameraSoftwareEncoderNotices([]*appconfig.AppConfig{h264CfgAt("")}, []*hwCap{row}); !slices.Equal(got, []string{want}) {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
@@ -601,7 +601,7 @@ func TestCameraPresetNotices_NothingIsSaidWhereThePresetIsAppliedOrNoH264NodeIsS
 
 func TestPrintCameraShareNotice_ThePresetLinesFollowTheEncoderLine(t *testing.T) {
 	applied := printedCameraNotice(t, []*hwCap{c920RowEncodedAtAPreset()}, h264CfgAt("veryfast"))
-	wantApplied := []string{c920SharedH264, c920EncodedSoftwareAt + `at preset veryfast, or at a faster one that another consumer of the camera states,` + noEncoderOtherwise}
+	wantApplied := []string{c920SharedH264, c920EncodedSoftwareAt + `at preset veryfast or a faster one another consumer of the camera states,` + noEncoderOtherwise}
 	if !slices.Equal(applied, wantApplied) {
 		t.Errorf("printed %q\nwant    %q", applied, wantApplied)
 	}

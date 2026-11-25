@@ -193,19 +193,16 @@ func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
 	return fmt.Sprintf("Camera: this app shares %s. For the real device (its own formats, sizes and controls), set \"mode\": \"direct\" on the camera entitlement.", strings.Join(entries, "; "))
 }
 
-// presetTheEncoderWillRunAt says at which preset the encoder of a camera's
-// h264 node will run for an app that states one, or none: the camera has one
-// encoder for all its consumers. It is "" for a row whose agent does not say
-// it applies presets to that encoder.
+// presetTheEncoderWillRunAt says, as a clause between commas, at which preset
+// the encoder of a camera's h264 node will run for an app that states one, or
+// none. It is "" for a row whose agent does not say it applies presets to that
+// encoder.
 func presetTheEncoderWillRunAt(c *cameraRow, stated appconfig.EncodePreset) string {
 	fallback := c.GetProperties()[camerashare.KeyH264DefaultPreset]
-	switch {
-	case fallback == "":
+	if fallback == "" {
 		return ""
-	case stated == appconfig.EncodePresetUnset:
-		return fmt.Sprintf(" at preset %s, or at the fastest one that a consumer of the camera states,", fallback)
 	}
-	return fmt.Sprintf(" at preset %s, or at a faster one that another consumer of the camera states,", stated)
+	return ", " + camerashare.DescribeEncoderPreset(stated.String(), fallback) + ","
 }
 
 // cameraSoftwareEncoderNotices returns one line for each camera whose node
