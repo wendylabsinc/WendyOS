@@ -889,12 +889,20 @@ func (op *registryOp) releases(ctx context.Context, appID string) ([]*cloudpb.Ap
 	return out, nil
 }
 
-// current is a deployment with this machine's newest deployment key that
-// has a sealed content key.
+// current is a deployment with this machine's newest deployment key sealed
+// for the release the deployment uses now. With none, the key is made now:
+// a change recorded in Cloud whose key upload failed left it out, and
+// Cloud takes a key only for the deployment's current release.
 func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedDeployment, error) {
 	d, err := cloudpb.NewDeploymentServiceClient(op.conn).GetDeployment(ctx, &cloudpb.GetDeploymentRequest{Id: deploymentID})
 	if err != nil {
 		return nil, fmt.Errorf("reading deployment %s: %w", deploymentID, err)
+	}
+	// The digest signed must be the manifest of the release the deployment
+	// uses now, not only what a key was sealed for.
+	m, err := op.artifact(ctx, d.GetAppReleaseId(), "")
+	if err != nil {
+		return nil, fmt.Errorf("deployment %s: %w", deploymentID, err)
 	}
 	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.reg).GetMyWraps(ctx, &cloudpb.GetMyWrapsRequest{
 		OrganizationId: op.org, Scope: &cloudpb.WrapScope{Scope: &cloudpb.WrapScope_DeploymentId{DeploymentId: deploymentID}},
@@ -906,7 +914,7 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 	for i := len(wraps) - 1; i >= 0; i-- { // newest last
 		w := wraps[i]
 		j := slices.IndexFunc(resp.GetSealedContentKeys(), func(s *cloudpb.SealedContentKey) bool { return s.GetDeploymentKeyId() == w.GetScope().GetKeyId() })
-		if w.GetRecipientKeyId() != op.keyID || j < 0 {
+		if w.GetRecipientKeyId() != op.keyID || j < 0 || resp.GetSealedContentKeys()[j].GetManifestDigest() != m.GetManifestDigest() {
 			continue
 		}
 		key, err := op.open(w, registrycrypto.ScopeDeployment, deploymentID)
@@ -924,15 +932,19 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 			return nil, fmt.Errorf("deployment %s: its sealed release key does not open: %w", deploymentID, err)
 		}
 		clear(contentKey)
-		// The digest signed must be the manifest of the release the deployment
-		// uses now, not only what the newest key was sealed for: a change can be
-		// recorded in Cloud before its key is.
-		if _, err := op.artifact(ctx, d.GetAppReleaseId(), sealed.GetManifestDigest()); err != nil {
-			return nil, fmt.Errorf("deployment %s: its key does not match release %s, so nothing was signed (%w). Update it to a release with wendy app deployment update --release <version> to make a key for that release", deploymentID, d.GetAppReleaseId(), err)
-		}
 		return &keyedDeployment{deployment: d, manifestDigest: sealed.GetManifestDigest(), key: key, sealed: sealed}, nil
 	}
-	return nil, fmt.Errorf("deployment %s has no key wrapped to this machine's registry key %s", deploymentID, op.keyID)
+	contentKey, err := op.contentKey(ctx, d.GetAppReleaseId(), m)
+	if err != nil {
+		return nil, fmt.Errorf("deployment %s has no key wrapped to this machine's registry key %s", deploymentID, op.keyID)
+	}
+	defer clear(contentKey)
+	kd, err := op.newDeploymentKey(ctx, d, m, contentKey)
+	if err != nil {
+		return nil, fmt.Errorf("deployment %s has no key for its release yet, and making one failed: %w", deploymentID, err)
+	}
+	cliLogln("Made the missing key of %s for its release.", d.GetName())
+	return kd, nil
 }
 
 // confirmed is one revision as the operator confirmed it: every statement

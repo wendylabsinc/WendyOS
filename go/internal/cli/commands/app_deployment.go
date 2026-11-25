@@ -543,6 +543,8 @@ func (op *registryOp) change(ctx context.Context, d *cloudpb.Deployment, newRel 
 	conf.revision = conf.d.GetRevision()
 	if m != nil {
 		if conf.kd, err = op.newDeploymentKey(ctx, conf.d, m, contentKey); err != nil {
+			say("Revision %d is recorded, but its key was not stored, so no device got it.", conf.revision)
+			say("Send it later with: wendy app deployment resume %s/%s", d.GetAppId(), d.GetName())
 			return fmt.Errorf("%s: %w", d.GetName(), err)
 		}
 	}

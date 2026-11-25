@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -161,16 +162,18 @@ func TestResumeSignsOnlyTheCurrentRevision(t *testing.T) {
 	if len(fake.assigned) != 2 || fake.assigned[1].GetRevision() != 1 || !strings.Contains(out.String(), "packer-01: get revision 1") {
 		t.Fatalf("resume signed %v\n%s", fake.assigned, out.String())
 	}
-	// Cloud recorded release B, but the newest key is still for A: resume
-	// shows B and must not sign A's digest.
-	releaseB, _ := publishFixture(t, op)
+	// Cloud recorded release B, but the newest key is still for A (its key
+	// upload failed): resume makes B's key and signs B's digest, never A's.
+	releaseB, mB := publishFixture(t, op)
 	fake.deploys[depID].AppReleaseId = releaseB
-	if err := runResume(context.Background(), op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err == nil || !strings.Contains(err.Error(), "nothing was signed") || len(fake.assigned) != 2 {
-		t.Fatalf("a key for another release: %v", err)
+	if err := runResume(context.Background(), op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err != nil || len(fake.assigned) != 3 ||
+		fake.assigned[2].GetManifestDigest() != mB.GetManifestDigest() {
+		t.Fatalf("a key for another release: %v, signed %v", err, fake.assigned)
 	}
 	fake.deploys[depID].AppReleaseId = fake.assigned[0].GetAppReleaseId()
+	before := len(fake.assigned)
 	fake.pending[depID][0].Revision = 7
-	if err := runResume(context.Background(), op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err == nil || len(fake.assigned) != 2 {
+	if err := runResume(context.Background(), op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err == nil || len(fake.assigned) != before {
 		t.Fatalf("a statement for another revision: %v", err)
 	}
 }
@@ -296,5 +299,56 @@ func TestAssetIDPrefersIDThenNameAndRefusesASharedDisplayName(t *testing.T) {
 	}
 	if _, err := assetID(assets, "nope"); err == nil {
 		t.Fatal("unknown device: want an error")
+	}
+}
+
+// M13: a deployment recorded in Cloud whose key upload failed is repaired by
+// resume, which makes the missing key, and by a configuration-only update.
+func TestAFailedKeyUploadIsRepairedByResumeAndUpdate(t *testing.T) {
+	v := loadRecipientVectors(t)
+	deviceKey, _ := vectorRecipientKey(t, v, "recipient-key-valid")
+	op, fake := registryFixture(t, deviceKey)
+	releaseID, m := publishFixture(t, op)
+	fake.defaults[releaseID] = `{"LOG_LEVEL":"info"}`
+	ctx := context.Background()
+	fake.wrapsErr = errors.New("registry down")
+	d, err := op.deploy(ctx, testPlan(releaseID, m.GetManifestDigest(), "line-3", []string{vectorDevice}))
+	if err == nil || d == nil || len(fake.assigned) != 0 {
+		t.Fatalf("setup: deploy with a failed key upload: %v, assigned %d", err, len(fake.assigned))
+	}
+	fake.wrapsErr = nil
+	device := certs.DeviceSPIFFEURI(testOperatorTenant, vectorDevice)
+	fake.pending[d.GetId()] = []*cloudpb.PendingDeviceStatement{{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, DeploymentId: d.GetId(), Device: device, Revision: 1}}
+	if err := runResume(ctx, op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(fake.assigned) != 1 || fake.assigned[0].GetManifestDigest() != m.GetManifestDigest() {
+		t.Fatalf("resume signed %v", fake.assigned)
+	}
+	// The same through a configuration-only update of a second keyless one.
+	fake.wrapsErr = errors.New("registry down")
+	d2, err := op.deploy(ctx, testPlan(releaseID, m.GetManifestDigest(), "line-4", []string{vectorDevice}))
+	if err == nil || d2 == nil {
+		t.Fatalf("setup: second deploy: %v", err)
+	}
+	fake.wrapsErr = nil
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-4", changeFlags{config: []string{"LOG_LEVEL=debug"}, yes: true}, io.Discard, false); err != nil {
+		t.Fatalf("configuration-only update: %v", err)
+	}
+	// An update to another release whose key upload fails names resume,
+	// and resume then sends it.
+	releaseB, mB := publishFixture(t, op)
+	fake.wrapsErr = errors.New("registry down")
+	var out bytes.Buffer
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{release: releaseB, yes: true}, &out, false); err == nil ||
+		!strings.Contains(out.String(), "Send it later with: wendy app deployment resume sh.wendy.example/line-3") {
+		t.Fatalf("update with a failed key upload: %v\n%s", err, out.String())
+	}
+	fake.wrapsErr = nil
+	n := len(fake.assigned)
+	fake.pending[d.GetId()] = []*cloudpb.PendingDeviceStatement{{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, DeploymentId: d.GetId(), Device: device, Revision: fake.deploys[d.GetId()].GetRevision()}}
+	if err := runResume(ctx, op, "sh.wendy.example", "line-3", changeFlags{yes: true}, io.Discard, false); err != nil || len(fake.assigned) != n+1 ||
+		fake.assigned[n].GetManifestDigest() != mB.GetManifestDigest() {
+		t.Fatalf("resume after the failed update: %v", err)
 	}
 }
