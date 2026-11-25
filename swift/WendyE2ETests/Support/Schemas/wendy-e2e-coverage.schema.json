@@ -173,7 +173,17 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["attempt", "sourceID", "revision", "status"],
+            "required": ["attempt", "status"],
+            "oneOf": [
+              {"required": ["sourceID", "revision"]},
+              {
+                "properties": {
+                  "status": {"enum": ["not-collected", "incomplete"]},
+                  "sourceID": false,
+                  "revision": false
+                }
+              }
+            ],
             "properties": {
               "attempt": {"type": "string"},
               "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},

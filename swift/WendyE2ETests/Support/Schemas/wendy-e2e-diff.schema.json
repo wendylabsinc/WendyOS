@@ -13,6 +13,8 @@
     "sourceRevision": {"type": "string", "pattern": "^[a-fA-F0-9]{40}$"},
     "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
     "profileSHA256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+    "specsStatus": {"enum": ["compared", "unavailable"]},
+    "specsReason": {"type": "string"},
     "specs": {
       "type": "array",
       "items": {
