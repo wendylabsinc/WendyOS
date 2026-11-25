@@ -53,7 +53,7 @@ struct `coverage workflow evidence` {
             env["AGGREGATE_EXIT"] = String(aggregate)
             env["REPORT_EXIT"] = String(report)
             let result = try CoverageIO.execute(
-                ["bash", "-euo", "pipefail", "-c", script],
+                ["/bin/bash", "-euo", "pipefail", "-c", script],
                 cwd: root,
                 environment: env
             )
@@ -70,7 +70,8 @@ struct `coverage workflow evidence` {
 
 @Suite
 struct `aggregate wrapper arguments` {
-    @Test func `forwards the explicit Git range unchanged to Swift`() throws {
+    @Test(arguments: ["", "origin/main...HEAD"])
+    func `forwards an optional Git range under stock Bash`(range: String) throws {
         let product = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -95,21 +96,24 @@ struct `aggregate wrapper arguments` {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = tool.deletingLastPathComponent().path + ":" + env["PATH", default: ""]
         env["ARGV_FILE"] = arguments.path
-        let result = try CoverageIO.execute(
-            [
-                "bash", product.appendingPathComponent("swift/Scripts/E2EAggregate.sh").path,
-                "--package-dir", package.path, "--output-dir",
-                root.appendingPathComponent("output").path, "--diff", "origin/main...HEAD",
-                attempt.path,
-            ],
-            environment: env
-        )
+        var argv = [
+            "/bin/bash", product.appendingPathComponent("swift/Scripts/E2EAggregate.sh").path,
+            "--package-dir", package.path, "--output-dir",
+            root.appendingPathComponent("output").path,
+        ]
+        if !range.isEmpty { argv += ["--diff", range] }
+        argv.append(attempt.path)
+        let result = try CoverageIO.execute(argv, environment: env)
         #expect(result.status == 0)
         let values = try String(contentsOf: arguments, encoding: .utf8).components(
             separatedBy: "\0"
         )
-        let index = try #require(values.firstIndex(of: "--diff"))
-        #expect(values[index + 1] == "origin/main...HEAD")
+        if range.isEmpty {
+            #expect(!values.contains("--diff"))
+        } else {
+            let index = try #require(values.firstIndex(of: "--diff"))
+            #expect(values[index + 1] == range)
+        }
         #expect(values.prefix(3) == ["run", "swift-e2e-testing", "aggregate"])
     }
 }
@@ -144,6 +148,70 @@ struct `native archive member paths` {
                 try Data(contentsOf: recovered.appendingPathComponent(name))
                     == Data("native bytes".utf8)
             )
+        }
+    }
+}
+
+@Suite
+struct `stock Bash coverage lifecycle` {
+    @Test func `optional prepare and finish arguments work empty and populated`() throws {
+        let product = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: product.appendingPathComponent("swift/Scripts/E2ETest.sh"),
+            encoding: .utf8
+        )
+        for phase in ["prepare", "finish"] {
+            let start = try #require(source.range(of: "coverage_" + phase + "_args=()"))
+            let rest = String(source[start.lowerBound...])
+            let lines = rest.components(separatedBy: "\n")
+            let end = try #require(lines.firstIndex { $0.contains("_capture --phase " + phase) })
+            let script = lines[0...end].joined(separator: "\n")
+            for enabled in [false, true] {
+                let root = try CoverageIO.temporaryDirectory()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let tool = root.appendingPathComponent("swift-e2e-testing")
+                try Data("#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$ARGV_FILE\"\n".utf8).write(to: tool)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o755],
+                    ofItemAtPath: tool.path
+                )
+                let swift = root.appendingPathComponent("swift")
+                try Data(
+                    "#!/bin/sh\ncase \"$*\" in *--show-bin-path*) printf '%s\\n' \"$FAKE_BIN\";; esac\n"
+                        .utf8
+                ).write(to: swift)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o755],
+                    ofItemAtPath: swift.path
+                )
+                let argv = root.appendingPathComponent("argv")
+                var environment = ProcessInfo.processInfo.environment
+                environment["COVERAGE_TOOL"] = tool.path
+                environment["PACKAGE_DIR"] = root.path
+                environment["FAKE_BIN"] = root.path
+                environment["PATH"] = root.path + ":" + environment["PATH", default: ""]
+                environment["CLI_REPO_DIR"] = root.path
+                environment["RUN_DIR"] = root.path
+                environment["MANAGED_AGENT"] = enabled ? "true" : "false"
+                environment["COVERAGE_CONTROL"] =
+                    enabled ? root.appendingPathComponent("socket with spaces").path : ""
+                environment["ARGV_FILE"] = argv.path
+                let result = try CoverageIO.execute(
+                    ["/bin/bash", "-euo", "pipefail", "-c", script],
+                    environment: environment
+                )
+                try #require(result.status == 0, Comment(rawValue: result.error))
+                let arguments = try String(contentsOf: argv, encoding: .utf8).components(
+                    separatedBy: "\0"
+                )
+                #expect(arguments.contains(phase))
+                #expect(
+                    arguments.contains(phase == "prepare" ? "--managed-agent" : "--control")
+                        == enabled
+                )
+            }
         }
     }
 }

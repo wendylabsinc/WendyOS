@@ -217,7 +217,7 @@ if [[ "$STAGE" == "aggregate" || "$STAGE" == "all" ]]; then
   [[ -z "$DIFF" ]] || aggregate_args+=(--diff "$DIFF")
   bash "$SCRIPT_DIR/E2EAggregate.sh" \
     --output-dir "$OUTPUT_DIR" \
-    "${aggregate_args[@]}" "${ATTEMPT_DIRS[@]}" || status=$?
+    ${aggregate_args[@]+"${aggregate_args[@]}"} "${ATTEMPT_DIRS[@]}" || status=$?
 fi
 
 if [[ "$STAGE" == "review" || "$STAGE" == "all" ]]; then

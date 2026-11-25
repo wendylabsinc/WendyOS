@@ -11,7 +11,10 @@ struct `report command` {
         let rootURL = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: rootURL) }
 
-        let packageURL = rootURL.appendingPathComponent("Package", isDirectory: true)
+        let packageURL = rootURL.appendingPathComponent(
+            "TestedRepo/swift/WendyE2ETests",
+            isDirectory: true
+        )
         let testsURL = packageURL.appendingPathComponent("Tests", isDirectory: true)
         let supportURL = packageURL.appendingPathComponent("Support", isDirectory: true)
         let runURL = rootURL.appendingPathComponent("Run", isDirectory: true)
@@ -89,6 +92,29 @@ struct `report command` {
             contentsOf: runURL.appendingPathComponent("index.html"),
             encoding: .utf8
         )
+
+        // Trusted templates and tested source identities must join the same
+        // recorded outcomes even when they live in different package roots.
+        let trustedPackage = rootURL.appendingPathComponent("TrustedPackage")
+        try FileManager.default.createDirectory(
+            at: trustedPackage.appendingPathComponent("Support"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(
+            at: productionReportTemplateURL(),
+            to: trustedPackage.appendingPathComponent("Support/e2e-report.template.html")
+        )
+        var splitReport = try ReportCommand.parse([
+            "--package-dir", trustedPackage.path,
+            "--repo", rootURL.appendingPathComponent("TestedRepo").path,
+            "--run-dir", runURL.path,
+        ])
+        try splitReport.run()
+        let splitHTML = try String(
+            contentsOf: runURL.appendingPathComponent("index.html"),
+            encoding: .utf8
+        )
+        #expect(splitHTML == html)
 
         #expect(!html.contains("<img src=x onerror="))
         #expect(html.contains("macos-to-&lt;img src=x onerror=&quot;alert(1)&quot;&gt;"))

@@ -2,6 +2,7 @@
 """Evaluate the committed Swift E2E job conditions across real run shapes."""
 
 import itertools
+import fnmatch
 import json
 import os
 
@@ -100,6 +101,26 @@ class GateTests(unittest.TestCase):
         build = WORKFLOW.with_name("build.yml").read_text()
         self.assertIn("uses: ./.github/workflows/swift-e2e-tests.yml", build)
         self.assertNotIn("quiet:", build)
+
+    def test_cli_tests_trigger_for_their_actual_dependencies(self):
+        workflow = yaml.load(WORKFLOW.with_name("swift-e2e-cli-tests.yml").read_text(), Loader=yaml.BaseLoader)
+        dependencies = [
+            ".github/workflows/build.yml", ".github/actions/swift-e2e-run/action.yml",
+            "swift/Scripts/E2EAggregate.sh", "swift/Scripts/E2ETest.sh",
+            "swift/Scripts/E2EReview.sh", "swift/Scripts/E2EReport.sh",
+            "go/cmd/wendy/coverage_e2e.go", "go/cmd/wendy-agent/coverage_e2e.go",
+            "go.mod", "go.sum",
+            "swift/WendyE2ETests/Tests/WendyE2ETests/ContextCLIAssertions.swift",
+            "swift/WendyE2ETests/Tests/WendyE2ETests/LocalCLIAssertions.swift",
+            "swift/WendyE2ETests/Tests/WendyE2ETests/FirstAppFixture.swift",
+            "swift/WendyE2ETests/Tests/WendyE2ETests/WendyProjectOptimizeTests.swift",
+        ]
+        for event in ("push", "pull_request"):
+            patterns = workflow["on"][event]["paths"]
+            for dependency in dependencies:
+                with self.subTest(event=event, dependency=dependency):
+                    self.assertTrue(any(fnmatch.fnmatchcase(dependency, pattern) for pattern in patterns))
+            self.assertFalse(any(fnmatch.fnmatchcase("go/internal/cli/ordinary.go", pattern) for pattern in patterns))
 
     def test_html_overview_is_rendered_before_raw_artifact_upload(self):
         action = (WORKFLOW.parents[1] / "actions/swift-e2e-run/action.yml").read_text()

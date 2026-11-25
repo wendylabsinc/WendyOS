@@ -665,11 +665,44 @@ jobs:
             mv "${normalized_dir}" "${raw_dir}"
           fi
 
+      # Tooling remains at the trusted checkout. Only validated raw Git blobs
+      # materialize the tested tree; tested files never enter the tool package.
+      - name: Prepare tested source as read-only review data
+        id: pr-head
+        shell: bash
+        env:
+          TESTED_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if ! git cat-file -e "${TESTED_SHA}^{commit}"; then
+            git fetch --no-tags origin "$TESTED_SHA"
+          fi
+          source_repo="${RUNNER_TEMP}/e2e-tested-source"
+          swift run --package-path "$GITHUB_WORKSPACE/swift/WendyE2ETests" swift-e2e-testing _source \
+            --repo "$PWD" --revision "$TESTED_SHA" --output-dir "$source_repo"
+          echo "repo=$source_repo" >> "$GITHUB_OUTPUT"
+          if [[ -n "$PR_BASE_SHA" ]]; then
+            [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            echo "diff_range=${PR_BASE_SHA}...${TESTED_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Aggregate Swift E2E attempts
         working-directory: swift
         shell: bash
+        env:
+          TESTED_SOURCE_REPO: ${{ steps.pr-head.outputs.repo }}
+          DIFF_BASE_REF: ${{ inputs.diff_base_ref || '' }}
+          PR_DIFF_RANGE: ${{ steps.pr-head.outputs.diff_range }}
         run: |
           set -euo pipefail
+          comparison_args=()
+          if [[ -n "$PR_DIFF_RANGE" ]]; then
+            comparison_args+=(--diff "$PR_DIFF_RANGE")
+          elif [[ -n "$DIFF_BASE_REF" ]]; then
+            comparison_args+=(--diff "$DIFF_BASE_REF...HEAD")
+          fi
           attempt_dirs=()
           while IFS= read -r attempt_dir; do
             attempt_dirs+=("$attempt_dir")
@@ -678,42 +711,10 @@ jobs:
             echo "ERROR: no Swift E2E attempt artifacts downloaded." >&2
             exit 1
           fi
-          bash ./Scripts/E2EAggregate.sh \
+          swift run --package-path WendyE2ETests swift-e2e-testing aggregate \
+            --package-dir WendyE2ETests --repo "$TESTED_SOURCE_REPO" \
             --output-dir "${RUNNER_TEMP}/wendy" \
-            "${attempt_dirs[@]}"
-
-      # The report lists tests, and the AI review its `// AI:` requests, from
-      # E2E test sources. Use the PR's, so added or edited tests line up with
-      # their results. They are copied in as regular files and only parsed:
-      # `swift run swift-e2e-testing` never builds test targets.
-      - name: Fetch PR head as review data
-        id: pr-head
-        if: github.event_name == 'pull_request'
-        continue-on-error: true
-        shell: bash
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ || ! "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Pull request head or base SHA is missing or malformed (head '${PR_HEAD_SHA}', base '${PR_BASE_SHA}')."
-            exit 1
-          fi
-          git fetch --no-tags origin "$PR_HEAD_SHA"
-          echo "diff_range=${PR_BASE_SHA}...${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
-
-          tests_path=swift/WendyE2ETests/Tests/WendyE2ETests
-          staging="$(mktemp -d "${RUNNER_TEMP}/pr-e2e-tests.XXXXXX")"
-          if git cat-file -e "${PR_HEAD_SHA}:${tests_path}" 2>/dev/null; then
-            git archive --format=tar "$PR_HEAD_SHA" "$tests_path" \
-              | tar -x -C "$staging" --no-same-owner --no-same-permissions
-          fi
-          # A symlink could point the report or AI review at runner files.
-          find "$staging" ! -type f ! -type d -print -delete
-          mkdir -p "$staging/$tests_path"
-          rm -rf "$tests_path"
-          mv "$staging/$tests_path" "$tests_path"
+            ${comparison_args[@]+"${comparison_args[@]}"} "${attempt_dirs[@]}"
 
       - name: Set up Node.js for review tools
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -869,12 +870,13 @@ jobs:
         env:
           DIFF_BASE_REF: ${{ inputs.diff_base_ref || '' }}
           PR_DIFF_RANGE: ${{ steps.pr-head.outputs.diff_range }}
+          TESTED_SOURCE_REPO: ${{ steps.pr-head.outputs.repo }}
           # Expose exactly one credential, chosen by the auth probe above.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.review-auth.outputs.auth_mode == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           ANTHROPIC_API_KEY: ${{ steps.review-auth.outputs.auth_mode == 'api-key' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           set -euo pipefail
-          review_args=(--run-dir "${{ steps.e2e-run.outputs.run_dir }}")
+          review_args=(--run-dir "${{ steps.e2e-run.outputs.run_dir }}" --repo "$TESTED_SOURCE_REPO")
 
           resolve_diff_base_ref() {
             local ref="$1"
@@ -897,9 +899,9 @@ jobs:
           }
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            # The PR head is fetched as data; nothing from it runs here.
+            # The tested merge revision is read-only data; nothing from it runs here.
             if [[ -z "$PR_DIFF_RANGE" ]]; then
-              echo "::error::No PR diff range; see the 'Fetch PR head as review data' step."
+              echo "::error::No PR diff range; see the 'Prepare tested source as read-only review data' step."
               exit 1
             fi
             review_args+=(--diff "$PR_DIFF_RANGE")
@@ -928,9 +930,11 @@ jobs:
         env:
           # Unlike conclusion, outcome is not masked by continue-on-error.
           WENDY_E2E_REVIEW_OUTCOME: ${{ steps.ai-review.outcome }}
+          TESTED_SOURCE_REPO: ${{ steps.pr-head.outputs.repo }}
         run: |
           set -euo pipefail
           bash ./Scripts/E2EReport.sh \
+            --repo "$TESTED_SOURCE_REPO" \
             --run-dir "${{ steps.e2e-run.outputs.run_dir }}"
 
       - name: Upload Swift E2E Report

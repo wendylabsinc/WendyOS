@@ -30,45 +30,7 @@ struct AggregateCoverageAttempt {
             }
             let archive = input.appendingPathComponent("coverage/go-native.tar.gz")
             if CoverageIO.exists(archive) {
-                let members = CoverageIO.lines(
-                    try CoverageIO.command(["tar", "-tzf", archive.path])
-                )
-                guard
-                    members.allSatisfy({ name in
-                        let parts = name.split(separator: "/")
-                        return !name.hasPrefix("/") && !parts.contains("..")
-                            && ((parts.count == 6 && parts[0] == "observations"
-                                && parts[3] == "coverage" && parts[4] == "go")
-                                || (parts.count == 3 && parts[0] == "coverage"
-                                    && parts[1] == "bootstrap"))
-                    })
-                else { throw ValidationError("Unsafe native archive member") }
-                _ = try CoverageIO.command(["tar", "-xzf", archive.path, "-C", workspace.path])
-                let manifest = try String(
-                    contentsOf: input.appendingPathComponent("coverage/native.sha256"),
-                    encoding: .utf8
-                )
-                let entries = try CoverageIO.lines(manifest).map { line -> (String, String) in
-                    guard line.count > 66 else {
-                        throw ValidationError("Invalid native SHA manifest")
-                    }
-                    return (String(line.prefix(64)), String(line.dropFirst(66)))
-                }
-                guard Set(entries.map(\.1)) == Set(members) else {
-                    throw ValidationError("Native archive differs from manifest")
-                }
-                for entry in entries {
-                    let attributes = try FileManager.default.attributesOfItem(
-                        atPath: workspace.appendingPathComponent(entry.1).path
-                    )
-                    guard attributes[.type] as? FileAttributeType == .typeRegular else {
-                        throw ValidationError("Non-file native archive entry")
-                    }
-                }
-                guard
-                    try CoverageIO.hashes(entries.map { workspace.appendingPathComponent($0.1) })
-                        == entries.map(\.0)
-                else { throw ValidationError("Native archive hash mismatch") }
+                _ = try GoCoverage.unpackNativeArchive(run: input, into: workspace)
             } else {
                 for original in try GoCoverage.nativeFiles(run: input) {
                     let destination = workspace.appendingPathComponent(
@@ -166,8 +128,9 @@ struct RunCoverageAggregation {
         }
         let revisions = try Set(
             inputs.compactMap { input in
-                (try CoverageIO.read(input.appendingPathComponent("attempt.json"))["git"]
-                    as? [String: Any])?["commit"] as? String
+                CoverageIO.recordedRevision(
+                    try CoverageIO.read(input.appendingPathComponent("attempt.json"))
+                )
             }
         )
         guard revisions.count == 1, let revision = revisions.first else {
@@ -236,9 +199,6 @@ func aggregateGoCoverage(
             }
             errors += attempt.result["errors"] as? [String] ?? []
         }
-        if captured.count != inputs.count {
-            errors.append("Some run attempts have no compatible captured coverage")
-        }
         result["sourceID"] = identity
         result["sourceRevision"] = revision
         result["scope"] = first.source["scope"]
@@ -270,10 +230,16 @@ func aggregateGoCoverage(
     } else if !errors.isEmpty {
         result["status"] = "incomplete"
     }
-    result["attempts"] = captured.map {
-        [
-            "attempt": $0.input.lastPathComponent, "sourceID": $0.source["sourceID"]!,
-            "revision": $0.source["revision"]!, "status": $0.result["status"]!,
+    result["attempts"] = try inputs.map { input -> [String: Any] in
+        if let attempt = captured.first(where: { $0.input == input }) {
+            return [
+                "attempt": input.lastPathComponent, "sourceID": attempt.source["sourceID"]!,
+                "revision": attempt.source["revision"]!, "status": attempt.result["status"]!,
+            ]
+        }
+        return [
+            "attempt": input.lastPathComponent,
+            "status": try GoCoverage.wasRequested(run: input) ? "incomplete" : "not-collected",
         ]
     }
     result["errors"] = errors
@@ -284,30 +250,46 @@ func aggregateGoCoverage(
             comparison.status = "compared"
             comparison.baseRevision = git.base
             comparison.sourceRevision = git.head
-            if target == nil { comparison.specs = try git.specs() }
-            if let first {
-                guard compatible, first.source["revision"] as? String == git.head else {
-                    throw ValidationError("Comparison source differs from measured build")
+            if target == nil {
+                do {
+                    comparison.specs = try git.specs()
+                    comparison.specsStatus = "compared"
+                } catch {
+                    comparison.specsStatus = "unavailable"
+                    comparison.specsReason = String(describing: error)
+                    context.logOnce("WARNING: E2E aggregate spec comparison unavailable: \(error)")
                 }
-                comparison.sourceID = first.source["sourceID"] as? String
-                let profile = destination.appendingPathComponent("coverage.out")
-                if CoverageIO.exists(profile) {
-                    comparison.profileSHA256 = try CoverageIO.sha256(file: profile)
+            }
+            do {
+                if let first {
+                    guard compatible, first.source["revision"] as? String == git.head else {
+                        throw ValidationError("Comparison source differs from measured build")
+                    }
+                    comparison.sourceID = first.source["sourceID"] as? String
+                    let profile = destination.appendingPathComponent("coverage.out")
+                    if CoverageIO.exists(profile) {
+                        comparison.profileSHA256 = try CoverageIO.sha256(file: profile)
+                    }
+                    var changed = try git.goCoverage(
+                        source: first.source,
+                        profile: profile,
+                        complete: errors.isEmpty && CoverageIO.exists(profile)
+                    )
+                    changed["provenance"] = [
+                        "baseRevision": git.base, "sourceRevision": git.head,
+                        "sourceID": comparison.sourceID ?? "",
+                        "profileSHA256": comparison.profileSHA256.map { $0 as Any } ?? NSNull(),
+                    ]
+                    result["diff"] = changed
+                } else {
+                    result["diff"] = [
+                        "status": "unavailable", "reason": "Go coverage not captured",
+                        "percent": NSNull(),
+                    ]
                 }
-                var changed = try git.goCoverage(
-                    source: first.source,
-                    profile: profile,
-                    complete: errors.isEmpty && CoverageIO.exists(profile)
-                )
-                changed["provenance"] = [
-                    "baseRevision": git.base, "sourceRevision": git.head,
-                    "sourceID": comparison.sourceID ?? "",
-                    "profileSHA256": comparison.profileSHA256.map { $0 as Any } ?? NSNull(),
-                ]
-                result["diff"] = changed
-            } else {
+            } catch {
                 result["diff"] = [
-                    "status": "unavailable", "reason": "Go coverage not captured",
+                    "status": "unavailable", "reason": String(describing: error),
                     "percent": NSNull(),
                 ]
             }

@@ -3,7 +3,7 @@ description: Run one WendyAgent Swift E2E route and upload its raw artifact.
 
 inputs:
   diff_base_ref:
-    description: Optional comparison base ref; defaults to the event's base or main.
+    description: Optional explicit comparison base ref; empty disables changed-source comparison.
     required: false
     default: ''
   coverage:
@@ -481,7 +481,7 @@ runs:
         aggregate_args=()
         [[ -z "$DIFF_BASE_REF" ]] || aggregate_args+=(--diff "$DIFF_BASE_REF...$GITHUB_SHA")
         set +e
-        bash swift/Scripts/E2EAggregate.sh --output-dir "$report_staging" "${aggregate_args[@]}" "$attempt_dir"
+        bash swift/Scripts/E2EAggregate.sh --output-dir "$report_staging" ${aggregate_args[@]+"${aggregate_args[@]}"} "$attempt_dir"
         aggregate_status=$?
         set -e
         reports=("$report_staging"/*)

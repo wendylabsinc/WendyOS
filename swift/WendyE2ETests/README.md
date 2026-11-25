@@ -153,7 +153,11 @@ swift run swift-e2e-testing report --run-dir /path/to/runs/swift-e2e-tests.RUN
 source totals, and computes one consolidated native
 source union with standard Go covdata `-pcombine`; it never averages percentages.
 It verifies source identities, immutable revisions and linked file/package scopes
-before combining attempts. Capture records and execution exit status remain
+before combining attempts. Uncollected attempts/targets are explicitly listed as
+`not-collected` and do not invalidate a compatible collected union. A requested
+capture missing provenance/counters remains `incomplete` and fails aggregation;
+new runner metadata records `coverageRequested` even when preparation fails.
+Capture records and execution exit status remain
 unchanged by derivation, so restoring matching source/evidence permits a clean
 retry. Derived participant states are saved in summaries and test coverage
 metadata. Incompatible evidence is incomplete, not a smaller successful
@@ -181,13 +185,19 @@ For multiple targets it also merges attempts by target under
 profiles in `attempts/<target>/<attempt>/coverage/`. A
 single-attempt run shares its run artifacts with that attempt and target.
 
-`report` reads saved totals and renders `source.html` for complete run and target
-profiles. Pass `--repo /path/to/tested/checkout` to the analysis stages when
-the tooling and measured source live in different checkouts. Source views require
-the recorded revision and source identity. Older runs can display their saved
-numbers without the source. Hover or focus a target row for its source report
-and plain-text function list. Diff appears only for a comparison; its tooltip
-explains unavailable values and gives the comparison range.
+Report reads saved totals and renders `source.html` for complete run and target
+profiles. Hover or focus a target row for the source report and plain-text
+function list. Diff appears in comparison mode. Older runs can display saved
+totals even when the matching source checkout is unavailable.
+
+For split checkouts, pass `--repo TESTED_REPO` to aggregate, review, and report.
+Report uses the measured Go source for source views and
+`TESTED_REPO/swift/WendyE2ETests` to join Swift tests to outcomes and recordings.
+`--tests-dir` can narrow that source selection. Templates, prompts and executed
+tools come from the trusted `--package-dir`. The review harness starts in the
+trusted tooling repository. The workflow materializes the tested revision,
+including a synthetic merge, from validated raw Git blobs without running
+checkout or archive filters.
 
 ### Optional Git comparison
 
@@ -224,14 +234,12 @@ without failing otherwise valid aggregation or changing test outcomes. This
 intentional approximation replaces the old token-based metric; results need not
 equal that metric.
 
-The existing reference parser compares suite/test identities and bounded
-attribute/declaration content. Aggregate saves **Added**, **Changed**, and
-**Removed** spec entries. Helper-only edits do not invent new specs. Report
-attaches Added/Changed labels to current declarations independently of outcomes;
-Removed specs appear as comparison entries, never executed/passing tests. The
-full suite remains visible. Optional AI review keeps its existing `--diff RANGE`
-behavior and can inspect the matching repository plus these recorded results;
-it is not required to collect, aggregate or display coverage.
+Aggregate retains spec-comparison entries and their independent extraction status
+in saved metadata. HTML displays the full current suite without Added/Changed/Removed
+highlights or a Removed-spec section; those report annotations are deferred.
+Optional AI review keeps its existing `--diff RANGE` behavior and can inspect the
+matching repository plus recorded results; it is not required to collect,
+aggregate or display coverage.
 
 The **Swift E2E Tests** workflow enables coverage on every active Ubuntu route
 and automatically aggregates/renders its artifact, including failed test runs.
@@ -242,10 +250,18 @@ Mac, remote and Windows routes remain paused; never run the full suite on a
 shared Mac. Framework checks use real instrumented Go fixtures in the Swift
 `native Go coverage` and aggregate comparison suites, separate from product specs.
 
-Active Ubuntu CI captures the comparison before rendering its artifact. An
-explicit workflow `diff_base_ref` overrides the default PR base, push's previous
-revision, or main comparison. Comparison problems remain informational labels;
+Set workflow `diff_base_ref` explicitly to request comparison before rendering
+the artifact; an empty value leaves changed-source comparison uncollected.
+Likewise, local aggregation requires explicit `--diff RANGE`. The analyzer forwards the PR range already selected for its AI review; otherwise
+only explicit input requests a comparison. No push/main fallback is selected. Comparison problems remain informational labels;
 there are no coverage thresholds or gates.
+
+Coverage has a measured execution cost: the E2E step took 7.6 minutes on
+[main, Build run45633937865](https://github.com/wendylabsinc/WendyOS/actions/runs/45633937865)
+and 18.1 minutes in
+[coverage run45386626330, Swift E2E Tests](https://github.com/wendylabsinc/WendyOS/actions/runs/45386626330). These are
+observed runs, not a controlled benchmark. Coverage scheduling/defaults are
+unchanged pending Konstantin’s policy decision.
 
 ### Test against a remote device
 

@@ -64,9 +64,7 @@ struct AggregateCommand: ParsableCommand {
             let root = outputURL.appendingPathComponent("\(id.workflowName).\(id.runID)")
             planned[root, default: []].insert(id.targetName + "/" + id.attempt)
         }
-        let hasCoverage = attemptURLs.contains {
-            CoverageIO.exists($0.appendingPathComponent("coverage/source.json"))
-        }
+        let hasCoverage = try attemptURLs.contains { try GoCoverage.wasRequested(run: $0) }
         for (root, expected) in planned
         where hasCoverage || diff != nil
             || CoverageIO.exists(root.appendingPathComponent("coverage/summary.json"))
@@ -106,9 +104,7 @@ struct AggregateCommand: ParsableCommand {
             )
 
             inputsByRun[runURL, default: []].append(attemptURL)
-            if CoverageIO.exists(attemptURL.appendingPathComponent("coverage/source.json"))
-                || diff != nil
-            {
+            if try GoCoverage.wasRequested(run: attemptURL) || diff != nil {
                 do {
                     let repository =
                         try repo.map { URL(fileURLWithPath: $0) }
@@ -119,8 +115,16 @@ struct AggregateCommand: ParsableCommand {
                             ).trimmingCharacters(in: .whitespacesAndNewlines)
                         )
                     repositories[runURL] = repository
-                    if CoverageIO.exists(attemptURL.appendingPathComponent("coverage/source.json"))
-                    {
+                    if try GoCoverage.wasRequested(run: attemptURL) {
+                        guard
+                            CoverageIO.exists(
+                                attemptURL.appendingPathComponent("coverage/source.json")
+                            )
+                        else {
+                            throw ValidationError(
+                                "Coverage requested but source provenance is missing: " + attemptID
+                            )
+                        }
                         let capture = try AggregateCoverageAttempt(
                             input: attemptURL,
                             repo: repository
@@ -140,7 +144,9 @@ struct AggregateCommand: ParsableCommand {
                 attemptURL: attemptURL,
                 components: components,
                 runURL: runURL,
-                packageURL: packageURL
+                packageURL: repo.map {
+                    URL(fileURLWithPath: $0).appendingPathComponent("swift/WendyE2ETests")
+                } ?? packageURL
             )
         }
 

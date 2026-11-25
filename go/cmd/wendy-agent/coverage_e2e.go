@@ -26,6 +26,8 @@ func init() {
 		fmt.Fprintln(os.Stderr, "E2E coverage control:", err)
 		os.Exit(1)
 	}
+	// A re-executed helper must not bind the parent Agent's private socket.
+	_ = os.Unsetenv("WENDY_E2E_COVERAGE_SOCKET")
 	go func() {
 		for {
 			conn, err := listener.Accept()

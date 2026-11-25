@@ -1421,16 +1421,24 @@ unacknowledged Stop ends motion recovery.
 The controller avoids recently visited endpoints and stops before rematching.
 New scans must contain new geometry to count as independent evidence. Merely
 moving or replaying an accumulated map does not increase confidence. Camera
-hints from earlier viewpoints are discarded. A candidate position still needs
-confirmation before normal site navigation.
+hints from earlier viewpoints are discarded. The Apple client automatically
+applies a single candidate accepted by the Linux matcher. The existing confirmation
+operation rechecks the command sequence, odometry epoch, scan freshness and pose
+before applying it. Applying a position does not start navigation.
 The room view hides rejected scan-fit hypotheses. An explicit scan preview
 requires a usable candidate and is labeled as unconfirmed in the viewport;
 confirmed scans and previously saved room contributions remain available.
 
 If discovery stops, the original motion fault remains visible when healthy
-telemetry resumes. The client can try up to three passive matches on distinct,
-fresh observations while Go2 is stationary. These retries never restart motion.
-Stop or an explicit new search cancels passive recovery.
+telemetry resumes. While the map is open, the client keeps matching distinct,
+fresh observations while Go2 is stationary, at most once every two seconds.
+A fresh camera frame can trigger another attempt even when the accumulated LiDAR
+geometry is unchanged. Ambiguous fits remain unpositioned; repeated packets do
+not increase confidence. Recovery also runs after telemetry reconnects or an
+established alignment is lost. It never restarts movement. A stale confirmation
+returns to passive matching rather than starting discovery again.
+Stop cancels pending matches and automatic position application. An explicit new
+search replaces passive recovery. The collapsed Go2 controls show position status.
 
 **Restart discovery** is also available after choosing a position. It stops Go2,
 discards the current alignment and that robot's saved localization references

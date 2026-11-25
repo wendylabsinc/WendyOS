@@ -9,7 +9,7 @@ import WendyE2ETesting
 struct `aggregate saved coverage` {
     @Test
     func
-        `unions compatible attempts reaggregates another base and renders saved specs without Git`()
+        `unions compatible attempts reaggregates another base and renders coverage without spec highlights or Git`()
         throws
     {
         let f = try GoCoverageFixture(build: false)
@@ -118,14 +118,35 @@ struct `aggregate saved coverage` {
         try report.run()
         #expect(CoverageIO.exists(run.appendingPathComponent("coverage/source.html")))
         var html = try String(contentsOf: run.appendingPathComponent("index.html"), encoding: .utf8)
-        #expect(html.contains("data-spec-change=\"Added\""))
-        #expect(html.contains("data-spec-change=\"Changed\""))
-        #expect(html.contains("data-comparison-removed"))
-        #expect(html.contains("not executed test outcomes"))
-        #expect(html.contains("data-spec-change=\"Removed\""))
-        // Removed entries never enter the current test count/outcomes.
+        #expect(!html.contains("data-spec-change="))
+        #expect(!html.contains("data-comparison-removed"))
+        #expect(!html.contains("Removed specs"))
+        // Saved Removed entries never enter current test counts/outcomes.
         #expect(html.components(separatedBy: "<summary class=\"test-summary\">").count - 1 == 2)
-        // A renderer has no Git access; it consumes saved results and source hashes.
+        let savedComparison = try Data(contentsOf: run.appendingPathComponent("diff.json"))
+        // Separate trusted templates/tooling from the tested source identity root.
+        var splitReport = try ReportCommand.parse([
+            "--package-dir", f.product.appendingPathComponent("swift/WendyE2ETests").path,
+            "--tests-dir", package.appendingPathComponent("Tests/WendyE2ETests").path,
+            "--run-dir", run.path,
+        ])
+        // Rendering has no spec identity or source-hash validation gate.
+        try splitReport.run()
+        splitReport.repo = f.repo.path
+        try splitReport.run()
+        let splitHTML = try String(
+            contentsOf: run.appendingPathComponent("index.html"),
+            encoding: .utf8
+        )
+        #expect(!splitHTML.contains("data-spec-change="))
+        #expect(!splitHTML.contains("data-comparison-removed"))
+        try f.write(file, after + "\n// source hash for deferred spec annotations is irrelevant\n")
+        try splitReport.run()
+        #expect(
+            try Data(contentsOf: run.appendingPathComponent("diff.json")) == savedComparison
+        )
+        try f.write(file, after)
+        // A renderer has no Git access; it displays saved coverage results.
         try f.write("fake-bin/git", "#!/bin/sh\nexit 99\n")
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755],
@@ -140,12 +161,39 @@ struct `aggregate saved coverage` {
             f.repo.appendingPathComponent("fake-bin").path + ":" + env["PATH", default: ""]
         let rendered = try CoverageIO.execute(
             [
-                cli.path, "report", "--package-dir", package.path, "--template", template.path,
+                cli.path, "report", "--package-dir",
+                f.product.appendingPathComponent("swift/WendyE2ETests").path,
+                "--repo", f.repo.path, "--template", template.path,
                 "--run-dir", run.path,
             ],
             environment: env
         )
         #expect(rendered.status == 0, Comment(rawValue: rendered.error))
+        // Exercise the actual shell wrapper without recursively invoking SwiftPM.
+        try f.write(
+            "fake-bin/swift",
+            "#!/bin/sh\n[ \"$1\" = run ] && [ \"$2\" = swift-e2e-testing ] || exit 91\nshift 2\nexec '"
+                + cli.path + "' \"$@\"\n"
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: f.repo.appendingPathComponent("fake-bin/swift").path
+        )
+        let wrapped = try CoverageIO.execute(
+            [
+                "/bin/bash", f.product.appendingPathComponent("swift/Scripts/E2EReport.sh").path,
+                "--package-dir", f.product.appendingPathComponent("swift/WendyE2ETests").path,
+                "--repo", f.repo.path, "--run-dir", run.path,
+            ],
+            environment: env
+        )
+        #expect(wrapped.status == 0, Comment(rawValue: wrapped.error))
+        let wrappedHTML = try String(
+            contentsOf: run.appendingPathComponent("index.html"),
+            encoding: .utf8
+        )
+        #expect(!wrappedHTML.contains("data-spec-change="))
+        #expect(!wrappedHTML.contains("data-comparison-removed"))
         // A different base uses exactly the same native evidence/profile.
         try aggregate(head + ".." + head)
         #expect(
@@ -159,7 +207,7 @@ struct `aggregate saved coverage` {
         #expect(!html.contains("data-comparison-removed"))
         let files = FileManager.default.enumerator(atPath: run.path)!.allObjects as! [String]
         #expect(!files.contains { $0.hasSuffix("diff.patch") || $0.hasSuffix("diff.patch.gz") })
-        // Saved wrong-head comparisons cannot annotate a valid run.
+        // Saved wrong-head Go comparisons still fail provenance validation.
         var bad = comparison
         bad.sourceRevision = base
         try JSONEncoder().encode(bad).write(to: run.appendingPathComponent("diff.json"))

@@ -2,6 +2,24 @@ import ArgumentParser
 import Foundation
 
 extension GoCoverage {
+    static func wasRequested(run: URL) throws -> Bool {
+        for name in ["source.json", "tests.json", "go-native.tar.gz"] {
+            if CoverageIO.exists(run.appendingPathComponent("coverage/" + name)) { return true }
+        }
+        if try !nativeFiles(run: run).isEmpty { return true }
+        let path = run.appendingPathComponent("attempt.json")
+        guard CoverageIO.exists(path) else { return false }
+        let metadata = try CoverageIO.read(path)
+        if metadata["coverageRequested"] as? Bool == true { return true }
+        if let coverage = metadata["coverage"] as? [String: Any] {
+            return coverage["sourceID"] != nil
+                || ["captured", "collected", "incomplete", "no-data"].contains(
+                    coverage["status"] as? String ?? ""
+                )
+        }
+        return false
+    }
+
     static func nativeFiles(run: URL) throws -> [URL] {
         var result: [URL] = []
         for suite in try CoverageIO.children(run.appendingPathComponent("observations")) {
@@ -13,6 +31,49 @@ extension GoCoverage {
             + (try CoverageIO.files(run.appendingPathComponent("coverage/bootstrap")))
     }
 
+    /// Validate the archive and SHA manifest before deriving or discarding any copies.
+    static func unpackNativeArchive(run: URL, into destination: URL) throws -> [String: String] {
+        let archive = run.appendingPathComponent("coverage/go-native.tar.gz")
+        let members = CoverageIO.lines(try CoverageIO.command(["tar", "-tzf", archive.path]))
+        guard
+            members.allSatisfy({ name in
+                let parts = name.split(separator: "/")
+                return !name.hasPrefix("/") && !parts.contains("..")
+                    && ((parts.count == 6 && parts[0] == "observations" && parts[3] == "coverage"
+                        && parts[4] == "go")
+                        || (parts.count == 3 && parts[0] == "coverage" && parts[1] == "bootstrap"))
+            })
+        else { throw ValidationError("Unsafe native archive member") }
+        let lines = CoverageIO.lines(
+            try String(
+                contentsOf: run.appendingPathComponent("coverage/native.sha256"),
+                encoding: .utf8
+            )
+        )
+        let entries = try lines.map { line -> (String, String) in
+            guard line.count > 66, String(line.dropFirst(64).prefix(2)) == "  ",
+                line.prefix(64).allSatisfy({ "0123456789abcdef".contains($0) })
+            else { throw ValidationError("Invalid native SHA manifest") }
+            return (String(line.dropFirst(66)), String(line.prefix(64)))
+        }
+        guard Set(entries.map(\.0)) == Set(members), Set(members).count == members.count,
+            Set(entries.map(\.0)).count == entries.count
+        else { throw ValidationError("Native archive differs from manifest") }
+        _ = try CoverageIO.command(["tar", "-xzf", archive.path, "-C", destination.path])
+        let paths = members.map { destination.appendingPathComponent($0) }
+        for path in paths {
+            let attributes = try FileManager.default.attributesOfItem(atPath: path.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular else {
+                throw ValidationError("Non-file native archive entry")
+            }
+        }
+        let expected = Dictionary(uniqueKeysWithValues: entries)
+        guard try CoverageIO.hashes(paths) == members.map({ expected[$0]! }) else {
+            throw ValidationError("Native archive hash mismatch")
+        }
+        return expected
+    }
+
     static func pack(run input: URL) throws {
         let run = input.resolvingSymlinksInPath()
         guard CoverageIO.exists(run) else {
@@ -20,10 +81,16 @@ extension GoCoverage {
         }
         let paths = try nativeFiles(run: run)
         let archive = run.appendingPathComponent("coverage/go-native.tar.gz")
-        if !paths.isEmpty {
-            guard !CoverageIO.exists(archive) else {
-                throw ValidationError("Native archive already exists; refusing to overwrite it")
-            }
+        if !paths.isEmpty && CoverageIO.exists(archive) {
+            let recovered = try CoverageIO.temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: recovered) }
+            let manifest = try unpackNativeArchive(run: run, into: recovered)
+            let names = try paths.map { try CoverageIO.relative($0, to: run) }
+            guard names.allSatisfy({ manifest[$0] != nil }),
+                try CoverageIO.hashes(paths) == names.map({ manifest[$0]! })
+            else { throw ValidationError("Unpacked native evidence differs from verified archive") }
+            for path in paths { try FileManager.default.removeItem(at: path) }
+        } else if !paths.isEmpty {
             try FileManager.default.createDirectory(
                 at: archive.deletingLastPathComponent(),
                 withIntermediateDirectories: true
