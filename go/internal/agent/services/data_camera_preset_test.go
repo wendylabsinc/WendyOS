@@ -351,3 +351,75 @@ func TestRecordingStatesItsPresetAgainWhenItReattaches(t *testing.T) {
 		})
 	}
 }
+
+// Where the device does not apply a stated preset to a camera's video, the
+// recording says so with the reason the deploy gave, however its frames came.
+func TestRecordingNamesTheReasonAStatedPresetIsNotApplied(t *testing.T) {
+	const why = "this device encodes with nvv4l2h264enc, which takes no preset"
+	c := newStoreTestCapture(t, &fakeReceipt{}, &data.SourceCapture{Store: data.CaptureStoreVideo, Preset: "medium"})
+	c.presetNotApplied = why
+	for i, preset := range []appconfig.EncodePreset{noPreset, noPreset, appconfig.EncodePresetUltrafast} {
+		if err := c.handleFrame(encodedAt(preset, uint64(i+1), time.Duration(i+1)*100*time.Millisecond, testRAUFrame)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := storePresetNote(t, c), "preset medium is not applied: "+why; got != want {
+		t.Errorf("note = %q\nwant   %q", got, want)
+	}
+	c.source.Capture = &data.SourceCapture{Store: data.CaptureStoreVideo}
+	if got := storePresetNote(t, c); got != "" {
+		t.Errorf("a source that states no preset says %q", got)
+	}
+}
+
+// The recording asks the same forecast the deploy warning does, whether it
+// begins at the trigger or from an armed ring.
+func TestRecordingOfACameraThatProducesH264SaysItsPresetIsNotApplied(t *testing.T) {
+	const want = "preset medium is not applied: the camera produces H.264 itself, so nothing is encoded"
+	for name, armed := range map[string]bool{"begun at the trigger": false, "begun from an armed ring": true} {
+		t.Run(name, func(t *testing.T) {
+			h := encoderCameras(t, softwareEncoderElements...)
+			fp := installFakeProducers(h.s)
+			stop := make(chan struct{})
+			defer close(stop)
+			go func() {
+				for {
+					select {
+					case <-stop:
+						return
+					case <-time.After(2 * time.Millisecond):
+						if fp.count() > 0 {
+							fp.hub(fp.count() - 1).broadcast(testH264Frame(testRAUFrame))
+						}
+					}
+				}
+			}()
+			adapter := &cameraDataAdapter{video: h.s}
+			source := data.Source{ID: "v4l2:/dev/video2", Kind: "camera", Detail: "Logi H264", Capture: &data.SourceCapture{Preset: "medium"}}
+			session := data.CaptureSession{Directory: t.TempDir()}
+			if armed {
+				session.CampaignKey = "cam"
+				adapter.Arm("cam", time.Second, []data.Source{source})
+				defer adapter.Disarm("cam")
+				waitUntil(t, "the ring has joined the camera", func() bool { return fp.count() == 1 && hubSubscriberCount(fp.hub(0)) == 1 })
+				time.Sleep(20 * time.Millisecond)
+			}
+			_, origin, _, err := data.CaptureReceipt()
+			if err != nil {
+				t.Fatal(err)
+			}
+			session.RequestBootNanos = origin
+			capture, err := adapter.Start(context.Background(), session, []data.Source{source})
+			if err != nil || capture == nil {
+				t.Fatalf("the recording did not start: %v", err)
+			}
+			results, err := capture.Stop(context.Background())
+			if err != nil || len(results) != 1 {
+				t.Fatalf("stop: %v, %d results", err, len(results))
+			}
+			if !strings.Contains(results[0].SourceDetail, want) {
+				t.Errorf("the source's detail is %q, want it to hold %q", results[0].SourceDetail, want)
+			}
+		})
+	}
+}

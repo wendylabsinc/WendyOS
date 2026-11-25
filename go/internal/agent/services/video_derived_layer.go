@@ -186,13 +186,6 @@ func softwareEncoderAmong(element string) string {
 // software.
 func (l *derivedLayer) softwareEncoder() string { return softwareEncoderAmong(l.h264Encoder()) }
 
-// softwareEncoderOfH264From is softwareEncoder of the layer a device with
-// these elements derives from frames of codec, without building it; "" also
-// for a device that cannot encode.
-func softwareEncoderOfH264From(codec agentpb.VideoCodec, available map[string]bool) string {
-	return softwareEncoderAmong(h264EncoderFrom(codec, available))
-}
-
 type derivedLayerGaveUp struct {
 	msg string
 	// afterPublishing says subscribers already hold frames this layer derived.

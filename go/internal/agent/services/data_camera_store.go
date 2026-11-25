@@ -80,34 +80,84 @@ func (s *VideoService) ownFramesForecast(hubKey string, req *agentpb.StreamVideo
 	return own, declined, native, true
 }
 
-// softwareEncoderOfVideoAt names the software element that encodes the video
-// of the camera a default capture runs at hubKey, and says whether that
-// capture also hands on the camera's own frames. A native source derives the
-// video from those frames; every other local camera is encoded by the
-// GStreamer pipeline, which hands on none. The element is "" for a camera
-// whose video needs no encoder here, for one whose capture is known only once
-// it runs (a SensorLink camera, a native source that cannot describe its
-// frames), and for an encoder not known to be software.
-func (s *VideoService) softwareEncoderOfVideoAt(hubKey string) (encoder string, ownFrames bool) {
-	if !strings.HasPrefix(hubKey, "/dev/video") || (s.sensorFrames != nil && isSensorLinkCameraPath(hubKey)) {
-		return "", false
+// videoForecast is how a default capture would make the video of a camera, as
+// far as can be told without running it.
+type videoForecast struct {
+	// softwareEncoder names the software element that encodes the video. It is
+	// "" for a camera whose video needs no encoder here, for one whose capture
+	// is known only once it runs (a SensorLink camera, a native source that
+	// cannot describe its frames), and for an encoder not known to be software.
+	softwareEncoder string
+	// ownFrames says the capture also hands on the camera's own frames: a
+	// native source derives the video from them, and every other local camera
+	// is encoded by the GStreamer pipeline, which hands on none.
+	ownFrames bool
+	// presetNotApplied is why a preset stated for the video is not applied,
+	// and "" where it is applied and where that is not known.
+	presetNotApplied string
+}
+
+func (s *VideoService) forecastVideoOf(src videoSource) videoForecast {
+	switch src.kind {
+	case sourceV4L2:
+	case sourceIP:
+		return videoForecast{presetNotApplied: presetIgnoredOwnH264}
+	default:
+		return videoForecast{}
 	}
 	_, available, err := s.gstElements()
 	if err != nil {
-		return "", false
+		return videoForecast{}
 	}
-	own, declined, native, asked := s.ownFramesForecast(hubKey, &agentpb.StreamVideoRequest{})
+	transport := camera.TransportUnknown
+	if s.classifyTransport != nil {
+		transport, _ = s.classifyTransport(filepath.Base(src.key))
+	}
+	// A feed of JPEG frames and Argus are launched once, at the default preset.
+	unshaped := s.sensorFrames != nil && isSensorLinkCameraPath(src.key)
+	var forecast videoForecast
+	var encoder string
+	own, declined, native, asked := s.ownFramesForecast(src.key, &agentpb.StreamVideoRequest{})
 	switch {
+	case asked && native && declined == "" && encodedFrames.receives(&videoFrame{codec: own.codec}):
+		return videoForecast{ownFrames: true, presetNotApplied: presetIgnoredOwnH264}
 	case asked && native && declined == "":
-		return softwareEncoderOfH264From(own.codec, available), true
+		encoder, forecast.ownFrames = h264EncoderFrom(own.codec, available), true
+		forecast.softwareEncoder = softwareEncoderAmong(encoder)
 	case asked && native:
-		return "", false
+		return videoForecast{}
+	default:
+		chosen, err := findGStreamerEncoderFromSet(available)
+		if err != nil {
+			return videoForecast{}
+		}
+		encoder = chosen.element
+		if chosen.codec == agentpb.VideoCodec_VIDEO_CODEC_H264 && !unshaped {
+			forecast.softwareEncoder = softwareEncoderAmong(encoder)
+		}
+		unshaped = unshaped || useArgusSource(transport, s.hostIsJetson(), available)
 	}
-	chosen, err := findGStreamerEncoderFromSet(available)
-	if err != nil || chosen.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || !encodesH264InSoftware(chosen.element) {
-		return "", false
+	switch {
+	case encoder == "":
+	case encoderPreset(encoder, noPreset) == noPreset:
+		forecast.presetNotApplied = fmt.Sprintf(presetIgnoredByEncoder, encoder)
+	case unshaped:
+		forecast.presetNotApplied = fmt.Sprintf(presetIgnoredUnshaped, encoderPreset(encoder, noPreset))
 	}
-	return chosen.element, false
+	return forecast
+}
+
+// whyPresetNotApplied is forecastVideoOf's reason for the camera a source
+// with this capture block records, and "" for a source that states no preset.
+func (s *VideoService) whyPresetNotApplied(devID uint32, capture *data.SourceCapture) string {
+	if capture.EncodePreset() == noPreset {
+		return ""
+	}
+	src, err := s.resolveSource(devID)
+	if err != nil {
+		return ""
+	}
+	return s.forecastVideoOf(src).presetNotApplied
 }
 
 // asksForEncodedVideo reports whether a recording or a pre-roll ring of a
@@ -127,7 +177,8 @@ func armsStandbyRing(source data.Source) bool {
 // DeployWarnings names each camera of the campaign present now whose video
 // this device encodes in software for the campaign, with the preset where the
 // encoder takes one: the one the camera's recording states, since inference
-// states none. It lists the cameras for
+// states none. It also names each camera whose recording states a preset that
+// this device does not apply to its video, with the reason. It lists the cameras for
 // any plan with a camera source, and resolves the plan's selectors with
 // data.Campaign.CamerasAmong. A camera is read as its recording asks; with a
 // buffer, the last listing Arm keeps a ring for decides instead, because the
@@ -163,30 +214,37 @@ func (a *cameraDataAdapter) DeployWarnings(ctx context.Context, campaign data.Ca
 			continue
 		}
 		src, err := a.video.resolveSource(devID)
-		if err != nil || src.kind != sourceV4L2 {
+		if err != nil {
 			continue
 		}
-		encoder, ownFrames := a.video.softwareEncoderOfVideoAt(src.key)
+		forecast := a.video.forecastVideoOf(src)
+		stated := readAs[source.ID].EncodePreset()
 		video := asksForEncodedVideo(readAs[source.ID])
-		if encoder == "" || (!inference && !video && ownFrames) {
-			continue
+		if encoder := forecast.softwareEncoder; encoder != "" && (inference || video || !forecast.ownFrames) {
+			willRunAt := ""
+			if forecast.presetNotApplied == "" {
+				recording := noPreset
+				if !inference {
+					recording = stated
+				}
+				willRunAt = betweenCommas(describePresetWhenRead(encoder, recording))
+			}
+			encoded := fmt.Sprintf("encoded in software (%s)%s on this device while ", encoder, willRunAt)
+			switch {
+			case inference:
+				encoded = "its video is " + encoded + "the campaign's inference runs"
+			case !video:
+				encoded = "it hands on no frames of its own, so what its source asks to store is recorded as video, " + encoded + "the campaign records or buffers"
+			case forecast.ownFrames && !asksForFramesAlone[source.ID]:
+				encoded = "its video is " + encoded + "the campaign records or buffers; store: frames keeps the camera's own frames without encoding"
+			default:
+				encoded = "its video is " + encoded + "the campaign records or buffers"
+			}
+			warnings = append(warnings, fmt.Sprintf("camera %s: %s", source.ID, encoded))
 		}
-		stated := noPreset
-		if video && !inference {
-			stated = readAs[source.ID].EncodePreset()
+		if ignored := describePresetIgnored(stated, forecast.presetNotApplied); ignored != "" {
+			warnings = append(warnings, fmt.Sprintf("camera %s: %s", source.ID, ignored))
 		}
-		encoded := fmt.Sprintf("encoded in software (%s)%s on this device while ", encoder, betweenCommas(describePresetWhenRead(encoder, stated)))
-		switch {
-		case inference:
-			encoded = "its video is " + encoded + "the campaign's inference runs"
-		case !video:
-			encoded = "it hands on no frames of its own, so what its source asks to store is recorded as video, " + encoded + "the campaign records or buffers"
-		case ownFrames && !asksForFramesAlone[source.ID]:
-			encoded = "its video is " + encoded + "the campaign records or buffers; store: frames keeps the camera's own frames without encoding"
-		default:
-			encoded = "its video is " + encoded + "the campaign records or buffers"
-		}
-		warnings = append(warnings, fmt.Sprintf("camera %s: %s", source.ID, encoded))
 	}
 	return warnings
 }
@@ -702,7 +760,9 @@ func presetNotAppliedNote(stated appconfig.EncodePreset, storedAt map[appconfig.
 func (c *cameraCapture) storeNotes() []string {
 	var notes []string
 	capture := c.source.Capture
-	if note := presetNotAppliedNote(capture.EncodePreset(), c.videoStoredAt); note != "" {
+	if note := describePresetIgnored(capture.EncodePreset(), c.presetNotApplied); note != "" {
+		notes = append(notes, note)
+	} else if note := presetNotAppliedNote(capture.EncodePreset(), c.videoStoredAt); note != "" {
 		notes = append(notes, note)
 	}
 	if c.nothingStoredSince != 0 {

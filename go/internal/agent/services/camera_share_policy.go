@@ -222,11 +222,13 @@ func describePresetIgnored(stated appconfig.EncodePreset, why string) string {
 	return camerashare.DescribePresetNotApplied(stated.String(), why)
 }
 
-// Why a preset stated for an h264 node is not applied.
+// Why a preset stated for an h264 node or for a campaign's stored video is
+// not applied.
 const (
-	presetIgnoredOwnH264   = "the camera produces H.264 itself, so no encoder runs for its node"
+	presetIgnoredOwnH264   = "the camera produces H.264 itself, so nothing is encoded"
 	presetIgnoredByEncoder = "this device encodes with %s, which takes no preset"
 	presetIgnoredNoEncoder = "no H.264 encoder that takes one was found on this device"
+	presetIgnoredUnshaped  = "this camera's pipeline always runs its encoder at the default preset, %s"
 )
 
 func describeServedInstead(askedFormat, servedFormat, whyNot string) string {

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -495,8 +497,8 @@ func TestCampaignDeployWarnings_NameThePresetTheSoftwareEncoderWillRunAt(t *test
 		"the recording states none": {softwareEncoderElements, recording(cameraSource("/dev/video4", "store: video")), c920RecordedWarning},
 		"the campaign's inference states none": {softwareEncoderElements, encoderPlan{inference: true, sources: [][]string{cameraSource("/dev/video4", "preset: veryfast")}},
 			c920InferenceWarning},
-		"a software encoder that takes no preset": {[]string{"avdec_h264", "jpegdec", "openh264enc"}, recording(cameraSource("/dev/video4", "preset: veryfast")),
-			"camera v4l2:/dev/video4: its video is encoded in software (openh264enc) on this device while " + recorded},
+		"a recording that stores both": {softwareEncoderElements, recording(cameraSource("/dev/video4", "store: both", "rate: 5", "preset: veryfast")),
+			"camera v4l2:/dev/video4: its video is encoded in software (x264enc)" + atVeryfast + " on this device while " + recorded},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := encoderCameras(t, tc.elements...)
@@ -504,5 +506,122 @@ func TestCampaignDeployWarnings_NameThePresetTheSoftwareEncoderWillRunAt(t *test
 				t.Errorf("warnings = %q\nwant       %q", got, []string{tc.want})
 			}
 		})
+	}
+}
+
+// onAJetsonSensor makes /dev/video4 a sensor on the CSI connector of a Jetson,
+// which the agent captures through Argus.
+func onAJetsonSensor(h *csHarness) {
+	h.s.classifyTransport = func(string) (camera.Transport, string) { return camera.TransportCSI, "tegra-capture-vi" }
+	h.s.isJetson = func() bool { return true }
+}
+
+// A campaign that states a preset this device will not apply to a camera's
+// stored video is told so at deploy, in one line with the reason, and the
+// warning of software encoding says "or a faster one" only of an encoder the
+// preset reaches.
+func TestCampaignDeployWarnings_SayWhenAStatedPresetWillNotBeApplied(t *testing.T) {
+	const (
+		recorded  = " on this device while the campaign records or buffers"
+		keepsOwn  = "; store: frames keeps the camera's own frames without encoding"
+		atMedium  = ", at preset medium or a faster one another consumer of the camera states,"
+		c920      = "camera v4l2:/dev/video4: "
+		inSoft    = "its video is encoded in software "
+		unshaped  = "this camera's pipeline always runs its encoder at the default preset, ultrafast"
+		ownH264   = "the camera produces H.264 itself, so nothing is encoded"
+		notAtAll  = "preset medium is not applied: "
+		takesNone = ", which takes no preset"
+	)
+	stated := []string{"store: video", "preset: medium"}
+	for name, tc := range map[string]struct {
+		elements []string
+		prepare  func(h *csHarness)
+		plan     encoderPlan
+		want     []string
+	}{
+		"x264enc and a webcam's JPEG frames: applied": {softwareEncoderElements, nil, recording(cameraSource("/dev/video4", stated...)),
+			[]string{c920 + inSoft + "(x264enc)" + atMedium + recorded + keepsOwn}},
+		"a hardware encoder": {[]string{"avdec_h264", "jpegdec", "nvv4l2h264enc"}, nil, recording(cameraSource("/dev/video4", stated...)),
+			[]string{c920 + notAtAll + "this device encodes with nvv4l2h264enc" + takesNone}},
+		"a software encoder that takes no preset": {[]string{"avdec_h264", "jpegdec", "openh264enc"}, nil, recording(cameraSource("/dev/video4", stated...)),
+			[]string{c920 + inSoft + "(openh264enc)" + recorded + keepsOwn, c920 + notAtAll + "this device encodes with openh264enc" + takesNone}},
+		"a camera that produces H.264 itself": {softwareEncoderElements, nil, recording(cameraSource("/dev/video2", stated...)),
+			[]string{"camera v4l2:/dev/video2: " + notAtAll + ownH264}},
+		"a Jetson sensor captured through Argus": {append([]string{"nvarguscamerasrc"}, softwareEncoderElements...), onAJetsonSensor, recording(cameraSource("/dev/video4", stated...)),
+			[]string{c920 + inSoft + "(x264enc)" + recorded, c920 + notAtAll + unshaped}},
+		"a Jetson sensor captured through Argus, no preset stated": {append([]string{"nvarguscamerasrc"}, softwareEncoderElements...), onAJetsonSensor, recording(cameraSource("/dev/video4")),
+			[]string{c920 + inSoft + "(x264enc)" + recorded}},
+		"a Jetson sensor and a hardware encoder": {[]string{"nvarguscamerasrc", "jpegdec", "nvv4l2h264enc"}, onAJetsonSensor, recording(cameraSource("/dev/video4", stated...)),
+			[]string{c920 + notAtAll + "this device encodes with nvv4l2h264enc" + takesNone}},
+		"a device that encodes VP8": {[]string{"jpegdec", "vp8enc", "webmmux"}, func(h *csHarness) {
+			h.s.gstMemo.mu.Lock()
+			h.s.gstMemo.available = map[string]bool{"jpegdec": true, "vp8enc": true, "webmmux": true}
+			h.s.gstMemo.mu.Unlock()
+		}, recording(cameraSource("/dev/video6", stated...)),
+			[]string{"camera v4l2:/dev/video6: " + notAtAll + "this device encodes with vp8enc" + takesNone}},
+		"with a buffer, the ring's listing states it": {[]string{"avdec_h264", "jpegdec", "nvv4l2h264enc"}, nil,
+			encoderPlan{buffer: "2s", sources: [][]string{cameraSource("/dev/video4", "preset: medium")}},
+			[]string{c920 + notAtAll + "this device encodes with nvv4l2h264enc" + takesNone}},
+		"a campaign with inference states it for its recording": {[]string{"avdec_h264", "jpegdec", "nvv4l2h264enc"}, nil,
+			encoderPlan{inference: true, sources: [][]string{cameraSource("/dev/video4", "preset: medium")}},
+			[]string{c920 + notAtAll + "this device encodes with nvv4l2h264enc" + takesNone}},
+		"no preset stated": {[]string{"avdec_h264", "jpegdec", "nvv4l2h264enc"}, nil, recording(cameraSource("/dev/video4", "store: video")), nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubV4L2NodeUsable(t, true)
+			h := encoderCameras(t, tc.elements...)
+			if tc.prepare != nil {
+				tc.prepare(h)
+			}
+			if got := deployWarningsOf(t, h, tc.plan); !slices.Equal(got, tc.want) {
+				t.Errorf("warnings = %q\nwant       %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The deploy's answer holds the line, and the stored plan does not.
+func TestCampaignDeploy_APresetThatWillNotBeAppliedIsWarnedOfAndNotStoredWithThePlan(t *testing.T) {
+	stubV4L2NodeUsable(t, true)
+	h := encoderCameras(t, "avdec_h264", "jpegdec", "nvv4l2h264enc")
+	service, deployed := deployedOn(t, h, recording(cameraSource("/dev/video4", "store: video", "preset: medium")))
+	want := []string{"camera v4l2:/dev/video4: preset medium is not applied: this device encodes with nvv4l2h264enc, which takes no preset"}
+	if got := deployed.GetWarnings(); !slices.Equal(got, want) {
+		t.Errorf("warnings = %q\nwant       %q", got, want)
+	}
+	stored, err := service.CampaignInspect(context.Background(), &agentpbv2.DataCampaignInspectRequest{Name: "encoder-notice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.GetWarnings(); len(got) != 0 {
+		t.Errorf("the stored plan holds %q", got)
+	}
+}
+
+// What cannot be listed among a device's cameras by path alone: a network
+// camera sends its own H.264, and a SensorLink camera's JPEG frames are
+// encoded by a pipeline that is not run in the shape its subscribers need.
+func TestForecastVideoOf_SaysWhyAPresetIsNotAppliedToCamerasThatAreNotLocalWebcams(t *testing.T) {
+	h := encoderCameras(t, softwareEncoderElements...)
+	h.s.sensorFrames = &SensorFrameFeed{}
+	sensorLink := fmt.Sprintf("/dev/video%d", ipcam.MCUBandStart)
+	for name, tc := range map[string]struct {
+		src  videoSource
+		want string
+	}{
+		"a network camera":    {videoSource{kind: sourceIP, key: "ip:200"}, "the camera produces H.264 itself, so nothing is encoded"},
+		"a SensorLink camera": {videoSource{kind: sourceV4L2, key: sensorLink, path: sensorLink}, "this camera's pipeline always runs its encoder at the default preset, ultrafast"},
+		"a ROS 2 camera":      {videoSource{kind: sourceROS2, key: "ros2:300"}, ""},
+		"a webcam":            {videoSource{kind: sourceV4L2, key: "/dev/video4", path: "/dev/video4"}, ""},
+	} {
+		if got := h.s.forecastVideoOf(tc.src).presetNotApplied; got != tc.want {
+			t.Errorf("%s: presetNotApplied = %q, want %q", name, got, tc.want)
+		}
+	}
+	stubV4L2NodeUsable(t, true)
+	hcCanDecode(h.s, "jpegdec", "nvv4l2h264enc")
+	if got, want := h.s.forecastVideoOf(videoSource{kind: sourceV4L2, key: sensorLink, path: sensorLink}).presetNotApplied,
+		"this device encodes with nvv4l2h264enc, which takes no preset"; got != want {
+		t.Errorf("a SensorLink camera on a device with a hardware encoder: presetNotApplied = %q, want %q", got, want)
 	}
 }

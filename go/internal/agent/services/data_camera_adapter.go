@@ -340,7 +340,8 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 			return a.video.joinHubKind(ctx, src.key, atDefaults, kind, capture.EncodePreset())
 		})(kind)
 	}
-	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, primaryKind: primaryKind, wantsNativeBeside: nativeBeside, monotonicMapping: a.monotonicMapping, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, lastSnapshotIdx: -1}
+	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, primaryKind: primaryKind, wantsNativeBeside: nativeBeside, monotonicMapping: a.monotonicMapping, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, lastSnapshotIdx: -1,
+		presetNotApplied: a.video.whyPresetNotApplied(devID, capture)}
 	if ownFramesRefusal != nil {
 		c.ownFramesNoLongerStored(ownFramesRefusal)
 	}
@@ -560,6 +561,9 @@ type cameraCapture struct {
 	videoStoredAt          map[appconfig.EncodePreset]uint64
 	lastVideoAt            appconfig.EncodePreset
 	awaitNewEncoderSegment bool
+	// presetNotApplied is why this device does not apply the preset the
+	// source states to the camera's video (VideoService.forecastVideoOf).
+	presetNotApplied string
 	// Snapshot state: the interval index of the last written snapshot (-1
 	// before the first) and intervals that produced no still.
 	lastSnapshotIdx int64

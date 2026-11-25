@@ -61,7 +61,7 @@ func TestCameraShareReport_SaysWhatBecomesOfAPresetOnACamerasH264Node(t *testing
 		"a software encoder without a preset":                 {csC920(), []string{"jpegdec", "openh264enc"}, "", "this device encodes with openh264enc, which takes no preset"},
 		"a hardware encoder chosen before x264enc":            {csC920(), []string{"jpegdec", "v4l2h264enc", "x264enc"}, "", "this device encodes with v4l2h264enc, which takes no preset"},
 		"an encoder that is hardware or software as it likes": {csC920(), []string{"jpegdec", "vtenc_h264"}, "", "this device encodes with vtenc_h264, which takes no preset"},
-		"a camera that produces H.264":                        {csH264Cam(), []string{"avdec_h264", "jpegdec", "x264enc"}, "", "the camera produces H.264 itself, so no encoder runs for its node"},
+		"a camera that produces H.264":                        {csH264Cam(), []string{"avdec_h264", "jpegdec", "x264enc"}, "", "the camera produces H.264 itself, so nothing is encoded"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newCSHarness(t, tc.camera)
@@ -163,7 +163,7 @@ func TestCreateCameraShares_AStatedPresetTheDeviceDoesNotApplyIsSaidOnTheNode(t 
 	}{
 		"a hardware encoder":                  {csC920(), []string{"jpegdec", "v4l2h264enc", "x264enc"}, "", "this device encodes with v4l2h264enc, which takes no preset"},
 		"a software encoder without a preset": {csC920(), []string{"jpegdec", "openh264enc"}, "; fed by the software encoder openh264enc", "this device encodes with openh264enc, which takes no preset"},
-		"a camera that produces H.264":        {csH264Cam(), []string{"avdec_h264", "jpegdec", "x264enc"}, "", "the camera produces H.264 itself, so no encoder runs for its node"},
+		"a camera that produces H.264":        {csH264Cam(), []string{"avdec_h264", "jpegdec", "x264enc"}, "", "the camera produces H.264 itself, so nothing is encoded"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := "/dev/" + tc.camera.base
@@ -356,7 +356,7 @@ func TestShareDecision_SaysWhyAPresetIsIgnoredOnlyOfAnH264NodeWhoseEncoderTakesN
 		"x264enc":                        {sfH264Mode, nodeFrames{own: jpeg, h264Encoder: "x264enc"}, ""},
 		"a hardware encoder":             {sfH264Mode, nodeFrames{own: jpeg, h264Encoder: "nvv4l2h264enc"}, "this device encodes with nvv4l2h264enc, which takes no preset"},
 		"no encoder":                     {sfH264Mode, nodeFrames{own: jpeg}, "no H.264 encoder that takes one was found on this device"},
-		"the camera's own H.264":         {sfH264Mode, nodeFrames{own: h264, h264Encoder: "x264enc"}, "the camera produces H.264 itself, so no encoder runs for its node"},
+		"the camera's own H.264":         {sfH264Mode, nodeFrames{own: h264, h264Encoder: "x264enc"}, "the camera produces H.264 itself, so nothing is encoded"},
 		"a node of the camera's frames":  {sfNativeMode, nodeFrames{own: jpeg, h264Encoder: "nvv4l2h264enc"}, ""},
 		"a node of pictures":             {sfPixelsMode, nodeFrames{own: jpeg, h264Encoder: "nvv4l2h264enc"}, ""},
 		"an h264 node that is not there": {sharedMode{}, nodeFrames{own: jpeg, h264Encoder: "nvv4l2h264enc"}, ""},

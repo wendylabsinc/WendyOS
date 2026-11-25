@@ -632,6 +632,7 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 		done: make(chan struct{}), ready: make(chan error, 1), mode: "continuous", rateCap: rateCap,
 		notes: notes, lastSnapshotIdx: -1, preRoll: preRoll, armed: true,
 		dropBaseline: baseline, armedDrops: armedDrops,
+		presetNotApplied: a.video.whyPresetNotApplied(a.devID, a.source.Capture),
 	}
 	go c.run()
 	select {
