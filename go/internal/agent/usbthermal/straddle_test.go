@@ -271,8 +271,10 @@ func TestCameraWithholdsFramesThatAreNotTemperatures(t *testing.T) {
 	window := blockWindow(t)
 	dev.bulk = replayFrames(1, func(seq uint16) []byte {
 		w := withCounter(window, seq)
-		// The picture rows where the temperatures belong: 239-243 degC.
-		copy(w[windowMargin+l.PictureBytes():], w[windowMargin:windowMargin+l.PictureBytes()])
+		// A leaked end-of-block word cannot be a temperature. Picture bytes
+		// alone are not an invalid-temperature signature: 239-243 degC is
+		// inside the Max's high range.
+		binary.LittleEndian.PutUint16(w[windowMargin+l.PictureBytes():], 0x00FF)
 		return w
 	})
 	b.attach(b.node(1, 15), dev)
