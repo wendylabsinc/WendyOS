@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -69,10 +70,7 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 	if discoverDevice && endpoint == "" {
 		return fmt.Errorf("pass --ca-certs-url for this PKI deployment, or supply --device-roots and --https-roots")
 	}
-	refreshURL, err := estRefreshURL(endpoint)
-	if err != nil {
-		return err
-	}
+	refreshURL := cfg.EstUrl
 	deviceRoots := cfg.DeviceRoots
 	httpsRoots := bytes.Clone(cfg.HttpsRoots)
 	seen := map[string]bool{}
@@ -162,6 +160,21 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 				}
 				return err
 			}
+			// Legacy discovery also accepts PEM and binary CMS. Only save a
+			// discovered URL if its response uses the board's EST transport format.
+			media, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+			payload := bytes.TrimSpace(body)
+			algorithm := profile.chainAlgorithm()
+			algorithms := resp.Header.Values(chainAlgorithmHeader)
+			matchesProfile := len(algorithms) == 0
+			if algorithm != "" {
+				matchesProfile = len(algorithms) == 1 && algorithms[0] == algorithm
+			}
+			if refreshURL == "" && media == "application/pkcs7-mime" &&
+				len(payload) > 0 && payload[0] != 0x30 && !bytes.HasPrefix(payload, []byte("-----")) && matchesProfile {
+				// A bootstrap endpoint may exceed the firmware URL limit.
+				refreshURL, _ = estRefreshURL(endpoint)
+			}
 			if profile.meshTrust {
 				discovered, err := discoveryCertificates(body, resp.Header.Get("Content-Type"))
 				if err != nil {
@@ -202,6 +215,34 @@ func defaultESTURL(csrURL, tenant string) string {
 	}
 	return (&url.URL{Scheme: "https", Host: "est." + suffix,
 		Path: "/.well-known/est/" + tenant + "/cacerts"}).String()
+}
+
+func hostedESTURL(csrURL, tenant string) string {
+	u, err := url.Parse(csrURL)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Fragment != "" ||
+		u.EscapedPath() != "/v1/"+tenant || u.RawQuery != "" || u.ForceQuery {
+		return ""
+	}
+	switch u.Host {
+	case "csr.pki.wendy.dev", "csr.dev.pki.wendy.dev", "csr.pki.wendy.sh", "csr.dev.pki.wendy.sh":
+		return defaultESTURL(csrURL, tenant)
+	default:
+		return ""
+	}
+}
+
+// SetESTURL saves an explicit refresh endpoint independently of the URL
+// used to bootstrap the board's trust. An omitted override keeps the default.
+func SetESTURL(cfg *litepb.WendyConfEnrollment, endpoint string) error {
+	if endpoint == "" {
+		return nil
+	}
+	resolved, err := estRefreshURL(endpoint)
+	if err != nil {
+		return fmt.Errorf("--est-url: %w", err)
+	}
+	cfg.EstUrl = resolved
+	return nil
 }
 
 func estRefreshURL(endpoint string) (string, error) {

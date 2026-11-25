@@ -59,6 +59,25 @@ func TestDiscoveryCMS(t *testing.T) {
 			if _, err := discoveryRoots(encode(append(ci, 0)), "application/pkcs7-mime"); err == nil {
 				t.Fatal("accepted trailing DER")
 			}
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/pkcs7-mime")
+				w.Header().Set(chainAlgorithmHeader, "ECDSA_P256")
+				if r.Method == http.MethodGet {
+					_, _ = w.Write(encode(ci))
+				}
+			}))
+			t.Cleanup(srv.Close)
+			cfg := &litepb.WendyConfEnrollment{CsrUrl: srv.URL, TimeUrl: "roughtime"}
+			if err := discoverTrust(context.Background(), srv.Client(), cfg, srv.URL); err != nil {
+				t.Fatal(err)
+			}
+			want := srv.URL + "/"
+			if raw {
+				want = ""
+			}
+			if cfg.EstUrl != want {
+				t.Fatalf("binary CMS=%v: saved EST URL = %q, want %q", raw, cfg.EstUrl, want)
+			}
 		}
 
 	}
@@ -91,8 +110,15 @@ func TestDiscoverTrustUsesVerifiedHTTPS(t *testing.T) {
 	if !cfg.ProvisionTrust || !bytes.Equal(cfg.DeviceRoots, root) || len(cfg.HttpsRoots) == 0 {
 		t.Fatal("missing USB trust")
 	}
-	if cfg.EstUrl != srv.URL+"/" {
-		t.Fatalf("saved EST URL = %q, want %q", cfg.EstUrl, srv.URL+"/")
+	if cfg.EstUrl != "" {
+		t.Fatalf("PEM bootstrap URL was saved as EST: %q", cfg.EstUrl)
+	}
+	const explicit = "https://mesh-pki.local:8443/distinct/cacerts?realm=lab"
+	if err := SetESTURL(cfg, explicit); err != nil {
+		t.Fatal(err)
+	}
+	if err := discoverTrust(context.Background(), srv.Client(), cfg, srv.URL); err != nil || cfg.EstUrl != explicit {
+		t.Fatalf("explicit EST URL = %q, err=%v", cfg.EstUrl, err)
 	}
 	// Even a transport deliberately skipping verification must not supply roots.
 	unsafe := srv.Client().Transport.(*http.Transport).Clone()

@@ -20,7 +20,7 @@ import (
 
 type liteEnrollmentOptions struct {
 	csrURL, timeURL, brokerHost       string
-	caCertsURL                        string
+	caCertsURL, estURL                string
 	deviceRoots, tsaRoots, httpsRoots string
 	brokerPort                        uint32
 }
@@ -44,8 +44,8 @@ func runSelectedDeviceEnrollment(cmd *cobra.Command, target *SelectedDevice, aut
 		}
 		return runLiteEnrollmentFn(cmd, *target.External, auth, name, opts)
 	}
-	if opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "" || opts.caCertsURL != "" {
-		return fmt.Errorf("trust bundle flags apply only to Wendy Lite devices")
+	if opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "" || opts.caCertsURL != "" || opts.estURL != "" {
+		return fmt.Errorf("trust bundle and EST flags apply only to Wendy Lite devices")
 	}
 	conn, err := connectFromSelectedDevice(target, resolveConfig{suppressProvisioningHint: true})
 	if err != nil {
@@ -118,6 +118,9 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	}
 	if opts.caCertsURL != "" && (opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "") {
 		return fmt.Errorf("use either --ca-certs-url or explicit root bundle files")
+	}
+	if err := liteenroll.SetESTURL(cfg, opts.estURL); err != nil {
+		return err
 	}
 	timeClient, err := liteenroll.ProvisionTrustForProfile(cfg, opts.deviceRoots, opts.tsaRoots, opts.httpsRoots, trustProfile)
 	if err != nil {

@@ -61,11 +61,12 @@ func TestConfigUsesSelectedPKI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CsrUrl != "https://csr.dev.pki.wendy.sh/v1/"+tenant || cfg.TimeUrl != "https://tsa.local/time" {
+	if cfg.CsrUrl != "https://csr.dev.pki.wendy.sh/v1/"+tenant || cfg.TimeUrl != "https://tsa.local/time" ||
+		cfg.EstUrl != "https://est.dev.pki.wendy.sh/.well-known/est/"+tenant+"/cacerts" {
 		t.Fatalf("unexpected endpoint derivation: %v", cfg)
 	}
 	cfg, err = Config(auth, deviceID, "https://csr.local:8443/v1/"+tenant, "https://tsa.local/time", "broker.local", 9443)
-	if err != nil || cfg.BrokerPort != 9443 {
+	if err != nil || cfg.BrokerPort != 9443 || cfg.EstUrl != "" {
 		t.Fatalf("self-hosted config: %v %v", cfg, err)
 	}
 }
