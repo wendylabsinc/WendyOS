@@ -116,7 +116,7 @@ func (a *deployAnswers) checkSteps() error {
 	if _, ok := keepTryingChoices[a.keepTrying]; !ok && a.keepTrying != "" {
 		return usageErrorf("--keep-trying must be 7d, 30d, 60d or 1y.")
 	}
-	if a.waitTimeout <= 0 {
+	if a.wait && a.waitTimeout <= 0 {
 		return usageErrorf("--wait-timeout must be longer than 0, e.g. 30m.")
 	}
 	return nil

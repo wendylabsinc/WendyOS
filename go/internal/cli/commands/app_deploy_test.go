@@ -421,3 +421,13 @@ func TestDeployWithAnUnsentDeviceFails(t *testing.T) {
 		}
 	})
 }
+
+// --wait-timeout is checked only with --wait, which it belongs to.
+func TestWaitTimeoutIsCheckedOnlyWithWait(t *testing.T) {
+	if err := (&deployAnswers{waitTimeout: 0}).checkSteps(); err != nil {
+		t.Fatalf("without --wait: %v", err)
+	}
+	if err := (&deployAnswers{wait: true, waitTimeout: 0}).checkSteps(); err == nil || !strings.Contains(err.Error(), "--wait-timeout must be longer than 0") {
+		t.Fatalf("with --wait: %v", err)
+	}
+}
