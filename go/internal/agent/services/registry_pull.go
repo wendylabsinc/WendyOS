@@ -112,7 +112,13 @@ const (
 	// startStepTimeout bounds a start the pull's stop does not cut. The
 	// start unpacks the release, which containerd's unpack lease allows 30
 	// minutes (multi-GB images on SD or eMMC), plus the create and start.
-	startStepTimeout  = 35 * time.Minute
+	startStepTimeout = 35 * time.Minute
+	// putBackTimeout bounds the put-back of the last applied app after a
+	// failed start. That release already ran, so nothing is unpacked; a
+	// stuck start holds its deployment at most startStepTimeout plus this
+	// (40 minutes), and with it a newer statement, a detach, a removal or a
+	// reset that must wait for the start to end.
+	putBackTimeout    = 5 * time.Minute
 	mediaTypeDockerV2 = "application/vnd.docker.distribution.manifest.v2+json"
 )
 

@@ -822,7 +822,8 @@ func TestPutBackRunsAnAppThatWasOnlyDown(t *testing.T) {
 
 // M6: the start step's budget covers containerd's 30-minute unpack lease,
 // and a start that ran its budget out still puts the last applied app back
-// under a budget of its own.
+// under a short budget of its own (a stuck start holds the device's
+// removals and reset at most 35 + 5 minutes, not 35 + 35).
 func TestRegistryPullStartBudgetCoversTheUnpackAndThePutBack(t *testing.T) {
 	if startStepTimeout <= 30*time.Minute {
 		t.Fatalf("startStepTimeout %v: a healthy 30-minute unpack would fail", startStepTimeout)
@@ -864,5 +865,8 @@ func TestRegistryPullStartBudgetCoversTheUnpackAndThePutBack(t *testing.T) {
 	last := len(rec.starts) - 1
 	if len(rec.starts[last].Env) != 0 || rec.startCtx[last] != nil || !rec.app.running {
 		t.Fatalf("last start %+v (ctx %v), app %+v: want the previous app put back under a live budget", rec.starts[last], rec.startCtx[last], rec.app)
+	}
+	if left := rec.startLeft[last]; left <= 0 || left > 5*time.Minute {
+		t.Fatalf("put-back budget %v: want at most 5 minutes", left)
 	}
 }

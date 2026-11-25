@@ -235,7 +235,8 @@ type importRecorder struct {
 	present   map[string]bool
 	appConfig []byte
 	starts    []ReleaseStart
-	startCtx  []error // each start's ctx.Err() as it began
+	startCtx  []error         // each start's ctx.Err() as it began
+	startLeft []time.Duration // each start's time to its ctx deadline (0: none)
 	startErr  func(ReleaseStart) error
 	// beforeReplace: startErr failures happen before the container is
 	// replaced (a refused validation). app is the app's container as the
@@ -269,6 +270,11 @@ type fakeApp struct {
 func (r *importRecorder) StartRelease(ctx context.Context, s ReleaseStart) (bool, error) {
 	r.starts = append(r.starts, s)
 	r.startCtx = append(r.startCtx, ctx.Err())
+	var left time.Duration
+	if d, ok := ctx.Deadline(); ok {
+		left = time.Until(d)
+	}
+	r.startLeft = append(r.startLeft, left)
 	var err error
 	if r.startErr != nil {
 		err = r.startErr(s)
