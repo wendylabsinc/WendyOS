@@ -105,7 +105,7 @@ func (a *deployAnswers) bindSteps(cmd *cobra.Command) {
 	f.StringVar(&a.note, "note", "", "6  Note for the history")
 	f.BoolVarP(&a.yes, "yes", "y", false, "6  Deploy without asking for confirmation")
 	f.BoolVar(&a.wait, "wait", false, "7  Stay until every device is done")
-	f.DurationVar(&a.waitTimeout, "wait-timeout", 30*time.Minute, "7  Stop waiting after this long, e.g. 45m or 2h")
+	f.DurationVar(&a.waitTimeout, "wait-timeout", 30*time.Minute, "7  With --wait, stop waiting after this long, e.g. 45m or 2h")
 }
 
 func (a *deployAnswers) checkSteps() error {
@@ -359,11 +359,11 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 
 	// 7  Progress
 	say("7/7  Progress")
-	follow := time.Duration(0)
-	if interactive || a.wait {
-		follow = a.waitTimeout
+	timeout := time.Duration(0) // an offline device is a normal state: only --wait gives up
+	if a.wait {
+		timeout = a.waitTimeout
 	}
-	if err := op.progress(ctx, d, rel.GetName(), online, follow, say); err != nil {
+	if err := op.progress(ctx, d, rel.GetName(), online, interactive || a.wait, timeout, say); err != nil {
 		return err
 	}
 	say("Follow it later with: wendy app deployment show %s/%s", a.app, plan.name)
@@ -481,15 +481,23 @@ func emptyRequired(config string, required []string) (string, error) {
 }
 
 // progress shows each device's state in the dashboard's words; with follow
-// above 0 it stays until every device is done, or follow has passed, printing
-// changes. Any failed device, or a device not done in time, is an error.
-func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, release string, online map[string]bool, follow time.Duration, say func(string, ...any)) error {
+// it stays until every device is done, printing changes, or until timeout
+// (above 0) has passed. Ctrl-C leaves it: the deployment goes on. Any failed
+// device, or a device not done in time, is an error.
+func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, release string, online map[string]bool, follow bool, timeout time.Duration, say func(string, ...any)) error {
 	shown := map[string]string{}
-	deadline := time.Now().Add(follow)
+	deadline := time.Now().Add(timeout)
+	left := func(err error) error {
+		if !interruptedByUser(ctx) {
+			return err
+		}
+		say("Stopped following. The deployment continues; follow it with: wendy app deployment show %s/%s", d.GetAppId(), d.GetName())
+		return nil
+	}
 	for {
 		rows, err := op.appDeviceStates(ctx, d.GetAppId(), d.GetId())
 		if err != nil {
-			return err
+			return left(err)
 		}
 		counts, done := map[string]int{}, true
 		for _, r := range rows {
@@ -501,8 +509,8 @@ func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, relea
 				say("%s", strings.TrimRight(line, " "))
 			}
 		}
-		late := follow > 0 && !done && !time.Now().Before(deadline)
-		if follow <= 0 || done || late {
+		late := follow && timeout > 0 && !done && !time.Now().Before(deadline)
+		if !follow || done || late {
 			var parts []string
 			for _, s := range []string{"running", "installed", "downloading", "waiting", "failed"} {
 				if counts[s] > 0 {
@@ -511,17 +519,21 @@ func (op *registryOp) progress(ctx context.Context, d *cloudpb.Deployment, relea
 			}
 			say("Deployed %s: %s %s to %s. %s.", d.GetName(), d.GetAppId(), release, plural(len(rows), "device"), strings.Join(parts, ", "))
 			if late {
-				return fmt.Errorf("stopped waiting after %s with devices not done. Check again with wendy app deployment show %s/%s, or wait longer with --wait-timeout", follow, d.GetAppId(), d.GetName())
+				return fmt.Errorf("stopped waiting after %s with devices not done. Check again with wendy app deployment show %s/%s, or wait longer with --wait-timeout", timeout, d.GetAppId(), d.GetName())
 			}
 			if counts["failed"] > 0 {
 				return fmt.Errorf("%s failed. The reason is next to each device above; fix it, then update the deployment", plural(counts["failed"], "device"))
 			}
 			return nil
 		}
+		wait := deployPoll
+		if timeout > 0 {
+			wait = min(wait, max(time.Until(deadline), 0))
+		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(min(deployPoll, max(time.Until(deadline), 0))):
+			return left(ctx.Err())
+		case <-time.After(wait):
 		}
 	}
 }
@@ -818,5 +830,5 @@ func (op *registryOp) showDeployment(ctx context.Context, appID, name string, ou
 	if err != nil {
 		return err
 	}
-	return op.progress(ctx, d, release, online, 0, say)
+	return op.progress(ctx, d, release, online, false, 0, say)
 }

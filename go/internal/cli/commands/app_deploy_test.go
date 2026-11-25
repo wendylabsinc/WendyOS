@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -354,5 +355,32 @@ func TestProgressMatchesTheStatementSent(t *testing.T) {
 	}
 	if err := op.showDeployment(context.Background(), "sh.wendy.example", "line-4", io.Discard); err == nil {
 		t.Fatal("show exits 0 with a failed device")
+	}
+}
+
+// In a terminal without --wait, progress follows with no time limit (an
+// offline device is a normal state), and Ctrl-C leaves it with exit 0 and
+// says the deployment continues.
+func TestDeployCtrlCLeavesProgressAndExitsZero(t *testing.T) {
+	op, fake, releaseID := stepsFixture(t)
+	prevPoll := deployPoll
+	deployPoll = time.Millisecond
+	t.Cleanup(func() { deployPoll = prevPoll })
+	a := allFlags(releaseID)
+	a.waitTimeout = time.Millisecond // --wait's limit; not given here
+	polls := 0
+	ctx, cancel := context.WithCancelCause(context.Background())
+	fake.report = func(s *cloudpb.AssetApp) {
+		s.PostboxEntryId-- // never reports the entry sent: stays waiting
+		if polls++; polls == 50 {
+			cancel(signalCause(os.Interrupt))
+		}
+	}
+	var out bytes.Buffer
+	if err := runDeploy(ctx, op, a, &out, true); err != nil || polls < 50 {
+		t.Fatalf("after %d polls: %v\n%s", polls, err, out.String())
+	}
+	if !strings.Contains(out.String(), "The deployment continues; follow it with: wendy app deployment show sh.wendy.example/line-3") {
+		t.Fatalf("output:\n%s", out.String())
 	}
 }

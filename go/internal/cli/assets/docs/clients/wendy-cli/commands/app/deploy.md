@@ -28,8 +28,10 @@ wendy app rotate --deployment <deployment-id> --device <device-uuid> [--device .
   nothing is created. A device that already runs the app in another
   deployment moves only with `--move` (or your confirmation). Progress shows
   each device as running, installed, downloading, waiting or failed, with the
-  reason; `--wait` stays until every device is done, for at most
-  `--wait-timeout` (30m by default). A device counts only once it reports
+  reason. In a terminal it follows until every device is done, with no time
+  limit (an offline device is a normal state); Ctrl-C leaves it and the
+  deployment continues. `--wait` stays until every device is done, for at
+  most `--wait-timeout` (30m by default). A device counts only once it reports
   the instruction just sent. deploy and deployment show exit non-zero when
   a device failed or the wait ran out.
 - The devices are every named device, every device with a chosen tag and
@@ -73,7 +75,7 @@ the machine that created the deployment.
 | `--note` | 6 Note for the history |
 | `--yes` | 6 Deploy without asking for confirmation |
 | `--wait` | 7 Stay until every device is done |
-| `--wait-timeout` | 7 Stop waiting after this long (default 30m) |
+| `--wait-timeout` | 7 With `--wait`, stop waiting after this long (default 30m) |
 | `--digest` | Refuse a release whose manifest digest is not this one |
 | `--deployment` | Deployment id (rotate) |
 | `--cloud-grpc` | Cloud gRPC endpoint of the session to use |
