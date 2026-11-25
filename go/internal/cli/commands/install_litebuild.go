@@ -105,9 +105,10 @@ type liteBuildOptions struct {
 	versionHint string
 
 	// simulator is the profile of the simulator that the firmware is built
-	// for (see createLiteSimulator). attrs are then the profile's values,
-	// nothing is asked, and the answers of the last install are neither used
-	// nor replaced.
+	// for (see createLiteSimulator). The values then come from the simulator
+	// section of the master configuration (liteSimulatorGiven), attrs and
+	// required are not used, nothing is asked, and the answers of the last
+	// install are neither used nor replaced.
 	simulator string
 	// out receives the build output; nil is stdout.
 	out io.Writer
@@ -418,7 +419,7 @@ func buildLiteFirmware(ctx context.Context, o liteBuildOptions) (*liteFirmware, 
 		return nil, err
 	}
 	if o.simulator != "" {
-		configurator.Given, err = liteSimulatorGiven(model, src, o.simulator, o.attrs)
+		configurator.Given, err = liteSimulatorGiven(model, src, o.simulator)
 	} else {
 		configurator.Given, err = liteBuildGiven(model, o.attrs, o.required)
 	}
@@ -470,7 +471,13 @@ func buildLiteFirmware(ctx context.Context, o liteBuildOptions) (*liteFirmware, 
 	if err != nil {
 		return nil, err
 	}
-	// Before the long build: the flasher must know the chip.
+	// Before the long build: the simulator emulates one chip, and the
+	// flasher must know the chip.
+	if o.simulator != "" {
+		if err := checkLiteSimulatorChip(src, o.simulator, build.chip); err != nil {
+			return nil, err
+		}
+	}
 	chip, err := chipModelForTarget(build.chip)
 	if err != nil {
 		return nil, err

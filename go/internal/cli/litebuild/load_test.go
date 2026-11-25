@@ -2,6 +2,7 @@ package litebuild
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -43,6 +44,15 @@ attributes:
 		{"display bad value", attrs + "display:\n  board:\n    values: {c: C}\n", "test: display: board: values: board: c is not one of: a, b"},
 		{"display bad default", attrs + "display:\n  board: {default: c}\n", "default: board: c is not one of: a, b"},
 		{"display bad priority", attrs + "display:\n  board: {priority: high}\n", "priority must be an integer"},
+		{"simulator not a map", attrs + "simulator: [a]\n", "test: simulator: expected a map of 'profile: {name: value}' entries"},
+		{"simulator bad profile name", attrs + "simulator:\n  Sim_A: {board: a}\n", "test: simulator: 'Sim_A' is not a valid profile name (lowercase letters, digits and '-')"},
+		{"simulator number profile name", attrs + "simulator:\n  1: {board: a}\n", "test: simulator: 1 is not a valid profile name"},
+		{"simulator empty profile", attrs + "simulator:\n  sim: {}\n", "test: simulator: sim: expected a non-empty map of 'name: value' entries"},
+		{"simulator profile not a map", attrs + "simulator:\n  sim: [board]\n", "test: simulator: sim: expected a non-empty map of 'name: value' entries"},
+		{"simulator sdkconfig", attrs + "simulator:\n  sim: {sdkconfig: X=y}\n", "test: simulator: sim: sdkconfig cannot be given in a simulator profile"},
+		{"simulator unknown attribute", attrs + "simulator:\n  sim: {chip: x}\n", `test: simulator: sim: unknown attribute "chip"`},
+		{"simulator no value", attrs + "simulator:\n  sim:\n    board:\n", "test: simulator: sim: board has no value"},
+		{"simulator bad value", attrs + "simulator:\n  sim: {board: c}\n", "test: simulator: sim: board: c is not one of: a, b"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -110,6 +120,45 @@ display:
 	}
 	if flash.Label(int64(8<<20)) != "Eight" || flash.Label(int64(4<<20)) != "4 MiB" {
 		t.Errorf("flash labels: %s, %s", flash.Label(int64(8<<20)), flash.Label(int64(4<<20)))
+	}
+}
+
+// TestLoadSimulator checks that the values of the simulator profiles are
+// normalized, as the values of a values file.
+func TestLoadSimulator(t *testing.T) {
+	const attrs = `
+attributes:
+  board: {type: string, enum: [a, b]}
+  net: {type: boolean}
+  flash: {type: size, enum: [4MiB, 8MiB]}
+`
+	m, err := Load([]byte(attrs+`
+simulator:
+  sim-a: {board: a, net: false, flash: 8MiB}
+  sim-b:
+    board: b
+    net: on
+`), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]any{
+		"sim-a": {"board": "a", "net": false, "flash": int64(8 << 20)},
+		"sim-b": {"board": "b", "net": true},
+	}
+	if !reflect.DeepEqual(m.Simulators, want) {
+		t.Errorf("Simulators = %#v, want %#v", m.Simulators, want)
+	}
+
+	// Without the section, or with "simulator:" alone: no profile.
+	for _, conf := range []string{attrs, attrs + "simulator:\n"} {
+		m, err := Load([]byte(conf), "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(m.Simulators) != 0 {
+			t.Errorf("Simulators = %#v, want none", m.Simulators)
+		}
 	}
 }
 

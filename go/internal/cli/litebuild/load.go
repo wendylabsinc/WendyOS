@@ -92,6 +92,9 @@ type Model struct {
 	Order         []*Attribute // declaration order
 	Rules         []*Rule
 	FormatVersion string
+	// Simulators are the input values of each simulator profile, normalized
+	// (section simulator).
+	Simulators map[string]map[string]any
 }
 
 // LoadFile reads and checks a master configuration file.
@@ -130,7 +133,7 @@ func load(doc *yaml.Node) (*Model, error) {
 	if m.FormatVersion, err = checkFormatVersion(data.get("format_version")); err != nil {
 		return nil, err
 	}
-	if err := checkKeys(data, "format_version", "attributes", "rules", DisplaySection); err != nil {
+	if err := checkKeys(data, "format_version", "attributes", "rules", DisplaySection, SimulatorSection); err != nil {
 		return nil, err
 	}
 	attrsNode := data.get("attributes")
@@ -156,6 +159,11 @@ func load(doc *yaml.Node) (*Model, error) {
 	}
 	if displayNode := data.get(DisplaySection); displayNode != nil && !isNull(displayNode) {
 		if err := m.parseDisplay(displayNode); err != nil {
+			return nil, err
+		}
+	}
+	if simulatorNode := data.get(SimulatorSection); simulatorNode != nil && !isNull(simulatorNode) {
+		if err := m.parseSimulator(simulatorNode); err != nil {
 			return nil, err
 		}
 	}
@@ -497,6 +505,50 @@ func (m *Model) parseDisplay(node *yaml.Node) error {
 		if err != nil {
 			return where(DisplaySection+": "+name, err)
 		}
+	}
+	return nil
+}
+
+// parseSimulator reads the simulator section: a map profile -> input
+// values, as _parse_simulator in conf_model.py. A profile cannot leave a
+// value empty.
+func (m *Model) parseSimulator(node *yaml.Node) error {
+	profiles, err := mapping(node, "expected a map of 'profile: {name: value}' entries")
+	if err != nil {
+		return where(SimulatorSection, err)
+	}
+	m.Simulators = map[string]map[string]any{}
+	for _, p := range profiles {
+		profile := p.key.Value
+		if p.key.Kind != yaml.ScalarNode || p.key.ShortTag() != "!!str" || !profileRe.MatchString(profile) {
+			return where(SimulatorSection, confErrorf("%s is not a valid profile name (lowercase letters, digits and '-')", pyRepr(scalarValue(p.key))))
+		}
+		entries, err := mapping(p.value, "expected a non-empty map of 'name: value' entries")
+		if err == nil && len(entries) == 0 {
+			err = confErrorf("expected a non-empty map of 'name: value' entries")
+		}
+		if err != nil {
+			return where(SimulatorSection+": "+profile, err)
+		}
+		values := make(map[string]any, len(entries))
+		for _, e := range entries {
+			name := e.key.Value
+			var err error
+			switch attr := m.Attributes[name]; {
+			case name == Sdkconfig:
+				err = confErrorf("%s cannot be given in a simulator profile", Sdkconfig)
+			case attr == nil:
+				err = confErrorf("unknown attribute \"%s\"", name)
+			case isNull(e.value):
+				err = confErrorf("%s has no value", name)
+			default:
+				values[name], err = attr.Normalize(scalarValue(e.value))
+			}
+			if err != nil {
+				return where(SimulatorSection+": "+profile, err)
+			}
+		}
+		m.Simulators[profile] = values
 	}
 	return nil
 }

@@ -20,6 +20,10 @@ const Sdkconfig = "sdkconfig"
 // DisplaySection is the top-level key of the display information.
 const DisplaySection = "display"
 
+// SimulatorSection is the top-level key of the simulator profiles: the
+// input values of each Wendy Lite simulator (wendy vm create --profile).
+const SimulatorSection = "simulator"
+
 // FormatMajor is the major format_version that this code reads: it reads
 // every "1.<minor>". A minor version must stay readable by an older reader
 // of the same major.
@@ -39,6 +43,8 @@ var sizeUnits = []struct {
 var (
 	sizeRe = regexp.MustCompile(`^\s*(\d+)\s*(KiB|MiB|GiB)?\s*$`)
 	nameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	// profileRe is the pattern of a simulator profile name.
+	profileRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 )
 
 // ConfError is an error in the master configuration or in the values.

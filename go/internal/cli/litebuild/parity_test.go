@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +25,8 @@ import (
 //
 //   - migration/<old_conf>: each entry of
 //     tools/configurator/conf_migration.yaml, solved directly and through
-//     the questions;
+//     the questions; migration/simulator_<profile>: each simulator profile
+//     of the master configuration, in the same way;
 //   - all/<NAME=VALUE ...>: each combination of answers that the questions
 //     allow.
 //
@@ -62,7 +64,7 @@ func TestPythonParity(t *testing.T) {
 	}
 
 	t.Run("migration", func(t *testing.T) {
-		for _, mc := range migrationCases(t, dir, m) {
+		for _, mc := range append(migrationCases(t, dir, m), simulatorCases(m)...) {
 			t.Run(mc.name, func(t *testing.T) {
 				// The Go work runs before t.Parallel: one at a time.
 				sol, err := c.solver.Evaluate(mc.inputs, nil)
@@ -337,6 +339,16 @@ func migrationCases(t *testing.T, dir string, m *Model) []migrationCase {
 			inputs[name] = v
 		}
 		cases = append(cases, migrationCase{e.OldConf, inputs})
+	}
+	return cases
+}
+
+// simulatorCases returns the input values of each simulator profile of the
+// master configuration.
+func simulatorCases(m *Model) []migrationCase {
+	var cases []migrationCase
+	for _, profile := range slices.Sorted(maps.Keys(m.Simulators)) {
+		cases = append(cases, migrationCase{"simulator " + profile, maps.Clone(m.Simulators[profile])})
 	}
 	return cases
 }

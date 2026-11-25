@@ -9,7 +9,6 @@ import (
 	"maps"
 	"net"
 	"os"
-	"slices"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/litebuild"
@@ -84,7 +83,6 @@ func createLiteSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Sim
 		fw, err := buildLiteFirmwareFn(ctx, liteBuildOptions{
 			nightly:     opts.Nightly,
 			version:     opts.Version,
-			attrs:       liteSimulatorAttrs(profile),
 			simulator:   profile,
 			out:         os.Stderr,
 			versionHint: liteSimulatorVersionHint(opts.Name, profile),
@@ -138,51 +136,34 @@ func readLiteFirmwareFile(ctx context.Context, path string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(simulatorContextReader{ctx: ctx, reader: f}, maxLiteFirmwareBytes+1))
 }
 
-// liteSimulatorAttrs returns the Wendy Lite build values of a simulator
-// profile. esp-emu emulates an ESP32-C6, so the board is a custom ESP32-C6:
-// a board of the master configuration could add pins or peripherals that
-// esp-emu does not have. 8MiB of flash gives the WASM runtime its partition
-// table and native apps their OTA slots, and stays below the 16 MiB that
-// prepareLiteFlash accepts. A simulator has no camera or microphone and is
-// never enrolled, so SensorLink and the Cloud tunnel are off. The ESP32-C6
-// has no PSRAM: the certificate chain is ECDSA P-256 (ML-DSA gives a
-// warning without PSRAM). The master configuration derives the other values
-// from these; a question left is an error (liteSimulatorPrompter).
-func liteSimulatorAttrs(profile string) map[string]string {
-	appType := "wasm"
-	if profile == vm.ProfileWendyLiteNative {
-		appType = "native"
-	}
-	return map[string]string{
-		"board":           "custom",
-		litebuild.Chip:    "esp32c6",
-		"flash_size":      "8MiB",
-		litebuild.AppType: appType,
-		"sensor_link_av":  "false",
-		"cloud_tunnel":    "false",
-		"chain_algorithm": "ecdsa_p256",
-	}
-}
-
 // liteSimulatorVersionHint is the hint of a Wendy Lite version that cannot
 // be built, for the simulator name of the profile.
 func liteSimulatorVersionHint(name, profile string) string {
 	return fmt.Sprintf("Specify a Wendy Lite version: wendy vm create %s --profile %s --version <version>", name, profile)
 }
 
-// liteSimulatorGiven returns the configurator values of attrs, the values of
-// a simulator profile. Each must be an attribute and a value of the master
-// configuration m of Wendy Lite src.
-func liteSimulatorGiven(m *litebuild.Model, src litebuild.Source, profile string, attrs map[string]string) (map[string]any, error) {
-	given := make(map[string]any, len(attrs))
-	for _, name := range slices.Sorted(maps.Keys(attrs)) {
-		value, err := m.ParseValue(name, attrs[name])
-		if err != nil {
-			return nil, liteSimulatorIncompatible(src, profile, err)
-		}
-		given[name] = value
+// liteSimulatorGiven returns the configurator values of a simulator profile:
+// the values of the profile in the simulator section of the master
+// configuration m of Wendy Lite src, which explains them. The rules give the
+// other values; a question left is an error (liteSimulatorPrompter).
+func liteSimulatorGiven(m *litebuild.Model, src litebuild.Source, profile string) (map[string]any, error) {
+	values, ok := m.Simulators[profile]
+	if !ok {
+		return nil, liteSimulatorIncompatible(src, profile, fmt.Errorf(
+			"%s has no %s profile %q: update the Wendy CLI, or choose another Wendy Lite version with --version",
+			litebuild.MasterConfFile, litebuild.SimulatorSection, profile))
 	}
-	return given, nil
+	return maps.Clone(values), nil
+}
+
+// checkLiteSimulatorChip checks the chip of a simulator build, before the
+// build: esp-emu emulates only vm.LiteChip.
+func checkLiteSimulatorChip(src litebuild.Source, profile, chip string) error {
+	if chip != vm.LiteChip {
+		return liteSimulatorIncompatible(src, profile, fmt.Errorf(
+			"the profile gives chip %s, but the simulator emulates an %s", chip, vm.LiteChip))
+	}
+	return nil
 }
 
 // liteSimulatorIncompatible is the error of a Wendy Lite version that cannot

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -77,11 +76,11 @@ func stubLiteSimulatorBuild(t *testing.T, image []byte) *[]liteBuildOptions {
 
 func TestLiteSimulatorBuildsFirmware(t *testing.T) {
 	for _, tc := range []struct {
-		profile, appType string
-		image            []byte
+		profile string
+		image   []byte
 	}{
-		{vm.ProfileWendyLite, "wasm", liteTestImage()},
-		{vm.ProfileWendyLiteNative, "native", liteTestNativeImage()},
+		{vm.ProfileWendyLite, liteTestImage()},
+		{vm.ProfileWendyLiteNative, liteTestNativeImage()},
 	} {
 		t.Run(tc.profile, func(t *testing.T) {
 			calls := stubLiteSimulatorBuild(t, tc.image)
@@ -94,12 +93,9 @@ func TestLiteSimulatorBuildsFirmware(t *testing.T) {
 				t.Fatalf("%d builds, want 1", len(*calls))
 			}
 			o := (*calls)[0]
-			want := map[string]string{
-				"board": "custom", "chip": "esp32c6", "flash_size": "8MiB",
-				"app_type": tc.appType, "sensor_link_av": "false", "cloud_tunnel": "false",
-				"chain_algorithm": "ecdsa_p256",
-			}
-			if !maps.Equal(o.attrs, want) || o.simulator != tc.profile || o.version != "feature/x" || o.nightly {
+			// The values of the profile come from the master configuration
+			// of the version that is built (liteSimulatorGiven).
+			if len(o.attrs) != 0 || o.simulator != tc.profile || o.version != "feature/x" || o.nightly {
 				t.Fatalf("build options: attrs %v, simulator %q, version %q, nightly %v", o.attrs, o.simulator, o.version, o.nightly)
 			}
 			// stdout is the JSON-RPC channel of the MCP server.
@@ -165,10 +161,10 @@ func TestLiteSimulatorBuildChecks(t *testing.T) {
 	}
 }
 
-// liteSimulatorConf is a master configuration with the attributes of the
-// simulator profiles. Each attribute changes the sdkconfig, as in the real
-// one: an attribute that changes nothing is never asked, and a value given
-// for it is not possible.
+// liteSimulatorConf is a master configuration with the attributes and the
+// simulator profiles of the real one. Each attribute changes the sdkconfig,
+// as in the real one: an attribute that changes nothing is never asked, and
+// a value given for it is not possible.
 const liteSimulatorConf = `
 attributes:
   board: {type: string, enum: [custom, esp32c6_devkit_c_1_n8]}
@@ -213,11 +209,30 @@ display:
   wendy_net: {priority: 6}
   cloud_tunnel: {priority: 7}
   chain_algorithm: {priority: 8}
+simulator:
+  wendy-lite:
+    board: custom
+    chip: esp32c6
+    flash_size: 8MiB
+    app_type: wasm
+    sensor_link_av: false
+    wendy_net: false
+    cloud_tunnel: false
+    chain_algorithm: ecdsa_p256
+  wendy-lite-native:
+    board: custom
+    chip: esp32c6
+    flash_size: 8MiB
+    app_type: native
+    sensor_link_av: false
+    wendy_net: false
+    cloud_tunnel: false
+    chain_algorithm: ecdsa_p256
 `
 
 func TestLiteSimulatorBuildValues(t *testing.T) {
 	src := litebuild.Source{Name: "1.2.3", Version: "1.2.3", Commit: strings.Repeat("cd", 20)}
-	run := func(conf string) (*litebuild.Model, *litebuild.Result, error) {
+	run := func(conf, profile string) (*litebuild.Model, *litebuild.Result, error) {
 		t.Helper()
 		m, err := litebuild.Load([]byte(conf), "test")
 		if err != nil {
@@ -227,40 +242,58 @@ func TestLiteSimulatorBuildValues(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c.Given, err = liteSimulatorGiven(m, src, vm.ProfileWendyLiteNative, liteSimulatorAttrs(vm.ProfileWendyLiteNative))
+		c.Given, err = liteSimulatorGiven(m, src, profile)
 		if err != nil {
 			return m, nil, err
 		}
-		res, err := c.Run(&liteSimulatorPrompter{TUIPrompter: litebuild.TUIPrompter{Out: io.Discard}, src: src, profile: vm.ProfileWendyLiteNative})
+		res, err := c.Run(&liteSimulatorPrompter{TUIPrompter: litebuild.TUIPrompter{Out: io.Discard}, src: src, profile: profile})
 		return m, res, err
 	}
 
-	// The profile answers every question.
-	m, res, err := run(liteSimulatorConf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := liteBuildSteps(m, res)
-	if err != nil || b.chip != "esp32c6" {
-		t.Fatalf("build: %+v, %v", b, err)
-	}
-	if !slices.Contains(b.configure, "app_type=native") || !slices.Contains(b.configure, "board=custom") {
-		t.Fatalf("configure.py arguments: %v", b.configure)
-	}
-	if len(res.Solution.Warnings) != 0 {
-		t.Errorf("the profile gives warning %s", res.Solution.Warnings[0].Warning.ID)
+	// Each profile of the CLI answers every question, with its values from
+	// the master configuration.
+	for profile, appType := range map[string]string{vm.ProfileWendyLite: "wasm", vm.ProfileWendyLiteNative: "native"} {
+		m, res, err := run(liteSimulatorConf, profile)
+		if err != nil {
+			t.Fatalf("%s: %v", profile, err)
+		}
+		b, err := liteBuildSteps(m, res)
+		if err != nil || b.chip != vm.LiteChip {
+			t.Fatalf("%s: build: %+v, %v", profile, b, err)
+		}
+		if err := checkLiteSimulatorChip(src, profile, b.chip); err != nil {
+			t.Fatalf("%s: %v", profile, err)
+		}
+		// wendy_net=false is a value of the profile, but the custom board
+		// rule sets it: it is not an input.
+		want := []string{"board=custom", "chip=esp32c6", "flash_size=8MiB", "app_type=" + appType,
+			"sensor_link_av=false", "cloud_tunnel=false", "chain_algorithm=ecdsa_p256"}
+		if !slices.Equal(b.configure, want) {
+			t.Fatalf("%s: configure.py arguments %v, want %v", profile, b.configure, want)
+		}
+		if len(res.Solution.Warnings) != 0 {
+			t.Errorf("%s: the profile gives warning %s", profile, res.Solution.Warnings[0].Warning.ID)
+		}
 	}
 
 	// A question that the profile does not answer.
 	noCustomRule := strings.Replace(liteSimulatorConf, "  - if: board == \"custom\"\n    set: {wendy_net: false}\n", "", 1)
-	_, _, err = run(noCustomRule)
+	noCustomRule = strings.ReplaceAll(noCustomRule, "    wendy_net: false\n", "")
+	_, _, err := run(noCustomRule, vm.ProfileWendyLiteNative)
 	if err == nil || !strings.Contains(err.Error(), "(wendy_net), which the wendy-lite-native simulator does not set") {
 		t.Fatalf("got %v", err)
 	}
 
-	// A profile value that the master configuration does not accept.
-	_, _, err = run(strings.Replace(noCustomRule, "[custom, esp32c6_devkit_c_1_n8]", "[esp32c6_devkit_c_1_n8]", 1))
-	if err == nil || !strings.HasPrefix(err.Error(), "Wendy Lite 1.2.3 cannot be built for the wendy-lite-native simulator: ") {
+	// A Wendy Lite version without the profile.
+	_, _, err = run(strings.Replace(liteSimulatorConf, "  wendy-lite-native:\n", "  wendy-lite-other:\n", 1), vm.ProfileWendyLiteNative)
+	if err == nil || !strings.HasPrefix(err.Error(), "Wendy Lite 1.2.3 cannot be built for the wendy-lite-native simulator: ") ||
+		!strings.Contains(err.Error(), `master_config.yaml has no simulator profile "wendy-lite-native"`) {
+		t.Fatalf("got %v", err)
+	}
+
+	// A profile for a chip that esp-emu does not emulate.
+	err = checkLiteSimulatorChip(src, vm.ProfileWendyLiteNative, "esp32s3")
+	if err == nil || !strings.Contains(err.Error(), "the profile gives chip esp32s3, but the simulator emulates an esp32c6") {
 		t.Fatalf("got %v", err)
 	}
 }
