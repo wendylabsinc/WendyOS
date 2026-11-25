@@ -135,7 +135,7 @@ if ($Stage -in @('aggregate', 'all')) {
 }
 
 if ($Stage -in @('review', 'all')) {
-    $reviewArgs = @()
+    $reviewArgs = $repoArgs
     if ($Diff) { $reviewArgs += @('--diff', $Diff) }
     foreach ($runDir in $runDirs) {
         & (Join-Path $ScriptDir 'E2EReview.ps1') --run-dir $runDir @reviewArgs

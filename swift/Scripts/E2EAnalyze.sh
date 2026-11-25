@@ -30,7 +30,7 @@ Options:
   --run-id ID       Analyze attempts matching this run ID prefix;
                     defaults to today's local run, or WENDY_E2E_RUN_ID/GITHUB_RUN_ID.
   --stage STAGE     aggregate, review, report, or all.
-  --repo DIR        Tested source checkout for aggregate and report.
+  --repo DIR        Tested source checkout for aggregate, review and report.
   --diff RANGE      Git range for aggregate comparison and optional AI review.
   --open            Open the newest generated report when supported; default.
   --no-open         Do not open a report.
@@ -221,7 +221,7 @@ if [[ "$STAGE" == "aggregate" || "$STAGE" == "all" ]]; then
 fi
 
 if [[ "$STAGE" == "review" || "$STAGE" == "all" ]]; then
-  review_args=()
+  review_args=("${repo_args[@]}")
   if [[ -n "$DIFF" ]]; then
     review_args+=(--diff "$DIFF")
   fi
