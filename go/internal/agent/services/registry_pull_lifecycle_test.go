@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -896,5 +897,67 @@ func TestRemovalCutsAStuckStart(t *testing.T) {
 	}
 	if n := len(rec.removed); n == 0 || rec.removed[n-1].prune || rec.removed[n-1].app != base.GetAppId() {
 		t.Fatalf("removals %+v: want the app's container and releases removed", rec.removed)
+	}
+}
+
+// M6: an ABSENT revision and a reset cut a start stuck in containerd, as a
+// removal does, and its put-back, then remove the app's container and
+// releases (a reset: every app's).
+func TestAbsentAndResetCutAStuckStart(t *testing.T) {
+	stuck := func(t *testing.T) (*pbFixture, *importRecorder, *cloudpbv2.DeviceAssignment) {
+		f, rec, base := runningRelease(t)
+		began := make(chan struct{})
+		rec.hang = began
+		next := proto.Clone(base).(*cloudpbv2.DeviceAssignment)
+		next.Revision, next.ConfigJson = 2, `{"MODE":"b"}`
+		f.assignEntry(next)
+		f.cycleWithin(5 * time.Second)
+		select {
+		case <-began:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the start never began")
+		}
+		return f, rec, base
+	}
+	noPutBack := func(t *testing.T, rec *importRecorder) {
+		for i := 2; i < len(rec.starts); i++ { // 0: revision 1, 1: the stuck one
+			if rec.startCtx[i] == nil {
+				t.Fatalf("start %d %+v: want no put-back past the cut", i, rec.starts[i])
+			}
+		}
+	}
+	t.Run("absent", func(t *testing.T) {
+		f, rec, base := stuck(t)
+		gone := proto.Clone(base).(*cloudpbv2.DeviceAssignment)
+		gone.Revision, gone.DesiredState = 3, cloudpbv2.Running_ABSENT
+		f.assignEntry(gone)
+		f.cycleWithin(5 * time.Second)
+		noPutBack(t, rec)
+		if n := len(rec.removed); n == 0 || rec.removed[n-1].prune || rec.removed[n-1].app != base.GetAppId() {
+			t.Fatalf("removals %+v: want the app's container and releases removed", rec.removed)
+		}
+	})
+	for _, imagesOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reset imagesOnly=%v", imagesOnly), func(t *testing.T) {
+			f, rec, _ := stuck(t)
+			done := make(chan error, 1)
+			go func() { done <- f.p.RemoveAllReleases(context.Background(), imagesOnly) }()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the reset waited for the stuck start")
+			}
+			noPutBack(t, rec)
+			want := removal{app: ""}
+			if imagesOnly {
+				want = removal{app: "images"}
+			}
+			if n := len(rec.removed); n == 0 || !rec.removed[n-1].equal(want) {
+				t.Fatalf("removals %+v: want every release removed (%+v)", rec.removed, want)
+			}
+		})
 	}
 }
