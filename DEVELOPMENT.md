@@ -396,8 +396,11 @@ The agent drives them itself through usbfs (`/dev/bus/usb/BBB/DDD`), in
 [`go/internal/agent/usbthermal`](go/internal/agent/usbthermal/doc.go). Today
 that is the TOPDON TC001 Max (USB `3474:4962`). It is found from sysfs, listed
 as **TC001 Max (thermal)** with an ID from the 88-95 band, and given a
-serial-based stable ID such as
-`by-id:usb-TOPDON_TECHNOLOGY_Co.__Ltd._TC001_Max_<serial>-thermal`.
+USB-port-based stable ID such as `by-path:usb-1-2.3-thermal`. Factory
+serials are not reliably unique, so every Max uses its port, even when only
+one is connected. The ID survives replugging and agent restarts on that port;
+moving the camera to another port changes it. Use the exact stable ID from
+`camera list`; older serial-based Max IDs must be selected again.
 
 ```sh
 wendy device camera list

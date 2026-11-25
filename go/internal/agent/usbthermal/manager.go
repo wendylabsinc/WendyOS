@@ -39,7 +39,7 @@ type Options struct {
 // Listing is one attached camera as ListVideoDevices reports it.
 type Listing struct {
 	ID       uint32 // device id, in IDBandStart..IDBandEnd
-	StableID string // "by-id:usb-<vendor>_<model>_<serial>-thermal", or "by-path:..." for a twin
+	StableID string // "by-path:usb-<port>-thermal"; identifies the USB port
 	Name     string // e.g. "TC001 Max (thermal)"
 	Model    string // the camera's USB product string, e.g. "TC001 Max"
 	Serial   string
@@ -98,7 +98,7 @@ func NewManager(ctx context.Context, opts Options) *Manager {
 // A device id is stable for the agent's lifetime: a camera keeps its number
 // across an unplug and replug. Across an agent restart the first camera is
 // IDBandStart again, which is the common case of one camera; StableID is the
-// name that survives everything.
+// name that survives a restart on the same physical USB port.
 func (m *Manager) List() []Listing {
 	cams := scanSysfs(m.opts.SysfsRoot)
 	present := make(map[string]bool, len(cams))

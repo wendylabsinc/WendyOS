@@ -19,7 +19,7 @@ import (
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
-const testThermalStableID = "by-id:usb-TOPDON_TECHNOLOGY_Co.__Ltd._TC001_Max_YFDVS000000000001-thermal"
+const testThermalStableID = "by-path:usb-1-2.3-thermal"
 
 // fakeUSBThermal stands in for usbthermal.Manager: one attached TC001 Max
 // whose frames the test pushes.

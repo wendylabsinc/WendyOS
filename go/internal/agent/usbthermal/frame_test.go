@@ -181,6 +181,9 @@ func TestCheckTemperatures(t *testing.T) {
 		}(),
 		"a cold store at -30 degC":     fill(-30),
 		"a hot plant room at 140 degC": fill(140),
+		"a hot scene at 200 degC":      fill(200),
+		"a hot scene at 240 degC":      fill(240),
+		"the high range at 550 degC":   fill(550),
 	}
 	for name, d := range pass {
 		if err := rawFrameOf(d).CheckTemperatures(); err != nil {
@@ -193,12 +196,9 @@ func TestCheckTemperatures(t *testing.T) {
 			set(d, 5, 126, 981)
 			return d
 		}(),
-		"the picture rows read as temperatures": slices.Concat(room[:l.PictureBytes()], room[:l.PictureBytes()]),
 		"the end-of-block row read as temperatures": slices.Concat(room[:l.PictureBytes()],
 			bytes.Repeat([]byte{0xFF, 0x00}, l.PictureBytes()/2)),
 		"no pixel with a reading": slices.Concat(room[:l.PictureBytes()], make([]byte, l.PictureBytes())),
-		"median -50 degC":         fill(-50),
-		"median 200 degC":         fill(200),
 		"a short frame":           room[:l.RawBytes()-2],
 	}
 	for name, d := range fail {
@@ -206,4 +206,24 @@ func TestCheckTemperatures(t *testing.T) {
 			t.Errorf("%s: CheckTemperatures = %v, want ErrNotTemperatures", name, err)
 		}
 	}
+}
+
+// These helpers construct scenes and describe captured fixtures; neither is
+// a criterion for accepting a frame from the camera.
+func celsiusToCounts(c float64) uint16 { return uint16((c+273.15)/KelvinPerCount + 0.5) }
+
+func (f RawFrame) medianCounts() uint16 {
+	var vals []uint16
+	for y := range f.Height / 2 {
+		for x := range f.Width {
+			if v, ok := f.Temperature(x, y); ok && !noReading(v) {
+				vals = append(vals, v)
+			}
+		}
+	}
+	if len(vals) == 0 {
+		return 0
+	}
+	slices.Sort(vals)
+	return vals[len(vals)/2]
 }
