@@ -4664,7 +4664,6 @@ const h264ByteStream = " ! h264parse config-interval=-1 ! video/x-h264,stream-fo
 // layer's frame numbering rests on, together with bframes=0 in keyframeArg.
 const x264Settings = " tune=zerolatency"
 
-// noPreset is what a consumer that states no encoder preset passes.
 const noPreset = appconfig.EncodePresetUnset
 
 // presetArg is the property through which an encoder takes a preset, and ""

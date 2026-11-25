@@ -94,7 +94,6 @@ func (sc *SourceCapture) StoresFrames() bool {
 	return sc != nil && (sc.Store == CaptureStoreFrames || sc.Store == CaptureStoreBoth)
 }
 
-// EncodePreset is the preset the source states, and unset without one.
 func (sc *SourceCapture) EncodePreset() appconfig.EncodePreset {
 	if sc == nil {
 		return appconfig.EncodePresetUnset

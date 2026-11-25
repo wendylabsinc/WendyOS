@@ -31,7 +31,6 @@ type nodeFrames struct {
 	h264Encoder string
 }
 
-// softwareEncoder is h264Encoder when it is known to encode in software.
 func (f nodeFrames) softwareEncoder() string { return softwareEncoderAmong(f.h264Encoder) }
 
 // isDepthOrInfraredNode is behind a var so tests can describe a RealSense node

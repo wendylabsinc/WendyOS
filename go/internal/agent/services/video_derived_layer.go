@@ -172,19 +172,12 @@ func h264EncoderFrom(codec agentpb.VideoCodec, available map[string]bool) string
 	return enc.element
 }
 
-// softwareEncoderAmong is element when it is known to encode in software, and
-// "" otherwise.
 func softwareEncoderAmong(element string) string {
 	if !encodesH264InSoftware(element) {
 		return ""
 	}
 	return element
 }
-
-// softwareEncoder names the software element the layer makes H.264 with, or
-// "": for a layer that encodes nothing, and for an encoder not known to be
-// software.
-func (l *derivedLayer) softwareEncoder() string { return softwareEncoderAmong(l.h264Encoder()) }
 
 type derivedLayerGaveUp struct {
 	msg string

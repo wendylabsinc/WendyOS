@@ -47,7 +47,6 @@ func ParseEncodePreset(name string) EncodePreset {
 	return EncodePresetUnset
 }
 
-// String is the preset's name, and "" for a value that states none.
 func (p EncodePreset) String() string {
 	if !p.known() {
 		return ""

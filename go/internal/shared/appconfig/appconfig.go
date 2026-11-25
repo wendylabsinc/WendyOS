@@ -592,11 +592,9 @@ type cameraClaim struct {
 	preset        EncodePreset
 }
 
-const noEncodePreset = "no preset"
-
 func (c cameraClaim) presetAsked() string {
 	if c.preset == EncodePresetUnset {
-		return noEncodePreset
+		return "no preset"
 	}
 	return c.preset.String()
 }
@@ -703,7 +701,7 @@ func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (fo
 	}
 	format = settle("format", CameraFormats[0], func(c cameraClaim) string { return c.format })
 	stamp = settle("stamp", CameraStamps[0], func(c cameraClaim) string { return c.stamp })
-	preset = ParseEncodePreset(settle("preset", noEncodePreset, cameraClaim.presetAsked))
+	preset = ParseEncodePreset(settle("preset", cameraClaim{}.presetAsked(), cameraClaim.presetAsked))
 	return format, stamp, preset, conflicts
 }
 

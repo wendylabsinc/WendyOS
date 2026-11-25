@@ -51,7 +51,6 @@ func describeShareSettings(format, stamp string) string {
 	return fmt.Sprintf("format %s, stamp %s", format, stamp)
 }
 
-// describeStatedPreset follows a node's settings when its app states a preset.
 func describeStatedPreset(preset appconfig.EncodePreset) string {
 	if preset == noPreset {
 		return ""
@@ -176,7 +175,6 @@ func describePresetWhenRead(element string, stated appconfig.EncodePreset) strin
 	return camerashare.DescribeEncoderPreset(stated.String(), fallback.String())
 }
 
-// betweenCommas sets a clause off inside a sentence, and is "" for none.
 func betweenCommas(clause string) string {
 	if clause == "" {
 		return ""

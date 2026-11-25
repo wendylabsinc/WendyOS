@@ -117,8 +117,7 @@ type hubDemand struct {
 	// encoderOff mirrors setPipelineEncodes, inverted so that the zero value
 	// matches every producer that never calls it: they all encode.
 	encoderOff bool
-	// preset is what setEncoderPreset last recorded.
-	preset appconfig.EncodePreset
+	preset     appconfig.EncodePreset
 }
 
 // subscribePixels adds an in-agent consumer of the tap's uncompressed frames.
