@@ -219,6 +219,21 @@ func (g Grid) turnCellsAtMargin(p Point, from, to, margin float64, visit func(Ce
 
 func Heading(a, b Point) float64 { return math.Atan2(b.Y-a.Y, b.X-a.X) }
 
+// RayHit returns the distance from origin to the first measured obstacle cell
+// along heading, sampled between from and to metres. It reads LiDAR evidence
+// for ranging a seen object; it never authorizes movement.
+func (g Grid) RayHit(origin Point, heading, from, to float64) (float64, bool) {
+	if !origin.Valid() || !finite(heading) {
+		return 0, false
+	}
+	for d := from; d <= to; d += CellSize / 2 {
+		if g.Obstacles[cell(Point{origin.X + d*math.Cos(heading), origin.Y + d*math.Sin(heading)})] {
+			return d, true
+		}
+	}
+	return 0, false
+}
+
 func (g Grid) Transition(a Point, yaw float64, b Point) bool {
 	if a.Distance(b) < 1e-9 {
 		return g.ClearPose(a, yaw)

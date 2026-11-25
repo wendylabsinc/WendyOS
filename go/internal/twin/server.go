@@ -34,7 +34,21 @@ type robotSession struct {
 	searchTurns, searchMoves   int
 	searchPhase                string
 	searchReport               json.RawMessage
+	findMu                     sync.Mutex
+	findCancel                 context.CancelFunc
+	findRoot                   uint64
+	find                       twinrobot.FindStatus
+	findViews                  chan findView
 }
+
+func (session *robotSession) cancelFind() {
+	session.findMu.Lock()
+	defer session.findMu.Unlock()
+	if session.findCancel != nil {
+		session.findCancel()
+	}
+}
+
 type Server struct {
 	Store        *Store
 	Conn         grpc.ClientConnInterface
@@ -183,6 +197,7 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 				previous.searchCancel()
 			}
 			previous.searchMu.Unlock()
+			previous.cancelFind()
 			// Drain any mapping sample captured by the old operator before a new
 			// session can reset that robot's persisted localization history.
 			previous.pendingMu.Lock()
@@ -230,14 +245,27 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	q.Sequence *= stride
 	q.MatchSequence *= stride
-	if q.Operation != "poll" && q.Operation != "video" && q.Operation != "search-poll" && q.Operation != "reset-localization" {
+	finding := q.Operation == "find-poll" || q.Operation == "find-view"
+	if q.Operation != "poll" && q.Operation != "video" && q.Operation != "search-poll" && q.Operation != "reset-localization" && !finding {
 		session.searchMu.Lock()
 		if session.searchCancel != nil {
 			session.searchCancel()
 		}
 		session.searchMu.Unlock()
 	}
+	// Any other order, including Stop and a manual destination, ends a find.
+	if q.Operation != "poll" && q.Operation != "video" && !finding {
+		session.cancelFind()
+	}
 	switch q.Operation {
+	case "find":
+		err = s.startFind(session, q)
+	case "find-poll":
+		session.findMu.Lock()
+		out.Find = session.find
+		session.findMu.Unlock()
+	case "find-view":
+		err = session.acceptFindView(q.View, q.Image)
 	case "search":
 		err = s.startSearch(session, q)
 	case "search-poll":

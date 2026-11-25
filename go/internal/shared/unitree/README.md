@@ -36,6 +36,17 @@ budget. A MOVE stays in effect for 500 ms: unless another MOVE refreshes it, the
 StopMove, so the robot stops when the caller disappears. Any other command cancels a
 pending move. If a MOVE fails, the agent attempts StopMove.
 
+`Connection.Bark` plays one bundled 1.45-second bark through Go2's speaker. It
+uses the audio hub's megaphone requests on `rt/api/audiohub/request`: enter (4001),
+the WAV as 1-based base64 blocks of 4,096 characters (4003), then exit (4002).
+Each block waits for its acknowledgement, and megaphone mode is left even when the
+upload fails. `Command` accepts it as command value 7. The shared service contract
+does not name that value yet, so an agent without it answers `InvalidArgument`.
+Bark is not a motion command and leaves a pending move expiry armed. The clip is
+`bark.wav` (CC0; source and edits in `Examples/Go2CameraSearch/audio/SOURCE.txt`),
+resampled to 44.1 kHz as the reference client does. No robot has played it yet:
+firmware acceptance, volume and the playback delay are unverified.
+
 These are software limits, not an emergency stop. If Stop cannot reach the robot
 (host crash, Wi-Fi loss), the robot can keep moving, so keep the vendor remote at hand.
 

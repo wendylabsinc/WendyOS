@@ -47,7 +47,7 @@ func (r *SiteRobot) DiscoveryStep(sequence, root uint64) error {
 	}
 	now := time.Now()
 	if r.closed || r.ctx.Err() != nil || now.Sub(r.heartbeat) > 600*time.Millisecond {
-		return errors.New("The map is no longer active.")
+		return ErrOperatorLease
 	}
 	if err := r.observed.Ready(now); err != nil {
 		return fmt.Errorf("%w: %v", ErrObservationUnavailable, err)

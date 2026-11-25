@@ -49,7 +49,7 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	}
 	now := time.Now()
 	if r.closed || r.ctx.Err() != nil || now.Sub(r.heartbeat) > 600*time.Millisecond {
-		return errors.New("The map is no longer active.")
+		return ErrOperatorLease
 	}
 	if err := r.observed.Ready(now); err != nil {
 		return fmt.Errorf("%w: %v", ErrObservationUnavailable, err)

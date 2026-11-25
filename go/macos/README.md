@@ -1308,6 +1308,35 @@ Tracking uses the twin's calibrated RGB cameras and needs no additional model
 download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
 
+### Asking chat to find something with Go2
+
+In a device's Chat, ask for example "Have the robot dog find the toolbox. I'm not
+sure what room it's in. Have it bark when it finds it." Chat proposes
+`find_with_robot` with the object and the bark choice. Go2 walks, so nothing
+happens until you approve that call.
+
+The reply then contains a live third-person view. It opens the device's first site
+model (choose another in the view before the search starts), connects to Go2 and
+waits for its position in that site to be confirmed, as the Site Model view does.
+The camera then trails Go2 through the room model, with the room's LiDAR points,
+Go2's joints, its route, an orange marker where the object was placed, and Go2's
+front camera in the corner. When the object is seen, the corner shows that camera
+frame with the detection outlined.
+
+The search itself runs on the gateway; see
+[Find an object](../apps/digital-twin/README.md#find-an-object) for what Go2 does
+and its limits. The view supplies the camera frames and keeps Go2's movement lease
+alive. **Stop Go2**, scrolling the view out of the conversation, switching devices
+or leaving the app stops Go2 and ends the search. A search is sent once per
+approved request and is not restarted when the view reappears.
+
+It needs a paired, connected Go2, a site model, and a vision-capable model in the
+device's Ollama, such as `qwen3-vl:4b`. With on-device chat the selected model is
+used when it can see images. Chat's own answer only says the search has started;
+the view reports whether the object was found, where the search gave up, and
+whether Go2 barked. An agent that predates the bark command reports that instead
+of barking. This flow has unit tests only; it has not run on a robot.
+
 ### Asking chat about recorded activity
 
 Native iOS and macOS chat can query data on the device where the conversation

@@ -32,6 +32,26 @@ struct SiteRobotCandidate: Sendable {
     var yaw, rms, coverage: Double
 
 }
+/// Progress of a Linux "find this object" mission, as the twin reports it.
+struct RobotFindStatus: Decodable, Sendable, Equatable {
+    var State = ""
+    var Phase = ""
+    var Message = ""
+    var Query = ""
+    var WantsView: UInt64 = 0
+    var Viewpoints = 0
+    var Views = 0
+    var Remembered = false
+    var Seen = false
+    var Located = false
+    var X = 0.0
+    var Z = 0.0
+    var Box: [Double] = []
+    var BoxView: UInt64 = 0
+    var Barked = false
+    var BarkFailure = ""
+    var searching: Bool { State == "searching" }
+}
 protocol SiteRobotObserving: Sendable {
     func open(session: UInt64, serial: String) async throws -> UInt64
     func poll(_ handle: UInt64) async throws -> SiteRobotReading
@@ -67,25 +87,41 @@ final class SiteRobotClient: SiteRobotObserving, SiteRobotTurning, SiteRobotSear
     }
     func resetLocalization(_ handle: UInt64, sequence: UInt64, frame: String) async throws {
         struct Command: Encodable { var Operation = "reset-localization"; var Sequence: UInt64; var Frame: String }
-        _ = try await remoteRequest(handle, data: JSONEncoder().encode(Command(Sequence: sequence, Frame: frame)))
+        let _: RemoteReply = try await remoteRequest(handle, data: JSONEncoder().encode(Command(Sequence: sequence, Frame: frame)))
     }
     func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws {
         struct Command: Encodable { var Operation = "search"; var Sequence: UInt64; var Fusion: RobotFusionRequest }
-        _ = try await remoteRequest(handle, data: JSONEncoder().encode(Command(Sequence: sequence, Fusion: request)))
+        let _: RemoteReply = try await remoteRequest(handle, data: JSONEncoder().encode(Command(Sequence: sequence, Fusion: request)))
     }
     func searchStatus(_ handle: UInt64) async throws -> RemoteReply {
         try await remoteRequest(handle, data: Data(#"{"Operation":"search-poll"}"#.utf8))
     }
-    private func remoteRequest(_ handle: UInt64, data: Data) async throws -> RemoteReply {
+    private func remoteRequest<Reply: Decodable & Sendable>(_ handle: UInt64, data: Data) async throws -> Reply {
         let json = String(decoding: data, as: UTF8.self)
         return try await perform {
             try GoClient.withCString(json) {
                 guard let p = WDSiteRobotRequest(handle, $0) else { throw WendyError(message: "Missing Linux twin response.") }
                 defer { WDSiteRobotFusionFree(p) }
                 try GoClient.check(p.pointee.status)
-                return try JSONDecoder().decode(RemoteReply.self, from: Data(GoClient.string(p.pointee.json).utf8))
+                return try JSONDecoder().decode(Reply.self, from: Data(GoClient.string(p.pointee.json).utf8))
             }
         }
+    }
+    private struct FindReply: Decodable, Sendable { var Find: RobotFindStatus }
+    /// Starts a Linux find mission. Linux plans, looks and moves; this client
+    /// renders progress and supplies the camera frames Linux asks for.
+    func find(_ handle: UInt64, sequence: UInt64, frame: String, query: String, bark: Bool, model: String, port: UInt32) async throws {
+        struct Command: Encodable { var Operation = "find"; var Sequence: UInt64; var Frame, Query: String; var Bark: Bool; var Model: String; var ModelPort: UInt32 }
+        let _: FindReply = try await remoteRequest(handle, data: JSONEncoder().encode(
+            Command(Sequence: sequence, Frame: frame, Query: query, Bark: bark, Model: model, ModelPort: port)))
+    }
+    func findStatus(_ handle: UInt64) async throws -> RobotFindStatus {
+        let reply: FindReply = try await remoteRequest(handle, data: Data(#"{"Operation":"find-poll"}"#.utf8))
+        return reply.Find
+    }
+    func findView(_ handle: UInt64, view: UInt64, jpeg: Data) async throws {
+        struct Command: Encodable { var Operation = "find-view"; var View: UInt64; var Image: Data }
+        let _: FindReply = try await remoteRequest(handle, data: JSONEncoder().encode(Command(View: view, Image: jpeg)))
     }
     func open(session: UInt64, serial: String) async throws -> UInt64 {
         try await perform {
@@ -135,7 +171,7 @@ final class SiteRobotClient: SiteRobotObserving, SiteRobotTurning, SiteRobotSear
             }
             let command = Command(Sequence: sequence, Frame: frame, X: position.x, Z: position.z, Floor: position.y, Yaw: yaw,
                 Fusion: RobotFusionRequest(frame: frame, architecture: geometry.architecture, furniture: geometry.furniture, visual: nil, reference: []))
-            _ = try await remoteRequest(handle, data: JSONEncoder().encode(command))
+            let _: RemoteReply = try await remoteRequest(handle, data: JSONEncoder().encode(command))
             return
         }
         try await perform { try GoClient.withCString(frame) { try GoClient.finish(WDSiteRobotAlign(handle, sequence, $0, position.x, position.z, position.y, yaw)) } }

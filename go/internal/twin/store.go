@@ -45,7 +45,41 @@ type Room struct {
 	LegacyPoints []Point                      `json:"legacyPoints,omitempty"`
 	Removed      bool                         `json:"removed"`
 	Sources      map[string]uint64            `json:"sources,omitempty"`
+	// Where a robot last saw a named object. A hint for the next search, never
+	// proof that the object is still there.
+	Objects map[string]RoomObject `json:"objects,omitempty"`
 }
+type RoomObject struct {
+	X        float64 `json:"x"`
+	Z        float64 `json:"z"`
+	SeenUnix int64   `json:"seenUnix"`
+}
+
+// SaveObject records a sighting. It keeps at most 64 objects, dropping the oldest.
+func (s *Store) SaveObject(frame, name string, object RoomObject) error {
+	return s.withFrame(frame, func() error {
+		r, e := s.read(strings.Split(frame, "/")[0])
+		if e != nil {
+			return e
+		}
+		if r.Objects == nil {
+			r.Objects = map[string]RoomObject{}
+		}
+		r.Objects[name] = object
+		for len(r.Objects) > 64 {
+			oldest := name
+			for key, v := range r.Objects {
+				if v.SeenUnix < r.Objects[oldest].SeenUnix {
+					oldest = key
+				}
+			}
+			delete(r.Objects, oldest)
+		}
+		r.Revision++
+		return s.write(r)
+	})
+}
+
 type Store struct {
 	mu        sync.Mutex
 	directory string
@@ -260,6 +294,7 @@ func (s *Store) Put(r Room) (Room, error) {
 		r.HasModel = old.HasModel
 		r.HasVisualMap = old.HasVisualMap
 		r.References = old.References
+		r.Objects = old.Objects
 		r.Points = old.Points
 		r.PointLayers = old.PointLayers
 		r.LegacyPoints = old.LegacyPoints
@@ -284,6 +319,7 @@ func (s *Store) Put(r Room) (Room, error) {
 		r.PointLayers = nil
 		r.LegacyPoints = nil
 		r.References = nil
+		r.Objects = nil
 		r.Sources = nil
 	}
 	r.Revision++

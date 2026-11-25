@@ -125,6 +125,7 @@
 		5FBD09FC5D3CC36947C4EE0B /* ChatCloudSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4CBC7C8ABEC458177AA44B /* ChatCloudSettings.swift */; };
 		604357B1B1F9B45D0EB3CB93 /* SiteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEC266E17CA48D89E2A7DA57 /* SiteStore.swift */; };
 		604A146A3A9A0202DEF64736 /* SiteVisualMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 453C94DF8A0078EC17B2D427 /* SiteVisualMap.swift */; };
+		607C4965C78C03210B6E8657 /* RobotFindCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 829A1E6AE4DE470155273B26 /* RobotFindCard.swift */; };
 		60A966F7107F6D27DA94DEC8 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
 		60B5F00D61E666108B8E604C /* VPNControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16082719BD2BF75BBBF59D09 /* VPNControls.swift */; };
 		61783CD803B9FF9CE23FBA27 /* MeshGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D7C90E8A6DFBFEBCBDC415 /* MeshGraphView.swift */; };
@@ -148,6 +149,7 @@
 		6FC51A15B6A00B68E69125A4 /* CampaignsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6206A67A4FAB8807E533A7F1 /* CampaignsView.swift */; };
 		6FD3EF6A632B76884FA7319E /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0DDA1A07827F3064598323B /* ActivityView.swift */; };
 		6FE367532D1AF4A4ED353037 /* SiteRealityProjection.metal in Sources */ = {isa = PBXBuildFile; fileRef = B300B334EB44105C3A135D2D /* SiteRealityProjection.metal */; };
+		71846A8760424BBAF272EE30 /* SiteChaseViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D378D671FEBCE8A8FB471E83 /* SiteChaseViewTests.swift */; };
 		72F278CD4596A3810B62747E /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = F7E321F63953AD979A129C4F /* SwiftTerm */; };
 		76A42584B2D5A4BCA51FAFA9 /* DeviceAudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0038357CF8976FBB01A9221 /* DeviceAudioView.swift */; };
 		76E5D9279EC8FE76BB7AE4BC /* H264VideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C93776C64F09D31D72C65AD /* H264VideoDecoder.swift */; };
@@ -285,6 +287,7 @@
 		CF7B25CD87AA4249EC3FCABC /* SiteRobotHazardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F723F56E5BD07722817AD88 /* SiteRobotHazardTests.swift */; };
 		D0E481DF826074F1875DAFDD /* SiteCameraColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FFC744729F358EB031585D5 /* SiteCameraColor.swift */; };
 		D17A0FC4CFBE9232DA7F6B34 /* CampaignSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */; };
+		D1C0E95CC2D82C84E1D5B4AD /* RobotFindCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 829A1E6AE4DE470155273B26 /* RobotFindCard.swift */; };
 		D2D83E7D232E0FD0DC79BDD6 /* SiteRobotGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */; };
 		D4B58CE3488AD1EDF4E5B3BF /* MobileRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 997174D2436A34109AF1823C /* MobileRootView.swift */; };
 		D6032CBE6D896CD6A5BB9C99 /* SiteRobotClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02EB82B6FACB20593A314081 /* SiteRobotClient.swift */; };
@@ -529,6 +532,7 @@
 		7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncActions.swift; sourceTree = "<group>"; };
 		7DEAEE88B9129990D3810958 /* SimulatorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorsView.swift; sourceTree = "<group>"; };
 		81E3C4300F1E2222E4ECCA7F /* MobileSiteRealityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSiteRealityView.swift; sourceTree = "<group>"; };
+		829A1E6AE4DE470155273B26 /* RobotFindCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RobotFindCard.swift; sourceTree = "<group>"; };
 		82AC2E778CCB1834490684FD /* MobileLensViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileLensViews.swift; sourceTree = "<group>"; };
 		830BF31D5054ED12AE4A2499 /* MobileVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileVideoPlayer.swift; sourceTree = "<group>"; };
 		8365356E3DFE9319DA387C60 /* SiteAutomaticAlignment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteAutomaticAlignment.swift; sourceTree = "<group>"; };
@@ -596,6 +600,7 @@
 		D12072D59326B47F07A71F81 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		D1F0FE01F434594987BCB7D5 /* DataTimelineViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataTimelineViewport.swift; sourceTree = "<group>"; };
 		D21E701A6DA5340AAC173A75 /* SitePersonMarker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitePersonMarker.swift; sourceTree = "<group>"; };
+		D378D671FEBCE8A8FB471E83 /* SiteChaseViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteChaseViewTests.swift; sourceTree = "<group>"; };
 		D387BA11A6E8345C67EC3A1C /* SiteFogControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteFogControls.swift; sourceTree = "<group>"; };
 		D5B2D6E09E17A33A168BD805 /* RealityProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealityProjectionTests.swift; sourceTree = "<group>"; };
 		D63AE3C5E01CE28F9A89C0EE /* VisualRecognition.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = VisualRecognition.cpp; sourceTree = "<group>"; };
@@ -783,6 +788,7 @@
 				40A7543FFAE45034DB228D85 /* PlatformServices.swift */,
 				1E60D04FF79C72E6F5AC5678 /* PresentedFailure.swift */,
 				4FD4712852B6F400373343C3 /* PushNotifications.swift */,
+				829A1E6AE4DE470155273B26 /* RobotFindCard.swift */,
 				78EF1B380CC110B5531DD514 /* SimulatorClient.swift */,
 				BE257C469E079D73200337A3 /* SimulatorRenderer.swift */,
 				7DEAEE88B9129990D3810958 /* SimulatorsView.swift */,
@@ -846,6 +852,7 @@
 				AA96AC91DE1B6D4C296226BF /* SimulatorTests.swift */,
 				29731A268C7EA376952C0151 /* SiteAutomaticAlignmentTests.swift */,
 				37814D56A945DF55B3199567 /* SiteCameraColorTests.swift */,
+				D378D671FEBCE8A8FB471E83 /* SiteChaseViewTests.swift */,
 				86688E5547A234D7615F2455 /* SiteFogTests.swift */,
 				5958890C690A885A313B8C83 /* SitePeopleTrackingTests.swift */,
 				99B2A869864F58FBEBFD1692 /* SitePersonMarkerTests.swift */,
@@ -1566,6 +1573,7 @@
 				9F1B78165E6F7A5B6190BAF1 /* SimulatorTests.swift in Sources */,
 				2A7D6511A3DE1DC959ED96CA /* SiteAutomaticAlignmentTests.swift in Sources */,
 				F11E1744956905F3C08BEB7F /* SiteCameraColorTests.swift in Sources */,
+				71846A8760424BBAF272EE30 /* SiteChaseViewTests.swift in Sources */,
 				02D7725C91B17BB9DA8CC191 /* SiteFogTests.swift in Sources */,
 				DA56924A4C743A950A9768A5 /* SitePeopleTrackingTests.swift in Sources */,
 				A1029715689BE1AA8B1537D6 /* SitePersonMarkerTests.swift in Sources */,
@@ -1680,6 +1688,7 @@
 				E5D917C5F9CB012DDC2D8F42 /* PlatformServices.swift in Sources */,
 				93B23A2E3D9EDC9087659488 /* PresentedFailure.swift in Sources */,
 				6475BF2FB6CB0A19AF740E66 /* PushNotifications.swift in Sources */,
+				607C4965C78C03210B6E8657 /* RobotFindCard.swift in Sources */,
 				8BFA17385F84DAD460A97274 /* RobotLensCalibration.swift in Sources */,
 				4AEBC9851152DACB5BC50D93 /* RobotLensCalibrationView.swift in Sources */,
 				383ECC2E48DFADB704DB2FA9 /* ScreenLensCalibration.swift in Sources */,
@@ -1837,6 +1846,7 @@
 				C3B9202FADD6F7B7462C64ED /* PlatformServices.swift in Sources */,
 				2D56AD29CF7094E56D4C28D4 /* PresentedFailure.swift in Sources */,
 				C22F6C5DB72DEA503FA54640 /* PushNotifications.swift in Sources */,
+				D1C0E95CC2D82C84E1D5B4AD /* RobotFindCard.swift in Sources */,
 				5668338BD2BA340E14E5AE56 /* RobotLensCalibration.swift in Sources */,
 				53E84E62DA9798E5250E2898 /* RobotLensCalibrationView.swift in Sources */,
 				1B0BB53494D63B19B9CEE96E /* ScreenLensCalibration.swift in Sources */,

@@ -21,8 +21,38 @@ type Request struct {
 	Direction, Index        int
 	Mesh                    []sitenav.Triangle
 	Fusion                  json.RawMessage
+	// find: what to look for, whether to bark, and the gateway's loopback
+	// Ollama port and preferred vision model. find-view: one JPEG camera frame
+	// answering FindStatus.WantsView.
+	Query     string
+	Bark      bool
+	Model     string
+	ModelPort uint32
+	View      uint64
+	Image     []byte
+}
+
+// FindStatus is the progress of one "find this object" mission. Linux owns the
+// search, perception and movement; the client renders this and supplies the
+// decoded camera frames Linux asks for.
+type FindStatus struct {
+	State     string // "", searching, found, not-found, failed
+	Phase     string // recalling, looking, thinking, turning, moving, approaching, barking
+	Message   string
+	Query     string
+	WantsView uint64 // nonzero: upload a camera frame captured after this request
+	// Viewpoints counts places searched; Views counts camera frames examined.
+	Viewpoints, Views int
+	Remembered        bool // started at a location saved by an earlier find
+	Seen, Located     bool // seen by the camera; placed in the room by LiDAR or floor geometry
+	X, Z              float64
+	Box               [4]float64 // x, y, width, height as fractions of frame BoxView
+	BoxView           uint64
+	Barked            bool
+	BarkFailure       string
 }
 type Response struct {
+	Find          FindStatus
 	SearchState   string
 	SearchMessage string
 	SearchTurns   int

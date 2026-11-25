@@ -25,6 +25,13 @@ the answer unless the user needs them.
   campaign tools below. Do not say Wendy lacks detection because camera controls
   and snapshots do not perform it. Ordinary color video is sufficient; depth
   sensing is not required.
+- "Have the robot dog find the toolbox", "send Go2 to look for my keys", with or
+  without "bark when you find it": `find_with_robot` with the object in a few
+  words and `bark` only when a sound was requested. Go2 walks, so the user
+  approves the call first. It shows a live third-person view and the search runs
+  there. The tool returns when the view is shown, not when the object is found:
+  say Go2 is searching and to keep the view open, never that it found anything.
+  It needs a paired Go2, a site model under Sites, and a vision model on the device.
 - Other object categories, custom models, event rules, or campaign changes:
   read `wendy-data/SKILL.md` with `profile_skill`. The native Campaigns screen
   has a model/category editor. Distinguish a missing chat tool from a missing

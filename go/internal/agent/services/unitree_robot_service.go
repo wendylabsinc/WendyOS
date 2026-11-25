@@ -75,6 +75,20 @@ func (s *UnitreeRobotService) Command(ctx context.Context, req *pb.UnitreeComman
 			zap.Float64("yaw", req.GetYaw()), zap.Duration("duration", time.Since(started)), zap.Error(err))
 	}()
 
+	// Sound is not a motion command: leave any pending move expiry armed.
+	if req.GetCommand() == pb.UnitreeCommand(unitree.CommandBark) {
+		speaker, ok := link.(interface{ Bark(context.Context) error })
+		if !ok {
+			return nil, status.Error(codes.Unimplemented, "this robot connection cannot play sound")
+		}
+		barkCtx, cancel := context.WithTimeout(ctx, unitree.BarkTimeout)
+		defer cancel()
+		if err = speaker.Bark(barkCtx); err != nil {
+			return nil, status.Error(codes.Unavailable, "Go2 did not play the bark: "+err.Error())
+		}
+		return &pb.UnitreeCommandResponse{}, nil
+	}
+
 	// Cancel any pending move expiry first, so it cannot fire after this command.
 	gen := s.cancelLease(req.GetSerial())
 	timeout := teleopRobotTimeout

@@ -470,7 +470,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 	case r.ctx.Err() != nil || r.closed:
 		fault = errors.New("Robot connection closed.")
 	case now.Sub(r.heartbeat) > 600*time.Millisecond:
-		fault = errors.New("Movement stopped because the map is no longer active.")
+		fault = errors.New(MovementLeaseLostMessage)
 	case now.Sub(r.started) > 30*time.Second:
 		fault = errors.New("The 30-second movement limit was reached.")
 	case r.frame == "" && r.lookTurn == nil && r.discoveryMove == nil:
@@ -601,7 +601,7 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 		return errors.New("Align Go2 with this site first.")
 	}
 	if time.Since(r.heartbeat) > 600*time.Millisecond {
-		return errors.New("The map is no longer active.")
+		return ErrOperatorLease
 	}
 	if err := r.observed.Ready(time.Now()); err != nil {
 		return err
