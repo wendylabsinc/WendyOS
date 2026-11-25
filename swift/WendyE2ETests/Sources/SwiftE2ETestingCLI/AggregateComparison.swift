@@ -20,6 +20,8 @@ struct E2ERunComparison: Codable {
     var sourceID: String?
     var profileSHA256: String?
     var specs: [Spec] = []
+    var specsStatus: String?
+    var specsReason: String?
 
     static func load(in run: URL) throws -> Self? {
         let path = run.appendingPathComponent("comparison.json")
@@ -27,18 +29,17 @@ struct E2ERunComparison: Codable {
         let result = try JSONDecoder().decode(Self.self, from: Data(contentsOf: path))
         if result.status == "compared" {
             let attempts = try runAttemptArtifactURLsByTarget(in: run).values.flatMap { $0 }
-            guard !attempts.isEmpty,
-                try attempts.allSatisfy({
-                    (try CoverageIO.read($0.appendingPathComponent("attempt.json"))["git"]
-                        as? [String: Any])?["commit"] as? String == result.sourceRevision
-                })
+            let metadata = try attempts.map {
+                try CoverageIO.read($0.appendingPathComponent("attempt.json"))
+            }
+            let revisions = metadata.compactMap(CoverageIO.recordedRevision)
+            guard !revisions.isEmpty, revisions.allSatisfy({ $0 == result.sourceRevision })
             else { throw ValidationError("Saved comparison revision differs from the run") }
             if let identity = result.sourceID {
-                guard
-                    try attempts.allSatisfy({
-                        (try CoverageIO.read($0.appendingPathComponent("attempt.json"))["coverage"]
-                            as? [String: Any])?["sourceID"] as? String == identity
-                    })
+                let identities = metadata.compactMap {
+                    ($0["coverage"] as? [String: Any])?["sourceID"] as? String
+                }
+                guard !identities.isEmpty, identities.allSatisfy({ $0 == identity })
                 else { throw ValidationError("Saved comparison source differs from the run") }
             }
             if let hash = result.profileSHA256 {
@@ -70,10 +71,24 @@ struct E2EGitComparison {
             guard !value.isEmpty && !value.hasPrefix("-") else {
                 throw ValidationError("Invalid comparison revision")
             }
-            return try CoverageIO.command(
-                ["git", "rev-parse", "--verify", value + "^{commit}"],
-                cwd: repo
-            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            var candidates = [value]
+            if value.hasPrefix("refs/heads/") {
+                candidates.append("refs/remotes/origin/" + value.dropFirst("refs/heads/".count))
+            } else if !value.hasPrefix("refs/") {
+                candidates += [
+                    "origin/" + value, "refs/remotes/origin/" + value, "refs/tags/" + value,
+                ]
+            }
+            for candidate in candidates {
+                let result = try CoverageIO.execute(
+                    ["git", "rev-parse", "--verify", "--quiet", candidate + "^{commit}"],
+                    cwd: repo
+                )
+                if result.status == 0 {
+                    return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            throw ValidationError("Unable to resolve comparison revision: " + value)
         }
         let separator = range.contains("...") ? "..." : ".."
         let parts = range.components(separatedBy: separator)
@@ -252,7 +267,10 @@ struct E2EGitComparison {
                             hash: hash
                         )
                         guard result.updateValue(value, forKey: value.identity) == nil else {
-                            throw ValidationError("Ambiguous spec identity: " + value.identity)
+                            throw ValidationError(
+                                "Ambiguous spec identity: " + value.document.title + " / "
+                                    + value.entry.title
+                            )
                         }
                     }
                 }
