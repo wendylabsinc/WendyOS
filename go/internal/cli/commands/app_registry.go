@@ -468,20 +468,32 @@ func (op *registryOp) verified(keys []*cloudpb.RecipientKey, principal string) (
 	return nil, fmt.Errorf("%s has %d registry keys; cannot tell which one it holds", principal, len(found))
 }
 
+// recipientKeyBatch is how many principals one GetRecipientKeys call asks
+// for. Cloud takes at most 500, and the reply must fit gRPC's 4 MiB receive
+// limit. A real ML-DSA-65 device key is about 27.7 kB (a 16.5 kB signed
+// registration and two 5.5 kB CA certificates), so one call broke at about
+// 150 devices. The largest key the CLI accepts is about 50 kB (the 32 KiB
+// registration cap and two ML-DSA-87 CAs): 64 of those are 3.2 MB.
+const recipientKeyBatch = 64
+
 // deviceKeys verifies the key of every device before anything is changed.
 func (op *registryOp) deviceKeys(ctx context.Context, devices []string) (map[string][]byte, error) {
 	principals := make([]string, len(devices))
 	for i, d := range devices {
 		principals[i] = certs.DeviceSPIFFEURI(op.org, d)
 	}
-	resp, err := cloudpb.NewKeyDirectoryServiceClient(op.conn).GetRecipientKeys(ctx, &cloudpb.GetRecipientKeysRequest{OrganizationId: op.org, Principals: principals})
-	if err != nil {
-		return nil, fmt.Errorf("fetching device keys: %w", err)
+	var served []*cloudpb.RecipientKey
+	for batch := range slices.Chunk(principals, recipientKeyBatch) {
+		resp, err := cloudpb.NewKeyDirectoryServiceClient(op.conn).GetRecipientKeys(ctx, &cloudpb.GetRecipientKeysRequest{OrganizationId: op.org, Principals: batch})
+		if err != nil {
+			return nil, fmt.Errorf("fetching device keys: %w", err)
+		}
+		served = append(served, resp.GetKeys()...)
 	}
 	keys := map[string][]byte{}
 	var errs []error
 	for _, p := range principals {
-		pub, err := op.verified(resp.GetKeys(), p)
+		pub, err := op.verified(served, p)
 		if err != nil {
 			errs = append(errs, err)
 		}

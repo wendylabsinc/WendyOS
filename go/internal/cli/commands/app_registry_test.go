@@ -130,6 +130,7 @@ type fakeRegistry struct {
 	apps       map[string]*cloudpb.App // app id -> app
 	users      map[string]string       // member user id -> email
 	noNotify   bool                    // the caller may not turn notifications on
+	keyCalls   []int                   // principals asked for by each GetRecipientKeys
 }
 
 func newFakeRegistry(t *testing.T, keys ...*cloudpb.RecipientKey) *fakeRegistry {
@@ -302,9 +303,15 @@ func (f *fakeRegistry) signed(method string) []signedCall {
 }
 
 func (f *fakeRegistry) GetRecipientKeys(_ context.Context, in *cloudpb.GetRecipientKeysRequest) (*cloudpb.GetRecipientKeysResponse, error) {
+	f.mu.Lock()
+	f.keyCalls = append(f.keyCalls, len(in.GetPrincipals()))
+	f.mu.Unlock()
+	if len(in.GetPrincipals()) > 500 {
+		return nil, status.Error(codes.InvalidArgument, "at most 500 principals per call")
+	}
 	resp := &cloudpb.GetRecipientKeysResponse{}
 	for _, k := range f.keys {
-		for _, p := range in.GetPrincipals() {
+		for _, p := range slices.Compact(slices.Sorted(slices.Values(in.GetPrincipals()))) { // as Cloud: duplicates dropped
 			if k.GetPrincipal() == p {
 				resp.Keys = append(resp.Keys, k)
 			}
@@ -1009,5 +1016,20 @@ func TestSigningRefusesAKeyForAnotherRelease(t *testing.T) {
 	err := op.rotate(context.Background(), depID, "sh.wendy.example", []string{vectorDevice})
 	if err == nil || !strings.Contains(err.Error(), "nothing was signed") || len(fake.assigned) != n {
 		t.Fatalf("a key for another release: %v", err)
+	}
+}
+
+// M17: device keys are fetched in batches, so neither gRPC's 4 MiB reply
+// limit nor Cloud's 500 principals per call is reached on a large fleet.
+func TestDeviceKeysFetchInBatches(t *testing.T) {
+	v := loadRecipientVectors(t)
+	deviceKey, _ := vectorRecipientKey(t, v, "recipient-key-valid")
+	op, fake := registryFixture(t, deviceKey)
+	devices := slices.Repeat([]string{vectorDevice}, 300)
+	if _, err := op.deviceKeys(context.Background(), devices); err != nil {
+		t.Fatalf("deviceKeys for 300 devices: %v", err)
+	}
+	if len(fake.keyCalls) != 5 || slices.Max(fake.keyCalls) > recipientKeyBatch {
+		t.Fatalf("calls %v: want 5 batches of at most %d", fake.keyCalls, recipientKeyBatch)
 	}
 }
