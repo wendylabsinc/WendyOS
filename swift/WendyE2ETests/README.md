@@ -79,6 +79,172 @@ The spec creates a per-test virtual environment, installs with `--no-index`, and
 runs the installed console script outside the source tree. Without that fixture,
 only this installation spec is skipped; parsed build settings remain covered.
 
+### Collect Go source coverage
+
+Local coverage is opt-in. Every active Swift E2E CI run collects Go coverage,
+including manual dispatch and the reusable release/build caller. For example,
+collect two local CLI tests:
+
+```bash
+bash Scripts/E2ETest.sh --coverage --no-managed-agent \
+  --output-dir ../Build/e2e \
+  --filter "prints CLI and system information" \
+  --filter "prints JSON info for automation"
+```
+
+Use `--managed-agent` on an isolated Ubuntu host to include the managed Go
+Agent. Existing device Agents are never replaced; CLI-only runs explicitly
+record the Agent as uninstrumented. Remote CLI transport and managed macOS
+Agent coverage are currently unsupported. `WENDY_E2E_COVERAGE=true` is equivalent
+to `--coverage`; combining coverage with `--parallel` is an error.
+
+The runner builds dedicated binaries under the attempt's `coverage/bin`, leaving
+ordinary build outputs alone. It builds Swift tests once, then runs each selected
+test in a separate sequential process. This adds process startup overhead per
+test. All scenario sessions belonging to that test accumulate into the same
+recorder identity. Parameterized cases belong to their test's interval.
+
+The managed Agent is started and checked for readiness before measurement. Its
+atomic counters reset once before each test process starts and export after that
+process exits, including its scenario hooks, deferred cleanup and session teardown,
+while the Agent is alive. Background Agent activity during that interval is
+included. Initialization before the interval is excluded. Its private Unix socket
+control and CLI invocation receipts exist only in `e2e_coverage` builds.
+
+Native files use `observations/<suite>/<test>/coverage/go/`. CI packages these
+paths, plus startup native evidence, losslessly in `coverage/go-native.tar.gz`.
+Ordinary tar hard links store byte-identical metadata once while restoring every
+test's original paths. From the downloaded attempt directory:
+
+```bash
+tar -xzf coverage/go-native.tar.gz
+sha256sum -c coverage/native.sha256
+```
+
+Standard Go coverage tools work on the unpacked directories. Aggregation's
+run-level `coverage/coverage.out` combines test evidence by source with Go's
+`covdata merge -pcombine`, so shared CLI/Agent packages have one denominator.
+Percentages use covered statements divided by statements, including zero-hit
+packages linked into the measured binaries. They are never averages of tests.
+This is platform-specific coverage of linked main-module Go packages; third-party
+dependencies, unlinked packages and non-Go source are outside its scope.
+
+Execution records source/build provenance in `coverage/source.json`, interval
+receipts in `coverage/tests.json`, and native metadata/counters under
+`observations/<suite>/<test>/coverage/go/`. The existing shell/Make entry points
+only coordinate execution; their private `_capture` CLI calls perform collection
+in Swift. There is no separate public coverage command family. The managed Go
+Agent resets once before each test and exports after test-owned cleanup, while
+still alive; all sessions of that test share an interval. Ordinary builds omit
+the instrumentation hooks. Missing counters, crashed participants and timeouts
+remain explicit incomplete evidence, without hiding the original test failure.
+
+### Aggregate, then display
+
+With the matching source checkout, use the existing aggregation command:
+
+```bash
+swift run swift-e2e-testing aggregate --package-dir . --output-dir /path/to/runs \
+  /path/to/swift-e2e-tests.RUN.TARGET.0001
+swift run swift-e2e-testing report --run-dir /path/to/runs/swift-e2e-tests.RUN
+```
+
+`aggregate` saves per-test participant/completeness summaries, derives per-attempt
+source totals, and computes one consolidated native
+source union with standard Go covdata `-pcombine`; it never averages percentages.
+It verifies source identities, immutable revisions and linked file/package scopes
+before combining attempts. Capture records and execution exit status remain
+unchanged by derivation, so restoring matching source/evidence permits a clean
+retry. Derived participant states are saved in summaries and test coverage
+metadata. Incompatible evidence is incomplete, not a smaller successful
+denominator. The run's `coverage/summary.json` saves totals and scope;
+`coverage/coverage.out` is its one overall profile. Generated Go files and test-only
+hooks are excluded by file from derived handwritten-source totals. Native data
+remains lossless. Non-Go and unlinked source are outside the overall build scope.
+
+Aggregation compacts each input attempt in place: binaries (after recording
+hashes/settings) and reproducible per-test profiles are omitted, while native
+files use standard `coverage/go-native.tar.gz` with hard links for repeated
+metadata. SHA-256 manifests are verified before originals are removed. Restore
+original paths inside the downloaded raw attempt with:
+
+```bash
+tar -xzf coverage/go-native.tar.gz
+```
+
+Reaggregation reads an existing native archive in scratch space, so it requires
+no new test execution or permanent unpack. Supply all raw attempts for a run
+when reaggregating coverage; use a fresh output directory for a subset. The
+aggregate stores `coverage/coverage.out` and `coverage/functions.txt` for the run.
+For multiple targets it also merges attempts by target under
+`coverage/targets/<target>/`. For multiple attempts it retains the individual
+profiles and function lists in `attempts/<target>/<attempt>/coverage/`. A
+single-attempt run shares its run artifacts with that attempt and target.
+
+`report` reads saved totals and renders `source.html` alongside each complete
+profile. Pass `--repo /path/to/tested/checkout` to aggregate and report when
+the tooling and measured source live in different checkouts. Source views require
+the recorded revision and source identity. Older runs can display their saved
+numbers without the source. Hover or focus a target row for its source report
+and plain-text function list. Diff appears only for a comparison; its tooltip
+explains unavailable values and gives the comparison range.
+
+### Optional Git comparison
+
+Aggregation uses the same Git range convention as optional AI `review --diff`:
+
+```bash
+swift run swift-e2e-testing aggregate --package-dir . --output-dir /path/to/runs \
+  --diff origin/main...TESTED /path/to/swift-e2e-tests.RUN.TARGET.0001
+```
+
+`BASE...TESTED` resolves an immutable merge base; `BASE..TESTED` uses the explicit
+base. TESTED must match the recorded run revision. Reaggregate with another base
+to change the comparison without rerunning tests. The run saves revisions,
+source/profile identity, metric results and spec entries in `diff.json`
+and `coverage/summary.json`. No patch, patch archive or whole-patch AI prompt is
+stored. The unreleased earlier patch-file/reference-comparison interface has
+been removed; full reference generation remains independent.
+
+Changed-code coverage uses `git diff --unified=0` new-side added/changed line
+ranges intersecting Go coverage block spans. Each block's statements count once;
+a block is covered when its counter is positive. **This is a block/line overlap
+approximation:** comment or formatting edits inside a block may count, and whole
+blocks (including several blocks on one physical line) contribute. No semantic
+Go lexer or AST filter is used. Removed lines, `_test.go`, `testdata`, the
+repository’s `go/internal/testfixture/` test helpers, generated files (header or
+`linguist-generated` attribute), nonproduction paths and test-only
+hooks are excluded. Production `go/` paths such as simulator code remain eligible.
+Changed eligible files absent from the measured build are explicitly incomplete;
+no eligible blocks means **Not applicable**, never 100%. Wrong revisions or an
+unresolvable range produce an unavailable comparison and a stderr warning,
+without failing otherwise valid aggregation or changing test outcomes. This
+intentional approximation replaces the old token-based metric; results need not
+equal that metric.
+
+The existing reference parser compares suite/test identities and bounded
+attribute/declaration content. Aggregate saves **Added**, **Changed**, and
+**Removed** spec entries. Helper-only edits do not invent new specs. Report
+attaches Added/Changed labels to current declarations independently of outcomes;
+Removed specs appear as comparison entries, never executed/passing tests. The
+full suite remains visible. Optional AI review keeps its existing `--diff RANGE`
+behavior and can inspect the matching repository plus these recorded results;
+it is not required to collect, aggregate or display coverage.
+
+The **Swift E2E Tests** workflow enables coverage on every active Ubuntu route
+and automatically aggregates/renders its artifact, including failed test runs.
+`quiet=true` skips AI/GitHub/Slack reporting; normal reporting remains enabled by
+default. `diff_base_ref` requests the optional aggregate comparison against that
+base and the tested head. Omit `tests` for the full isolated Ubuntu suite. Paused
+Mac, remote and Windows routes remain paused; never run the full suite on a
+shared Mac. Framework checks use real instrumented Go fixtures in the Swift
+`native Go coverage` and aggregate comparison suites, separate from product specs.
+
+Active Ubuntu CI captures the comparison before rendering its artifact. An
+explicit workflow `diff_base_ref` overrides the default PR base, push's previous
+revision, or main comparison. Comparison problems remain informational labels;
+there are no coverage thresholds or gates.
+
 ### Test against a remote device
 
 From `swift/`:
@@ -355,7 +521,7 @@ has the spec/test source that produced them.
 
 AI review files are Markdown. Top-level `review.md` is the compact aggregate
 that can be posted as a CI comment. Attempt, overview, and AI review JSON
-schemas live in `Support/Schemas/`.
+schemas live in `Support/Schemas/`. The coverage schema describes the source manifest, captured test records, and attempt and aggregate summaries. The diff and test schemas describe the saved comparison and observation metadata.
 
 ### Reference directory
 

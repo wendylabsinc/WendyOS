@@ -64,7 +64,7 @@ enum ContextCLIAssertions {
                         self.observer_errors.append(type(error).__name__)
                 self.thread = threading.Thread(target=observe)
                 self.original = {
-                    'currentContext': 'alpha', 'defaultDevice': 'device-preference-SENTINEL',
+                    'currentContext': 'alpha', 'defaultBuildHost': 'build-host-preference-SENTINEL',
                     'analytics': {'enabled': False}, 'completionPromptDismissed': True,
                     'lastCompletionPromptCheck': '2026-01-01T00:00:00Z',
                     'auth': [self.account('alpha', 41, VALID_CERT), self.account('beta', 73, EXPIRED_CERT)]}
@@ -125,7 +125,7 @@ enum ContextCLIAssertions {
                 return 'org %d — %s' % ({'alpha': 41, 'beta': 73}[name], self.endpoint)
 
             def run(self, *args, exit=0):
-                env = {k: os.environ[k] for k in ('HOME', 'PATH', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'USERPROFILE') if k in os.environ}
+                env = {k: os.environ[k] for k in ('HOME', 'PATH', 'GOCOVERDIR', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'USERPROFILE') if k in os.environ}
                 env.update(WENDY_CONFIG_DIR=str(self.directory), WENDY_ANALYTICS='false',
                            WENDY_NO_UPDATE_CHECK='1', WENDY_SECRET_STORE='file', CI='1', NO_COLOR='1')
                 # DEVNULL on stdin and pipes on both output streams guarantee no terminal.

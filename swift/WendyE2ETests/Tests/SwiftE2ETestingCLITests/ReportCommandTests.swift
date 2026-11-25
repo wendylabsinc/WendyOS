@@ -171,21 +171,90 @@ struct `report command` {
         )
 
         #expect(html.contains("macos-jetson-orin-nano"))
-        #expect(html.contains("<td><span class=\"badge fail\">Failed</span></td>"))
+        #expect(html.contains(#"<span class="badge fail">Failed</span></td>"#))
+        #expect(html.contains(#"aria-label="0 passed, 0 flaked, 1 failed, 0 skipped, 0 unknown""#))
         #expect(
-            html.contains(
-                """
-                  <td class="numeric">1</td>
-                  <td class="numeric">0</td>
-                  <td class="numeric">0</td>
-                  <td class="numeric">0</td>
-                  <td class="numeric">1</td>
-                  <td class="numeric">0</td>
-                  <td class="numeric">0</td>
-                """
-            )
+            html.range(
+                of: #"<td class="numeric">1</td>\s*<td class="numeric">0</td>"#,
+                options: .regularExpression
+            ) != nil
         )
     }
+}
+
+@Suite
+struct `report Go coverage total` {
+    @Test(
+        arguments: [
+            (#"{"status":"collected","summary":{"percent":1.8833638131730965}}"#, "1.883%", "2%"),
+            (#"{"status":"collected","summary":{"percent":0}}"#, "0.000%", "0%"),
+            (
+                #"{"status":"incomplete","summary":{"percent":1.8833638131730965}}"#, "Incomplete",
+                "Partial"
+            ),
+            (#"{"status":"no-data"}"#, "No data", "—"),
+            (#"{"status":"collected","summary":{"percent":null}}"#, "Incomplete", "Partial"),
+            (#"{"status":"collected","summary":{"percent":101}}"#, "Incomplete", "Partial"),
+            (#"{"status":"collected","summary":{"percent":49.4999}}"#, "49.500%", "49%"),
+            (#"{"status":"collected","summary":{"percent":49.5}}"#, "49.500%", "50%"),
+            (nil, "Not collected", "—"),
+        ] as [(String?, String, String)]
+    )
+    func `overview reads the attempt total and preserves honest missing states`(
+        coverage: String?,
+        expected: String,
+        visible: String
+    ) throws {
+        try assertCoverageOverview(coverages: [coverage], expected: expected, visible: visible)
+    }
+
+    @Test
+    func `overview does not average several attempts`() throws {
+        try assertCoverageOverview(
+            coverages: [
+                #"{"status":"collected","summary":{"percent":20}}"#,
+                #"{"status":"collected","summary":{"percent":80}}"#,
+            ],
+            expected: "Multiple attempts",
+            visible: "—"
+        )
+    }
+}
+
+private func assertCoverageOverview(coverages: [String?], expected: String, visible: String) throws
+{
+    let rootURL = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let packageURL = rootURL.appendingPathComponent("Package")
+    let runURL = rootURL.appendingPathComponent("Run")
+    let supportURL = packageURL.appendingPathComponent("Support")
+    try FileManager.default.createDirectory(
+        at: packageURL.appendingPathComponent("Tests"),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(
+        at: productionReportTemplateURL(),
+        to: supportURL.appendingPathComponent("e2e-report.template.html")
+    )
+    for (index, coverage) in coverages.enumerated() {
+        let attempt = runURL.appendingPathComponent("attempts/ubuntu/\(index)")
+        try FileManager.default.createDirectory(at: attempt, withIntermediateDirectories: true)
+        let coverageField = coverage.map { ",\"coverage\":\($0)" } ?? ""
+        try "{\"exitStatus\":0\(coverageField)}".write(
+            to: attempt.appendingPathComponent("attempt.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+    var command = try ReportCommand.parse([
+        "--package-dir", packageURL.path, "--run-dir", runURL.path,
+    ])
+    try command.run()
+    let html = try String(contentsOf: runURL.appendingPathComponent("index.html"), encoding: .utf8)
+    #expect(html.contains("<span title=\"\(expected)\">Total <b>\(visible)</b></span>"))
+    #expect(!html.contains(">Diff <b>"))
+    #expect(!html.contains("{{GO_COVERAGE_TOTAL}}"))
 }
 
 // setenv is process-wide, so these cases must not overlap. The other report tests

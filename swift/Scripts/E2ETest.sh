@@ -68,6 +68,9 @@ AGENT_INFO_JSON=""
 ISOLATION="${WENDY_E2E_ISOLATION:-per-test}"
 VERBOSE="${WENDY_E2E_VERBOSE:-false}"
 PARALLEL="${WENDY_E2E_PARALLEL:-false}"
+COVERAGE="${WENDY_E2E_COVERAGE:-false}"
+COVERAGE_CONTROL=""
+COVERAGE_BUILD_FLAGS=""
 TEST_TIMEOUT_SECONDS="${WENDY_E2E_TEST_TIMEOUT_SECONDS:-5400}"
 TEST_FILTERS=()
 
@@ -198,6 +201,7 @@ Options:
   --managed-agent       Build and launch a local wendy-agent for this run.
   --no-managed-agent    Do not launch a managed local wendy-agent.
   --isolation MODE      Sandbox isolation: none, per-run, or per-test; defaults to per-test.
+  --coverage            Collect Go source coverage, one test process at a time.
   --parallel            Allow SwiftPM to run tests in parallel. Only valid when
                         both CLI and agent machines use local transport.
   --no-parallel         Do not run SwiftPM tests in parallel.
@@ -231,6 +235,7 @@ Environment:
   WENDY_E2E_MANAGED_AGENT             Boolean; build and launch a local wendy-agent.
   WENDY_E2E_TRANSPORT                 Optional transport label for report metadata.
   WENDY_E2E_ISOLATION                 none, per-run, or per-test; defaults to per-test.
+  WENDY_E2E_COVERAGE                  Boolean; opt-in sequential Go source coverage.
   WENDY_E2E_PARALLEL                  Boolean; enables SwiftPM parallel tests.
   WENDY_E2E_TEST_TIMEOUT_SECONDS      SwiftPM test process timeout in seconds; 0 disables.
   WENDY_E2E_VERBOSE                   Boolean; prints machine commands.
@@ -325,6 +330,10 @@ while [[ $# -gt 0 ]]; do
       ISOLATION="$2"
       shift 2
       ;;
+    --coverage)
+      COVERAGE="true"
+      shift
+      ;;
     --parallel)
       PARALLEL="true"
       shift
@@ -395,11 +404,28 @@ if [[ -z "$AGENT_ROOT_DIR" ]]; then
   fi
 fi
 
+COVERAGE="$(normalize_bool "WENDY_E2E_COVERAGE" "$COVERAGE")"
 ISOLATION="$(normalize_isolation "$ISOLATION")"
 PARALLEL="$(normalize_bool "WENDY_E2E_PARALLEL" "$PARALLEL")"
 TEST_TIMEOUT_SECONDS="$(normalize_timeout_seconds "WENDY_E2E_TEST_TIMEOUT_SECONDS" "$TEST_TIMEOUT_SECONDS")"
 VERBOSE="$(normalize_bool "WENDY_E2E_VERBOSE" "$VERBOSE")"
 MANAGED_AGENT="$(normalize_bool "WENDY_E2E_MANAGED_AGENT" "$MANAGED_AGENT")"
+
+if [[ "$COVERAGE" == "true" ]]; then
+  if [[ "$PARALLEL" == "true" ]]; then
+    echo "ERROR: --coverage requires single tests without --parallel." >&2
+    exit 64
+  fi
+  if [[ -n "$CLI_ADDRESS" || -n "$AGENT_ADDRESS" ]]; then
+    echo "ERROR: --coverage currently requires local CLI transport; external Agents are uninstrumented." >&2
+    exit 64
+  fi
+  if [[ "$MANAGED_AGENT" == "true" ]] && [[ "$(uname -s)" != "Linux" || "$(normalized_agent_os)" != "linux" && "$(normalized_agent_os)" != "ubuntu" ]]; then
+    echo "ERROR: managed Go Agent coverage currently requires isolated Ubuntu; use --no-managed-agent for CLI coverage." >&2
+    exit 64
+  fi
+  COVERAGE_BUILD_FLAGS="-cover -covermode=atomic -tags=e2e_coverage"
+fi
 
 if [[ -n "$CLI_DEVICE_CACHE_FIXTURE" && ( -z "$DEVICE_ADDRESS" || "$ISOLATION" != "per-test" || "$MANAGED_AGENT" == "true" ) ]]; then
   echo "ERROR: --device-cache-fixture requires an explicit --device-address, --isolation per-test and --no-managed-agent." >&2
@@ -522,6 +548,28 @@ if [[ -n "$AGENT_BIN_DIR" && -z "$AGENT_ADDRESS" ]]; then
 fi
 
 RUN_DIR="$OUTPUT_DIR/$RUN_ID"
+if [[ "$COVERAGE" == "true" ]]; then
+  if [[ -e "$RUN_DIR" ]]; then
+    echo "ERROR: coverage attempt already exists; choose a new --run-id to preserve native evidence." >&2
+    exit 64
+  fi
+  if [[ "$CLI_REPO_DIR" != "$REPO_DIR" || "$MANAGED_AGENT" == "true" && "$AGENT_REPO_DIR" != "$REPO_DIR" ]]; then
+    echo "ERROR: --coverage requires binaries built from this harness checkout." >&2
+    exit 64
+  fi
+  if [[ "$RUN_DIR" == *,* ]]; then
+    echo "ERROR: coverage output paths cannot contain commas (Go covdata input separator)." >&2
+    exit 64
+  fi
+  # Dedicated binaries: never overwrite ordinary go/bin outputs, even if the
+  # caller supplies --cli-bin-dir or --agent-bin-dir.
+  CLI_BIN_DIR="$RUN_DIR/coverage/bin"
+  AGENT_BIN_DIR="$RUN_DIR/coverage/bin"
+  if [[ "$MANAGED_AGENT" == "true" ]]; then
+    # AF_UNIX paths are short even when the attempt directory is deeply nested.
+    COVERAGE_CONTROL="$(mktemp -d /tmp/wendy-cover.XXXXXXXX)/agent.sock"
+  fi
+fi
 CLI_RUN_DIR="$CLI_ROOT_DIR/$RUN_ID/cli"
 AGENT_RUN_DIR="$AGENT_ROOT_DIR/$RUN_ID/agent"
 TEST_RESULTS_OUTPUT_PATH="$RUN_DIR/test-results.xml"
@@ -681,7 +729,7 @@ if [[ "\$(uname -s)" == "Linux" ]] && ! pkg-config --exists libusb-1.0 2>/dev/nu
   echo "  (apt install libusb-1.0-0-dev / dnf install libusb1-devel)" >&2
   exit 1
 fi
-go build -o "\$wendy_path" ./cmd/wendy
+go build $COVERAGE_BUILD_FLAGS -o "\$wendy_path" ./cmd/wendy
 
 resolved="\$(PATH="\$cli_bin_dir:\$PATH" command -v wendy || true)"
 if [[ "\$resolved" != "\$wendy_path" ]]; then
@@ -804,7 +852,7 @@ build_managed_agent() {
     mkdir -p "$AGENT_BIN_DIR"
     (
       cd "$REPO_DIR/go"
-      go build -o "$agent_path" ./cmd/wendy-agent
+      go build $COVERAGE_BUILD_FLAGS -o "$agent_path" ./cmd/wendy-agent
     )
     "$agent_path" --version
   fi
@@ -870,6 +918,8 @@ start_managed_agent() {
       PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
       TMPDIR="${TMPDIR:-/tmp}" \
       USER="wendy-e2e-agent" \
+      WENDY_E2E_COVERAGE_SOCKET="$COVERAGE_CONTROL" \
+      GOCOVERDIR="${GOCOVERDIR:-}" \
       WENDY_CONFIG_PATH="$config_dir" \
       XDG_CONFIG_HOME="$config_dir/xdg-config" \
       XDG_DATA_HOME="$config_dir/xdg-data" \
@@ -911,9 +961,7 @@ start_managed_agent() {
 }
 
 stop_managed_agent() {
-  if [[ "$MANAGED_AGENT" != "true" ]]; then
-    return
-  fi
+  [[ "$MANAGED_AGENT" == "true" ]] || return 0
   if managed_agent_is_macos; then
     local quit_log="$RUN_DIR/managed-agent/quit.log"
     if ! "$REPO_DIR/swift/Scripts/Quit.sh" >"$quit_log" 2>&1; then
@@ -1193,9 +1241,22 @@ finalize_attempt() {
   local status=$?
   trap - EXIT
   set +e
-  stop_managed_agent
   if [[ "$ATTEMPT_INFO_WRITTEN" != "true" ]]; then
     write_attempt_info "$status"
+  fi
+  if [[ "$COVERAGE" == "true" && -f "$RUN_DIR/coverage/tests.json" ]]; then
+    coverage_finish_args=()
+    [[ -z "$COVERAGE_CONTROL" ]] || coverage_finish_args+=(--control "$COVERAGE_CONTROL")
+    "$COVERAGE_TOOL" _capture --phase finish --repo "$CLI_REPO_DIR" --run-dir "$RUN_DIR" "${coverage_finish_args[@]}"
+    coverage_status=$?
+    if [[ "$status" == 0 && "$coverage_status" != 0 ]]; then
+      status=$coverage_status
+    fi
+  fi
+  stop_managed_agent
+  if [[ -n "$COVERAGE_CONTROL" ]]; then
+    rm -f "$COVERAGE_CONTROL"
+    rmdir "${COVERAGE_CONTROL%/*}"
   fi
   exit "$status"
 }
@@ -1228,6 +1289,16 @@ if [[ -z "$CLI_ADDRESS" ]]; then
 fi
 prepare_managed_agent_auth_fixture
 
+if [[ "$COVERAGE" == "true" ]]; then
+  coverage_prepare_args=()
+  [[ "$MANAGED_AGENT" != "true" ]] || coverage_prepare_args+=(--managed-agent)
+  swift build --package-path "$PACKAGE_DIR" --product swift-e2e-testing
+  COVERAGE_TOOL="$(swift build --package-path "$PACKAGE_DIR" --show-bin-path)/swift-e2e-testing"
+  "$COVERAGE_TOOL" _capture --phase prepare --repo "$CLI_REPO_DIR" --run-dir "$RUN_DIR" "${coverage_prepare_args[@]}"
+  # Setup, version checks and readiness polling are outside test intervals.
+  export GOCOVERDIR="$RUN_DIR/coverage/bootstrap"
+  mkdir -p "$GOCOVERDIR"
+fi
 build_cli
 if [[ "$MANAGED_AGENT" == "true" ]]; then
   build_managed_agent
@@ -1255,6 +1326,7 @@ SWIFT_TEST_ENV=(
   "WENDY_E2E_AGENT_OS=$AGENT_OS"
   "WENDY_E2E_ISOLATION=$ISOLATION"
   "WENDY_E2E_PARALLEL=$PARALLEL"
+  "WENDY_E2E_COVERAGE=$COVERAGE"
   "WENDY_E2E_VERBOSE=$VERBOSE"
   "WENDY_E2E_TEST_TIMEOUT_SECONDS=$TEST_TIMEOUT_SECONDS"
 )
@@ -1292,11 +1364,20 @@ set +e
   # Export is intentional: run_swift_test_with_timeout launches python3, which
   # inherits this environment before spawning swift test.
   export "${SWIFT_TEST_ENV[@]}"
+  if [[ "$COVERAGE" == "true" ]]; then
+    coverage_args=("$COVERAGE_TOOL" _capture --phase run --run-dir "$RUN_DIR")
+    for filter in "${TEST_FILTERS[@]}"; do
+      coverage_args+=(--filter "$filter")
+    done
+    [[ -z "$COVERAGE_CONTROL" ]] || coverage_args+=(--control "$COVERAGE_CONTROL")
+    test_command=("${coverage_args[@]}")
+  else
+    test_command=(swift "${SWIFT_TEST_ARGS[@]}" --xunit-output "$TEST_RESULTS_OUTPUT_PATH")
+  fi
   run_swift_test_with_timeout \
     "$TEST_TIMEOUT_SECONDS" \
     "$RUN_DIR/timeout.json" \
-    swift "${SWIFT_TEST_ARGS[@]}" \
-    --xunit-output "$TEST_RESULTS_OUTPUT_PATH"
+    "${test_command[@]}"
 )
 TEST_STATUS=$?
 set -e

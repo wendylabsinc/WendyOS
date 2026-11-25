@@ -7,10 +7,11 @@ DEFAULT_PACKAGE_DIR="$SWIFT_DIR/WendyE2ETests"
 
 RUN_DIR=""
 PACKAGE_DIR="$DEFAULT_PACKAGE_DIR"
+REPO_DIR=""
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") --run-dir DIR [--package-dir DIR]
+Usage: $(basename "$0") --run-dir DIR [--package-dir DIR] [--repo DIR]
 
 Render the WendyAgent Swift E2E HTML report for a run directory.
 
@@ -18,6 +19,7 @@ Options:
   --run-dir DIR      Required Swift E2E run directory produced by E2EAggregate.sh.
   --package-dir DIR  Swift package directory containing swift-e2e-testing;
                      defaults to $DEFAULT_PACKAGE_DIR.
+  --repo DIR         Checkout containing the measured source revision.
   --help             Show this help message.
 EOF
 }
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --run-dir)
       RUN_DIR="$2"
+      shift 2
+      ;;
+    --repo)
+      REPO_DIR="$(absolute_existing_dir_path "$2")"
       shift 2
       ;;
     --package-dir)
@@ -104,7 +110,9 @@ sanitize_run_xunit
 set +e
 (
   cd "$PACKAGE_DIR"
-  swift run swift-e2e-testing report --run-dir "$RUN_DIR"
+  report_args=(--run-dir "$RUN_DIR")
+  [[ -z "$REPO_DIR" ]] || report_args+=(--repo "$REPO_DIR")
+  swift run swift-e2e-testing report "${report_args[@]}"
 )
 report_status=$?
 set -e

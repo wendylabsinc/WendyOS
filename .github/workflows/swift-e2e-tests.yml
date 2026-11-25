@@ -3,6 +3,11 @@ name: Swift E2E Tests
 on:
   workflow_dispatch:
     inputs:
+      quiet:
+        description: 'Diagnostic run: skip AI review, GitHub comments and Slack notifications'
+        type: boolean
+        required: false
+        default: false
       tests:
         description: 'Comma-separated SwiftPM test filters (empty = WendyE2ETests)'
         required: false
@@ -21,6 +26,10 @@ on:
         default: ''
   workflow_call:
     inputs:
+      quiet:
+        type: boolean
+        required: false
+        default: false
       tests:
         type: string
         required: false
@@ -143,6 +152,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          # Comparison provenance and PR merge bases require Git history.
+          fetch-depth: 0
       # This job is required by the default-branch ruleset and runs on every PR.
       # An audit failure (a finding or a PyPI outage) fails the job only after
       # the E2E suite runs, so it never discards the run's E2E results.
@@ -161,6 +172,9 @@ jobs:
         with:
           tests: ${{ inputs.tests || '' }}
           target_id: local-ubuntu-24
+          # Every active CI execution measures Go source, including reusable callers.
+          coverage: 'true'
+          diff_base_ref: ${{ inputs.diff_base_ref || '' }}
           runner_id: ubuntu-24-04
           cli_os: linux
           device_address: 127.0.0.1:50051
@@ -495,7 +509,7 @@ jobs:
     # green first attempt goes to swift-e2e-passed instead. .github/scripts/
     # swift_e2e_gate_test.py evaluates both conditions.
     if: >-
-      ${{ always() && !cancelled() &&
+      ${{ always() && !cancelled() && !inputs.quiet &&
           (contains(needs.*.result, 'failure') ||
            contains(needs.*.result, 'cancelled') ||
            github.run_attempt != '1' ||
@@ -1188,7 +1202,7 @@ jobs:
     # it, a fixed failure's review comment and main's last Failed post would
     # outlive the failure.
     if: >-
-      ${{ always() && !cancelled() &&
+      ${{ always() && !cancelled() && !inputs.quiet &&
           contains(needs.*.result, 'success') &&
           !contains(needs.*.result, 'failure') &&
           !contains(needs.*.result, 'cancelled') &&

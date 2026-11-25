@@ -47,6 +47,7 @@
       --skipped-blue: #5B5A56;
       --skipped-blue-bg: #E6E2D8;
       --skipped-blue-line: #B8B3A8;
+      --unknown-line: #AAA9A6;
       --red: #A32929;
       --red-bg: #F0DCDA;
       --red-line: #D79A94;
@@ -82,6 +83,7 @@
       --skipped-blue: #C7C2B7;
       --skipped-blue-bg: #242B35;
       --skipped-blue-line: rgba(241, 238, 231, .24);
+      --unknown-line: rgba(199, 194, 183, .42);
       --red: #F2AAA3;
       --red-bg: rgba(177, 59, 53, .2);
       --red-line: rgba(242, 170, 163, .44);
@@ -111,8 +113,8 @@
 
     header {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 20px;
+      grid-template-columns: minmax(0, 1.618fr) minmax(0, 1fr);
+      column-gap: 28px;
       align-items: end;
       margin-bottom: 18px;
     }
@@ -148,6 +150,8 @@
     }
 
     .header-side {
+      min-width: 0;
+      padding-inline-start: 20px;
       display: grid;
       gap: 10px;
       justify-items: end;
@@ -208,36 +212,90 @@
       outline-offset: 3px;
     }
 
-    .summary {
+    .compact-stats {
+      box-sizing: border-box;
       display: grid;
-      grid-template-columns: repeat(6, minmax(80px, 1fr));
+      width: 100%;
+      min-width: 0;
       gap: 8px;
       margin: 12px 0;
+      padding: 5px 0 5px 8px;
     }
 
-    .metric {
-      background: var(--card);
-      border: 1px solid var(--line);
-      padding: 10px 12px;
+    .outcome-pill {
+      display: inline-grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      vertical-align: middle;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
     }
 
-    .metric strong {
-      display: block;
-      font-size: 22px;
-      font-weight: 500;
-      line-height: 1;
-      letter-spacing: 0;
+    .outcome-pill .badge {
+      justify-content: center;
+      border-radius: 0;
+      margin: 0;
+      padding: 3px 7px;
     }
 
-    .metric span {
-      display: block;
-      margin-top: 5px;
+    .outcome-pill .badge + .badge { border-left: 0; }
+    .outcome-pill .badge:first-child { border-radius: 999px 0 0 999px; }
+    .outcome-pill .badge:last-child { border-radius: 0 999px 999px 0; }
+
+    .compact-stats .outcome-pill .badge {
+      flex-direction: column;
+      gap: 2px;
+      padding: 5px 2px;
+      font-size: 10px;
+      line-height: 1.25;
+    }
+
+    .compact-stats .outcome-pill b { font-size: 17px; font-weight: 650; line-height: 1; }
+    .target-overview-table td.target-outcomes { text-align: center; }
+    .target-outcomes .outcome-pill {
+      font: 500 11px/1.4 "Geist Mono", ui-monospace, monospace;
+      grid-template-columns: repeat(5, calc(var(--count-width, 3ch) + 18px));
+    }
+
+    .run-coverage {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 4px 16px;
+      margin-top: 4px;
+      padding: 8px 0 2px;
+      font-size: 13px;
+    }
+
+    .coverage-links a { color: var(--link); }
+    .run-coverage-values, .target-coverage {
       color: var(--muted);
       font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
     }
 
-    .compact-stats {
-      min-width: min(520px, 100%);
+    .run-coverage-values { margin-left: auto; }
+    .run-coverage-values b { color: var(--text); font-size: 22px; font-weight: 650; }
+    .target-coverage b { color: var(--text); font-size: 15px; font-weight: 600; }
+    .target-overview-table .target-action-cell { width: 1%; text-align: center; }
+    .target-actions { display: inline-flex; gap: 4px; vertical-align: middle; }
+    .target-actions .observation-button {
+      box-sizing: border-box;
+      width: 30px;
+      height: 24px;
+      justify-content: center;
+      padding: 0;
+    }
+
+    .function-glyph { font: italic 600 12px/1 Georgia, serif; }
+    .target-overview tbody tr:is(:hover, :focus-within) .observation-button {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .target-actions [aria-disabled="true"] { color: var(--muted); cursor: default; }
+    @media (hover: none) {
+      .target-actions .observation-button { opacity: 1; pointer-events: auto; }
     }
 
     .target-overview {
@@ -254,14 +312,14 @@
 
     .target-overview-table {
       width: 100%;
-      min-width: 760px;
+      min-width: 520px;
       border-collapse: collapse;
       font-size: 13px;
     }
 
     .target-overview-table th,
     .target-overview-table td {
-      padding: 9px 10px;
+      padding: 6px 10px;
       text-align: left;
       vertical-align: middle;
       white-space: nowrap;
@@ -345,8 +403,8 @@
 
     .filter-button[data-filter="unknown"] {
       color: var(--muted);
-      background: var(--soft);
-      border-color: var(--line);
+      background: var(--card);
+      border-color: var(--unknown-line);
     }
 
     .filter-button[data-filter="fail"],
@@ -460,8 +518,8 @@
 
     .badge.unknown {
       color: var(--muted);
-      background: var(--soft);
-      border: 1px solid var(--line);
+      background: var(--card);
+      border: 1px solid var(--unknown-line);
     }
 
     .badge.duration {
@@ -1242,12 +1300,16 @@
       text-align: center;
     }
 
+    @media (max-width: 959px) {
+      header { grid-template-columns: minmax(0, 1fr); row-gap: 24px; }
+      .header-side { padding: 16px 0 0; border-top: 1px solid var(--line); }
+      .header-side .compact-stats { width: fit-content; max-width: 100%; }
+    }
+
     @media (max-width: 680px) {
       main { padding: 24px 16px 56px; }
-      header { grid-template-columns: 1fr; }
-      .header-side { justify-items: stretch; }
-      .theme-toggle { justify-self: start; }
-      .summary { grid-template-columns: repeat(2, 1fr); }
+      .compact-stats .outcome-pill b { font-size: 16px; }
+      .compact-stats .outcome-pill .badge { font-size: 9px; }
       .filter-bar { position: static; }
       .filter-count { flex-basis: 100%; margin-left: 0; }
       .search-field { flex-basis: 100%; }
@@ -1332,13 +1394,12 @@
           <span class="theme-toggle-icon" data-theme-toggle-icon aria-hidden="true">◐</span>
           <span data-theme-toggle-label>Theme</span>
         </button>
-        <section class="summary compact-stats" aria-label="Test summary">
-          <div class="metric"><strong>{{TESTS_PASSED_COUNT}}</strong><span>Passed</span></div>
-          <div class="metric"><strong>{{TESTS_FLAKED_COUNT}}</strong><span>Flaked</span></div>
-          <div class="metric"><strong>{{TESTS_FAILED_COUNT}}</strong><span>Failed</span></div>
-          <div class="metric"><strong>{{TESTS_SKIPPED_COUNT}}</strong><span>Skipped</span></div>
-          <div class="metric"><strong>{{TESTS_UNKNOWN_COUNT}}</strong><span>Unknown</span></div>
-          <div class="metric"><strong>{{COMMAND_RUN_COUNT}}</strong><span>Commands</span></div>
+        <section class="summary compact-stats" aria-label="Run totals">
+          {{RUN_OUTCOMES}}
+          <div class="run-coverage">
+            <span class="coverage-links">{{RUN_COVERAGE_LINKS}}</span>
+            <span class="run-coverage-values">{{RUN_COVERAGE_VALUES}}</span>
+          </div>
         </section>
       </div>
     </header>

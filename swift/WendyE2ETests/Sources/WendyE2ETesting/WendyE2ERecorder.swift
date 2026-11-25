@@ -4,6 +4,13 @@ public struct WendyE2ERecorder: Sendable {
     public let recordPath: String
     public let testDirectoryPath: String
 
+    public var goCoverageDirectoryPath: String? {
+        WendyE2EEnvironment.coverage
+            ? URL(fileURLWithPath: self.testDirectoryPath).appendingPathComponent("coverage/go")
+                .path
+            : nil
+    }
+
     public init(
         filePath: String,
         function: String,
@@ -33,6 +40,43 @@ public struct WendyE2ERecorder: Sendable {
             sourceStartLine: identity.sourceStartLine,
             sourceEndLine: identity.sourceEndLine
         )
+        if let directory = self.goCoverageDirectoryPath {
+            guard !WendyE2EEnvironment.parallel,
+                let receipt = ProcessInfo.processInfo.environment["WENDY_E2E_COVERAGE_RECEIPT"]
+            else {
+                throw NSError(
+                    domain: "WendyE2E.Coverage",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "Coverage requires the sequential E2ETest.sh runner."
+                    ]
+                )
+            }
+            try FileManager.default.createDirectory(
+                atPath: directory,
+                withIntermediateDirectories: true
+            )
+            // All scenarios and sessions within this test share the recorder identity.
+            // The runner uses this receipt after the entire test process exits.
+            if let previous = try? String(contentsOfFile: receipt, encoding: .utf8),
+                previous != self.testDirectoryPath
+            {
+                throw NSError(
+                    domain: "WendyE2E.Coverage",
+                    code: 2,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "One coverage test produced multiple recorder identities."
+                    ]
+                )
+            }
+            try Data(self.testDirectoryPath.utf8).write(
+                to: URL(fileURLWithPath: receipt),
+                options: .atomic
+            )
+            try self.writeTestMetadata(nextTo: URL(fileURLWithPath: self.recordPath))
+        }
     }
 
     public func record(

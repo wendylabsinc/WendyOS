@@ -10,10 +10,11 @@ OPEN_REPORT="true"
 STAGE="all"
 RUN_PREFIX="${WENDY_E2E_ANALYZE_RUN_ID:-}"
 DIFF=""
+repo_args=()
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--output-dir DIR] [--run-id ID] [--stage STAGE] [--diff RANGE] [--open|--no-open]
+Usage: $(basename "$0") [--output-dir DIR] [--run-id ID] [--stage STAGE] [--diff RANGE] [--repo DIR] [--open|--no-open]
 
 Analyze Swift E2E attempts found in an output directory.
 
@@ -29,7 +30,8 @@ Options:
   --run-id ID       Analyze attempts matching this run ID prefix;
                     defaults to today's local run, or WENDY_E2E_RUN_ID/GITHUB_RUN_ID.
   --stage STAGE     aggregate, review, report, or all.
-  --diff RANGE      Git diff range to pass to review stage.
+  --repo DIR        Tested source checkout for aggregate and report.
+  --diff RANGE      Git range for aggregate comparison and optional AI review.
   --open            Open the newest generated report when supported; default.
   --no-open         Do not open a report.
   --help            Show this help message.
@@ -70,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --stage)
       STAGE="$2"
+      shift 2
+      ;;
+    --repo)
+      repo_args=(--repo "$(cd "$2" && pwd)")
       shift 2
       ;;
     --diff)
@@ -207,9 +213,11 @@ status=0
 declare -A failed_reviews=()
 
 if [[ "$STAGE" == "aggregate" || "$STAGE" == "all" ]]; then
+  aggregate_args=("${repo_args[@]}")
+  [[ -z "$DIFF" ]] || aggregate_args+=(--diff "$DIFF")
   bash "$SCRIPT_DIR/E2EAggregate.sh" \
     --output-dir "$OUTPUT_DIR" \
-    "${ATTEMPT_DIRS[@]}" || status=$?
+    "${aggregate_args[@]}" "${ATTEMPT_DIRS[@]}" || status=$?
 fi
 
 if [[ "$STAGE" == "review" || "$STAGE" == "all" ]]; then
@@ -233,7 +241,7 @@ if [[ "$STAGE" == "report" || "$STAGE" == "all" ]]; then
       if [[ -n "${failed_reviews[$run_dir]:-}" ]]; then
         export WENDY_E2E_REVIEW_OUTCOME=failure
       fi
-      bash "$SCRIPT_DIR/E2EReport.sh" --run-dir "$run_dir"
+      bash "$SCRIPT_DIR/E2EReport.sh" --run-dir "$run_dir" "${repo_args[@]}"
     ) || {
       step_status=$?
       [[ $status -eq 0 ]] && status=$step_status
