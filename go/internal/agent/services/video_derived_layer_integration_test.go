@@ -97,7 +97,19 @@ func (s *derivedFramesSeen) count() int {
 
 // Real gst-launch-1.0, real elements and the real layer on a real hub; only the
 // camera is replaced, by JPEG frames produced into the hub as capture does.
+// A frame's identity must not rest on how fast the encoder works, so the proof
+// runs again with the viewer stating medium, the preset farthest from the
+// default.
 func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.T) {
+	t.Run("no preset stated", func(t *testing.T) {
+		derivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t, noPreset)
+	})
+	t.Run("medium stated", func(t *testing.T) {
+		derivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t, appconfig.EncodePresetMedium)
+	})
+}
+
+func derivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.T, stated appconfig.EncodePreset) {
 	skip := func(why string) {
 		if os.Getenv("WENDY_GSTREAMER_REQUIRED") == "1" {
 			t.Fatal(why)
@@ -136,13 +148,14 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 	if err != nil {
 		skip("this GStreamer cannot run the derived layer: " + err.Error())
 	}
-	t.Logf("H.264 encoder: %s", layer.encoder.element)
+	runsAt := encoderPreset(layer.encoder.element, stated)
+	t.Logf("H.264 encoder: %s, preset stated %q, runs at %q", layer.encoder.element, stated, runsAt)
 
 	idPictures, chPictures, err := hub.subscribePixels()
 	if err != nil {
 		t.Fatal(err)
 	}
-	idUnits, chUnits, err := hub.subscribe()
+	idUnits, chUnits, err := hub.subscribeAsKind("", encodedFrames, stated)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,6 +223,10 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 	var decoded decodedGray
 	// Where the burst began in what the layer published, and its counts then.
 	burstFrom, beforeBurst := -1, derivedLayerCounts{}
+	// Where in what the layer published a consumer stating a faster preset had
+	// the encoder replaced.
+	const faster = appconfig.EncodePresetSuperfast
+	fasterFrom := -1
 	checkPairing := func(what string) {
 		t.Helper()
 		// Each access unit must decode to the picture of the frame whose
@@ -219,6 +236,13 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 		for i, unit := range published {
 			if unit.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || !unit.auAligned || !bytes.HasPrefix(unit.data, []byte{0, 0, 0, 1}) {
 				t.Fatalf("%s: published access unit %d: codec=%v auAligned=%v, %d bytes, want one whole Annex B access unit", what, i, unit.codec, unit.auAligned, len(unit.data))
+			}
+			wantAt := runsAt
+			if fasterFrom >= 0 && i >= fasterFrom {
+				wantAt = faster
+			}
+			if unit.encodedAt != wantAt {
+				t.Fatalf("%s: published access unit %d says it was encoded at %q, and the encoder ran at %q", what, i, unit.encodedAt, wantAt)
 			}
 			payloads[i] = unit.data
 		}
@@ -333,6 +357,28 @@ func TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity(t *testing.
 	}
 	if counts := layer.counts(); counts.unknownTags != 0 {
 		t.Errorf("the restarted child's outputs named %d unknown tags", counts.unknownTags)
+	}
+
+	// A consumer that states a faster preset joins: the encoder is replaced at
+	// once by one at that preset, and what it makes is still each frame's own.
+	if faster.FasterThan(runsAt) {
+		idFaster, _, err := hub.subscribeAsKind("", encodedFrames, faster)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer hub.unsubscribe(idFaster)
+		waitUntil(t, "the child is replaced by one at the faster preset", func() bool { return layer.counts().childRuns == 3 })
+		fasterFrom = len(stream.all())
+		for i := 0; i < 5; i++ {
+			want = append(want, producePaced("5 frames after a consumer stated a faster preset"))
+		}
+		expectExactly("5 frames after a consumer stated a faster preset", want)
+		if starts := annexBKeyframeStarts(stream.all()[fasterFrom].data); len(starts) == 0 {
+			t.Error("the first access unit at the faster preset is not a keyframe")
+		}
+		if got := hub.encoderPreset(); got != faster {
+			t.Errorf("the hub says its encoder runs at %q, want %q", got, faster)
+		}
 	}
 
 	// A burst faster than the child: frames are refused at the feed queue,
