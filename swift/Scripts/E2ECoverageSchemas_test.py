@@ -15,6 +15,34 @@ def validator(name):
 
 
 class CoverageSchemasTests(unittest.TestCase):
+    def test_attempt_coverage_requested(self):
+        attempt = validator("attempt")
+        manifest = {
+            "kind": "wendy-e2e-attempt", "version": 1, "attemptID": "local.0001",
+            "createdAt": "2026-11-25T10:00:00Z", "exitStatus": 0,
+            "git": {"commit": None, "branch": None, "ref": None, "remote": None, "dirty": False},
+            "github": dict.fromkeys(
+                ("repository", "workflow", "runID", "runAttempt", "job", "actor", "sha")
+            ),
+            "target": dict.fromkeys(
+                ("cliOS", "cliAddress", "cliUser", "agentOS", "agentAddress", "agentUser", "transport")
+            ),
+            "paths": {
+                "attemptDirectory": "attempt", "outputDirectory": "output", "cliRunDirectory": "cli",
+                "cliBinDirectory": "cli/bin", "agentRunDirectory": "agent", "agentBinDirectory": None,
+            },
+            "test": {"filters": [], "isolation": "per-test", "parallel": False},
+            "tools": dict.fromkeys(("swift", "go", "wendy", "wendyPath")),
+        }
+        attempt.validate(manifest)
+        for value in (True, False):
+            with self.subTest(value=value):
+                attempt.validate({**manifest, "coverageRequested": value})
+        for value in ("true", "false", 1, 0, None):
+            with self.subTest(value=value):
+                self.assertFalse(attempt.is_valid({**manifest, "coverageRequested": value}))
+        self.assertFalse(attempt.is_valid({**manifest, "unexpected": True}))
+
     def test_run_attempt_provenance(self):
         coverage = validator("coverage")
         source = {"sourceID": "a" * 64, "revision": "b" * 40}
