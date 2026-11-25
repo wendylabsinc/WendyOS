@@ -364,7 +364,8 @@ func TestAFailedKeyUploadIsRepairedByResumeAndUpdate(t *testing.T) {
 
 // M14: a removal interrupted while signing is still resumed after a newer
 // deployment took the name: by name the one with devices still to be told
-// is taken, and its id names it directly.
+// is taken and named by its id as the removed one, and its id names it
+// directly.
 func TestResumeFindsAnInterruptedRemovalUnderAReusedName(t *testing.T) {
 	op, fake, _, oldID := deployedFixture(t)
 	ctx := context.Background()
@@ -376,11 +377,15 @@ func TestResumeFindsAnInterruptedRemovalUnderAReusedName(t *testing.T) {
 	newer := proto.Clone(old).(*cloudpb.Deployment)
 	newer.Id, newer.CreatedAt, newer.RemovedAt = "00000000-0000-4000-8000-0000000000aa", timestamppb.New(now), nil
 	fake.deploys[newer.Id] = newer
-	if err := runResume(ctx, op, "sh.wendy.example", old.GetName(), changeFlags{yes: true}, io.Discard, false); err != nil {
+	var out strings.Builder
+	if err := runResume(ctx, op, "sh.wendy.example", old.GetName(), changeFlags{yes: true}, &out, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.removed) != 1 || fake.removed[0].GetDeploymentId() != oldID {
 		t.Fatalf("removals %v: want the interrupted removal of %s sent", fake.removed, oldID)
+	}
+	if want := "sh.wendy.example/" + old.GetName() + " (deployment " + oldID + ") is the removed deployment of that name."; !strings.Contains(out.String(), want) {
+		t.Fatalf("output %q: want %q, not the live deployment read as removed", out.String(), want)
 	}
 	// By id, whatever the name now names.
 	fake.pending[oldID][0].Revision = maxRevision

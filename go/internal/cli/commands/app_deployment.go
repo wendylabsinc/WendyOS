@@ -443,7 +443,8 @@ func runResume(ctx context.Context, op *registryOp, appID, name string, c change
 	revision := d.GetRevision()
 	if d.GetRemovedAt() != nil {
 		revision = maxRevision
-		say("%s/%s is removed. Devices still to be told:", appID, name)
+		// Named by its id: a live deployment may carry the name now.
+		say("%s/%s (deployment %s) is the removed deployment of that name. Devices still to be told:", appID, name, d.GetId())
 	} else {
 		run := "run it now"
 		if d.GetDesiredState() == cloudpb.Running_STOPPED {
