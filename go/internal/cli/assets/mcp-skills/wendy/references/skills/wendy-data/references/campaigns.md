@@ -89,8 +89,22 @@ device deployment; it does not fan deployment out to every fleet member.
   records or buffers, and for as long as the campaign's inference runs when it
   has `inference`. Without inference, `store: frames` keeps the own frames of a
   webcam captured as JPEG without encoding; a camera that hands on no frames
-  of its own is recorded as video whatever `store` says. The agent runs x264,
-  the software encoder it uses where it has one, at x264's fastest preset.
+  of its own is recorded as video whatever `store` says.
+- `preset` on a camera source that stores video sets how fast the software
+  H.264 encoder works: `ultrafast`, `superfast`, `veryfast`, `faster`, `fast`
+  or `medium`, fastest first. A slower preset spends more CPU on each frame for
+  fewer bits. It applies only where the device encodes that video in software.
+  A camera has one encoder for all its consumers (recordings, apps and
+  viewers), which runs at the fastest preset any of them states, so it never
+  costs more than the cheapest request on that camera allows, and at
+  `ultrafast` when none states one. The encoder restarts to change preset: at
+  once to a faster one, and to a slower one after 30 seconds in which no
+  consumer called for the faster one; the recording goes on in a new segment
+  file. The deploy warning names the preset, and the source's detail in the
+  episode manifest says how many video frames were not encoded at the preset
+  requested. `preset` is rejected on a source that is not a camera, with
+  `store: frames` and with `mode: snapshot`, and an agent from before it
+  rejects the campaign as it does any unknown field.
 - Audio supports `continuous` and `threshold`, such as
   `trigger: "level_db > -20"` and `fragment: 30s`. ROS 2 and telemetry support
   `continuous`. Other mode/kind combinations validate, warn, and record

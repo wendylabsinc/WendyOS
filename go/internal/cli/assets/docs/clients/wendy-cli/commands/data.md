@@ -392,6 +392,7 @@ Fields belonging to a different mode than the declared one are rejected.
 | `fragment` | `threshold` | Optional captured duration per threshold crossing. |
 | `max_resolution` | any | Camera sources only: `WxH` cap such as `1280x720`. |
 | `store` | not `snapshot` | Camera sources only: what the episode stores of the camera's continuous recording. `video` (default) stores video, `frames` stores single frames, each with its frame number and capture time, and `both` stores video and frames. |
+| `preset` | not `snapshot` | Camera sources that store video only: how fast the software H.264 encoder works, one of `ultrafast`, `superfast`, `veryfast`, `faster`, `fast`, `medium`, fastest first. Without it the source states no preset. |
 
 Any other `store` value, `store` on a source that is not a camera, or `store`
 with `mode: snapshot` is rejected; snapshot mode always stores single frames.
@@ -413,8 +414,22 @@ elements could be listed: the encoder runs while the campaign records or
 buffers, and for as long as the campaign's inference runs when it has
 `inference`. Without inference, `store: frames` keeps the own frames of a
 webcam captured as JPEG without encoding; a camera that hands on no frames of
-its own is recorded as video whatever `store` says. The agent runs x264, the
-software encoder it uses where it has one, at x264's fastest preset.
+its own is recorded as video whatever `store` says.
+
+`preset` applies only where the device encodes the camera's video in
+software; a slower preset spends more CPU on each frame for fewer bits. A
+camera has one encoder for all its consumers: recordings, apps and viewers.
+It runs at the fastest preset any of them states, so the encoder never costs
+more than the cheapest request on that camera allows, and at `ultrafast` when
+none states one. The encoder restarts to change preset: at once to a faster
+one, and to a slower one after 30 seconds in which no consumer called for the
+faster one; a recording goes on in a new segment file. The deployment warning
+names the preset, and the source's detail in the episode manifest says how
+many video frames were not encoded at the preset requested: at another
+preset, or by the camera itself or an encoder that takes no preset. Any other
+`preset` value, `preset` on a source that is not a camera, with
+`store: frames` or with `mode: snapshot` is rejected, and an agent older than
+the release that added `preset` rejects a campaign that uses the key.
 
 What each adapter honors today: cameras implement `continuous` and `snapshot`,
 audio implements `continuous` and `threshold`, and the ROS 2 and telemetry

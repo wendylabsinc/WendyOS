@@ -144,7 +144,8 @@ shared by the app (see below).
 
 ### Choose what the node carries
 
-Two optional keys on the camera entitlement set what the node carries:
+Two optional keys on the camera entitlement set what the node carries, and a
+third sets how its H.264 is encoded:
 
 - `format`: `"pixels"` (default) for decoded pictures, `"native"` for the
   camera's own frames, for example MJPEG or H.264, or `"h264"` for H.264 with
@@ -154,18 +155,36 @@ Two optional keys on the camera entitlement set what the node carries:
   `tv_sec * 1000000 + tv_usec`. That number is the frame's `sample_id` in a
   Wendy Data episode, so an app can match a frame it read to the frame the
   episode recorded.
+- `preset`: only with `"format": "h264"`, how fast the software H.264 encoder
+  works: `"ultrafast"`, `"superfast"`, `"veryfast"`, `"faster"`, `"fast"` or
+  `"medium"`, fastest first. A slower preset spends more CPU on each frame for
+  fewer bits. An entry without the key states no preset.
 
 On a camera that produces H.264, `"native"` and `"h264"` are the same thing:
 the camera's own H.264, one whole frame per buffer. `"pixels"` on such a
 camera are pictures decoded from it. Where the device encodes the `"h264"` of
 a camera that produces JPEG in software, the encoder runs for as long as the
 app reads its node, and the deploy notice, the agent's log and the camera's
-status say so; `"native"` and `"pixels"` run no encoder. The agent runs x264,
-the software encoder it uses where it has one, at x264's fastest preset.
+status say so; `"native"` and `"pixels"` run no encoder.
 
 ```json
 { "type": "camera", "format": "pixels", "stamp": "time" }
+{ "type": "camera", "format": "h264", "preset": "veryfast" }
 ```
+
+`preset` applies only where the device encodes the node's H.264 in software.
+A camera has one encoder for all its consumers: apps, campaign recordings and
+viewers. It runs at the fastest preset any of them states, so the encoder
+never costs more than the cheapest request on that camera allows, and at
+`"ultrafast"` when none states one. The encoder restarts to change preset: at
+once to a faster one, and to a slower one after 30 seconds in which no
+consumer called for the faster one. The deploy notice, the agent's log and
+the camera's status name the preset the encoder runs at, and the status of a
+node that is read says so when that is not the preset its app stated. A
+device that encodes with a hardware encoder, or with a software encoder that
+takes no preset, does not apply a stated one, and neither does a camera that
+produces H.264 itself: the deploy notice and the camera's status then say that
+the preset is not applied, with the encoder or the reason.
 
 An app gets a node for every shared camera. A camera that cannot provide the
 `format` asked for is served in another: pictures in place of `"native"` or
@@ -184,8 +203,8 @@ node is read, its status names the decoder: `pictures decoded by <element>`. A
 carry no frame number gets no frames, and its status says why.
 
 An app gets one node per camera. An entry's `allowlist` selects which cameras
-its `format` and `stamp` apply to; an entry without one applies to every
-camera. An allowlist entry names a camera by any identifier
+its `format`, `stamp` and `preset` apply to; an entry without one applies to
+every camera. An allowlist entry names a camera by any identifier
 `wendy device camera list --json` prints for it: its `stable_id`
 (`by-id:usb-046d_HD_Pro_Webcam_C920-video-index0`, with or without the `by-id:`
 prefix), its `path` (`/dev/video0`, or `v4l2:/dev/video0` as a campaign file
@@ -207,18 +226,21 @@ on a device that lists no camera, or when the agent does not answer within
 three seconds. An agent from before stable id and `v4l2:` entries matches only
 the exact device path or name, and an agent from before `format` and `stamp`
 reads neither of them nor the allowlist and gives every camera pictures stamped
-with the capture time; `wendy run` says so when the app asks for something the
-device's agent does not read.
+with the capture time; an agent from before `preset` does not read it;
+`wendy run` says so when the app asks for something the device's agent does not
+read.
 
 Two `camera` or `video` entries that claim the same camera must agree on
-`format` and `stamp`. Validation compares allowlist entries as written, and
+`format`, `stamp` and `preset`; an entry that states a preset and one that
+states none do not agree. Validation compares allowlist entries as written, and
 also knows `/dev/video0` and `v4l2:/dev/video0` for one camera, and a `by-id:`
 stable id with and without its prefix. Entries that name one camera by
 different identifiers, such as its stable id and its path, are only found on
 the device: there the stable id decides before the path and the path before
 the name, and `wendy run`, the agent's log and the camera's status say which
-entry decided and which was passed over. Neither key can be used when any of
-the app's camera entries has `"mode": "direct"`.
+entry decided and which was passed over. None of the three keys can be used
+when any of the app's camera entries has `"mode": "direct"`, and `preset` only
+on an entry with `"format": "h264"`.
 
 ### Apps that need `"mode": "direct"`
 
@@ -265,7 +287,8 @@ While a camera is shared:
 
 The Status column of `wendy device camera list` shows
 `shared: <app> [format <format>, stamp <stamp>] (<state>), ...` for each app
-sharing the camera. When the camera cannot fill a node in its format or with
+sharing the camera, with `, preset <preset>` after the stamp for an h264 node
+whose app states one. When the camera cannot fill a node in its format or with
 its stamp, the state is `cannot serve` with the reason; the node gets no frames
 until the camera can, which the agent checks once a minute. The same detail is
 in the JSON from `wendy device hardware list --category camera --json` as the
@@ -274,6 +297,10 @@ with `share_mode_native` and `share_mode_h264` for the mode of a node in those
 formats, or `share_unavailable_native` and `share_unavailable_h264` for why the
 camera has none. The row of a camera this device shares with an h264 mode and
 encodes in software carries `h264_encoder`, for example `x264enc (software)`.
+The row of a camera with an h264 mode also says what becomes of a stated
+preset: `h264_default_preset` holds the preset the encoder runs at when no
+consumer states one, where the device applies presets, and
+`h264_preset_ignored` holds the reason where it does not.
 A camera that is not shared carries `share_unavailable` with the reason. The
 row of each camera `wendy device camera list` lists also carries `stable_id`,
 the stable id that command's `--json` prints for it and the one an allowlist
