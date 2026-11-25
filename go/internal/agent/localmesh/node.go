@@ -268,8 +268,15 @@ func (n *Node) refreshName() error {
 	if source == nil {
 		return nil
 	}
-	name, valid := meshname.FriendlyLabel(source())
-	if !valid || name == n.advertisement.Name {
+	name := source()
+	if name != "" {
+		var valid bool
+		name, valid = meshname.FriendlyLabel(name)
+		if !valid {
+			return nil
+		}
+	}
+	if name == n.advertisement.Name {
 		return nil
 	}
 	previous := n.advertisement.Name

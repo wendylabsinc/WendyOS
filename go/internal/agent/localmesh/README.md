@@ -550,9 +550,11 @@ The app DNS resolver accepts `device-<uuid>.wendy.internal` and one-label
 `<device-name>.wendy.internal` within the enrolled tenant. UUID names pin a local
 VIP; exact friendly labels merge currently admitted signed device manifests
 and authenticated Cloud roster entries. Conflicting principals fail closed.
-Valid enrolled names retain repeated hyphens; compatibility org-qualified aliases
-keep their legacy normalization. Signed device manifests publish the installed
-friendly label and republish live renames through the durable revision gate.
+Valid enrolled names retain repeated hyphens. Compatibility org-qualified
+aliases keep their legacy normalization. Updated WendyOS devices publish the
+registered name from their authenticated Cloud roster in the existing manifest
+name field. Republished names use the durable revision gate. An empty name
+withdraws the alias while preserving the route.
 Custom DNS resolvers implement [`mesh.ExactResolver`](../mesh/dns.go) to answer
 short friendly names. The UUID form uses the enrolled identity and VIP table.
 All UUID hostname spellings for a device share one VIP allocation.

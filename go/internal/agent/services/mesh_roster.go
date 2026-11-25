@@ -21,6 +21,7 @@ import (
 // for existing Cloud RPC adapters, never a second identity or address input.
 type RosterEntry struct {
 	Name       string // normalized DNS label
+	ShortName  string // Cloud label with exact hyphens preserved
 	DeviceUUID string // canonical lowercase device UUID; "" = no mesh identity
 	AssetUUID  string // alias of DeviceUUID for Cloud asset_id adapters
 
@@ -57,6 +58,10 @@ type MeshRoster struct {
 	ambiguous      map[string]struct{}
 	byExactName    map[string]RosterEntry
 	exactAmbiguous map[string]struct{}
+	localNameFile  string
+	localName      registeredDeviceName
+	nameNeedsSave  bool
+	refresh        chan struct{}
 }
 
 func NewMeshRoster(logger *zap.Logger, cloudURL, certPEM, keyPEM, chainPEM string) *MeshRoster {
@@ -71,6 +76,7 @@ func NewMeshRoster(logger *zap.Logger, cloudURL, certPEM, keyPEM, chainPEM strin
 		ambiguous:      make(map[string]struct{}),
 		byExactName:    make(map[string]RosterEntry),
 		exactAmbiguous: make(map[string]struct{}),
+		refresh:        make(chan struct{}, 1),
 	}
 	r.loadIdentity()
 	return r
@@ -125,6 +131,7 @@ func (r *MeshRoster) OwnTenant() (meshid.Tenant, bool) {
 func (r *MeshRoster) UpdateIdentity(cloudURL, certPEM, keyPEM, chainPEM string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	previous := r.identity
 	r.generation++
 	r.cloudURL, r.certPEM, r.keyPEM, r.chainPEM = cloudURL, certPEM, keyPEM, chainPEM
 	r.loadIdentity()
@@ -134,6 +141,14 @@ func (r *MeshRoster) UpdateIdentity(cloudURL, certPEM, keyPEM, chainPEM string) 
 	r.ambiguous = make(map[string]struct{})
 	r.byExactName = make(map[string]RosterEntry)
 	r.exactAmbiguous = make(map[string]struct{})
+	if r.identity != previous {
+		r.restoreLocalName()
+		if r.identity == "" && r.localNameFile != "" {
+			if err := os.Remove(r.localNameFile); err != nil && !os.IsNotExist(err) {
+				r.logger.Warn("wendy net: clearing cached Cloud device name failed", zap.Error(err))
+			}
+		}
+	}
 }
 
 // Lookup returns the roster entry for a normalized device name. Unknown and
@@ -228,14 +243,15 @@ func (r *MeshRoster) applyResponse(generation uint64, resp *cloudpbv2.GetMeshRos
 		if !canonicalRosterUUID(entry.DeviceUUID) {
 			continue
 		}
-		byAsset[entry.AssetUUID] = entry
 		if exact, valid := meshname.ShortDeviceLabel(e.GetName()); valid {
+			entry.ShortName = exact
 			if existing, ok := byExactName[exact]; ok && existing.AssetUUID != entry.AssetUUID {
 				exactAmbiguous[exact] = struct{}{}
 			} else {
 				byExactName[exact] = entry
 			}
 		}
+		byAsset[entry.AssetUUID] = entry
 		if n == "" {
 			continue
 		}
@@ -251,6 +267,13 @@ func (r *MeshRoster) applyResponse(generation uint64, resp *cloudpbv2.GetMeshRos
 	r.ambiguous = ambiguous
 	r.byExactName = byExactName
 	r.exactAmbiguous = exactAmbiguous
+	if self, err := meshid.DeviceFromPrincipal(r.identity); err == nil {
+		name := byAsset[self.UUID().String()].ShortName
+		if _, ambiguous := exactAmbiguous[name]; ambiguous {
+			name = ""
+		}
+		r.rememberLocalName(registeredDeviceName{Principal: r.identity, Name: name})
+	}
 }
 
 func canonicalRosterUUID(text string) bool {
@@ -299,20 +322,39 @@ func (r *MeshRoster) Sync(ctx context.Context) error {
 // RunSync refreshes immediately, then every interval, until ctx is done.
 // Failures are logged and retried on the next tick; the cache keeps its last
 // good contents so a transient cloud outage never breaks LAN-cached names.
-func (r *MeshRoster) RunSync(ctx context.Context, interval time.Duration) {
-	if err := r.Sync(ctx); err != nil {
-		r.logger.Warn("wendy net roster initial sync failed", zap.Error(err))
+func (r *MeshRoster) RunSync(ctx context.Context, interval time.Duration, publishName func(principal, name string)) {
+	publish := func() {
+		r.mu.RLock()
+		local := r.localName
+		r.mu.RUnlock()
+		if local.Principal != "" && publishName != nil {
+			publishName(local.Principal, local.Name)
+		}
 	}
+	publish()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
+		if err := r.Sync(ctx); err != nil && ctx.Err() == nil {
+			r.logger.Warn("wendy net roster sync failed", zap.Error(err))
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		publish()
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := r.Sync(ctx); err != nil {
-				r.logger.Warn("wendy net roster sync failed", zap.Error(err))
-			}
+		case <-r.refresh:
 		}
+	}
+}
+
+// RequestSync wakes the roster worker after enrollment or a local rename.
+func (r *MeshRoster) RequestSync() {
+	select {
+	case r.refresh <- struct{}{}:
+	default:
 	}
 }

@@ -1310,8 +1310,9 @@ func main() {
 			}
 			launch(func() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
+					cloudName := func() string { return meshRoster.LocalCloudName(credentials.Device) }
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
-						Name: services.FriendlyDeviceName(), NameSource: services.FriendlyDeviceName, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
+						Name: cloudName(), NameSource: cloudName, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
 						Agent:               services.MeshAgentMetadata(),
 						AppEndpoints:        []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
 						PreparedCredentials: credentials,
@@ -1335,6 +1336,9 @@ func main() {
 	// unenrolled device the cert fields are empty, so DialDevice simply
 	// fails closed at runtime with a clear error instead of never starting.
 	cloudHost, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
+	meshRoster = services.NewMeshRoster(logger, cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+	meshRoster.UseLocalNameCache(configPath)
+	agentSvc.SetMeshRoster(meshRoster)
 	var activeProvisioningIdentity provisioningIdentityTracker
 	if alreadyProvisioned {
 		activeProvisioningIdentity.Changed(certPEM, chainPEM, keyPEM, orgID, assetID)
@@ -1445,7 +1449,6 @@ func main() {
 	// MeshRoster has no device principal to authenticate with and Sync simply
 	// fails closed (logged, retried) until the device is provisioned, rather
 	// than never starting at all.
-	meshRoster = services.NewMeshRoster(logger, cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 	meshBrowse := func(ctx context.Context) ([]models.LANDevice, error) {
 		col, err := discovery.Discover(ctx, discovery.DiscoveryOptions{
 			Types:   []models.InterfaceType{models.InterfaceLAN},
@@ -1477,11 +1480,6 @@ func main() {
 			meshDNS.SetMeshIdentity(meshTenant, meshVIPs)
 		}
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		meshRoster.RunSync(ctx, 5*time.Minute)
-	}()
 
 	// Report every app's state to cloud (apps spec section 2). Like the
 	// roster it starts unconditionally and stays silent until enrolled.
@@ -1512,6 +1510,11 @@ func main() {
 		advertiseProvisionedMeshIdentity(logger, mtlsPortNum, provisioningSvc)
 		startBLEPeripheral(certPEM, chainPEM, keyPEM)
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		meshRoster.RunSync(ctx, 5*time.Minute, services.CloudNameAdvertisement(logger))
+	}()
 
 	// Advertise the device's Ethernet addresses so hosts can prefer the cable.
 	wg.Add(1)
@@ -1667,7 +1670,6 @@ func main() {
 		}
 		startMTLSServer(certPEM, chainPEM, keyPEM)
 		startTunnelBroker()
-		startConfiguredLocalMesh(certPEM, chainPEM, keyPEM)
 		// Refresh the mesh dialer with the fresh identity — like the mTLS
 		// server and tunnel broker above, it consumes cert material, and BLE
 		// first-boot enrollment happens while the agent is running, so the
@@ -1679,6 +1681,7 @@ func main() {
 		// peer, until the agent is restarted — so swap in the freshly issued
 		// identity here.
 		meshRoster.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		startConfiguredLocalMesh(certPEM, chainPEM, keyPEM)
 		if reportedState != nil {
 			reportedState.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 			postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
@@ -1695,16 +1698,9 @@ func main() {
 				meshDNS.SetMeshIdentity(meshTenant, meshVIPs)
 			}
 		}
-		// Resync immediately so friendly names work without waiting for the periodic tick.
-		go func() {
-			sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			defer cancel()
-			if err := meshRoster.Sync(sctx); err != nil {
-				logger.Warn("wendy net roster resync after provisioning failed", zap.Error(err))
-			}
-		}()
 		configpartition.PersistDeviceUUID(logger, certPEM)
 		advertiseProvisionedMeshIdentity(logger, mtlsPortNum, provisioningSvc)
+		meshRoster.RequestSync()
 		startBLEPeripheral(certPEM, chainPEM, keyPEM)
 		if agentServer != nil {
 			logger.Info("Device provisioned — shutting down plaintext gRPC port", zap.String("port", agentPort))
