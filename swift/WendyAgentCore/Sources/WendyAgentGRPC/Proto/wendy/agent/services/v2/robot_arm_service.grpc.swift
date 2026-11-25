@@ -83,9 +83,8 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService {
     /// This protocol is the lowest-level of the service protocols generated for this service
     /// giving you the most flexibility over the implementation of your service. This comes at
     /// the cost of more verbose and less strict APIs. Each RPC requires you to implement it in
-    /// terms of a request stream and response stream. Where the RPC expects only a single
-    /// request or response message, you are responsible for ensuring your implementation
-    /// maintains this invariant.
+    /// terms of a request stream and response stream. Where only a single request or response
+    /// message is expected, you are responsible for enforcing this invariant is maintained.
     ///
     /// Where possible, prefer using the stricter, less-verbose ``ServiceProtocol``
     /// or ``SimpleServiceProtocol`` instead.
@@ -386,9 +385,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ListRobotArmsRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ListRobotArmsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func listRobotArms<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ListRobotArmsRequest>,
@@ -405,9 +404,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_BindRobotArmRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_BindRobotArmResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func bindRobotArm<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_BindRobotArmRequest>,
@@ -424,9 +423,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ForgetRobotArmRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ForgetRobotArmResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func forgetRobotArm<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ForgetRobotArmRequest>,
@@ -464,9 +463,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ListRobotArmsRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ListRobotArmsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func listRobotArms<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ListRobotArmsRequest>,
@@ -494,9 +493,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_BindRobotArmRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_BindRobotArmResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func bindRobotArm<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_BindRobotArmRequest>,
@@ -524,9 +523,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ForgetRobotArmRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ForgetRobotArmResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func forgetRobotArm<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ForgetRobotArmRequest>,
@@ -557,9 +556,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_ListRobotArmsRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listRobotArms<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ListRobotArmsRequest>,
@@ -582,9 +581,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_BindRobotArmRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func bindRobotArm<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_BindRobotArmRequest>,
@@ -607,9 +606,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_ForgetRobotArmRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func forgetRobotArm<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ForgetRobotArmRequest>,
@@ -637,9 +636,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listRobotArms<Result>(
         _ message: Wendy_Agent_Services_V2_ListRobotArmsRequest,
@@ -666,9 +665,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func bindRobotArm<Result>(
         _ message: Wendy_Agent_Services_V2_BindRobotArmRequest,
@@ -695,9 +694,9 @@ extension Wendy_Agent_Services_V2_WendyRobotArmService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func forgetRobotArm<Result>(
         _ message: Wendy_Agent_Services_V2_ForgetRobotArmRequest,

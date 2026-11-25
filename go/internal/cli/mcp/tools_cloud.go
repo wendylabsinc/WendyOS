@@ -287,6 +287,9 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	if err != nil {
 		return cloudErrResult(err), nil
 	}
+	if err := checkDeviceInternet(ctx, conn.Conn, cfg.DirectoryURL); err != nil {
+		return cloudErrResult(err), nil
+	}
 	cloudConn, err := mcpDialCloudGRPC(auth)
 	if err != nil {
 		return cloudErrResult(err), nil
@@ -307,7 +310,7 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 		EabKeyId: cfg.EABKeyID, EabHmacKey: cfg.EABHMACKey,
 	})
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return reservedEnrollmentFailure(assetID, err), nil
 	}
 	out := map[string]any{
 		"asset_id":      assetID,
@@ -319,6 +322,20 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 		out["hardware_warning"] = hwErr.Error()
 	}
 	return okResult(out), nil
+}
+
+// checkDeviceInternet is cloudenroll.CheckDeviceInternet; a variable so a test
+// can refuse without a device that reports its network.
+var checkDeviceInternet = cloudenroll.CheckDeviceInternet
+
+// reservedEnrollmentFailure reports a device that failed PKI enrollment after
+// Cloud reserved its asset. The EAB is single-use, so the reservation cannot
+// be resumed, and a retry under the same name is refused as taken until the
+// asset is removed. No MCP tool removes one, so the CLI command is named.
+func reservedEnrollmentFailure(assetID string, err error) *mcpgo.CallToolResult {
+	return errResultf(codeFromGRPC(err),
+		"Cloud registered asset %s and reserved the device name, but device PKI enrollment failed: %s. Before enrolling again, remove the reserved asset by running 'wendy cloud device unenroll --device %s' in a terminal.",
+		assetID, grpcErrString(err), assetID)
 }
 
 func (s *mcpServer) handleCloudTunnel(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -642,26 +659,10 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 	})
 
 	certInfo := auth.Certificates[0]
-	keyPEM, err := certInfo.PrivateKeyPEM()
+	var verifiedIdentity grpcclient.VerifiedServerIdentity
+	tlsCfg, err := mcpCloudAgentTLSConfig(certInfo, device, &verifiedIdentity)
 	if err != nil {
-		return nil, mcpCloudDevice{}, commandTarget{}, fmt.Errorf("loading client key: %w", err)
-	}
-	x509Cert, err := tls.X509KeyPair([]byte(certInfo.PemCertificate), []byte(keyPEM))
-	if err != nil {
-		return nil, mcpCloudDevice{}, commandTarget{}, fmt.Errorf("loading agent mTLS cert: %w", err)
-	}
-	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:      certInfo.PemCertificateChain,
-		ExpectedOrgID: int32(certInfo.OrganizationID),
-	})
-	if err != nil {
-		return nil, mcpCloudDevice{}, commandTarget{}, fmt.Errorf("building TLS verifier: %w", err)
-	}
-	tlsCfg := &tls.Config{
-		Certificates:       []tls.Certificate{x509Cert},
-		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
-		VerifyConnection:   verifyConn,
-		MinVersion:         tls.VersionTLS12,
+		return nil, mcpCloudDevice{}, commandTarget{}, err
 	}
 	grpcConn, err := grpc.NewClient(
 		"passthrough:///cloud-tunnel",
@@ -671,12 +672,13 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 	if err != nil {
 		return nil, mcpCloudDevice{}, commandTarget{}, fmt.Errorf("creating tunnelled gRPC connection: %w", err)
 	}
-	agentConn := grpcclient.NewFromConn(grpcConn)
+	agentConn := grpcclient.NewFromConnWithVerifiedIdentity(grpcConn, &verifiedIdentity)
 	agentConn.Host = device.GetName()
 	if !device.isV2 {
 		agentConn.MeshHost = meshname.Device(device.legacyID)
 	}
 	agentConn.IsMTLS = true
+	agentConn.CertInfo = &certInfo
 	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
 		return device.openTunnel(ctx, brokerConn, auth, uint32(port))
 	}
@@ -685,7 +687,7 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 		return next, err
 	}
 	if brokerConn != nil {
-		agentConn.ExtraClosers = append(agentConn.ExtraClosers, brokerConn)
+		agentConn.AddCloser(brokerConn)
 	}
 	cleanupBroker = false
 	return agentConn, device, cloudCommandTarget(auth, device, brokerURL), nil
@@ -1065,4 +1067,33 @@ func validatePort(port int) error {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+// mcpCloudAgentTLSConfig is shared by initial connection and reconnect, keeping
+// the selected inventory identity mandatory in both handshakes.
+func mcpCloudAgentTLSConfig(certInfo config.CertificateInfo, device mcpCloudDevice, verified *grpcclient.VerifiedServerIdentity) (*tls.Config, error) {
+	keyPEM, err := certInfo.PrivateKeyPEM()
+	if err != nil {
+		return nil, fmt.Errorf("loading client key: %w", err)
+	}
+	client, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
+	}
+	expected := device.expectedIdentity(certInfo)
+	verify, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ChainPEM:                 certInfo.PemCertificateChain,
+		ExpectedOrgID:            int32(certInfo.OrganizationID),
+		ExpectedIdentity:         &expected,
+		OnVerifiedServerIdentity: verified.Observe,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("building TLS verifier: %w", err)
+	}
+	return &tls.Config{
+		Certificates:       []tls.Certificate{client},
+		InsecureSkipVerify: true, // VerifyConnection enforces chain and selected device identity.
+		VerifyConnection:   verify,
+		MinVersion:         tls.VersionTLS12,
+	}, nil
 }

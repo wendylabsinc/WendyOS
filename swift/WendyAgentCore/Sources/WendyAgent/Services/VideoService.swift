@@ -188,21 +188,44 @@ actor VideoService: RegistrableRPCService {
         return StreamingServerResponse { writer in
             try await self.reserveStream(device: device, remotePeer: remotePeer)
             do {
-                var restored = false
-                for try await frame in camera.frames(for: device) {
-                    // Capture may restore firmware defaults when opening. Reapply
-                    // once its first frame arrives; that frame can precede tuning.
-                    if !restored {
-                        restored = true
-                        do { try await controls.restore(uniqueID: device.uniqueID) } catch {
-                            await self.logControlRestoreFailure(device: device, error: error)
+                // gRPC cancels its RPC handle, not the response producer Task.
+                // Race that handle against the frame copy so an idle camera is
+                // cancelled and joined before its capture slot is released.
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask {
+                        var restored = false
+                        for try await frame in camera.frames(for: device) {
+                            // Capture may restore firmware defaults when opening. Reapply
+                            // once its first frame arrives; that frame can precede tuning.
+                            if !restored {
+                                restored = true
+                                do { try await controls.restore(uniqueID: device.uniqueID) } catch {
+                                    await self.logControlRestoreFailure(
+                                        device: device,
+                                        error: error
+                                    )
+                                }
+                            }
+                            var proto = Wendy_Agent_Services_V1_VideoFrame()
+                            proto.data = frame.annexB
+                            proto.timestampNs = frame.timestampNanoseconds
+                            proto.codec = .h264
+                            try await writer.write(proto)
                         }
                     }
-                    var proto = Wendy_Agent_Services_V1_VideoFrame()
-                    proto.data = frame.annexB
-                    proto.timestampNs = frame.timestampNanoseconds
-                    proto.codec = .h264
-                    try await writer.write(proto)
+                    group.addTask { try await context.cancellation.cancelled }
+                    defer { group.cancelAll() }
+                    _ = try await group.next()
+                }
+                // The handle gives no reason. A client that reset the stream or
+                // hit its deadline never reads this status; a viewer attached
+                // while the server shuts down does, and must not see OK.
+                if context.cancellation.isCancelled {
+                    throw RPCError(
+                        code: .unavailable,
+                        message:
+                            "Wendy Agent for Mac ended the camera stream: the agent is shutting down or the request was cancelled."
+                    )
                 }
                 await self.releaseStream(device: device, remotePeer: remotePeer)
                 return Metadata()

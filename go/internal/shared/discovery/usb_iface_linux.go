@@ -11,29 +11,39 @@ import (
 // a var so tests can point it at a fixture tree.
 var netClassRoot = "/sys/class/net"
 
-// interfaceIsUSBBacked reports whether the named network interface is backed by
-// a USB device. It resolves the interface's sysfs symlink to its real device
-// path and checks whether that path traverses the USB bus (a "usb*" path
-// component). This catches USB-CDC gadget interfaces even when predictable
-// naming is disabled (net.ifnames=0) and the interface is a plain name like
-// "eth0"/"usb0" that the name heuristics in looksLikeUSBConnection would miss.
-func interfaceIsUSBBacked(name string) bool {
-	if name == "" {
+// The USB identity every WendyOS image's gadget presents (gadget-setup.sh in
+// wendyos-builder). The VID:PID is the generic Linux Foundation composite
+// gadget, shared by other Linux gadgets, so the manufacturer is required too.
+// The product string carries the per-device name and is not matched.
+const (
+	wendyGadgetVendorID     = "1d6b"
+	wendyGadgetProductID    = "0104"
+	wendyGadgetManufacturer = "Wendy Labs Inc"
+)
+
+// usbGadgetIdentityFn makes looksLikeUSBConnection judge interfaces by USB
+// identity on Linux. Tests of the name rules other platforms use clear it.
+var usbGadgetIdentityFn = IsWendyUSBGadget
+
+// IsWendyUSBGadget reports whether the named network interface is the host end
+// of a Wendy device's USB link, judged by the identity of the USB device behind
+// it in sysfs, never by the interface name: ordinary USB network adapters get
+// the same names (enx…, en…u1, usb0) as the gadget.
+func IsWendyUSBGadget(name string) bool {
+	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') {
 		return false
 	}
-	resolved, err := filepath.EvalSymlinks(filepath.Join(netClassRoot, name))
+	dir, err := filepath.EvalSymlinks(filepath.Join(netClassRoot, name))
 	if err != nil {
 		return false
 	}
-	return pathHasUSBComponent(resolved)
-}
-
-// pathHasUSBComponent reports whether any path segment names a USB bus/device
-// (sysfs uses components like "usb1", "usb2", ...).
-func pathHasUSBComponent(p string) bool {
-	for _, seg := range strings.Split(p, string(filepath.Separator)) {
-		if strings.HasPrefix(seg, "usb") {
-			return true
+	// Walk up from …/<usb-device>/<usb-device>:1.0/net/<name> to the first
+	// directory carrying USB device attributes. Non-USB devices have none.
+	for ; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if vid := readSysfsAttr(dir, "idVendor"); vid != "" {
+			return strings.EqualFold(vid, wendyGadgetVendorID) &&
+				strings.EqualFold(readSysfsAttr(dir, "idProduct"), wendyGadgetProductID) &&
+				readSysfsAttr(dir, "manufacturer") == wendyGadgetManufacturer
 		}
 	}
 	return false

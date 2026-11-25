@@ -108,15 +108,6 @@ func isLiteCloudAsset(asset *cloudpbv2.Asset) bool {
 	return strings.EqualFold(asset.GetOsType(), liteCloudOSType)
 }
 
-// liteDeviceType labels a Lite board's type in Cloud listings the way the
-// local tab does ("LAN (Lite)").
-func liteDeviceType(devType string) string {
-	if devType == "" {
-		return "Lite"
-	}
-	return devType + " (Lite)"
-}
-
 // cloudLiteSelectedDevice targets a Wendy Lite asset through the Cloud relay.
 // Nothing is dialled here: like its other transports, the Lite provider
 // connects when a command uses the device. selector is the asset's cloud://
@@ -143,8 +134,8 @@ func cloudLiteSelectedDevice(auth *config.AuthConfig, asset *cloudpbv2.Asset, se
 			OSVersion:       asset.GetOsVersion(),
 			CPUArchitecture: asset.GetArchitecture(),
 		},
-		Provider:        provider,
-		DefaultSelector: selector,
+		Provider: provider,
+		Selector: selector,
 	}, nil
 }
 

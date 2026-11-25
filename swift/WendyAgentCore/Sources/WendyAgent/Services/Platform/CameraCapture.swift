@@ -17,7 +17,7 @@ struct CameraFrame: Equatable, Sendable {
 /// with a fake that yields canned frames instead of touching real hardware.
 protocol CameraCapturing: Sendable {
     func frames() -> AsyncThrowingStream<CameraFrame, any Error>
-    func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor?
+    func descriptor() -> Wendylite_V1_SensorDescriptor?
 }
 
 /// A camera as `WendyVideoService` presents it: a small numeric ID (position
@@ -232,15 +232,15 @@ struct CameraCapture: CameraCapturing {
         }
     }
 
-    func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor? {
+    func descriptor() -> Wendylite_V1_SensorDescriptor? {
         guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return nil }
         guard let device = AVCaptureDevice.default(for: .video) else { return nil }
         let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
 
-        var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
+        var descriptor = Wendylite_V1_SensorDescriptor()
         descriptor.channelID = Self.channel
         descriptor.name = device.localizedName
-        var video = Wendy_Lite_Sensorlink_VideoFormat()
+        var video = Wendylite_V1_VideoFormat()
         video.codec = .h264
         video.width = UInt32(max(0, dims.width))
         video.height = UInt32(max(0, dims.height))

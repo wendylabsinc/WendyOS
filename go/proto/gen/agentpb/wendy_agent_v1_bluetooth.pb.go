@@ -43,6 +43,10 @@ type BluetoothCommand struct {
 	//	*BluetoothCommand_WifiSetPriority
 	//	*BluetoothCommand_WifiReorder
 	//	*BluetoothCommand_WifiForget
+	//	*BluetoothCommand_SetupStatus
+	//	*BluetoothCommand_SetupEnroll
+	//	*BluetoothCommand_SetupHello
+	//	*BluetoothCommand_SetupSealed
 	Command       isBluetoothCommand_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -238,6 +242,42 @@ func (x *BluetoothCommand) GetWifiForget() *WifiForgetCommand {
 	return nil
 }
 
+func (x *BluetoothCommand) GetSetupStatus() *SetupStatusCommand {
+	if x != nil {
+		if x, ok := x.Command.(*BluetoothCommand_SetupStatus); ok {
+			return x.SetupStatus
+		}
+	}
+	return nil
+}
+
+func (x *BluetoothCommand) GetSetupEnroll() *SetupEnrollCommand {
+	if x != nil {
+		if x, ok := x.Command.(*BluetoothCommand_SetupEnroll); ok {
+			return x.SetupEnroll
+		}
+	}
+	return nil
+}
+
+func (x *BluetoothCommand) GetSetupHello() *SetupHello {
+	if x != nil {
+		if x, ok := x.Command.(*BluetoothCommand_SetupHello); ok {
+			return x.SetupHello
+		}
+	}
+	return nil
+}
+
+func (x *BluetoothCommand) GetSetupSealed() *SetupSealed {
+	if x != nil {
+		if x, ok := x.Command.(*BluetoothCommand_SetupSealed); ok {
+			return x.SetupSealed
+		}
+	}
+	return nil
+}
+
 type isBluetoothCommand_Command interface {
 	isBluetoothCommand_Command()
 }
@@ -310,6 +350,22 @@ type BluetoothCommand_WifiForget struct {
 	WifiForget *WifiForgetCommand `protobuf:"bytes,17,opt,name=wifi_forget,json=wifiForget,proto3,oneof"`
 }
 
+type BluetoothCommand_SetupStatus struct {
+	SetupStatus *SetupStatusCommand `protobuf:"bytes,18,opt,name=setup_status,json=setupStatus,proto3,oneof"`
+}
+
+type BluetoothCommand_SetupEnroll struct {
+	SetupEnroll *SetupEnrollCommand `protobuf:"bytes,19,opt,name=setup_enroll,json=setupEnroll,proto3,oneof"`
+}
+
+type BluetoothCommand_SetupHello struct {
+	SetupHello *SetupHello `protobuf:"bytes,20,opt,name=setup_hello,json=setupHello,proto3,oneof"`
+}
+
+type BluetoothCommand_SetupSealed struct {
+	SetupSealed *SetupSealed `protobuf:"bytes,21,opt,name=setup_sealed,json=setupSealed,proto3,oneof"`
+}
+
 func (*BluetoothCommand_WifiList) isBluetoothCommand_Command() {}
 
 func (*BluetoothCommand_WifiConnect) isBluetoothCommand_Command() {}
@@ -343,6 +399,14 @@ func (*BluetoothCommand_WifiSetPriority) isBluetoothCommand_Command() {}
 func (*BluetoothCommand_WifiReorder) isBluetoothCommand_Command() {}
 
 func (*BluetoothCommand_WifiForget) isBluetoothCommand_Command() {}
+
+func (*BluetoothCommand_SetupStatus) isBluetoothCommand_Command() {}
+
+func (*BluetoothCommand_SetupEnroll) isBluetoothCommand_Command() {}
+
+func (*BluetoothCommand_SetupHello) isBluetoothCommand_Command() {}
+
+func (*BluetoothCommand_SetupSealed) isBluetoothCommand_Command() {}
 
 // Empty commands (no parameters needed)
 type WifiListCommand struct {
@@ -1102,6 +1166,10 @@ type BluetoothResponse struct {
 	//	*BluetoothResponse_WifiSetPriority
 	//	*BluetoothResponse_WifiReorder
 	//	*BluetoothResponse_WifiForget
+	//	*BluetoothResponse_SetupStatus
+	//	*BluetoothResponse_SetupEnroll
+	//	*BluetoothResponse_SetupHello
+	//	*BluetoothResponse_SetupSealed
 	Response      isBluetoothResponse_Response `protobuf_oneof:"response"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1306,6 +1374,42 @@ func (x *BluetoothResponse) GetWifiForget() *WifiForgetResponse {
 	return nil
 }
 
+func (x *BluetoothResponse) GetSetupStatus() *SetupStatusResponse {
+	if x != nil {
+		if x, ok := x.Response.(*BluetoothResponse_SetupStatus); ok {
+			return x.SetupStatus
+		}
+	}
+	return nil
+}
+
+func (x *BluetoothResponse) GetSetupEnroll() *SetupEnrollResponse {
+	if x != nil {
+		if x, ok := x.Response.(*BluetoothResponse_SetupEnroll); ok {
+			return x.SetupEnroll
+		}
+	}
+	return nil
+}
+
+func (x *BluetoothResponse) GetSetupHello() *SetupHello {
+	if x != nil {
+		if x, ok := x.Response.(*BluetoothResponse_SetupHello); ok {
+			return x.SetupHello
+		}
+	}
+	return nil
+}
+
+func (x *BluetoothResponse) GetSetupSealed() *SetupSealed {
+	if x != nil {
+		if x, ok := x.Response.(*BluetoothResponse_SetupSealed); ok {
+			return x.SetupSealed
+		}
+	}
+	return nil
+}
+
 type isBluetoothResponse_Response interface {
 	isBluetoothResponse_Response()
 }
@@ -1382,6 +1486,22 @@ type BluetoothResponse_WifiForget struct {
 	WifiForget *WifiForgetResponse `protobuf:"bytes,18,opt,name=wifi_forget,json=wifiForget,proto3,oneof"`
 }
 
+type BluetoothResponse_SetupStatus struct {
+	SetupStatus *SetupStatusResponse `protobuf:"bytes,19,opt,name=setup_status,json=setupStatus,proto3,oneof"`
+}
+
+type BluetoothResponse_SetupEnroll struct {
+	SetupEnroll *SetupEnrollResponse `protobuf:"bytes,20,opt,name=setup_enroll,json=setupEnroll,proto3,oneof"`
+}
+
+type BluetoothResponse_SetupHello struct {
+	SetupHello *SetupHello `protobuf:"bytes,21,opt,name=setup_hello,json=setupHello,proto3,oneof"`
+}
+
+type BluetoothResponse_SetupSealed struct {
+	SetupSealed *SetupSealed `protobuf:"bytes,22,opt,name=setup_sealed,json=setupSealed,proto3,oneof"`
+}
+
 func (*BluetoothResponse_WifiList) isBluetoothResponse_Response() {}
 
 func (*BluetoothResponse_WifiConnect) isBluetoothResponse_Response() {}
@@ -1417,6 +1537,14 @@ func (*BluetoothResponse_WifiSetPriority) isBluetoothResponse_Response() {}
 func (*BluetoothResponse_WifiReorder) isBluetoothResponse_Response() {}
 
 func (*BluetoothResponse_WifiForget) isBluetoothResponse_Response() {}
+
+func (*BluetoothResponse_SetupStatus) isBluetoothResponse_Response() {}
+
+func (*BluetoothResponse_SetupEnroll) isBluetoothResponse_Response() {}
+
+func (*BluetoothResponse_SetupHello) isBluetoothResponse_Response() {}
+
+func (*BluetoothResponse_SetupSealed) isBluetoothResponse_Response() {}
 
 // WiFi responses
 type WifiListResponse struct {
@@ -2732,11 +2860,388 @@ func (x *BluetoothDeviceInfo) GetIcon() string {
 	return ""
 }
 
+// Unenrolled-device setup only, on service 7565e9eb-4c20-4b67-9272-d708b397b632,
+// LE CoC PSM 130. Never dispatch these through the authenticated management service.
+type SetupStatusCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestNonce  bool                   `protobuf:"varint,1,opt,name=request_nonce,json=requestNonce,proto3" json:"request_nonce,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetupStatusCommand) Reset() {
+	*x = SetupStatusCommand{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetupStatusCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetupStatusCommand) ProtoMessage() {}
+
+func (x *SetupStatusCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetupStatusCommand.ProtoReflect.Descriptor instead.
+func (*SetupStatusCommand) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *SetupStatusCommand) GetRequestNonce() bool {
+	if x != nil {
+		return x.RequestNonce
+	}
+	return false
+}
+
+type SetupStatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enrolled      bool                   `protobuf:"varint,1,opt,name=enrolled,proto3" json:"enrolled,omitempty"`
+	AcmeSupported bool                   `protobuf:"varint,2,opt,name=acme_supported,json=acmeSupported,proto3" json:"acme_supported,omitempty"`
+	PrincipalUri  string                 `protobuf:"bytes,3,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"`
+	DeviceClass   string                 `protobuf:"bytes,4,opt,name=device_class,json=deviceClass,proto3" json:"device_class,omitempty"`
+	Nonce         string                 `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	HardwareId    string                 `protobuf:"bytes,6,opt,name=hardware_id,json=hardwareId,proto3" json:"hardware_id,omitempty"`
+	LiteSupported bool                   `protobuf:"varint,7,opt,name=lite_supported,json=liteSupported,proto3" json:"lite_supported,omitempty"`
+	MaxConfigSize uint32                 `protobuf:"varint,8,opt,name=max_config_size,json=maxConfigSize,proto3" json:"max_config_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetupStatusResponse) Reset() {
+	*x = SetupStatusResponse{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetupStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetupStatusResponse) ProtoMessage() {}
+
+func (x *SetupStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetupStatusResponse.ProtoReflect.Descriptor instead.
+func (*SetupStatusResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *SetupStatusResponse) GetEnrolled() bool {
+	if x != nil {
+		return x.Enrolled
+	}
+	return false
+}
+
+func (x *SetupStatusResponse) GetAcmeSupported() bool {
+	if x != nil {
+		return x.AcmeSupported
+	}
+	return false
+}
+
+func (x *SetupStatusResponse) GetPrincipalUri() string {
+	if x != nil {
+		return x.PrincipalUri
+	}
+	return ""
+}
+
+func (x *SetupStatusResponse) GetDeviceClass() string {
+	if x != nil {
+		return x.DeviceClass
+	}
+	return ""
+}
+
+func (x *SetupStatusResponse) GetNonce() string {
+	if x != nil {
+		return x.Nonce
+	}
+	return ""
+}
+
+func (x *SetupStatusResponse) GetHardwareId() string {
+	if x != nil {
+		return x.HardwareId
+	}
+	return ""
+}
+
+func (x *SetupStatusResponse) GetLiteSupported() bool {
+	if x != nil {
+		return x.LiteSupported
+	}
+	return false
+}
+
+func (x *SetupStatusResponse) GetMaxConfigSize() uint32 {
+	if x != nil {
+		return x.MaxConfigSize
+	}
+	return 0
+}
+
+type SetupEnrollCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CloudHost     string                 `protobuf:"bytes,1,opt,name=cloud_host,json=cloudHost,proto3" json:"cloud_host,omitempty"`
+	DirectoryUrl  string                 `protobuf:"bytes,2,opt,name=directory_url,json=directoryUrl,proto3" json:"directory_url,omitempty"`
+	DeviceId      string                 `protobuf:"bytes,3,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	EabKeyId      string                 `protobuf:"bytes,4,opt,name=eab_key_id,json=eabKeyId,proto3" json:"eab_key_id,omitempty"`
+	EabHmacKey    string                 `protobuf:"bytes,5,opt,name=eab_hmac_key,json=eabHmacKey,proto3" json:"eab_hmac_key,omitempty"`
+	LiteConfig    []byte                 `protobuf:"bytes,6,opt,name=lite_config,json=liteConfig,proto3" json:"lite_config,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetupEnrollCommand) Reset() {
+	*x = SetupEnrollCommand{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetupEnrollCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetupEnrollCommand) ProtoMessage() {}
+
+func (x *SetupEnrollCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetupEnrollCommand.ProtoReflect.Descriptor instead.
+func (*SetupEnrollCommand) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *SetupEnrollCommand) GetCloudHost() string {
+	if x != nil {
+		return x.CloudHost
+	}
+	return ""
+}
+
+func (x *SetupEnrollCommand) GetDirectoryUrl() string {
+	if x != nil {
+		return x.DirectoryUrl
+	}
+	return ""
+}
+
+func (x *SetupEnrollCommand) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+func (x *SetupEnrollCommand) GetEabKeyId() string {
+	if x != nil {
+		return x.EabKeyId
+	}
+	return ""
+}
+
+func (x *SetupEnrollCommand) GetEabHmacKey() string {
+	if x != nil {
+		return x.EabHmacKey
+	}
+	return ""
+}
+
+func (x *SetupEnrollCommand) GetLiteConfig() []byte {
+	if x != nil {
+		return x.LiteConfig
+	}
+	return nil
+}
+
+type SetupEnrollResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PrincipalUri  string                 `protobuf:"bytes,1,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"`
+	Pending       bool                   `protobuf:"varint,2,opt,name=pending,proto3" json:"pending,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetupEnrollResponse) Reset() {
+	*x = SetupEnrollResponse{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetupEnrollResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetupEnrollResponse) ProtoMessage() {}
+
+func (x *SetupEnrollResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetupEnrollResponse.ProtoReflect.Descriptor instead.
+func (*SetupEnrollResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *SetupEnrollResponse) GetPrincipalUri() string {
+	if x != nil {
+		return x.PrincipalUri
+	}
+	return ""
+}
+
+func (x *SetupEnrollResponse) GetPending() bool {
+	if x != nil {
+		return x.Pending
+	}
+	return false
+}
+
+// Ephemeral X25519 handshake. HKDF-SHA256 salt is client_public || server_public,
+// info "wendy-ble-setup-v1", 64 bytes: client write key then server write key.
+// This protects against passive listeners, not active impersonation. Setup has
+// the same physical-proximity trust as headless BLE Just Works pairing.
+type SetupHello struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PublicKey     []byte                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetupHello) Reset() {
+	*x = SetupHello{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetupHello) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetupHello) ProtoMessage() {}
+
+func (x *SetupHello) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetupHello.ProtoReflect.Descriptor instead.
+func (*SetupHello) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *SetupHello) GetPublicKey() []byte {
+	if x != nil {
+		return x.PublicKey
+	}
+	return nil
+}
+
+// AES-256-GCM combined nonce || ciphertext || tag. Nonce is 4 zero bytes plus
+// a big-endian uint64 request counter starting at 1; response echoes its counter.
+// Only sealed messages are accepted after the hello, with strictly ordered counters.
+type SetupSealed struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetupSealed) Reset() {
+	*x = SetupSealed{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetupSealed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetupSealed) ProtoMessage() {}
+
+func (x *SetupSealed) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetupSealed.ProtoReflect.Descriptor instead.
+func (*SetupSealed) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *SetupSealed) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 var File_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDesc = "" +
 	"\n" +
-	"6wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto\x12\x17wendy.agent.services.v1\x1a4wendy/agent/services/v1/wendy_agent_v1_service.proto\"\xc7\v\n" +
+	"6wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto\x12\x17wendy.agent.services.v1\x1a4wendy/agent/services/v1/wendy_agent_v1_service.proto\"\xfe\r\n" +
 	"\x10BluetoothCommand\x12G\n" +
 	"\twifi_list\x18\x01 \x01(\v2(.wendy.agent.services.v1.WifiListCommandH\x00R\bwifiList\x12P\n" +
 	"\fwifi_connect\x18\x02 \x01(\v2+.wendy.agent.services.v1.WifiConnectCommandH\x00R\vwifiConnect\x12M\n" +
@@ -2758,7 +3263,12 @@ const file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDesc = "" +
 	"\x11wifi_set_priority\x18\x0f \x01(\v2/.wendy.agent.services.v1.WifiSetPriorityCommandH\x00R\x0fwifiSetPriority\x12P\n" +
 	"\fwifi_reorder\x18\x10 \x01(\v2+.wendy.agent.services.v1.WifiReorderCommandH\x00R\vwifiReorder\x12M\n" +
 	"\vwifi_forget\x18\x11 \x01(\v2*.wendy.agent.services.v1.WifiForgetCommandH\x00R\n" +
-	"wifiForgetB\t\n" +
+	"wifiForget\x12P\n" +
+	"\fsetup_status\x18\x12 \x01(\v2+.wendy.agent.services.v1.SetupStatusCommandH\x00R\vsetupStatus\x12P\n" +
+	"\fsetup_enroll\x18\x13 \x01(\v2+.wendy.agent.services.v1.SetupEnrollCommandH\x00R\vsetupEnroll\x12F\n" +
+	"\vsetup_hello\x18\x14 \x01(\v2#.wendy.agent.services.v1.SetupHelloH\x00R\n" +
+	"setupHello\x12I\n" +
+	"\fsetup_sealed\x18\x15 \x01(\v2$.wendy.agent.services.v1.SetupSealedH\x00R\vsetupSealedB\t\n" +
 	"\acommand\"\x11\n" +
 	"\x0fWifiListCommand\"\x13\n" +
 	"\x11WifiStatusCommand\"\x17\n" +
@@ -2796,7 +3306,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDesc = "" +
 	"\x11AppsRemoveCommand\x12\x19\n" +
 	"\bapp_name\x18\x01 \x01(\tR\aappName\x12\x1f\n" +
 	"\vpurge_image\x18\x02 \x01(\bR\n" +
-	"purgeImage\"\x9a\f\n" +
+	"purgeImage\"\xd3\x0e\n" +
 	"\x11BluetoothResponse\x12H\n" +
 	"\twifi_list\x18\x01 \x01(\v2).wendy.agent.services.v1.WifiListResponseH\x00R\bwifiList\x12Q\n" +
 	"\fwifi_connect\x18\x02 \x01(\v2,.wendy.agent.services.v1.WifiConnectResponseH\x00R\vwifiConnect\x12N\n" +
@@ -2819,7 +3329,12 @@ const file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDesc = "" +
 	"\x11wifi_set_priority\x18\x10 \x01(\v20.wendy.agent.services.v1.WifiSetPriorityResponseH\x00R\x0fwifiSetPriority\x12Q\n" +
 	"\fwifi_reorder\x18\x11 \x01(\v2,.wendy.agent.services.v1.WifiReorderResponseH\x00R\vwifiReorder\x12N\n" +
 	"\vwifi_forget\x18\x12 \x01(\v2+.wendy.agent.services.v1.WifiForgetResponseH\x00R\n" +
-	"wifiForgetB\n" +
+	"wifiForget\x12Q\n" +
+	"\fsetup_status\x18\x13 \x01(\v2,.wendy.agent.services.v1.SetupStatusResponseH\x00R\vsetupStatus\x12Q\n" +
+	"\fsetup_enroll\x18\x14 \x01(\v2,.wendy.agent.services.v1.SetupEnrollResponseH\x00R\vsetupEnroll\x12F\n" +
+	"\vsetup_hello\x18\x15 \x01(\v2#.wendy.agent.services.v1.SetupHelloH\x00R\n" +
+	"setupHello\x12I\n" +
+	"\fsetup_sealed\x18\x16 \x01(\v2$.wendy.agent.services.v1.SetupSealedH\x00R\vsetupSealedB\n" +
 	"\n" +
 	"\bresponse\"X\n" +
 	"\x10WifiListResponse\x12D\n" +
@@ -2929,7 +3444,39 @@ const file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDesc = "" +
 	"deviceType\x12\x17\n" +
 	"\x04icon\x18\b \x01(\tH\x01R\x04icon\x88\x01\x01B\a\n" +
 	"\x05_rssiB\a\n" +
-	"\x05_iconb\x06proto3"
+	"\x05_icon\"9\n" +
+	"\x12SetupStatusCommand\x12#\n" +
+	"\rrequest_nonce\x18\x01 \x01(\bR\frequestNonce\"\xa6\x02\n" +
+	"\x13SetupStatusResponse\x12\x1a\n" +
+	"\benrolled\x18\x01 \x01(\bR\benrolled\x12%\n" +
+	"\x0eacme_supported\x18\x02 \x01(\bR\racmeSupported\x12#\n" +
+	"\rprincipal_uri\x18\x03 \x01(\tR\fprincipalUri\x12!\n" +
+	"\fdevice_class\x18\x04 \x01(\tR\vdeviceClass\x12\x14\n" +
+	"\x05nonce\x18\x05 \x01(\tR\x05nonce\x12\x1f\n" +
+	"\vhardware_id\x18\x06 \x01(\tR\n" +
+	"hardwareId\x12%\n" +
+	"\x0elite_supported\x18\a \x01(\bR\rliteSupported\x12&\n" +
+	"\x0fmax_config_size\x18\b \x01(\rR\rmaxConfigSize\"\xd6\x01\n" +
+	"\x12SetupEnrollCommand\x12\x1d\n" +
+	"\n" +
+	"cloud_host\x18\x01 \x01(\tR\tcloudHost\x12#\n" +
+	"\rdirectory_url\x18\x02 \x01(\tR\fdirectoryUrl\x12\x1b\n" +
+	"\tdevice_id\x18\x03 \x01(\tR\bdeviceId\x12\x1c\n" +
+	"\n" +
+	"eab_key_id\x18\x04 \x01(\tR\beabKeyId\x12 \n" +
+	"\feab_hmac_key\x18\x05 \x01(\tR\n" +
+	"eabHmacKey\x12\x1f\n" +
+	"\vlite_config\x18\x06 \x01(\fR\n" +
+	"liteConfig\"T\n" +
+	"\x13SetupEnrollResponse\x12#\n" +
+	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri\x12\x18\n" +
+	"\apending\x18\x02 \x01(\bR\apending\"+\n" +
+	"\n" +
+	"SetupHello\x12\x1d\n" +
+	"\n" +
+	"public_key\x18\x01 \x01(\fR\tpublicKey\"!\n" +
+	"\vSetupSealed\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04datab\x06proto3"
 
 var (
 	file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescOnce sync.Once
@@ -2943,7 +3490,7 @@ func file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescGZIP() [
 	return file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescData
 }
 
-var file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
+var file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
 var file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_goTypes = []any{
 	(*BluetoothCommand)(nil),            // 0: wendy.agent.services.v1.BluetoothCommand
 	(*WifiListCommand)(nil),             // 1: wendy.agent.services.v1.WifiListCommand
@@ -2987,7 +3534,13 @@ var file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_goTypes = []any{
 	(*AppInfo)(nil),                     // 39: wendy.agent.services.v1.AppInfo
 	(*HardwareInfo)(nil),                // 40: wendy.agent.services.v1.HardwareInfo
 	(*BluetoothDeviceInfo)(nil),         // 41: wendy.agent.services.v1.BluetoothDeviceInfo
-	(WiFiSecurityType)(0),               // 42: wendy.agent.services.v1.WiFiSecurityType
+	(*SetupStatusCommand)(nil),          // 42: wendy.agent.services.v1.SetupStatusCommand
+	(*SetupStatusResponse)(nil),         // 43: wendy.agent.services.v1.SetupStatusResponse
+	(*SetupEnrollCommand)(nil),          // 44: wendy.agent.services.v1.SetupEnrollCommand
+	(*SetupEnrollResponse)(nil),         // 45: wendy.agent.services.v1.SetupEnrollResponse
+	(*SetupHello)(nil),                  // 46: wendy.agent.services.v1.SetupHello
+	(*SetupSealed)(nil),                 // 47: wendy.agent.services.v1.SetupSealed
+	(WiFiSecurityType)(0),               // 48: wendy.agent.services.v1.WiFiSecurityType
 }
 var file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_depIdxs = []int32{
 	1,  // 0: wendy.agent.services.v1.BluetoothCommand.wifi_list:type_name -> wendy.agent.services.v1.WifiListCommand
@@ -3007,37 +3560,45 @@ var file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_depIdxs = []int3
 	13, // 14: wendy.agent.services.v1.BluetoothCommand.wifi_set_priority:type_name -> wendy.agent.services.v1.WifiSetPriorityCommand
 	14, // 15: wendy.agent.services.v1.BluetoothCommand.wifi_reorder:type_name -> wendy.agent.services.v1.WifiReorderCommand
 	15, // 16: wendy.agent.services.v1.BluetoothCommand.wifi_forget:type_name -> wendy.agent.services.v1.WifiForgetCommand
-	42, // 17: wendy.agent.services.v1.WifiConnectCommand.security:type_name -> wendy.agent.services.v1.WiFiSecurityType
-	19, // 18: wendy.agent.services.v1.BluetoothResponse.wifi_list:type_name -> wendy.agent.services.v1.WifiListResponse
-	20, // 19: wendy.agent.services.v1.BluetoothResponse.wifi_connect:type_name -> wendy.agent.services.v1.WifiConnectResponse
-	21, // 20: wendy.agent.services.v1.BluetoothResponse.wifi_status:type_name -> wendy.agent.services.v1.WifiStatusResponse
-	22, // 21: wendy.agent.services.v1.BluetoothResponse.wifi_disconnect:type_name -> wendy.agent.services.v1.WifiDisconnectResponse
-	23, // 22: wendy.agent.services.v1.BluetoothResponse.apps_list:type_name -> wendy.agent.services.v1.AppsListResponse
-	24, // 23: wendy.agent.services.v1.BluetoothResponse.apps_stop:type_name -> wendy.agent.services.v1.AppsStopResponse
-	25, // 24: wendy.agent.services.v1.BluetoothResponse.apps_remove:type_name -> wendy.agent.services.v1.AppsRemoveResponse
-	26, // 25: wendy.agent.services.v1.BluetoothResponse.agent_version:type_name -> wendy.agent.services.v1.AgentVersionResponse
-	27, // 26: wendy.agent.services.v1.BluetoothResponse.hardware_list:type_name -> wendy.agent.services.v1.HardwareListResponse
-	28, // 27: wendy.agent.services.v1.BluetoothResponse.error:type_name -> wendy.agent.services.v1.ErrorResponse
-	29, // 28: wendy.agent.services.v1.BluetoothResponse.bluetooth_list:type_name -> wendy.agent.services.v1.BluetoothListResponse
-	30, // 29: wendy.agent.services.v1.BluetoothResponse.bluetooth_connect:type_name -> wendy.agent.services.v1.BluetoothConnectResponse
-	31, // 30: wendy.agent.services.v1.BluetoothResponse.bluetooth_disconnect:type_name -> wendy.agent.services.v1.BluetoothDisconnectResponse
-	32, // 31: wendy.agent.services.v1.BluetoothResponse.bluetooth_forget:type_name -> wendy.agent.services.v1.BluetoothForgetResponse
-	33, // 32: wendy.agent.services.v1.BluetoothResponse.wifi_known_list:type_name -> wendy.agent.services.v1.WifiKnownListResponse
-	35, // 33: wendy.agent.services.v1.BluetoothResponse.wifi_set_priority:type_name -> wendy.agent.services.v1.WifiSetPriorityResponse
-	36, // 34: wendy.agent.services.v1.BluetoothResponse.wifi_reorder:type_name -> wendy.agent.services.v1.WifiReorderResponse
-	37, // 35: wendy.agent.services.v1.BluetoothResponse.wifi_forget:type_name -> wendy.agent.services.v1.WifiForgetResponse
-	38, // 36: wendy.agent.services.v1.WifiListResponse.networks:type_name -> wendy.agent.services.v1.WifiNetworkInfo
-	39, // 37: wendy.agent.services.v1.AppsListResponse.apps:type_name -> wendy.agent.services.v1.AppInfo
-	40, // 38: wendy.agent.services.v1.HardwareListResponse.capabilities:type_name -> wendy.agent.services.v1.HardwareInfo
-	41, // 39: wendy.agent.services.v1.BluetoothListResponse.devices:type_name -> wendy.agent.services.v1.BluetoothDeviceInfo
-	34, // 40: wendy.agent.services.v1.WifiKnownListResponse.networks:type_name -> wendy.agent.services.v1.KnownWifiNetworkInfo
-	42, // 41: wendy.agent.services.v1.KnownWifiNetworkInfo.security:type_name -> wendy.agent.services.v1.WiFiSecurityType
-	42, // 42: wendy.agent.services.v1.WifiNetworkInfo.security:type_name -> wendy.agent.services.v1.WiFiSecurityType
-	43, // [43:43] is the sub-list for method output_type
-	43, // [43:43] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	42, // 17: wendy.agent.services.v1.BluetoothCommand.setup_status:type_name -> wendy.agent.services.v1.SetupStatusCommand
+	44, // 18: wendy.agent.services.v1.BluetoothCommand.setup_enroll:type_name -> wendy.agent.services.v1.SetupEnrollCommand
+	46, // 19: wendy.agent.services.v1.BluetoothCommand.setup_hello:type_name -> wendy.agent.services.v1.SetupHello
+	47, // 20: wendy.agent.services.v1.BluetoothCommand.setup_sealed:type_name -> wendy.agent.services.v1.SetupSealed
+	48, // 21: wendy.agent.services.v1.WifiConnectCommand.security:type_name -> wendy.agent.services.v1.WiFiSecurityType
+	19, // 22: wendy.agent.services.v1.BluetoothResponse.wifi_list:type_name -> wendy.agent.services.v1.WifiListResponse
+	20, // 23: wendy.agent.services.v1.BluetoothResponse.wifi_connect:type_name -> wendy.agent.services.v1.WifiConnectResponse
+	21, // 24: wendy.agent.services.v1.BluetoothResponse.wifi_status:type_name -> wendy.agent.services.v1.WifiStatusResponse
+	22, // 25: wendy.agent.services.v1.BluetoothResponse.wifi_disconnect:type_name -> wendy.agent.services.v1.WifiDisconnectResponse
+	23, // 26: wendy.agent.services.v1.BluetoothResponse.apps_list:type_name -> wendy.agent.services.v1.AppsListResponse
+	24, // 27: wendy.agent.services.v1.BluetoothResponse.apps_stop:type_name -> wendy.agent.services.v1.AppsStopResponse
+	25, // 28: wendy.agent.services.v1.BluetoothResponse.apps_remove:type_name -> wendy.agent.services.v1.AppsRemoveResponse
+	26, // 29: wendy.agent.services.v1.BluetoothResponse.agent_version:type_name -> wendy.agent.services.v1.AgentVersionResponse
+	27, // 30: wendy.agent.services.v1.BluetoothResponse.hardware_list:type_name -> wendy.agent.services.v1.HardwareListResponse
+	28, // 31: wendy.agent.services.v1.BluetoothResponse.error:type_name -> wendy.agent.services.v1.ErrorResponse
+	29, // 32: wendy.agent.services.v1.BluetoothResponse.bluetooth_list:type_name -> wendy.agent.services.v1.BluetoothListResponse
+	30, // 33: wendy.agent.services.v1.BluetoothResponse.bluetooth_connect:type_name -> wendy.agent.services.v1.BluetoothConnectResponse
+	31, // 34: wendy.agent.services.v1.BluetoothResponse.bluetooth_disconnect:type_name -> wendy.agent.services.v1.BluetoothDisconnectResponse
+	32, // 35: wendy.agent.services.v1.BluetoothResponse.bluetooth_forget:type_name -> wendy.agent.services.v1.BluetoothForgetResponse
+	33, // 36: wendy.agent.services.v1.BluetoothResponse.wifi_known_list:type_name -> wendy.agent.services.v1.WifiKnownListResponse
+	35, // 37: wendy.agent.services.v1.BluetoothResponse.wifi_set_priority:type_name -> wendy.agent.services.v1.WifiSetPriorityResponse
+	36, // 38: wendy.agent.services.v1.BluetoothResponse.wifi_reorder:type_name -> wendy.agent.services.v1.WifiReorderResponse
+	37, // 39: wendy.agent.services.v1.BluetoothResponse.wifi_forget:type_name -> wendy.agent.services.v1.WifiForgetResponse
+	43, // 40: wendy.agent.services.v1.BluetoothResponse.setup_status:type_name -> wendy.agent.services.v1.SetupStatusResponse
+	45, // 41: wendy.agent.services.v1.BluetoothResponse.setup_enroll:type_name -> wendy.agent.services.v1.SetupEnrollResponse
+	46, // 42: wendy.agent.services.v1.BluetoothResponse.setup_hello:type_name -> wendy.agent.services.v1.SetupHello
+	47, // 43: wendy.agent.services.v1.BluetoothResponse.setup_sealed:type_name -> wendy.agent.services.v1.SetupSealed
+	38, // 44: wendy.agent.services.v1.WifiListResponse.networks:type_name -> wendy.agent.services.v1.WifiNetworkInfo
+	39, // 45: wendy.agent.services.v1.AppsListResponse.apps:type_name -> wendy.agent.services.v1.AppInfo
+	40, // 46: wendy.agent.services.v1.HardwareListResponse.capabilities:type_name -> wendy.agent.services.v1.HardwareInfo
+	41, // 47: wendy.agent.services.v1.BluetoothListResponse.devices:type_name -> wendy.agent.services.v1.BluetoothDeviceInfo
+	34, // 48: wendy.agent.services.v1.WifiKnownListResponse.networks:type_name -> wendy.agent.services.v1.KnownWifiNetworkInfo
+	48, // 49: wendy.agent.services.v1.KnownWifiNetworkInfo.security:type_name -> wendy.agent.services.v1.WiFiSecurityType
+	48, // 50: wendy.agent.services.v1.WifiNetworkInfo.security:type_name -> wendy.agent.services.v1.WiFiSecurityType
+	51, // [51:51] is the sub-list for method output_type
+	51, // [51:51] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_init() }
@@ -3064,6 +3625,10 @@ func file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_init() {
 		(*BluetoothCommand_WifiSetPriority)(nil),
 		(*BluetoothCommand_WifiReorder)(nil),
 		(*BluetoothCommand_WifiForget)(nil),
+		(*BluetoothCommand_SetupStatus)(nil),
+		(*BluetoothCommand_SetupEnroll)(nil),
+		(*BluetoothCommand_SetupHello)(nil),
+		(*BluetoothCommand_SetupSealed)(nil),
 	}
 	file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[11].OneofWrappers = []any{}
 	file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[18].OneofWrappers = []any{
@@ -3085,6 +3650,10 @@ func file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_init() {
 		(*BluetoothResponse_WifiSetPriority)(nil),
 		(*BluetoothResponse_WifiReorder)(nil),
 		(*BluetoothResponse_WifiForget)(nil),
+		(*BluetoothResponse_SetupStatus)(nil),
+		(*BluetoothResponse_SetupEnroll)(nil),
+		(*BluetoothResponse_SetupHello)(nil),
+		(*BluetoothResponse_SetupSealed)(nil),
 	}
 	file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[20].OneofWrappers = []any{}
 	file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_msgTypes[21].OneofWrappers = []any{}
@@ -3106,7 +3675,7 @@ func file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDesc), len(file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   42,
+			NumMessages:   48,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

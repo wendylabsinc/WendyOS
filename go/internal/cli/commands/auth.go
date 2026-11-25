@@ -24,10 +24,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/enrolltoken"
-	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
 )
 
 const defaultCloudDashboard = "https://cloud.wendy.sh"
@@ -95,8 +91,6 @@ func newAuthCmd() *cobra.Command {
 func newAuthLoginCmd() *cobra.Command {
 	var cloudDashboard string
 	var cloudGRPC string
-	var apiKey string
-	var orgID int32
 	var issuer string
 	var email string
 	var authBase string
@@ -114,7 +108,7 @@ func newAuthLoginCmd() *cobra.Command {
 		Use:   "login",
 		Short: "Sign in to Wendy Cloud",
 		Long: "Sign in to Wendy Cloud in your browser, choose your organization, then return to the terminal. Wendy saves the sign-in for later commands. Pass --email to supply your email first.\n" +
-			"For scripts, use --service-account <key-file> or " + serviceAccountKeyEnv + ": no browser or terminal is needed. Use --api-key only for a self-hosted deployment that supports it.",
+			"For scripts, use --service-account <key-file> or " + serviceAccountKeyEnv + ": no browser or terminal is needed.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			targetCount := 0
 			for _, selected := range []bool{production, development, legacy} {
@@ -126,12 +120,12 @@ func newAuthLoginCmd() *cobra.Command {
 				return fmt.Errorf("--production, --development, and --legacy are mutually exclusive")
 			}
 
-			if serviceAccount != "" && (legacy || apiKey != "" || issuer != "" || email != "") {
-				return fmt.Errorf("--service-account selects headless service-account login and cannot be combined with --legacy, --api-key, --issuer, or --email")
+			if serviceAccount != "" && (legacy || issuer != "" || email != "") {
+				return fmt.Errorf("--service-account selects headless service-account login and cannot be combined with --legacy, --issuer, or --email")
 			}
 			// An explicit login mode wins over a key in the environment. Target
 			// flags do not: they select the environment for that headless login.
-			otherMode := legacy || apiKey != "" || issuer != "" || email != ""
+			otherMode := legacy || issuer != "" || email != ""
 			saKey, err := readServiceAccountKey(serviceAccount)
 			if err != nil {
 				return err
@@ -158,8 +152,8 @@ func newAuthLoginCmd() *cobra.Command {
 				})
 			}
 			if legacy {
-				if apiKey != "" || issuer != "" || email != "" {
-					return fmt.Errorf("--legacy selects the old cloud-dashboard login and cannot be combined with --api-key, --issuer, or --email")
+				if issuer != "" || email != "" {
+					return fmt.Errorf("--legacy selects the old cloud-dashboard login and cannot be combined with --issuer or --email")
 				}
 				if cloudDashboard == "" {
 					cloudDashboard = defaultCloudDashboard
@@ -171,18 +165,6 @@ func newAuthLoginCmd() *cobra.Command {
 					cloudDashboard = "https://" + cloudDashboard
 				}
 				return performLoginFn(cmd.Context(), cloudDashboard, cloudGRPC)
-			}
-
-			// Self-hosted pki-core with a bearer key remains independent of the
-			// built-in Cloud environments.
-			if apiKey != "" {
-				if production || development || issuer != "" || email != "" {
-					return fmt.Errorf("Cloud target/OIDC options and --api-key select different login modes; pass only one")
-				}
-				if cloudGRPC == "" {
-					return fmt.Errorf("--cloud-grpc is required for local authentication")
-				}
-				return performLocalLogin(cmd.Context(), cloudGRPC, apiKey, orgID)
 			}
 
 			// A built-in Cloud target starts at wendy-auth's universal page so the
@@ -234,9 +216,7 @@ func newAuthLoginCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&cloudDashboard, "cloud", "", "Cloud dashboard URL")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud API endpoint, or self-hosted authentication address (host:port) with --api-key")
-	cmd.Flags().StringVar(&apiKey, "api-key", "", "API key for a self-hosted authentication service")
-	cmd.Flags().Int32Var(&orgID, "org", 1, "Organization ID for --api-key local login. For Wendy Cloud, each login is stored as an auth context; switch with 'wendy auth use <context>'.")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud API endpoint")
 	cmd.Flags().StringVar(&issuer, "issuer", "", "wendy-auth realm issuer URL, e.g. https://auth.wendy.dev/realms/acme")
 	cmd.Flags().StringVar(&email, "email", "", "Email address for explicit organization discovery with wendy-auth")
 	cmd.Flags().StringVar(&authBase, "auth", defaultProdAuthBase, "wendy-auth base URL for browser login and --email discovery")
@@ -391,90 +371,6 @@ func enrollmentTokenIdentity(token string) (commonName string, identityURIs []st
 	default:
 		return "", nil, fmt.Errorf("unsupported enrollment token type %q", claims.Type)
 	}
-}
-
-func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int32) error {
-	cloudConn, err := grpc.NewClient(cloudGRPC, grpc.WithTransportCredentials(credentials.NewTLS(nil)))
-	if err != nil {
-		return fmt.Errorf("connecting to pki-core: %w", err)
-	}
-	defer cloudConn.Close()
-
-	authCtx := metadata.NewOutgoingContext(ctx,
-		metadata.Pairs("authorization", "Bearer "+apiKey))
-
-	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
-
-	tokenResp, err := certClient.CreateAssetEnrollmentToken(authCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
-		OrganizationId: orgID,
-		Name:           "cli-user",
-		TtlSeconds:     120,
-	})
-	if err != nil {
-		return fmt.Errorf("creating enrollment token from pki-core %s: %w", cloudGRPC, err)
-	}
-	// Reconstruct the device_id that pki-core stored in the token.
-	deviceID := fmt.Sprintf("sh/wendy/%d/%d", tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
-	identityURIs := []string{certs.AssetURN(tokenResp.GetOrganizationId(), tokenResp.GetAssetId())}
-	if spiffeURI, ok := enrolltoken.TenantSPIFFEURIFromToken(tokenResp.GetEnrollmentToken()); ok {
-		identityURIs = append(identityURIs, spiffeURI)
-	}
-
-	privateKeyPEM, err := certs.GenerateKeyPair()
-	if err != nil {
-		return fmt.Errorf("generating key pair: %w", err)
-	}
-	csrPEM, err := certs.GenerateCSR([]byte(privateKeyPEM), deviceID, identityURIs)
-	if err != nil {
-		return fmt.Errorf("generating CSR: %w", err)
-	}
-
-	issueResp, err := certClient.IssueCertificate(ctx, &cloudpb.IssueCertificateRequest{
-		PemCsr:          csrPEM,
-		EnrollmentToken: tokenResp.GetEnrollmentToken(),
-	})
-	if err != nil {
-		return fmt.Errorf("issuing certificate: %w", err)
-	}
-	if issueResp.GetError() != nil {
-		return fmt.Errorf("certificate issuance error: %s", issueResp.GetError().GetMessage())
-	}
-	cert := issueResp.GetCertificate()
-	if cert == nil {
-		return fmt.Errorf("no certificate returned from pki-core")
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	certInfo := config.CertificateInfo{
-		PemCertificate:      cert.GetPemCertificate(),
-		PemCertificateChain: cert.GetPemCertificateChain(),
-		PemPrivateKey:       privateKeyPEM,
-		OrganizationID:      int(issueResp.GetOrganizationId()),
-		AssetID:             int(issueResp.GetAssetId()),
-	}
-	authEntry := config.AuthConfig{
-		CloudGRPC:    cloudGRPC,
-		APIKey:       apiKey,
-		Certificates: []config.CertificateInfo{certInfo},
-	}
-
-	cfg.AddAuth(authEntry)
-	cfg.EnsureContexts()
-
-	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("saving config: %w", err)
-	}
-
-	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Local authentication successful (organization %s, device %s). Certificates saved.",
-		orgLabel(cloudGRPC, issueResp.GetOrganizationId()), deviceID)))
-	fmt.Println(sessionKeyLine(privateKeyAlgorithm(privateKeyPEM), "legacy"))
-	clitimesync.CacheProof(ctx)
-
-	return nil
 }
 
 func newAuthLogoutCmd() *cobra.Command {

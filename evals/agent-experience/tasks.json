@@ -4,7 +4,8 @@
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "prompt": "Use Wendy to deploy the HTTP app in the current directory to {device}. Leave it running and verify that /health returns this app's settings. Work only on this benchmark app and the named target. Do not change other apps or device settings.",
     "timeout_seconds": 600,
@@ -52,14 +53,33 @@
       "--port",
       "{port}"
     ],
-    "fixture": "builtin"
+    "fixture": "builtin",
+    "expect": {
+      "right": [
+        {
+          "tool": "run"
+        },
+        {
+          "cli": "run"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "repair-startup",
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "prompt": "The HTTP app {app_id} on {device} crashes at startup. Its source is in the current directory. Find and fix the cause, deploy the fix using Wendy, and verify /health works. Preserve the app ID and settings. Work only on this benchmark app and the named target. Do not change other apps or device settings.",
     "timeout_seconds": 600,
@@ -107,14 +127,33 @@
       "--port",
       "{port}"
     ],
-    "fixture": "builtin"
+    "fixture": "builtin",
+    "expect": {
+      "right": [
+        {
+          "tool": "run"
+        },
+        {
+          "cli": "run"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "update-http",
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "prompt": "Use Wendy to update the HTTP app {app_id} on {device} so /health reports version v2. Its source is in the current directory. Preserve the app ID, nonce, and port. Deploy and verify the change. Work only on this benchmark app and the named target. Do not change other apps or device settings.",
     "timeout_seconds": 600,
@@ -162,14 +201,33 @@
       "--port",
       "{port}"
     ],
-    "fixture": "builtin"
+    "fixture": "builtin",
+    "expect": {
+      "right": [
+        {
+          "tool": "run"
+        },
+        {
+          "cli": "run"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "stop-app",
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "prompt": "Use Wendy to stop the app {app_id} on {device}. Keep it deployed so it can be started later, and verify it stopped. Work only on this benchmark app and the named target. Do not change other apps or device settings.",
     "timeout_seconds": 600,
@@ -217,7 +275,25 @@
       "--port",
       "{port}"
     ],
-    "fixture": "builtin"
+    "fixture": "builtin",
+    "expect": {
+      "right": [
+        {
+          "tool": "container_stop"
+        },
+        {
+          "cli": "device apps stop"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "create-simulator",
@@ -271,7 +347,17 @@
       "{port}"
     ],
     "fixture": "builtin",
-    "owns_vm": true
+    "owns_vm": true,
+    "expect": {
+      "right": [
+        {
+          "tool": "simulator_create"
+        },
+        {
+          "cli": "vm create"
+        }
+      ]
+    }
   },
   {
     "id": "start-app",
@@ -279,7 +365,8 @@
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "prompt": "Use Wendy to start the stopped app {app_id} on {device}. Keep its existing deployment and settings. Verify /health and leave it running. Work only on this benchmark app and the named target.",
     "timeout_seconds": 600,
@@ -326,7 +413,25 @@
       "{run_id}",
       "--port",
       "{port}"
-    ]
+    ],
+    "expect": {
+      "right": [
+        {
+          "tool": "container_start"
+        },
+        {
+          "cli": "device apps start"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "compose-app",
@@ -334,7 +439,8 @@
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "prompt": "Create and deploy a Python Docker Compose app to {device} using requirements.json. Create exactly two services, frontend and worker, under app ID {app_id}. The frontend must serve GET /compute?value=<integer>&challenge=<string> on the specified frontend port. It forwards each request to the worker, which calculates the square and echoes the challenge with worker_id from requirements.json. The frontend returns JSON with exactly app_id, worker_id, result, and challenge. The frontend must return HTTP 503 when the worker is unavailable and recover when it returns. Include python3 in the frontend image so operators can probe it. Use the specified worker port. Verify both services and leave them running. Work only on this benchmark app and the named target.",
     "timeout_seconds": 900,
@@ -381,7 +487,25 @@
       "{run_id}",
       "--port",
       "{port}"
-    ]
+    ],
+    "expect": {
+      "right": [
+        {
+          "tool": "run"
+        },
+        {
+          "cli": "run"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "create-go2-simulator",
@@ -435,7 +559,17 @@
       "--port",
       "{port}"
     ],
-    "owns_vm": true
+    "owns_vm": true,
+    "expect": {
+      "right": [
+        {
+          "tool": "simulator_create"
+        },
+        {
+          "cli": "vm create"
+        }
+      ]
+    }
   },
   {
     "id": "create-g1-simulator",
@@ -489,7 +623,17 @@
       "--port",
       "{port}"
     ],
-    "owns_vm": true
+    "owns_vm": true,
+    "expect": {
+      "right": [
+        {
+          "tool": "simulator_create"
+        },
+        {
+          "cli": "vm create"
+        }
+      ]
+    }
   },
   {
     "id": "install-physical",
@@ -545,7 +689,8 @@
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "prompt": "The supplied app on {device} has a reproducible problem: a request fails. Diagnose it using Wendy OpenTelemetry logs, fix the cause in the supplied source or app configuration, redeploy, and verify recovery under the provided workload. Preserve the app identity, instrumentation, and unrelated apps. Explain which telemetry evidence supports the diagnosis. The required request behavior and latency limit are in requirements.json. Keep telemetry.py unchanged.",
     "timeout_seconds": 900,
@@ -601,7 +746,25 @@
       "{run_id}",
       "--port",
       "{port}"
-    ]
+    ],
+    "expect": {
+      "right": [
+        {
+          "tool": "telemetry_logs"
+        },
+        {
+          "cli": "device logs"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "debug-otel-metrics",
@@ -609,7 +772,8 @@
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "prompt": "The supplied app on {device} has a reproducible problem: requests are too slow or failing at a high rate. Diagnose it using Wendy OpenTelemetry metrics, fix the cause in the supplied source or app configuration, redeploy, and verify recovery under the provided workload. Preserve the app identity, instrumentation, and unrelated apps. Explain which telemetry evidence supports the diagnosis. The required request behavior and latency limit are in requirements.json. Keep telemetry.py unchanged.",
     "timeout_seconds": 900,
@@ -665,7 +829,26 @@
       "{run_id}",
       "--port",
       "{port}"
-    ]
+    ],
+    "expect": {
+      "right": [
+        {
+          "tool": "telemetry_metrics"
+        },
+        {
+          "cli": "device telemetry-stream",
+          "args_regex": "--metrics\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "debug-otel-traces",
@@ -673,7 +856,8 @@
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "prompt": "The supplied app on {device} has a reproducible problem: an end-to-end request is slow or fails in one service. Diagnose it using Wendy OpenTelemetry traces, fix the cause in the supplied source or app configuration, redeploy, and verify recovery under the provided workload. Preserve the app identity, instrumentation, and unrelated apps. Explain which telemetry evidence supports the diagnosis. The required request behavior and latency limit are in requirements.json. Keep telemetry.py unchanged.",
     "timeout_seconds": 900,
@@ -729,14 +913,34 @@
       "{run_id}",
       "--port",
       "{port}"
-    ]
+    ],
+    "expect": {
+      "right": [
+        {
+          "tool": "telemetry_traces"
+        },
+        {
+          "cli": "device telemetry-stream",
+          "args_regex": "--traces\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "debug-ros2",
     "fixture": "external",
     "environments": [
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "requires": [
       "ros2-fixture"
@@ -760,7 +964,8 @@
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "requires": [
       "camera-fixture"
@@ -783,7 +988,8 @@
     "fixture": "external",
     "environments": [
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "requires": [
       "camera-fault-fixture"
@@ -806,7 +1012,8 @@
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "requires": [
       "audio-fixture"
@@ -830,7 +1037,8 @@
     "environments": [
       "simulator",
       "cloud",
-      "physical"
+      "physical",
+      "local"
     ],
     "requires": [
       "peripheral-fixture"
@@ -904,7 +1112,31 @@
       "--port",
       "{port}"
     ],
-    "owns_vm": true
+    "owns_vm": true,
+    "expect": {
+      "right": [
+        {
+          "tool": "ros2_topics"
+        },
+        {
+          "tool": "ros2_topic_info"
+        },
+        {
+          "cli": "device ros2 topics"
+        },
+        {
+          "cli": "device ros2 topic info"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "repair-go2-camera",
@@ -962,7 +1194,31 @@
       "--port",
       "{port}"
     ],
-    "owns_vm": true
+    "owns_vm": true,
+    "expect": {
+      "right": [
+        {
+          "tool": "camera_list"
+        },
+        {
+          "tool": "camera_snapshot"
+        },
+        {
+          "cli": "device camera list"
+        },
+        {
+          "cli": "device camera view"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "debug-g1-ros2",
@@ -1020,7 +1276,31 @@
       "--port",
       "{port}"
     ],
-    "owns_vm": true
+    "owns_vm": true,
+    "expect": {
+      "right": [
+        {
+          "tool": "ros2_topics"
+        },
+        {
+          "tool": "ros2_topic_info"
+        },
+        {
+          "cli": "device ros2 topics"
+        },
+        {
+          "cli": "device ros2 topic info"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   },
   {
     "id": "repair-g1-camera",
@@ -1078,6 +1358,30 @@
       "--port",
       "{port}"
     ],
-    "owns_vm": true
+    "owns_vm": true,
+    "expect": {
+      "right": [
+        {
+          "tool": "camera_list"
+        },
+        {
+          "tool": "camera_snapshot"
+        },
+        {
+          "cli": "device camera list"
+        },
+        {
+          "cli": "device camera view"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ]
+    }
   }
 ]

@@ -2,15 +2,110 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
+
+func TestDevicePickerFramesFitTerminal(t *testing.T) {
+	for _, purpose := range []devicePickerPurpose{unspecifiedDevicePicker, mainDevicePicker} {
+		m := newDevicePickerModel(withDevicePickerPurpose(context.Background(), purpose), tui.NewPicker(), pickerAuth(7), 0, true, devicePickerLocalTab)
+		var items []tui.PickerItem
+		var assets []*cloudpb.Asset
+		for i := range 60 {
+			name := fmt.Sprintf("device-%02d", i)
+			items = append(items, tui.PickerItem{Name: name, Insecure: true, Probe: tui.ProbeFailed})
+			assets = append(assets, &cloudpb.Asset{Id: int32(i + 1), Name: name})
+		}
+		next, _ := m.Update(devicePickerLocalMsg{tui.PickerAddMsg{Items: items}})
+		m = next.(devicePickerModel)
+		next, _ = m.Update(devicePickerCloudMsg{cloudScanMsg{assets: assets}})
+		m = next.(devicePickerModel)
+		m.cloudOrg = strings.Repeat("Long organization name ", 10)
+		for _, size := range []tea.WindowSizeMsg{{Width: 100, Height: 24}, {Width: 40, Height: 16}, {Width: 80, Height: 40}, {Width: 20, Height: 5}} {
+			next, _ = m.Update(size)
+			m = next.(devicePickerModel)
+			for _, tab := range deviceTabOrder() {
+				m.active = tab
+				view := m.View()
+				if lipgloss.Height(view) > size.Height || lipgloss.Width(view) > size.Width {
+					t.Fatalf("purpose=%d tab=%d size=%+v: frame is %dx%d\n%s", purpose, tab, size, lipgloss.Width(view), lipgloss.Height(view), view)
+				}
+				if strings.HasSuffix(view, "\n") {
+					t.Fatal("trailing newline can scroll the terminal")
+				}
+			}
+		}
+	}
+}
+
+func TestDevicePickerLastRowVisibleAndInterruptClearsFrame(t *testing.T) {
+	for _, tab := range []devicePickerTab{devicePickerLocalTab, devicePickerCloudTab} {
+		m := newDevicePickerModel(context.Background(), tui.NewPicker(), pickerAuth(7), 0, true, tab)
+		var items []tui.PickerItem
+		var assets []*cloudpb.Asset
+		for i := range 60 {
+			name := fmt.Sprintf("device-%02d", i)
+			items = append(items, tui.PickerItem{Name: name})
+			assets = append(assets, &cloudpb.Asset{Id: int32(i + 1), Name: name})
+		}
+		for _, msg := range []tea.Msg{devicePickerLocalMsg{tui.PickerAddMsg{Items: items}}, devicePickerCloudMsg{cloudScanMsg{assets: assets}}, tea.WindowSizeMsg{Width: 100, Height: 24}} {
+			next, _ := m.Update(msg)
+			m = next.(devicePickerModel)
+		}
+		for range 60 {
+			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+			m = next.(devicePickerModel)
+		}
+		if !strings.Contains(m.View(), "device-59") {
+			t.Fatalf("tab=%d: selected last row is hidden: %s", tab, m.View())
+		}
+		next, cmd := m.Update(tui.InterruptFilter(m, tea.InterruptMsg{}))
+		if cmd == nil || next.View() != "" {
+			t.Fatalf("tab=%d: interrupt left a frame: %q", tab, next.View())
+		}
+	}
+}
+
+func TestDevicePickerShortTerminalKeepsTheSelectionUnderTheBanner(t *testing.T) {
+	for _, size := range []tea.WindowSizeMsg{{Width: 100, Height: 9}, {Width: 60, Height: 10}, {Width: 30, Height: 12}, {Width: 100, Height: 14}, {Width: 100, Height: 24}} {
+		for _, tab := range []devicePickerTab{devicePickerLocalTab, devicePickerCloudTab} {
+			m := newDevicePickerModel(withDevicePickerPurpose(context.Background(), mainDevicePicker), tui.NewPicker(), pickerAuth(7), 0, true, tab)
+			var items []tui.PickerItem
+			var assets []*cloudpb.Asset
+			for i := range 30 {
+				name := fmt.Sprintf("device-%02d", i)
+				items = append(items, tui.PickerItem{Name: name})
+				assets = append(assets, &cloudpb.Asset{Id: int32(i + 1), Name: name})
+			}
+			for _, msg := range []tea.Msg{devicePickerLocalMsg{tui.PickerAddMsg{Items: items}}, devicePickerCloudMsg{cloudScanMsg{assets: assets}}, size} {
+				next, _ := m.Update(msg)
+				m = next.(devicePickerModel)
+			}
+			for i := range 30 {
+				view := ansi.Strip(m.View())
+				if !strings.Contains(view, fmt.Sprintf("device-%02d", i)) || lipgloss.Height(view) > size.Height {
+					t.Fatalf("tab=%d size=%dx%d cursor=%d: selected row hidden or frame too tall:\n%s", tab, size.Width, size.Height, i, view)
+				}
+				// At 9 rows the cloud tab's organization line leaves no room, and
+				// the clip drops the banner before the selected row.
+				if size.Height >= 10 && !strings.Contains(view, "MAIN DEVICE") {
+					t.Fatalf("tab=%d size=%dx%d: banner title lost:\n%s", tab, size.Width, size.Height, view)
+				}
+				next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+				m = next.(devicePickerModel)
+			}
+		}
+	}
+}
 
 func pickerAuth(orgID int) *config.AuthConfig {
 	return &config.AuthConfig{
@@ -271,5 +366,33 @@ func TestDevicePickerEnrollmentUnavailable(t *testing.T) {
 				t.Fatalf("missing explanation %q: %q", tt.wantMessage, m.View())
 			}
 		})
+	}
+}
+
+func TestDevicePickerFitsWindowAsRowsArrive(t *testing.T) {
+	for _, width := range []int{60, 129} {
+		for _, height := range []int{16, 24, 74} {
+			t.Run(fmt.Sprintf("%dx%d", width, height), func(t *testing.T) {
+				picker := tui.NewPicker()
+				picker.MergeItem = mergePickerItem
+				m := newDevicePickerModel(context.Background(), picker, nil, 0, false, devicePickerLocalTab)
+				updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+				m = updated.(devicePickerModel)
+				for i := range 40 {
+					dev := models.LANDevice{DisplayName: fmt.Sprintf("board-%02d", i), Hostname: fmt.Sprintf("board-%02d.local", i), IPAddress: "192.168.100.126", AgentVersion: "2026.10.18-meshtopology-e56e1ef-dev", OSVersion: "WendyOS-0.20.1", ProbeFailure: missingLANCredentials()}
+					updated, _ = m.Update(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{lanPickerItem(dev, false, tui.ProbeFailed)}}})
+					m = updated.(devicePickerModel)
+					view := m.View()
+					if got := lipgloss.Height(view); got > height {
+						t.Fatalf("%d devices: view height %d exceeds %d:\n%s", i+1, got, height, view)
+					}
+					for _, line := range strings.Split(view, "\n") {
+						if got := ansi.StringWidth(line); got > width {
+							t.Fatalf("%d devices: line width %d exceeds %d: %q", i+1, got, width, line)
+						}
+					}
+				}
+			})
+		}
 	}
 }

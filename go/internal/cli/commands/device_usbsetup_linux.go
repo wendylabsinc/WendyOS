@@ -29,14 +29,14 @@ const (
 
 // usbSetupUdevRule tags the Wendy USB gadget so ModemManager leaves its CDC-ACM
 // serial console (/dev/ttyACM*) and CDC-NCM network port alone.
-const usbSetupUdevRule = `# Installed by 'wendy discover' USB-C auto-setup.
+const usbSetupUdevRule = `# Installed by 'wendy discover' USB auto-setup.
 # Stop ModemManager from probing the Wendy USB gadget's serial console
 # (/dev/ttyACM*) and network port (VID:PID 1d6b:0104).
 ACTION=="add|change", SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ENV{ID_MM_DEVICE_IGNORE}="1"
 ACTION=="add|change", SUBSYSTEM=="net", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ENV{ID_MM_DEVICE_IGNORE}="1"
 `
 
-// runUSBSetup configures this Linux host so a USB-C-tethered Wendy device is
+// runUSBSetup configures this Linux host so a USB-tethered Wendy device is
 // reachable. It brings up a link-local NetworkManager profile (IPv4 169.254/16
 // and IPv6 fe80::/64, matching a stock device's link-local usb0) and installs a
 // udev rule so ModemManager stops grabbing the gadget's serial console. The
@@ -61,7 +61,7 @@ func runUSBSetup(ctx context.Context, iface string, w io.Writer) error {
 	}
 	conn := usbSetupConnName(mac)
 
-	fmt.Fprintln(w, "Wendy USB-C host setup")
+	fmt.Fprintln(w, "Wendy USB host setup")
 	fmt.Fprintf(w, "  interface: %s (MAC %s)\n", iface, mac)
 	fmt.Fprintln(w, "  ip mode:   link-local (IPv4 169.254/16, IPv6 fe80::/64; no DHCP)")
 	fmt.Fprintf(w, "  udev rule: %s (ModemManager-ignore for %s:%s)\n", usbSetupUdevPath, usbGadgetVID, usbGadgetPID)
@@ -123,24 +123,30 @@ func usbSetupAddArgs(conn string, mac net.HardwareAddr) []string {
 		"ipv4.method", "link-local", "ipv6.method", "link-local"}
 }
 
+// isWendyUSBGadget is a seam over discovery.IsWendyUSBGadget for tests.
+var isWendyUSBGadget = discovery.IsWendyUSBGadget
+
 // resolveUSBSetupInterface returns the gadget interface to configure, using the
-// override when given or auto-detecting otherwise.
+// override when given or auto-detecting otherwise. It only ever returns a Wendy
+// device's USB link, so setup never touches another network adapter.
 func resolveUSBSetupInterface(override string) (string, error) {
 	if override != "" {
+		if !isWendyUSBGadget(override) {
+			return "", fmt.Errorf("%s is not a USB connection to a Wendy device; plug in the device and run 'wendy discover' again", override)
+		}
 		return override, nil
 	}
-	found, err := discovery.USBNetworkInterfaceNames()
+	found, err := usbGadgetIfaceNames()
 	if err != nil {
 		return "", fmt.Errorf("detecting USB interfaces: %w", err)
 	}
 	switch len(found) {
 	case 0:
-		return "", fmt.Errorf("no USB gadget interface found.\n" +
-			"  Connect the device with a data (not charge-only) USB-C cable, wait a few seconds, then retry.")
+		return "", fmt.Errorf("no Wendy device is connected over USB; connect it with a data (not charge-only) cable and retry")
 	case 1:
 		return found[0], nil
 	default:
-		return "", fmt.Errorf("multiple USB interfaces found (%s); pass one with --iface <name>", strings.Join(found, ", "))
+		return "", fmt.Errorf("several Wendy devices are connected over USB (%s); pick one with --iface <name>", strings.Join(found, ", "))
 	}
 }
 

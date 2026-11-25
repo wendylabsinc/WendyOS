@@ -77,17 +77,107 @@ func (DeviceClass) EnumDescriptor() ([]byte, []int) {
 	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{0}
 }
 
+type ListUnmigratedDevicesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUnmigratedDevicesRequest) Reset() {
+	*x = ListUnmigratedDevicesRequest{}
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUnmigratedDevicesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUnmigratedDevicesRequest) ProtoMessage() {}
+
+func (x *ListUnmigratedDevicesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUnmigratedDevicesRequest.ProtoReflect.Descriptor instead.
+func (*ListUnmigratedDevicesRequest) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{0}
+}
+
+type ListUnmigratedDevicesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Count         int32                  `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	AssetIds      []string               `protobuf:"bytes,2,rep,name=asset_ids,json=assetIds,proto3" json:"asset_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUnmigratedDevicesResponse) Reset() {
+	*x = ListUnmigratedDevicesResponse{}
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUnmigratedDevicesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUnmigratedDevicesResponse) ProtoMessage() {}
+
+func (x *ListUnmigratedDevicesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUnmigratedDevicesResponse.ProtoReflect.Descriptor instead.
+func (*ListUnmigratedDevicesResponse) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ListUnmigratedDevicesResponse) GetCount() int32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *ListUnmigratedDevicesResponse) GetAssetIds() []string {
+	if x != nil {
+		return x.AssetIds
+	}
+	return nil
+}
+
 type EnrollDeviceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The name pki-core will know this device by, and the one irreversible field here: it is
-	// fixed at mint and becomes the permanent SPIFFE SAN
-	// spiffe://wendy.sh/tenant/<tenant>/device/<device_id>, carried across every renewal.
+	// The device's ONE id (WDY-3919): a lowercase UUID the CLI mints, fixed at mint as the
+	// permanent SPIFFE SAN spiffe://wendy.sh/tenant/<tenant>/device/<device_id>, and adopted by
+	// cloud as the asset id. Anything else is INVALID_ARGUMENT.
 	//
 	// It MUST equal the device_id inside enrollment_request_jws. Cloud checks that and refuses
 	// on disagreement -- see the note on enrollment_request_jws.
 	//
-	// A "/"-separated path, each segment matching ^[A-Za-z0-9._-]{1,64}$, no empty, "." or ".."
-	// segment, no leading or trailing "/". Multi-segment is legal and intended ("fleet-a/box-01").
+	// The id is global. One already in use, in any organization, is ALREADY_EXISTS with the
+	// response trailer `wendy-colliding-field: device_id` and a message that names no holder or
+	// tenant; the client mints a fresh UUID, re-signs and retries. A name collision (below) is
+	// ALREADY_EXISTS with `wendy-colliding-field: name` and is not retried that way.
 	DeviceId    string      `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
 	DeviceClass DeviceClass `protobuf:"varint,2,opt,name=device_class,json=deviceClass,proto3,enum=wendycloud.v2.DeviceClass" json:"device_class,omitempty"`
 	// The operator-signed enrollment request: a compact JWS with an x5c chain to an operator
@@ -127,7 +217,7 @@ type EnrollDeviceRequest struct {
 
 func (x *EnrollDeviceRequest) Reset() {
 	*x = EnrollDeviceRequest{}
-	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[0]
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -139,7 +229,7 @@ func (x *EnrollDeviceRequest) String() string {
 func (*EnrollDeviceRequest) ProtoMessage() {}
 
 func (x *EnrollDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[0]
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -152,7 +242,7 @@ func (x *EnrollDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnrollDeviceRequest.ProtoReflect.Descriptor instead.
 func (*EnrollDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{0}
+	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *EnrollDeviceRequest) GetDeviceId() string {
@@ -231,7 +321,7 @@ type DeviceHardware struct {
 
 func (x *DeviceHardware) Reset() {
 	*x = DeviceHardware{}
-	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[1]
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -243,7 +333,7 @@ func (x *DeviceHardware) String() string {
 func (*DeviceHardware) ProtoMessage() {}
 
 func (x *DeviceHardware) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[1]
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -256,7 +346,7 @@ func (x *DeviceHardware) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeviceHardware.ProtoReflect.Descriptor instead.
 func (*DeviceHardware) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{1}
+	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DeviceHardware) GetBoardModel() string {
@@ -351,7 +441,7 @@ func (x *DeviceHardware) GetGpuArch() string {
 // it is cheaper than a stored secret nobody needed.
 type EnrollDeviceResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Cloud's asset id for the device row this call created.
+	// The device row this call created. Equals device_id (WDY-3919).
 	AssetId string `protobuf:"bytes,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	// "eab" for class A/B, "enrollment_token" for class C. pki-core's word, relayed unchanged.
 	CredentialKind string `protobuf:"bytes,2,opt,name=credential_kind,json=credentialKind,proto3" json:"credential_kind,omitempty"`
@@ -369,7 +459,7 @@ type EnrollDeviceResponse struct {
 
 func (x *EnrollDeviceResponse) Reset() {
 	*x = EnrollDeviceResponse{}
-	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[2]
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -381,7 +471,7 @@ func (x *EnrollDeviceResponse) String() string {
 func (*EnrollDeviceResponse) ProtoMessage() {}
 
 func (x *EnrollDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[2]
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -394,7 +484,7 @@ func (x *EnrollDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnrollDeviceResponse.ProtoReflect.Descriptor instead.
 func (*EnrollDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{2}
+	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *EnrollDeviceResponse) GetAssetId() string {
@@ -450,7 +540,11 @@ var File_wendycloud_v2_device_enrollment_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_device_enrollment_proto_rawDesc = "" +
 	"\n" +
-	"%wendycloud/v2/device_enrollment.proto\x12\rwendycloud.v2\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\x90\x02\n" +
+	"%wendycloud/v2/device_enrollment.proto\x12\rwendycloud.v2\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\x1e\n" +
+	"\x1cListUnmigratedDevicesRequest\"R\n" +
+	"\x1dListUnmigratedDevicesResponse\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\x05R\x05count\x12\x1b\n" +
+	"\tasset_ids\x18\x02 \x03(\tR\bassetIds\"\x90\x02\n" +
 	"\x13EnrollDeviceRequest\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12=\n" +
 	"\fdevice_class\x18\x02 \x01(\x0e2\x1a.wendycloud.v2.DeviceClassR\vdeviceClass\x124\n" +
@@ -505,9 +599,10 @@ const file_wendycloud_v2_device_enrollment_proto_rawDesc = "" +
 	"\x18DEVICE_CLASS_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eDEVICE_CLASS_A\x10\x01\x12\x12\n" +
 	"\x0eDEVICE_CLASS_B\x10\x02\x12\x12\n" +
-	"\x0eDEVICE_CLASS_C\x10\x032r\n" +
+	"\x0eDEVICE_CLASS_C\x10\x032\xe6\x01\n" +
 	"\x17DeviceEnrollmentService\x12W\n" +
-	"\fEnrollDevice\x12\x1c.wendycloud.v2.SignedRequest\x1a#.wendycloud.v2.EnrollDeviceResponse\"\x04\x88\xb5\x18\x01b\x06proto3"
+	"\fEnrollDevice\x12\x1c.wendycloud.v2.SignedRequest\x1a#.wendycloud.v2.EnrollDeviceResponse\"\x04\x88\xb5\x18\x01\x12r\n" +
+	"\x15ListUnmigratedDevices\x12+.wendycloud.v2.ListUnmigratedDevicesRequest\x1a,.wendycloud.v2.ListUnmigratedDevicesResponseb\x06proto3"
 
 var (
 	file_wendycloud_v2_device_enrollment_proto_rawDescOnce sync.Once
@@ -522,21 +617,25 @@ func file_wendycloud_v2_device_enrollment_proto_rawDescGZIP() []byte {
 }
 
 var file_wendycloud_v2_device_enrollment_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wendycloud_v2_device_enrollment_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_wendycloud_v2_device_enrollment_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_wendycloud_v2_device_enrollment_proto_goTypes = []any{
-	(DeviceClass)(0),             // 0: wendycloud.v2.DeviceClass
-	(*EnrollDeviceRequest)(nil),  // 1: wendycloud.v2.EnrollDeviceRequest
-	(*DeviceHardware)(nil),       // 2: wendycloud.v2.DeviceHardware
-	(*EnrollDeviceResponse)(nil), // 3: wendycloud.v2.EnrollDeviceResponse
-	(*SignedRequest)(nil),        // 4: wendycloud.v2.SignedRequest
+	(DeviceClass)(0),                      // 0: wendycloud.v2.DeviceClass
+	(*ListUnmigratedDevicesRequest)(nil),  // 1: wendycloud.v2.ListUnmigratedDevicesRequest
+	(*ListUnmigratedDevicesResponse)(nil), // 2: wendycloud.v2.ListUnmigratedDevicesResponse
+	(*EnrollDeviceRequest)(nil),           // 3: wendycloud.v2.EnrollDeviceRequest
+	(*DeviceHardware)(nil),                // 4: wendycloud.v2.DeviceHardware
+	(*EnrollDeviceResponse)(nil),          // 5: wendycloud.v2.EnrollDeviceResponse
+	(*SignedRequest)(nil),                 // 6: wendycloud.v2.SignedRequest
 }
 var file_wendycloud_v2_device_enrollment_proto_depIdxs = []int32{
 	0, // 0: wendycloud.v2.EnrollDeviceRequest.device_class:type_name -> wendycloud.v2.DeviceClass
-	2, // 1: wendycloud.v2.EnrollDeviceRequest.hardware:type_name -> wendycloud.v2.DeviceHardware
-	4, // 2: wendycloud.v2.DeviceEnrollmentService.EnrollDevice:input_type -> wendycloud.v2.SignedRequest
-	3, // 3: wendycloud.v2.DeviceEnrollmentService.EnrollDevice:output_type -> wendycloud.v2.EnrollDeviceResponse
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
+	4, // 1: wendycloud.v2.EnrollDeviceRequest.hardware:type_name -> wendycloud.v2.DeviceHardware
+	6, // 2: wendycloud.v2.DeviceEnrollmentService.EnrollDevice:input_type -> wendycloud.v2.SignedRequest
+	1, // 3: wendycloud.v2.DeviceEnrollmentService.ListUnmigratedDevices:input_type -> wendycloud.v2.ListUnmigratedDevicesRequest
+	5, // 4: wendycloud.v2.DeviceEnrollmentService.EnrollDevice:output_type -> wendycloud.v2.EnrollDeviceResponse
+	2, // 5: wendycloud.v2.DeviceEnrollmentService.ListUnmigratedDevices:output_type -> wendycloud.v2.ListUnmigratedDevicesResponse
+	4, // [4:6] is the sub-list for method output_type
+	2, // [2:4] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
 	2, // [2:2] is the sub-list for extension extendee
 	0, // [0:2] is the sub-list for field type_name
@@ -549,14 +648,14 @@ func file_wendycloud_v2_device_enrollment_proto_init() {
 	}
 	file_wendy_options_proto_init()
 	file_wendycloud_v2_signed_request_proto_init()
-	file_wendycloud_v2_device_enrollment_proto_msgTypes[1].OneofWrappers = []any{}
+	file_wendycloud_v2_device_enrollment_proto_msgTypes[3].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_v2_device_enrollment_proto_rawDesc), len(file_wendycloud_v2_device_enrollment_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

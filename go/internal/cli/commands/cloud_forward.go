@@ -9,6 +9,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -182,20 +185,33 @@ func cloudTunnelCommand(ctx context.Context, auth *config.AuthConfig, deviceName
 	cliSuccess("Forwarding %s → %s:%d (via cloud)", listenAddr, asset.GetName(), remotePort)
 	cliLogln("Press Ctrl+C to stop.")
 
-	return serveTCPForward(ctx, ln, func(ctx context.Context) (net.Conn, error) {
-		return asset.openTunnel(ctx, brokerConn, auth, remotePort)
-	}, func(err error) {
+	return asset.serveTunnelForward(ctx, ln, brokerConn, auth, remotePort, func(err error) {
 		cliLogln("Cloud tunnel failed: %v", err)
-	})
+	}, newUnansweredNotice(func() {
+		cliLogln("The device closed a connection to port %d without sending anything. Nothing may be listening on 127.0.0.1:%d on the device; an app that listens only on another address cannot be reached through the tunnel.", remotePort, remotePort)
+	}))
+}
+
+// serveTunnelForward relays every connection accepted on ln through its own
+// tunnel to remotePort. The connections share one TunnelSession: each still
+// requests its own grant, over the session's authorization connection.
+func (d cloudDiscoveryDevice) serveTunnelForward(ctx context.Context, ln net.Listener, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32, dialFailed func(error), unanswered *unansweredNotice) error {
+	var session TunnelSession
+	session.SetActive(true)
+	defer session.SetActive(false)
+	return serveTCPForward(session.Context(ctx), ln, func(ctx context.Context) (net.Conn, error) {
+		return d.openTunnel(ctx, brokerConn, auth, remotePort)
+	}, dialFailed, unanswered)
 }
 
 // serveTCPForward accepts connections on ln until ctx ends and relays each one
 // through its own tunnel connection from dial. It closes ln when ctx ends and
 // then returns nil; any other accept failure is returned. A failed dial drops
-// that one local connection and is reported to dialFailed. `wendy cloud
-// tunnel` and the tunnel `wendy run` opens to a cloud app (cloudAppTunnel)
-// both forward through it.
-func serveTCPForward(ctx context.Context, ln net.Listener, dial func(context.Context) (net.Conn, error), dialFailed func(error)) error {
+// that one local connection and is reported to dialFailed. A connection the
+// device closes without an answer is reported to unanswered, when one is
+// given. `wendy cloud tunnel` and the tunnel `wendy run` opens to a cloud app
+// (cloudAppTunnel) both forward through it.
+func serveTCPForward(ctx context.Context, ln net.Listener, dial func(context.Context) (net.Conn, error), dialFailed func(error), unanswered *unansweredNotice) error {
 	stop := context.AfterFunc(ctx, func() { ln.Close() })
 	defer stop()
 	for {
@@ -206,18 +222,69 @@ func serveTCPForward(ctx context.Context, ln net.Listener, dial func(context.Con
 			}
 			return fmt.Errorf("accepting connection: %w", err)
 		}
-		go serveForwardedConn(ctx, tcpConn, dial, dialFailed)
+		go serveForwardedConn(ctx, tcpConn, dial, dialFailed, unanswered)
 	}
 }
 
-func serveForwardedConn(ctx context.Context, tcpConn net.Conn, dial func(context.Context) (net.Conn, error), dialFailed func(error)) {
+func serveForwardedConn(ctx context.Context, tcpConn net.Conn, dial func(context.Context) (net.Conn, error), dialFailed func(error), unanswered *unansweredNotice) {
 	defer tcpConn.Close()
 	tunnel, err := dial(ctx)
 	if err != nil {
 		dialFailed(err)
 		return
 	}
-	relayTunnel(ctx, tcpConn, tunnel)
+	if unanswered == nil {
+		relayTunnel(ctx, tcpConn, tunnel)
+		return
+	}
+	opened := unanswered.now()
+	if relayTunnel(ctx, tcpConn, tunnel) && unanswered.now().Sub(opened) <= unanswered.window {
+		unanswered.report()
+	}
+}
+
+const (
+	// unansweredWindow is how soon after its tunnel opens a forwarded
+	// connection must end to be reported as unanswered. A device with nothing
+	// on the port ends it within moments; a later end is more likely the
+	// app's own, such as an idle timeout.
+	unansweredWindow = 15 * time.Second
+	// unansweredNoticeInterval spaces the notices, so a client that retries
+	// or opens several connections at once gets one line, not one each.
+	unansweredNoticeInterval = 10 * time.Second
+)
+
+// unansweredNotice tells the user about forwarded connections that end the
+// way they do when nothing listens on the device's port: the device ends the
+// tunnel within window of it opening, without sending a byte, while the local
+// client still waits. The device's own reason stays in its log, so the notice
+// names a likely cause, at most once per interval.
+type unansweredNotice struct {
+	window, interval time.Duration
+	now              func() time.Time
+	notify           func()
+
+	mu       sync.Mutex
+	notified time.Time // when notify last ran; zero until it has
+}
+
+func newUnansweredNotice(notify func()) *unansweredNotice {
+	return &unansweredNotice{window: unansweredWindow, interval: unansweredNoticeInterval, now: time.Now, notify: notify}
+}
+
+// report notifies of one unanswered connection, unless a notice went out less
+// than interval ago.
+func (u *unansweredNotice) report() {
+	now := u.now()
+	u.mu.Lock()
+	due := u.notified.IsZero() || now.Sub(u.notified) >= u.interval
+	if due {
+		u.notified = now
+	}
+	u.mu.Unlock()
+	if due {
+		u.notify()
+	}
 }
 
 func serveTunnelConn(ctx context.Context, tcpConn net.Conn, brokerConn *grpc.ClientConn, auth *config.AuthConfig, assetID int32, remotePort uint32) {
@@ -230,22 +297,49 @@ func serveTunnelConn(ctx context.Context, tcpConn net.Conn, brokerConn *grpc.Cli
 	relayTunnel(ctx, tcpConn, tunnelConn)
 }
 
-// Keep the return path alive after the caller finishes sending its request.
-func relayTunnel(ctx context.Context, tcpConn, tunnelConn io.ReadWriteCloser) {
+// relayTunnel copies between a forwarded local connection and its tunnel
+// until the tunnel's side ends or ctx does. The local client finishing its
+// sending does not end the relay: the device may still answer. The tunnel
+// ending does: nothing more can come back, and a tunnel whose device side has
+// ended takes nothing more either, so the local connection is closed at once
+// rather than left open until its client gives up waiting.
+//
+// It reports whether the relay ended the way it does when nothing answers on
+// the device: the tunnel ended cleanly, without a byte from the device, while
+// the local client was still connected.
+func relayTunnel(ctx context.Context, tcpConn, tunnelConn io.ReadWriteCloser) (unanswered bool) {
 	defer tcpConn.Close()
 	defer tunnelConn.Close()
-	done := make(chan struct{}, 2)
-	relay := func(dst io.Writer, src io.Reader) {
-		defer func() { done <- struct{}{} }()
-		_, _ = io.Copy(dst, src)
+	local := &endNotingReader{Reader: tcpConn}
+	go func() { _, _ = io.Copy(tunnelConn, local) }()
+	type copied struct {
+		n   int64
+		err error
 	}
-	go relay(tunnelConn, tcpConn)
-	go relay(tcpConn, tunnelConn)
-	for range 2 {
-		select {
-		case <-ctx.Done():
-			return
-		case <-done:
-		}
+	fromTunnel := make(chan copied, 1)
+	go func() {
+		n, err := io.Copy(tcpConn, tunnelConn)
+		fromTunnel <- copied{n, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return false
+	case c := <-fromTunnel:
+		// A tunnel that ctx ended also reads as a clean end.
+		return c.n == 0 && c.err == nil && !local.ended.Load() && ctx.Err() == nil
 	}
+}
+
+// endNotingReader notes when its source has ended, by EOF or by an error.
+type endNotingReader struct {
+	io.Reader
+	ended atomic.Bool
+}
+
+func (r *endNotingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err != nil {
+		r.ended.Store(true)
+	}
+	return n, err
 }

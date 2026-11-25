@@ -245,8 +245,12 @@ func TestWiFiDisconnect_Success(t *testing.T) {
 		t.Fatalf("unexpected error result: %v", result.Content)
 	}
 	text := result.Content[0].(mcpgo.TextContent).Text
-	if text != "disconnected from WiFi" {
-		t.Errorf("text = %q, want %q", text, "disconnected from WiFi")
+	var outcome grpcclient.WiFiDisconnectResult
+	if err := json.Unmarshal([]byte(text), &outcome); err != nil {
+		t.Fatalf("invalid disconnect outcome: %s: %v", text, err)
+	}
+	if outcome.State != "completed" || !outcome.CompletionConfirmed || outcome.Success == nil || !*outcome.Success || !outcome.Legacy || outcome.Warning == "" {
+		t.Fatalf("legacy completed disconnect = %+v", outcome)
 	}
 }
 

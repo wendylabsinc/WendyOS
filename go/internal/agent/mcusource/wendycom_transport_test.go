@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
+	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
@@ -437,18 +438,44 @@ func TestWendycomTransportConnectBoundedByContext(t *testing.T) {
 }
 
 func TestWendycomTransportConnectHasDefaultDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name, principal string
+		budget          time.Duration
+	}{{"legacy", "", 15 * time.Second}, {"principal", meshSourcePrincipal, liteclient.SensorSourceSetupTimeout}} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				tr := &wendycomTransport{logger: zap.NewNop(), sourceAssetID: 7, sourcePrincipalURI: tc.principal, connect: func(ctx context.Context) (wendycomClient, error) {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}}
+				defer tr.Close()
+				start := time.Now()
+				if err := tr.Connect(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("Connect: got %v, want a deadline error", err)
+				}
+				if elapsed := time.Since(start); elapsed != tc.budget {
+					t.Fatalf("Connect took %s, want %s", elapsed, tc.budget)
+				}
+			})
+		})
+	}
+}
+
+func TestNormalPrincipalSourceCanCompleteRoutedCertificateFlight(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		tr := &wendycomTransport{logger: zap.NewNop(), sourceAssetID: 7, connect: func(ctx context.Context) (wendycomClient, error) {
-			<-ctx.Done()
-			return nil, ctx.Err()
+		client := newFakeWendycomClient()
+		client.peerCert = certWithURI(meshSourcePrincipal)
+		tr := &wendycomTransport{logger: zap.NewNop(), sourcePrincipalURI: meshSourcePrincipal, connect: func(ctx context.Context) (wendycomClient, error) {
+			select {
+			case <-time.After(33 * time.Second):
+				return client, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}}
 		defer tr.Close()
-		start := time.Now()
-		if err := tr.Connect(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("Connect: got %v, want a deadline error", err)
-		}
-		if elapsed := time.Since(start); elapsed != 15*time.Second {
-			t.Fatalf("Connect took %s, want 15s", elapsed)
+		if err := tr.Connect(context.Background()); err != nil {
+			t.Fatalf("normal routed native certificate flight: %v", err)
 		}
 	})
 }

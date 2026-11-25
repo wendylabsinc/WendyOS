@@ -14,7 +14,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -110,6 +109,83 @@ func TestDiscoverModel_UpdateReturnsDelayedCmd(t *testing.T) {
 				t.Error("expected non-nil cmd (delayed rescan)")
 			}
 		})
+	}
+}
+
+func TestDiscoverRefreshKeepsSelectedDeviceWhenRowsMove(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.collection.LANDevices = []models.LANDevice{
+		{ID: "first", DisplayName: "Robot", Hostname: "first.local"},
+		{ID: "selected", DisplayName: "Robot", Hostname: "selected.local"},
+	}
+	m.refreshTable()
+	m.table.SetCursor(1)
+
+	m.collection.LANDevices = append(m.collection.LANDevices,
+		models.LANDevice{ID: "new", DisplayName: "Alpha", Hostname: "alpha.local"})
+	m.refreshTable()
+
+	if cursor := m.table.Cursor(); cursor != 2 || m.tableItems[cursor].lanKey != "selected" {
+		t.Fatalf("cursor = %d, want the selected device at row 2", cursor)
+	}
+}
+
+func TestDiscoverRefreshKeepsSelectedDeviceWhenMarkerColumnChanges(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.collection.USBDevices = []models.USBDevice{
+		{DisplayName: "First", SerialNumber: "first", USBVersion: "3.0"},
+		{DisplayName: "Selected", SerialNumber: "selected", USBVersion: "3.0"},
+	}
+	m.refreshTable()
+	m.table.SetCursor(1)
+	columnsWithoutMarker := len(m.table.Columns())
+
+	m.collection.LANDevices = []models.LANDevice{{ID: "lan", DisplayName: "LAN", Hostname: "lan.local", IsMTLS: true}}
+	m.refreshTable()
+	if columns := len(m.table.Columns()); columns != columnsWithoutMarker+1 {
+		t.Fatalf("columns = %d, want a marker column added to %d columns", columns, columnsWithoutMarker)
+	}
+	if cursor := m.table.Cursor(); cursor != 1 || m.tableItems[cursor].info.Name != "Selected" {
+		t.Errorf("cursor = %d, want the selected USB device at row 1 after the marker appeared", cursor)
+	}
+
+	m.table.SetCursor(1)
+	m.collection.LANDevices = nil
+	m.refreshTable()
+	if columns := len(m.table.Columns()); columns != columnsWithoutMarker {
+		t.Fatalf("columns = %d, want %d after the marker disappeared", columns, columnsWithoutMarker)
+	}
+	if cursor := m.table.Cursor(); cursor != 1 || m.tableItems[cursor].info.Name != "Selected" {
+		t.Errorf("cursor = %d, want the selected USB device at row 1 after the marker disappeared", cursor)
+	}
+}
+
+func TestDiscoverRefreshKeepsSelectedDeviceVisibleAfterReordering(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.windowHeight = 9
+	for _, name := range []string{"Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf"} {
+		m.collection.LANDevices = append(m.collection.LANDevices, models.LANDevice{
+			ID: name, DisplayName: name, Hostname: strings.ToLower(name) + ".local",
+		})
+	}
+	m.refreshTable()
+	for i := 0; i < 3; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(discoverModel)
+	}
+	if cursor := m.table.Cursor(); cursor != 3 || !strings.Contains(m.tableView(), "Echo") {
+		t.Fatalf("expected Echo to be highlighted and visible before the refresh, got row %d in:\n%s", cursor, m.tableView())
+	}
+
+	renamed := m.collection.LANDevices[3]
+	renamed.DisplayName = "Aardvark"
+	updated, _ := m.Update(lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: renamed}})
+	m = updated.(discoverModel)
+	if cursor := m.table.Cursor(); cursor != 0 || m.tableItems[cursor].lanKey != "echo" {
+		t.Fatalf("cursor = %d, want the renamed device at row 0", cursor)
+	}
+	if view := m.tableView(); !strings.Contains(view, "Aardvark") {
+		t.Fatalf("highlighted device is outside the viewport:\n%s", view)
 	}
 }
 
@@ -249,45 +325,6 @@ func TestDiscoverModel_LeftRightScrollsWithoutBreakingVerticalNavigation(t *test
 
 	if m.table.ScrollOffset() != 0 {
 		t.Fatalf("expected left arrow to return to zero offset, got %d", m.table.ScrollOffset())
-	}
-}
-
-func TestDiscoverModel_DKeySetsDefaultAndMarksSelectedDevice(t *testing.T) {
-	setTempConfig(t, &config.Config{})
-
-	m := newDiscoverModel(context.Background(), defaultOpts(), true)
-	updated, _ := m.Update(lanFoundEvent(models.LANDevice{
-		DisplayName: "ubuntu",
-		Hostname:    "ubuntu.local",
-		Port:        defaultAgentPort,
-	}))
-	m = updated.(discoverModel)
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	um := updated.(discoverModel)
-
-	if um.flashMessage != "Default device set to: ubuntu.local" {
-		t.Fatalf("flash message = %q, want default device confirmation", um.flashMessage)
-	}
-	if cmd == nil {
-		t.Fatal("expected clearFlashAfter cmd")
-	}
-	if !strings.Contains(um.table.View(), "✦") {
-		t.Fatalf("expected selected default device to show marker, got %q", um.table.View())
-	}
-
-	// 'd' toggles: on the default row it clears the default, as on the
-	// Simulator and Cloud tabs. There is no separate 'x' any more.
-	updated, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	um = updated.(discoverModel)
-	if got := defaultKey(t); got != "" {
-		t.Fatalf("second d left default %q, want it cleared", got)
-	}
-	if um.flashMessage != "Default device cleared." || strings.Contains(um.table.View(), "✦") {
-		t.Fatalf("second d: flash=%q table=%q", um.flashMessage, um.table.View())
-	}
-	if view := um.View(); !strings.Contains(view, "d toggle default") || strings.Contains(view, "x unset default") {
-		t.Fatalf("hint does not describe the toggle: %q", view)
 	}
 }
 
@@ -477,7 +514,7 @@ func TestDiscoverTableItemsProvisionedStateAndProbeHint(t *testing.T) {
 	}
 
 	_, rows := tui.PickerDeviceTableData(discoverPickerItems(items), "", true)
-	// Columns: 0=marker (provisioned glyph + ✦ default) 1=Name 2=Type 3=Address 4=Agent 5=OS.
+	// Columns: 0=marker (provisioned glyph) 1=Name 2=Type 3=Address 4=Agent 5=OS.
 	if rows[0][0] != "●" {
 		t.Fatalf("provisioned marker cell = %q, want \"●\"", rows[0][0])
 	}
@@ -948,5 +985,95 @@ func TestMergePickerItemTakesNoCableFromAnotherDevice(t *testing.T) {
 
 	if got := existing.Value.(*pickerEntry).mergedDevice.LAN.WiredAddresses; got != nil {
 		t.Errorf("WiredAddresses = %v from another device, want nil", got)
+	}
+}
+
+// A USB board that also answers on the network over its USB link is one
+// board: the USB scan must not add a second row with no address or agent.
+func TestDiscoverTableItemsListsAUSBBoardOnce(t *testing.T) {
+	collection := &models.DevicesCollection{
+		USBDevices: []models.USBDevice{
+			{Name: "WendyOS Device brave-otter", DisplayName: "WendyOS Device brave-otter", USBVersion: "USB 3.0", NetworkInterface: "en11"},
+		},
+		LANDevices: []models.LANDevice{
+			{
+				ID:               "7d9c1f0e-0000-4000-8000-000000000001",
+				DisplayName:      "Brave Otter",
+				Hostname:         "wendyos-brave-otter.local",
+				IPAddress:        "fe80::5741:1%en11",
+				NetworkInterface: "en11",
+				USB:              "WendyOS Device brave-otter (en11) 2.5 Gbps",
+				AgentVersion:     "2026.11.13-154136",
+			},
+		},
+	}
+
+	items := discoverTableItems(collection)
+	if len(items) != 1 {
+		var names []string
+		for _, item := range items {
+			names = append(names, item.info.Name+" ["+item.info.Type+"]")
+		}
+		t.Fatalf("got %d rows, want 1: %v", len(items), names)
+	}
+	if got := items[0].info.Name; got != "Brave Otter" {
+		t.Fatalf("row name = %q, want the network row", got)
+	}
+	if got := items[0].picker.USB; got != "WendyOS Device brave-otter (en11) 2.5 Gbps" {
+		t.Fatalf("row USB detail = %q, want the USB link summary", got)
+	}
+}
+
+// The interface a board answers on is also carried by its other addresses
+// when the row leads with a Wi-Fi address.
+func TestDiscoverTableItemsListsAUSBBoardOnceWhenWiFiLeads(t *testing.T) {
+	collection := &models.DevicesCollection{
+		USBDevices: []models.USBDevice{
+			{Name: "WendyOS Device brave-otter", DisplayName: "WendyOS Device brave-otter", NetworkInterface: "en11"},
+		},
+		LANDevices: []models.LANDevice{
+			{
+				DisplayName:      "Brave Otter",
+				Hostname:         "wendyos-brave-otter.local",
+				IPAddress:        "192.168.1.207",
+				Addresses:        []string{"192.168.1.207", "fe80::5741:1%EN11"},
+				NetworkInterface: "en0",
+			},
+		},
+	}
+
+	if items := discoverTableItems(collection); len(items) != 1 {
+		t.Fatalf("got %d rows, want 1", len(items))
+	}
+}
+
+// A USB board with no network row is still worth listing: it is plugged in
+// but not answering. So is one whose interface the scan could not tell, and
+// one whose interface carries no device.
+func TestDiscoverTableItemsKeepsAUSBBoardWithNoNetworkRow(t *testing.T) {
+	collection := &models.DevicesCollection{
+		USBDevices: []models.USBDevice{
+			{Name: "WendyOS Device silent", DisplayName: "WendyOS Device silent", NetworkInterface: "en12"},
+			{Name: "WendyOS Device unknown-port", DisplayName: "WendyOS Device unknown-port"},
+		},
+		LANDevices: []models.LANDevice{
+			{
+				DisplayName:      "Brave Otter",
+				Hostname:         "wendyos-brave-otter.local",
+				IPAddress:        "fe80::5741:1%en11",
+				NetworkInterface: "en11",
+			},
+		},
+	}
+
+	items := discoverTableItems(collection)
+	var usbRows []string
+	for _, item := range items {
+		if item.info.Type == "USB" {
+			usbRows = append(usbRows, item.info.Name)
+		}
+	}
+	if len(items) != 3 || len(usbRows) != 2 {
+		t.Fatalf("got %d rows with USB rows %v, want 3 rows and both USB boards", len(items), usbRows)
 	}
 }

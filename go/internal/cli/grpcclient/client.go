@@ -22,10 +22,11 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 )
@@ -63,7 +64,7 @@ const (
 
 // tlsDebugWriter is where WENDY_TLS_DEBUG resumption logging is written.
 // Overridable in tests to capture output.
-var tlsDebugWriter io.Writer = os.Stderr
+var tlsDebugWriter io.Writer = terminaloutput.Stderr
 
 type AgentConnection struct {
 	Conn *grpc.ClientConn
@@ -77,16 +78,36 @@ type AgentConnection struct {
 	// actually answered, mTLS port included. Empty for unix-socket and
 	// pre-built (NewFromConn) connections.
 	Addr string
+	// DevicePinKey retains the selected local device name independently of the
+	// resolved IP. Enrollment and reconnects use this same saved binding.
+	DevicePinKey string
+	// NoSavedIdentity marks a connection to a device this CLI had no saved
+	// identity for: an enrolled device verified only against the trust roots,
+	// or an unenrolled device that answered without TLS. Commands tell the
+	// user once (see the commands package's first-contact notice).
+	NoSavedIdentity bool
 	// SimulatorName retains the VM pin identity independently of its loopback endpoint.
 	SimulatorName  string
 	IsMTLS         bool                    // true when connected via mutual TLS
 	IsSessionProxy bool                    // true when Conn reaches a local session broker retaining the mTLS transport
 	CertInfo       *config.CertificateInfo // cert used to establish mTLS; nil for plaintext
 	RegistryDialer func(context.Context, int) (net.Conn, error)
-	ExtraClosers   []io.Closer
+	// IsCloudV2 identifies Cloud v2 connections, where the CLI surfaces
+	// transport drops without an automatic registry fallback. LAN and legacy Cloud
+	// connections leave it false.
+	IsCloudV2 bool
+	// OperatorMeshTarget retains the selected device independently of the first
+	// hop and Cloud's reconnect marker. AppDialer reuses its authenticated agent
+	// stream and running-app admission, rather than dialing a reported LAN IP.
+	OperatorMeshTarget meshid.Device
+	AppDialer          func(context.Context, uint16) (net.Conn, error)
+
+	ExtraClosers []io.Closer
+	extraMu      sync.Mutex
+	extraClosed  bool
 	// Reconnect re-establishes a connection to the SAME device this connection
-	// targets, after the agent restarts. It is set for transports where the
-	// connection identity can't be re-derived from Host alone (e.g. the cloud
+	// targets, after a disconnect or agent restart. It is set for transports
+	// where the connection identity can't be re-derived from Host alone (e.g. the cloud
 	// tunnel, which is pinned to a specific asset id). nil for plain LAN
 	// connections, where the caller re-dials Host directly.
 	Reconnect            func(context.Context) (*AgentConnection, error)
@@ -105,6 +126,7 @@ type AgentConnection struct {
 	UnitreeService       agentpbv2.WendyUnitreeServiceClient
 	RobotArmService      agentpbv2.WendyRobotArmServiceClient
 	DriverService        agentpbv2.WendyDriverServiceClient
+	McuService           agentpbv2.WendyArduinoMcuServiceClient
 	DataService          agentpbv2.DataServiceClient
 	// CalibratedFrameService serves RGB-D frames: colour plus depth aligned to
 	// it, with the scale and intrinsics that make both measurable. Separate
@@ -124,6 +146,11 @@ type AgentConnection struct {
 	// by callers after the first RPC returns; atomic makes that read race-free.
 	// nil for connections that never install the sink (plaintext / NewFromConn).
 	observedServerOrg *atomic.Int32
+	// observedServerTenant is observedServerOrg's counterpart for a device
+	// certificate that names a pki-core tenant instead of a numeric org: the
+	// tenant UUID its server certificate claimed, recorded before any
+	// verification. Diagnostics only, with the same goroutine story.
+	observedServerTenant *atomic.Pointer[string]
 	// observedServerIdentity holds the device's full Wendy identity (org +
 	// asset) from a server certificate this client actually VERIFIED — the
 	// OnVerifiedServerIdentity sink, which fires only after the chain and org
@@ -146,6 +173,8 @@ type AgentConnection struct {
 	// tcpDial records failures before TCP connected, separately from TLS errors.
 	// nil when gRPC owns dialing, including HTTP CONNECT proxy transports.
 	tcpDial *agentTCPDialState
+	// A pooled lease releases its owner instead of closing the shared channel.
+	release func() error
 }
 
 type agentTCPDialState struct {
@@ -335,6 +364,10 @@ func newUnixClient(socketPath, target string, extra ...grpc.DialOption) (*grpc.C
 		var d net.Dialer
 		return d.DialContext(ctx, "unix", socketPath)
 	}
+	return newLocalStreamClient(dialer, target, extra...)
+}
+
+func newLocalStreamClient(dialer func(context.Context, string) (net.Conn, error), target string, extra ...grpc.DialOption) (*grpc.ClientConn, error) {
 	opts := []grpc.DialOption{
 		grpc.WithContextDialer(dialer),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -366,6 +399,9 @@ func ConnectUnix(ctx context.Context, socketPath string) (*AgentConnection, erro
 	return ac, nil
 }
 
+// ConnectWithTLS cannot authenticate a selected device without an expected
+// identity and returns certs.ErrExpectedDeviceIdentity.
+// Deprecated: use ConnectWithTLSExpecting with a trusted device binding.
 func ConnectWithTLS(ctx context.Context, address string, certInfo *config.CertificateInfo) (*AgentConnection, error) {
 	return ConnectWithTLSAndPins(ctx, address, certInfo, nil)
 }
@@ -380,6 +416,7 @@ func newAgentTLSConfig(
 	observedOrg *atomic.Int32,
 	observedIdentity *atomic.Pointer[certs.WendyIdentity],
 	expected *certs.WendyIdentity,
+	firstContact bool,
 	mismatch *atomic.Pointer[certs.IdentityMismatchError],
 	pinMismatch *atomic.Pointer[devicepin.PinMismatchError],
 ) (*tls.Config, error) {
@@ -398,6 +435,7 @@ func newAgentTLSConfig(
 		ExpectedOrgID:            int32(certInfo.OrganizationID),
 		PinStore:                 pins,
 		ExpectedIdentity:         expected,
+		FirstContact:             firstContact,
 		OnServerIdentity:         observedOrgSink(observedOrg),
 		OnVerifiedServerIdentity: verifiedIdentitySink(observedIdentity),
 	})
@@ -491,29 +529,56 @@ func newAgentTLSConfig(
 	return tlsCfg, nil
 }
 
+// ConnectWithTLSAndPins cannot infer the intended device from certificate-key
+// pins, which are keyed by the identity presented by the peer.
+// Deprecated: use ConnectWithTLSExpecting with a trusted device binding.
 func ConnectWithTLSAndPins(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker) (*AgentConnection, error) {
 	return ConnectWithTLSExpecting(ctx, address, certInfo, pins, nil)
 }
 
 // ConnectWithTLSExpecting is ConnectWithTLSAndPins with a required peer
-// identity. A nil expected is exactly ConnectWithTLSAndPins.
+// identity. A nil expected fails closed; use a trusted enrollment or inventory
+// binding for first contact, including on legacy org/asset connections.
 //
 // extraOpts extends the standard dial options for callers whose channel has
 // different lifetime needs than a per-command connection — today the session
 // broker, which must pin its retained transport open (grpc.WithIdleTimeout(0))
 // because for it a teardown-and-redial is a trust event, not a transparency.
 func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker, expected *certs.WendyIdentity, extraOpts ...grpc.DialOption) (*AgentConnection, error) {
+	return connectWithTLS(ctx, address, certInfo, pins, expected, false, extraOpts...)
+}
+
+// ConnectWithTLSFirstContact connects to a device this CLI has no saved
+// identity for. The device's certificate is still verified against the trust
+// roots in certInfo's chain, must name a Wendy device, and is checked against
+// pins; only the comparison with a saved identity is missing. The device
+// decides whether it accepts certInfo. The connection is marked NoSavedIdentity.
+func ConnectWithTLSFirstContact(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker) (*AgentConnection, error) {
+	conn, err := connectWithTLS(ctx, address, certInfo, pins, nil, true)
+	if conn != nil {
+		conn.NoSavedIdentity = true
+	}
+	return conn, err
+}
+
+func connectWithTLS(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker, expected *certs.WendyIdentity, firstContact bool, extraOpts ...grpc.DialOption) (*AgentConnection, error) {
 	observedOrg := new(atomic.Int32)
 	observedIdentity := new(atomic.Pointer[certs.WendyIdentity])
 	mismatch := new(atomic.Pointer[certs.IdentityMismatchError])
 	pinMismatch := new(atomic.Pointer[devicepin.PinMismatchError])
-	tlsCfg, err := newAgentTLSConfig(address, certInfo, pins, observedOrg, observedIdentity, expected, mismatch, pinMismatch)
+	tlsCfg, err := newAgentTLSConfig(address, certInfo, pins, observedOrg, observedIdentity, expected, firstContact, mismatch, pinMismatch)
 	if err != nil {
 		return nil, err
 	}
+	observedTenant := new(atomic.Pointer[string])
+	tlsCfg.VerifyConnection = observeServerTenant(observedTenant, tlsCfg.VerifyConnection)
 
+	transport, err := newIssuerTransport(tlsCfg, certInfo.PemCertificateChain)
+	if err != nil {
+		return nil, err
+	}
 	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithTransportCredentials(transport),
 		grpc.WithInitialWindowSize(grpcInitialStreamWindow),
 		grpc.WithInitialConnWindowSize(grpcInitialConnWindow),
 		grpc.WithReadBufferSize(grpcReadBufferSize),
@@ -537,11 +602,19 @@ func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *conf
 	ac.IsMTLS = true
 	ac.CertInfo = certInfo
 	ac.observedServerOrg = observedOrg
+	ac.observedServerTenant = observedTenant
 	ac.observedServerIdentity = observedIdentity
 	ac.identityMismatch = mismatch
 	ac.pinMismatch = pinMismatch
 	ac.tcpDial = tcpDial
 	return ac, nil
+}
+
+// UnverifiedPlaintext reports a plaintext connection to an unenrolled device
+// that nothing authenticated (see NoSavedIdentity). Secrets such as Wi-Fi
+// passwords need the user's consent before they go over it.
+func (c *AgentConnection) UnverifiedPlaintext() bool {
+	return c != nil && c.NoSavedIdentity && !c.IsMTLS
 }
 
 // grpcTarget converts a host:port address into a gRPC target string.
@@ -586,6 +659,28 @@ func hostFromAddress(address string) string {
 	return host
 }
 
+// AddCloser assigns a local helper to this connection's lifetime. Parallel
+// service hooks can register forwards without racing shutdown. A late helper
+// is closed immediately and false is returned.
+func (c *AgentConnection) AddCloser(closer io.Closer) bool {
+	if closer == nil {
+		return true
+	}
+	if c == nil {
+		_ = closer.Close()
+		return false
+	}
+	c.extraMu.Lock()
+	if c.extraClosed {
+		c.extraMu.Unlock()
+		_ = closer.Close()
+		return false
+	}
+	c.ExtraClosers = append(c.ExtraClosers, closer)
+	c.extraMu.Unlock()
+	return true
+}
+
 // Close closes the underlying gRPC connection.
 //
 // Safe on a nil receiver: callers defer Close on a connection variable that a
@@ -595,11 +690,22 @@ func (c *AgentConnection) Close() error {
 	if c == nil {
 		return nil
 	}
+	c.extraMu.Lock()
+	if c.extraClosed {
+		c.extraMu.Unlock()
+		return nil
+	}
+	c.extraClosed = true
+	closers := c.ExtraClosers
+	c.ExtraClosers = nil
+	c.extraMu.Unlock()
 	var errs []error
-	if c.Conn != nil {
+	if c.release != nil {
+		errs = append(errs, c.release())
+	} else if c.Conn != nil {
 		errs = append(errs, c.Conn.Close())
 	}
-	for _, closer := range c.ExtraClosers {
+	for _, closer := range closers {
 		if closer != nil {
 			errs = append(errs, closer.Close())
 		}
@@ -620,6 +726,40 @@ func (c *AgentConnection) ObservedServerOrg() (int32, bool) {
 	}
 	v := c.observedServerOrg.Load()
 	return v, v != 0
+}
+
+// observeServerTenant records the pki-core tenant the peer's leaf certificate
+// names, then runs verify. It records before verification, like the org sink:
+// a device that refuses this CLI's certificate has still said which tenant it
+// belongs to, and that is what tells an expired login apart from a wrong clock.
+func observeServerTenant(dst *atomic.Pointer[string], verify func(tls.ConnectionState) error) func(tls.ConnectionState) error {
+	return func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) > 0 {
+			if id, ok, err := certs.IdentityFromCert(cs.PeerCertificates[0]); ok && err == nil && id.TenantUUID != "" {
+				tenant := id.TenantUUID
+				dst.Store(&tenant)
+			}
+		}
+		if verify == nil {
+			return nil
+		}
+		return verify(cs)
+	}
+}
+
+// ObservedServerTenant returns the pki-core tenant UUID named by the device's
+// server certificate during the TLS handshake, or ("", false) when none was
+// observed. Like ObservedServerOrg it is unverified and for diagnostics only:
+// it must never decide whom to trust.
+func (c *AgentConnection) ObservedServerTenant() (string, bool) {
+	if c == nil || c.observedServerTenant == nil {
+		return "", false
+	}
+	tenant := c.observedServerTenant.Load()
+	if tenant == nil || *tenant == "" {
+		return "", false
+	}
+	return *tenant, true
 }
 
 // ObservedServerIdentity returns the device's Wendy identity (org + entity, the
@@ -687,6 +827,7 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		UnitreeService:       agentpbv2.NewWendyUnitreeServiceClient(conn),
 		RobotArmService:      agentpbv2.NewWendyRobotArmServiceClient(conn),
 		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
+		McuService:           agentpbv2.NewWendyArduinoMcuServiceClient(conn),
 		DataService:          agentpbv2.NewDataServiceClient(conn),
 
 		CalibratedFrameService: agentpbv2.NewWendyCalibratedFrameServiceClient(conn),

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"strings"
 	"time"
 
@@ -25,6 +26,11 @@ type cloudAppRegistration func(context.Context, *config.AuthConfig, *agentpb.Pro
 func registerCloudApps(ctx context.Context, conn *grpcclient.AgentConnection, appIDs []string, skip bool) error {
 	if skip {
 		cliLogln("Cloud app registration skipped (--skip-cloud-registration).")
+		return nil
+	}
+	if conn != nil && strings.HasPrefix(conn.Host, "unix:") {
+		// The agent socket carries no verified device identity to register with.
+		cliLogln("Cloud app registration skipped (the deploy goes through the local agent socket).")
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -137,7 +143,7 @@ func registerAppsWithCloud(ctx context.Context, auth *config.AuthConfig, device 
 			Id: id, OrganizationId: device.GetOrganizationId(),
 		})
 		if status.Code(err) == codes.NotFound {
-			name := strings.TrimPrefix(id, "campaign:")
+			name := strings.TrimPrefix(id, data.CampaignAppPrefix)
 			app, err = client.UpsertApp(cloudCtx, &cloudpb.UpsertAppRequest{
 				Id: id, OrganizationId: device.GetOrganizationId(), Name: &name,
 			})

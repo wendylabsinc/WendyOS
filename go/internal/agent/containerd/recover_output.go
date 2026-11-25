@@ -18,6 +18,10 @@ import (
 
 type taskOutputOwner struct {
 	pid uint32
+	// cameraShared marks a run of a sharing container: its exit lets go of
+	// the container's mount namespace (camera_share_wiring.go). Set before
+	// the run's exit watcher starts and never changed.
+	cameraShared bool
 }
 
 type recoveredTaskOutput struct {
@@ -149,6 +153,12 @@ func (c *Client) recoverTaskOutput(ctx context.Context, ctr containerdclient.Con
 		return err
 	}
 	pid := task.Pid()
+	// A sharing container's namespace, held again by the startup sync, is let
+	// go of when this inherited task exits, as for one this agent started.
+	cameraShared := false
+	if labels, labelErr := ctr.Labels(ctx); labelErr == nil {
+		cameraShared = sharesCamera(labels)
+	}
 	c.outputMu.Lock()
 	owner := c.outputOwners[name]
 	tracked, closed := owner != nil && owner.pid == pid, c.outputClosed
@@ -193,7 +203,7 @@ func (c *Client) recoverTaskOutput(ctx context.Context, ctr containerdclient.Con
 	if c.recoveredOutput == nil {
 		c.recoveredOutput = make(map[string]*recoveredTaskOutput)
 	}
-	r.owner = &taskOutputOwner{pid: pid}
+	r.owner = &taskOutputOwner{pid: pid, cameraShared: cameraShared}
 	c.outputOwners[name] = r.owner
 	c.recoveredOutput[name] = r
 	c.outputMu.Unlock()
@@ -209,6 +219,9 @@ func (c *Client) recoverTaskOutput(ctx context.Context, ctr containerdclient.Con
 				_ = fifos.Close()
 			}
 			c.withTaskOutputOwner(name, r.owner, func() {
+				if r.owner.cameraShared {
+					c.releaseCameraShares(name)
+				}
 				recordCtx, recordCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer recordCancel()
 				c.recordContainerExit(recordCtx, name, int32(code), classifyExit(code, taskOOMKilled(recordCtx, task)), exitedAt)

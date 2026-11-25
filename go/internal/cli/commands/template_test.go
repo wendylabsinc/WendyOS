@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -870,5 +872,63 @@ func TestIsTextFile_CoversTemplateSourceExtensions(t *testing.T) {
 	}
 	if isTextFile("assets/logo.jpeg") {
 		t.Error("isTextFile should reject binary assets")
+	}
+}
+
+// A file can arrive while a template is being downloaded, after the initial
+// destination check. Exercise the real downloader, extractor, and renderer.
+func TestRenderAndWriteTemplate_PreservesFileArrivingDuringDownload(t *testing.T) {
+	cwd := t.TempDir()
+	dest := filepath.Join(cwd, "sapi")
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("destination must start empty: %v, %v", entries, err)
+	}
+	original := []byte("valuable bytes written while template downloads\n")
+	path := filepath.Join(dest, "Package.swift")
+	archive := buildTestTarball(t, "templates-fixture", "swift", "simple-api", map[string]string{
+		"template.json": `{"name":"simple-api"}`,
+		"Package.swift": `name: "{{.APP_ID}}"`,
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := os.WriteFile(path, original, 0o644); err != nil {
+			t.Error(err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write(archive)
+	}))
+	defer server.Close()
+	files, _, err := downloadTemplateArchiveFromURL(context.Background(), server.URL, "fixture", "swift", "simple-api", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vals := map[string]interface{}{"APP_ID": "sapi"}
+	err = renderAndWriteTemplate(files, dest, "sapi", "simple-api", vals, false)
+	if !errors.Is(err, os.ErrExist) {
+		t.Errorf("want an existing-file error, got %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Errorf("file written during download was replaced: %q", got)
+	}
+
+	// The same downloaded fixture must still render normally into a fresh tree.
+	fresh := filepath.Join(cwd, "fresh")
+	if err := renderAndWriteTemplate(files, fresh, "sapi", "simple-api", vals, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(filepath.Join(fresh, "Package.swift"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `name: "sapi"` {
+		t.Fatalf("template was not rendered: %q", got)
 	}
 }

@@ -538,7 +538,7 @@ func TestDragonwingUnusableCacheAdviceDependsOnReachability(t *testing.T) {
 
 // A download or extraction failure happens before the first write command, with
 // the destructive prompt already answered: untagged, it reports nothing at all,
-// leaving the board in EDL with no word about DIP switch 3.
+// leaving the board in EDL with no word about its EDL switch.
 func TestDragonwingDownloadFailureReportsAnUntouchedBoard(t *testing.T) {
 	board, _ := dragonwingBoardFor("dragonwing-iq-8275")
 	dir := filepath.Join(dragonwingVersionCacheDir(t.TempDir(), board, "0.19.3"), "aaaaaaaaaaaa")
@@ -817,7 +817,7 @@ func TestPlanDragonwingFlashResolvesBeforeAnyWrite(t *testing.T) {
 	// Every write is resolved up front, so a bundle the flash cannot take
 	// fails while the board is still untouched rather than after 12 GiB.
 	_, err := planDragonwingFlash(t.TempDir(), t.TempDir(), "", nil, "", nil,
-		io.Discard, func(string) {}, func(string) {})
+		io.Discard, func(string) {}, func(string) {}, agentSeed{})
 	if err == nil {
 		t.Fatal("want an error for an empty bundle dir")
 	}
@@ -910,28 +910,6 @@ func TestCheckDragonwingDiskSpaceReflectsRealExpansion(t *testing.T) {
 	}
 }
 
-func TestEDLUdevRuleMatchesPackagedRule(t *testing.T) {
-	// The USB-access hint tells tarball users to install edlUdevRule verbatim,
-	// so it must be byte-identical to what the deb/rpm ships. Mirrors
-	// TestUsbUdevRuleMatchesPackagedRule for the Jetson rule.
-	body, err := os.ReadFile("../../../../packaging/linux/udev/70-wendy-qualcomm.rules")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rules []string
-	for _, line := range strings.Split(string(body), "\n") {
-		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-			rules = append(rules, line)
-		}
-	}
-	if len(rules) != 1 || rules[0] != edlUdevRule {
-		t.Fatalf("packaged rule diverged from edlUdevRule:\npackaged: %q\nconst:    %q", rules, edlUdevRule)
-	}
-	if !strings.Contains(string(body), "05c6") {
-		t.Error("the packaged rule does not match the Qualcomm EDL vendor")
-	}
-}
-
 func TestManifestUnreachableExcludesMissingBuilds(t *testing.T) {
 	// The offline cache fallback is gated on ErrManifestUnreachable, so a
 	// manifest that was fetched fine but has no such build must not carry it —
@@ -968,5 +946,17 @@ func TestReportDragonwingFailureCoversCancellation(t *testing.T) {
 				t.Errorf("output = %q, want it to mention %q", buf.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestDragonwingEDLInstructionsMatchTheBoard(t *testing.T) {
+	for _, tc := range []struct{ board, pole string }{{"dragonwing-iq-8275", "DIP switch 3"}, {"dragonwing-iq-9075", "MODE switch 3"}} {
+		board, _ := dragonwingBoardFor(tc.board)
+		guide := board.guide()
+		for label, value := range map[string]string{"entry": strings.Join(guide.entry, "\n"), "ready": guide.ready, "done": strings.Join(guide.done, "\n"), "retry": guide.retry, "reenter": strings.Join(guide.reenter, "\n")} {
+			if !strings.Contains(value, tc.pole) {
+				t.Errorf("%s %s omits %s", tc.board, label, tc.pole)
+			}
+		}
 	}
 }

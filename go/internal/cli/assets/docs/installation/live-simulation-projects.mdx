@@ -12,6 +12,8 @@ simulator, follow the steps below. For an existing one, `wendy vm robot update
 my-go2` installs the current runtime and resets its world; create a separate VM
 if you need to preserve the existing scene.
 
+<YouTubeVideo id="omjsN0AcDaU" title="Setting up a Custom Scene for Wendy Simulator" />
+
 ## Connect a folder once
 
 ```sh
@@ -37,7 +39,7 @@ wendy vm robot project watch ./my-environment
 `init` requires a new folder; `link` requires an existing scene. Both require
 an explicit, running Go2/G1 VM with the matching runtime. They write local binding
 metadata in `.wendy-simulation.json`. Keep this file local and ignore it in Git;
-share `scene.json` and `assets/` instead. No command falls back to a default device,
+share `scene.json` and `assets/` instead. No command picks a device for you,
 boots a stopped VM, updates its runtime, or deploys to physical hardware.
 
 `link` records the binding; `sync` or `watch` applies it. Watch runs in the foreground.

@@ -187,7 +187,7 @@ func (BatteryState) EnumDescriptor() ([]byte, []int) {
 
 type RestartPolicy struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Mode  RestartPolicyMode      `protobuf:"varint,1,opt,name=mode,proto3,enum=RestartPolicyMode" json:"mode,omitempty"`
+	Mode  RestartPolicyMode      `protobuf:"varint,1,opt,name=mode,proto3,enum=wendy.agent.services.v1.RestartPolicyMode" json:"mode,omitempty"`
 	// Only used when mode==ON_FAILURE
 	OnFailureMaxRetries int32 `protobuf:"varint,2,opt,name=on_failure_max_retries,json=onFailureMaxRetries,proto3" json:"on_failure_max_retries,omitempty"`
 	unknownFields       protoimpl.UnknownFields
@@ -244,7 +244,7 @@ func (x *RestartPolicy) GetOnFailureMaxRetries() int32 {
 type ServiceEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	RunningState  AppRunningState        `protobuf:"varint,2,opt,name=running_state,json=runningState,proto3,enum=AppRunningState" json:"running_state,omitempty"`
+	RunningState  AppRunningState        `protobuf:"varint,2,opt,name=running_state,json=runningState,proto3,enum=wendy.agent.services.v1.AppRunningState" json:"running_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -297,7 +297,7 @@ type AppContainer struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	AppName      string                 `protobuf:"bytes,1,opt,name=app_name,json=appName,proto3" json:"app_name,omitempty"` // app ID (bare, without service suffix)
 	AppVersion   string                 `protobuf:"bytes,2,opt,name=app_version,json=appVersion,proto3" json:"app_version,omitempty"`
-	RunningState AppRunningState        `protobuf:"varint,3,opt,name=running_state,json=runningState,proto3,enum=AppRunningState" json:"running_state,omitempty"` // aggregate: RUNNING if any service is running
+	RunningState AppRunningState        `protobuf:"varint,3,opt,name=running_state,json=runningState,proto3,enum=wendy.agent.services.v1.AppRunningState" json:"running_state,omitempty"` // aggregate: RUNNING if any service is running
 	FailureCount uint32                 `protobuf:"varint,4,opt,name=failure_count,json=failureCount,proto3" json:"failure_count,omitempty"`
 	McpPort      uint32                 `protobuf:"varint,5,opt,name=mcp_port,json=mcpPort,proto3" json:"mcp_port,omitempty"`
 	// One entry per service container for apps that declare named services
@@ -417,7 +417,7 @@ type BatteryStats struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Charge level, 0-100, across every system battery on the device.
 	Percent float64      `protobuf:"fixed64,1,opt,name=percent,proto3" json:"percent,omitempty"`
-	State   BatteryState `protobuf:"varint,2,opt,name=state,proto3,enum=BatteryState" json:"state,omitempty"`
+	State   BatteryState `protobuf:"varint,2,opt,name=state,proto3,enum=wendy.agent.services.v1.BatteryState" json:"state,omitempty"`
 	// Estimated seconds until empty (discharging) or until full (charging).
 	// Absent whenever the kernel reports no usable charge/discharge rate — a
 	// missing estimate is reported as missing rather than extrapolated.
@@ -481,27 +481,27 @@ var File_wendy_agent_services_v1_shared_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v1_shared_proto_rawDesc = "" +
 	"\n" +
-	"$wendy/agent/services/v1/shared.proto\"l\n" +
-	"\rRestartPolicy\x12&\n" +
-	"\x04mode\x18\x01 \x01(\x0e2\x12.RestartPolicyModeR\x04mode\x123\n" +
-	"\x16on_failure_max_retries\x18\x02 \x01(\x05R\x13onFailureMaxRetries\"Y\n" +
+	"$wendy/agent/services/v1/shared.proto\x12\x17wendy.agent.services.v1\"\x84\x01\n" +
+	"\rRestartPolicy\x12>\n" +
+	"\x04mode\x18\x01 \x01(\x0e2*.wendy.agent.services.v1.RestartPolicyModeR\x04mode\x123\n" +
+	"\x16on_failure_max_retries\x18\x02 \x01(\x05R\x13onFailureMaxRetries\"q\n" +
 	"\fServiceEntry\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x125\n" +
-	"\rrunning_state\x18\x02 \x01(\x0e2\x10.AppRunningStateR\frunningState\"\xd5\x02\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12M\n" +
+	"\rrunning_state\x18\x02 \x01(\x0e2(.wendy.agent.services.v1.AppRunningStateR\frunningState\"\x85\x03\n" +
 	"\fAppContainer\x12\x19\n" +
 	"\bapp_name\x18\x01 \x01(\tR\aappName\x12\x1f\n" +
 	"\vapp_version\x18\x02 \x01(\tR\n" +
-	"appVersion\x125\n" +
-	"\rrunning_state\x18\x03 \x01(\x0e2\x10.AppRunningStateR\frunningState\x12#\n" +
+	"appVersion\x12M\n" +
+	"\rrunning_state\x18\x03 \x01(\x0e2(.wendy.agent.services.v1.AppRunningStateR\frunningState\x12#\n" +
 	"\rfailure_count\x18\x04 \x01(\rR\ffailureCount\x12\x19\n" +
-	"\bmcp_port\x18\x05 \x01(\rR\amcpPort\x12)\n" +
-	"\bservices\x18\x06 \x03(\v2\r.ServiceEntryR\bservices\x12\x1b\n" +
+	"\bmcp_port\x18\x05 \x01(\rR\amcpPort\x12A\n" +
+	"\bservices\x18\x06 \x03(\v2%.wendy.agent.services.v1.ServiceEntryR\bservices\x12\x1b\n" +
 	"\texit_code\x18\v \x01(\x05R\bexitCode\x12-\n" +
 	"\x12termination_reason\x18\f \x01(\tR\x11terminationReason\x12\x1b\n" +
-	"\thttp_port\x18\r \x01(\rR\bhttpPort\"\x95\x01\n" +
+	"\thttp_port\x18\r \x01(\rR\bhttpPort\"\xad\x01\n" +
 	"\fBatteryStats\x12\x18\n" +
-	"\apercent\x18\x01 \x01(\x01R\apercent\x12#\n" +
-	"\x05state\x18\x02 \x01(\x0e2\r.BatteryStateR\x05state\x120\n" +
+	"\apercent\x18\x01 \x01(\x01R\apercent\x12;\n" +
+	"\x05state\x18\x02 \x01(\x0e2%.wendy.agent.services.v1.BatteryStateR\x05state\x120\n" +
 	"\x11seconds_remaining\x18\x03 \x01(\x03H\x00R\x10secondsRemaining\x88\x01\x01B\x14\n" +
 	"\x12_seconds_remaining*L\n" +
 	"\x11RestartPolicyMode\x12\v\n" +
@@ -519,7 +519,7 @@ const file_wendy_agent_services_v1_shared_proto_rawDesc = "" +
 	"\x16BATTERY_STATE_CHARGING\x10\x01\x12\x1d\n" +
 	"\x19BATTERY_STATE_DISCHARGING\x10\x02\x12\x16\n" +
 	"\x12BATTERY_STATE_FULL\x10\x03\x12\x1e\n" +
-	"\x1aBATTERY_STATE_NOT_CHARGING\x10\x04b\x06proto3"
+	"\x1aBATTERY_STATE_NOT_CHARGING\x10\x04B7Z5github.com/wendylabsinc/cloud/services/internal/protob\x06proto3"
 
 var (
 	file_wendy_agent_services_v1_shared_proto_rawDescOnce sync.Once
@@ -536,20 +536,20 @@ func file_wendy_agent_services_v1_shared_proto_rawDescGZIP() []byte {
 var file_wendy_agent_services_v1_shared_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_wendy_agent_services_v1_shared_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_wendy_agent_services_v1_shared_proto_goTypes = []any{
-	(RestartPolicyMode)(0), // 0: RestartPolicyMode
-	(AppRunningState)(0),   // 1: AppRunningState
-	(BatteryState)(0),      // 2: BatteryState
-	(*RestartPolicy)(nil),  // 3: RestartPolicy
-	(*ServiceEntry)(nil),   // 4: ServiceEntry
-	(*AppContainer)(nil),   // 5: AppContainer
-	(*BatteryStats)(nil),   // 6: BatteryStats
+	(RestartPolicyMode)(0), // 0: wendy.agent.services.v1.RestartPolicyMode
+	(AppRunningState)(0),   // 1: wendy.agent.services.v1.AppRunningState
+	(BatteryState)(0),      // 2: wendy.agent.services.v1.BatteryState
+	(*RestartPolicy)(nil),  // 3: wendy.agent.services.v1.RestartPolicy
+	(*ServiceEntry)(nil),   // 4: wendy.agent.services.v1.ServiceEntry
+	(*AppContainer)(nil),   // 5: wendy.agent.services.v1.AppContainer
+	(*BatteryStats)(nil),   // 6: wendy.agent.services.v1.BatteryStats
 }
 var file_wendy_agent_services_v1_shared_proto_depIdxs = []int32{
-	0, // 0: RestartPolicy.mode:type_name -> RestartPolicyMode
-	1, // 1: ServiceEntry.running_state:type_name -> AppRunningState
-	1, // 2: AppContainer.running_state:type_name -> AppRunningState
-	4, // 3: AppContainer.services:type_name -> ServiceEntry
-	2, // 4: BatteryStats.state:type_name -> BatteryState
+	0, // 0: wendy.agent.services.v1.RestartPolicy.mode:type_name -> wendy.agent.services.v1.RestartPolicyMode
+	1, // 1: wendy.agent.services.v1.ServiceEntry.running_state:type_name -> wendy.agent.services.v1.AppRunningState
+	1, // 2: wendy.agent.services.v1.AppContainer.running_state:type_name -> wendy.agent.services.v1.AppRunningState
+	4, // 3: wendy.agent.services.v1.AppContainer.services:type_name -> wendy.agent.services.v1.ServiceEntry
+	2, // 4: wendy.agent.services.v1.BatteryStats.state:type_name -> wendy.agent.services.v1.BatteryState
 	5, // [5:5] is the sub-list for method output_type
 	5, // [5:5] is the sub-list for method input_type
 	5, // [5:5] is the sub-list for extension type_name

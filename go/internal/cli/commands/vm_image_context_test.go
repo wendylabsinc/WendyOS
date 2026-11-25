@@ -167,6 +167,10 @@ func TestDownloadImageContextCancelsInflightRequests(t *testing.T) {
 }
 
 func TestDownloadImageContextCancelsWorkerOnProgressExit(t *testing.T) {
+	oldJSON, oldInteractive := jsonOutput, isInteractiveTerminalFn
+	t.Cleanup(func() { jsonOutput = oldJSON; isInteractiveTerminalFn = oldInteractive })
+	jsonOutput = false
+	isInteractiveTerminalFn = func() bool { return true }
 	for _, key := range []string{"q", "\x03", "parent"} {
 		t.Run(key, func(t *testing.T) {
 			dir := isolateVMImageCache(t)

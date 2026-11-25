@@ -6,7 +6,7 @@
 // Source: wendy/agent/services/v2/provisioning_service.proto
 //
 // For information on using the generated types, please see the documentation:
-//   https://github.com/grpc/grpc-swift-2
+//   https://github.com/grpc/grpc-swift
 
 public import GRPCCore
 public import GRPCProtobuf
@@ -125,9 +125,8 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
     /// This protocol is the lowest-level of the service protocols generated for this service
     /// giving you the most flexibility over the implementation of your service. This comes at
     /// the cost of more verbose and less strict APIs. Each RPC requires you to implement it in
-    /// terms of a request stream and response stream. Where the RPC expects only a single
-    /// request or response message, you are responsible for ensuring your implementation
-    /// maintains this invariant.
+    /// terms of a request stream and response stream. Where only a single request or response
+    /// message is expected, you are responsible for enforcing this invariant is maintained.
     ///
     /// Where possible, prefer using the stricter, less-verbose ``ServiceProtocol``
     /// or ``SimpleServiceProtocol`` instead.
@@ -700,9 +699,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_StartProvisioningRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_StartProvisioningResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func startProvisioning<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StartProvisioningRequest>,
@@ -723,9 +722,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_StartACMEProvisioningRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_StartACMEProvisioningResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func startACMEProvisioning<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StartACMEProvisioningRequest>,
@@ -742,9 +741,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_IsProvisionedRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_IsProvisionedResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func isProvisioned<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_IsProvisionedRequest>,
@@ -767,9 +766,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_UnprovisionRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_UnprovisionResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func unprovision<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_UnprovisionRequest>,
@@ -791,9 +790,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_RevokeACMECertificateRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_RevokeACMECertificateResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func revokeACMECertificate<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_RevokeACMECertificateRequest>,
@@ -814,9 +813,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_RevokeACMECertificateRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_RevokeACMECertificateResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func checkACMERevocation<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_RevokeACMECertificateRequest>,
@@ -850,9 +849,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_StartProvisioningRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_StartProvisioningResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func startProvisioning<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StartProvisioningRequest>,
@@ -884,9 +883,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_StartACMEProvisioningRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_StartACMEProvisioningResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func startACMEProvisioning<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StartACMEProvisioningRequest>,
@@ -914,9 +913,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_IsProvisionedRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_IsProvisionedResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func isProvisioned<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_IsProvisionedRequest>,
@@ -950,9 +949,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_UnprovisionRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_UnprovisionResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func unprovision<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_UnprovisionRequest>,
@@ -985,9 +984,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_RevokeACMECertificateRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_RevokeACMECertificateResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func revokeACMECertificate<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_RevokeACMECertificateRequest>,
@@ -1019,9 +1018,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_RevokeACMECertificateRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_RevokeACMECertificateResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func checkACMERevocation<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_RevokeACMECertificateRequest>,
@@ -1052,9 +1051,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_StartProvisioningRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func startProvisioning<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StartProvisioningRequest>,
@@ -1081,9 +1080,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_StartACMEProvisioningRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func startACMEProvisioning<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StartACMEProvisioningRequest>,
@@ -1106,9 +1105,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_IsProvisionedRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func isProvisioned<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_IsProvisionedRequest>,
@@ -1137,9 +1136,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_UnprovisionRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func unprovision<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_UnprovisionRequest>,
@@ -1167,9 +1166,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_RevokeACMECertificateRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func revokeACMECertificate<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_RevokeACMECertificateRequest>,
@@ -1196,9 +1195,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_RevokeACMECertificateRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func checkACMERevocation<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_RevokeACMECertificateRequest>,
@@ -1226,9 +1225,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func startProvisioning<Result>(
         _ message: Wendy_Agent_Services_V2_StartProvisioningRequest,
@@ -1259,9 +1258,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func startACMEProvisioning<Result>(
         _ message: Wendy_Agent_Services_V2_StartACMEProvisioningRequest,
@@ -1288,9 +1287,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func isProvisioned<Result>(
         _ message: Wendy_Agent_Services_V2_IsProvisionedRequest,
@@ -1323,9 +1322,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func unprovision<Result>(
         _ message: Wendy_Agent_Services_V2_UnprovisionRequest,
@@ -1357,9 +1356,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func revokeACMECertificate<Result>(
         _ message: Wendy_Agent_Services_V2_RevokeACMECertificateRequest,
@@ -1390,9 +1389,9 @@ extension Wendy_Agent_Services_V2_WendyProvisioningService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func checkACMERevocation<Result>(
         _ message: Wendy_Agent_Services_V2_RevokeACMECertificateRequest,

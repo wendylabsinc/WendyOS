@@ -16,7 +16,9 @@ func TestLadderRaceKeepsPrimaryCertificateRejection(t *testing.T) {
 		for _, entryPoint := range []string{"ladder", "connect address"} {
 			t.Run(backupOutcome+"/"+entryPoint, func(t *testing.T) {
 				storedCerts := []config.CertificateInfo{{OrganizationID: 7}}
-				setTempConfig(t, &config.Config{Auth: []config.AuthConfig{{Certificates: storedCerts}}})
+				cfg := &config.Config{Auth: []config.AuthConfig{{Certificates: storedCerts}}}
+				cfg.SetDevicePin("pi.local", 7, "cloud.test:443", "42", "")
+				setTempConfig(t, cfg)
 				setPinCache(t)
 				budget := 3 * time.Second
 				if backupOutcome == "deadline" {
@@ -53,7 +55,7 @@ func TestLadderRaceKeepsPrimaryCertificateRejection(t *testing.T) {
 					t.Error("certificate rejection or cancellation must not offer plaintext")
 					return grpcclient.NewFromConn(nil), nil
 				}
-				target := dialTarget{Addr: "192.0.2.1:50051", Candidates: []string{"192.0.2.1:50051", "[fd00::1]:50051"}}
+				target := dialTarget{Expected: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, Addr: "192.0.2.1:50051", Candidates: []string{"192.0.2.1:50051", "[fd00::1]:50051"}}
 				var conn *grpcclient.AgentConnection
 				var mtlsErr, err error
 				if entryPoint == "ladder" {
@@ -87,7 +89,7 @@ func TestDialAddrDoesNotRetryCertificatesAfterTCPFailure(t *testing.T) {
 	setTempConfig(t, &config.Config{})
 	setPinCache(t)
 	addr := deadAgentAddr(t)
-	walk := &mtlsWalk{target: dialTarget{Addr: addr}}
+	walk := &mtlsWalk{target: dialTarget{Addr: addr, Expected: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}}}
 	for i := 0; i < 7; i++ {
 		walk.allCerts = append(walk.allCerts, selfSignedCLICert(t, i+1))
 		walk.probeOrder = append(walk.probeOrder, i)

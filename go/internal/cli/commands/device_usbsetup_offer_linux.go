@@ -48,7 +48,7 @@ func ipv4Configured(addrs []net.Addr) bool {
 	return false
 }
 
-// detectUnconfiguredUSBGadget returns the name of a single USB-C gadget
+// detectUnconfiguredUSBGadget returns the name of a single USB gadget
 // interface that is present but has no IPv4 address (so the host link still
 // needs configuring), or "" when there is nothing to do. It is read-only and
 // needs no privileges.
@@ -101,7 +101,7 @@ var usbSetupProfileExists = func(iface string) bool {
 	return false
 }
 
-// maybeOfferUSBSetup detects an unconfigured USB-C Wendy gadget link and, with
+// maybeOfferUSBSetup detects an unconfigured Wendy USB gadget link and, with
 // the user's consent, configures it by re-executing the hidden "__usb-setup"
 // subcommand under sudo. Without a terminal to ask on (or with --json) it only
 // prints a notice saying how to set the link up. It is best-effort: any
@@ -119,8 +119,8 @@ func maybeOfferUSBSetup(ctx context.Context) error {
 		return nil
 	}
 
-	fmt.Printf("Found a USB-C Wendy device whose host link isn't configured (%s).\n", iface)
-	confirmed, err := tui.Confirm("Configure the USB-C link to this Wendy device now?")
+	fmt.Printf("Found a Wendy USB device whose host link isn't configured (%s).\n", iface)
+	confirmed, err := tui.Confirm("Configure the USB link to this Wendy device now?")
 	if err != nil {
 		if !errors.Is(err, tui.ErrCancelled) {
 			fmt.Printf("Skipping USB setup: %v\n", err)

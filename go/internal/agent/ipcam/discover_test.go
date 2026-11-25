@@ -277,6 +277,12 @@ func TestListLocalIPv4sSkipsLoopback(t *testing.T) {
 	}
 }
 
+// withLogin makes d report a stored login for every camera, the state of a
+// camera the user has paired.
+func withLogin(d *Discoverer) {
+	d.Credentials = func(string) (Credential, bool) { return Credential{Username: "admin"}, true }
+}
+
 // A camera holding a lease from an earlier session answers no probe, so liveness
 // has to be checked directly or it would sit offline forever.
 func TestOnceRefreshesLivenessOfKnownCamera(t *testing.T) {
@@ -284,7 +290,7 @@ func TestOnceRefreshesLivenessOfKnownCamera(t *testing.T) {
 	if err := reg.Load(); err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	cam, err := reg.Upsert(Camera{MAC: "ec:71:db:2a:ae:7e", Address: "10.98.0.50"})
+	cam, err := reg.Upsert(Camera{MAC: "ec:71:db:2a:ae:7e", Address: "10.98.0.50", Link: "eth1", DHCPServed: true})
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -329,6 +335,7 @@ func TestOnceMarksUnreachableCameraOffline(t *testing.T) {
 	}
 
 	d := NewDiscoverer(reg, zap.NewNop())
+	withLogin(d)
 	d.probe = func(ctx context.Context) ([][]byte, error) { return nil, nil }
 	d.arpTable = func() (string, error) { return "", nil }
 	d.reachable = func(string) bool { return false }
@@ -341,11 +348,108 @@ func TestOnceMarksUnreachableCameraOffline(t *testing.T) {
 	}
 }
 
+// A camera found on a shared network belongs to someone else until a login is
+// stored for it, so the agent does not dial it between probes. Whether it
+// answered this round's probe is all its online flag reports.
+func TestOnceDoesNotDialUnpairedCameras(t *testing.T) {
+	d, reg := newTestDiscoverer(t, [][]byte{[]byte(reolinkProbeMatch)}, procNetARP)
+	var dialed []string
+	d.reachable = func(address string) bool {
+		dialed = append(dialed, address)
+		return true
+	}
+	d.resolveStreams = nil
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	cams := reg.List()
+	if len(cams) != 1 || !cams[0].Online {
+		t.Fatalf("a camera that answered the probe should be online: %+v", cams)
+	}
+
+	d.probe = func(context.Context) ([][]byte, error) { return nil, nil }
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(dialed) != 0 {
+		t.Fatalf("dialed unpaired camera at %v", dialed)
+	}
+	if got, _ := reg.Get(cams[0].ID); got.Online {
+		t.Fatal("an unpaired camera that stopped answering is still online")
+	}
+
+	withLogin(d)
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(dialed) != 1 || dialed[0] != "10.98.0.50" {
+		t.Fatalf("dialed %v, want the paired camera's address", dialed)
+	}
+}
+
+// Without a login the camera is not asked for its stream paths: an ONVIF
+// request to a stranger's camera every round is not ours to send. The first
+// round after a login is stored asks.
+func TestOnceAsksForStreamPathsOnlyWithALogin(t *testing.T) {
+	d, reg := newTestDiscoverer(t, [][]byte{[]byte(reolinkProbeMatch)}, procNetARP)
+	d.reachable = func(string) bool { return false }
+	var asked int
+	d.resolveStreams = func(context.Context, Camera, Credential) (StreamPaths, error) {
+		asked++
+		return StreamPaths{Sub: "/s", Main: "/m"}, nil
+	}
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if asked != 0 {
+		t.Fatalf("resolver asked %d times for an unpaired camera", asked)
+	}
+	withLogin(d)
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if asked != 1 || reg.List()[0].StreamSub != "/s" {
+		t.Fatalf("after login: asked = %d, registry = %+v", asked, reg.List())
+	}
+}
+
+// Storing a login asks the camera for its stream paths straight away, so a
+// stream started right after `camera login` does not fall back to guessing.
+func TestLearnStreamPathsForPairedCamera(t *testing.T) {
+	d, reg := newTestDiscoverer(t, nil, "")
+	cam, err := reg.Upsert(Camera{MAC: "ec:71:db:2a:ae:7e", Address: "10.98.0.50",
+		ONVIFAddr: "http://10.98.0.50/onvif/device_service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked int
+	d.resolveStreams = func(_ context.Context, _ Camera, cred Credential) (StreamPaths, error) {
+		asked++
+		if cred.Username != "admin" {
+			t.Fatalf("resolver got credential %+v", cred)
+		}
+		return StreamPaths{Sub: "/s", Main: "/m"}, nil
+	}
+	if got := d.LearnStreamPaths(context.Background(), cam); got.StreamSub != "" || asked != 0 {
+		t.Fatalf("unpaired camera: learned %+v after %d asks", got, asked)
+	}
+	withLogin(d)
+	got := d.LearnStreamPaths(context.Background(), cam)
+	if asked != 1 || got.StreamSub != "/s" || got.StreamMain != "/m" {
+		t.Fatalf("paired camera: learned %+v after %d asks", got, asked)
+	}
+	if stored, _ := reg.Get(cam.ID); stored.StreamSub != "/s" {
+		t.Fatalf("registry not updated: %+v", stored)
+	}
+}
+
 // A newly discovered camera is asked, over ONVIF, what its streams are called,
 // and the answer lands in the registry so StreamURL stops guessing Reolink
 // paths. Once the paths are known the camera is not asked again.
 func TestOnceLearnsStreamPathsOnceAndKeepsThem(t *testing.T) {
 	d, reg := newTestDiscoverer(t, [][]byte{[]byte(reolinkProbeMatch)}, procNetARP)
+	withLogin(d)
+	d.reachable = func(string) bool { return false }
 	var asked int
 	d.resolveStreams = func(ctx context.Context, cam Camera, cred Credential) (StreamPaths, error) {
 		asked++
@@ -376,6 +480,8 @@ func TestOnceLearnsStreamPathsOnceAndKeepsThem(t *testing.T) {
 // the default paths as before, and is asked again next round.
 func TestOnceKeepsCameraWhenStreamPathsAreUnknown(t *testing.T) {
 	d, reg := newTestDiscoverer(t, [][]byte{[]byte(reolinkProbeMatch)}, procNetARP)
+	withLogin(d)
+	d.reachable = func(string) bool { return false }
 	var asked int
 	d.resolveStreams = func(context.Context, Camera, Credential) (StreamPaths, error) {
 		asked++
@@ -407,6 +513,7 @@ func TestOnceHandsTheCamerasLoginToTheResolver(t *testing.T) {
 		}
 		return Credential{Username: "admin", Password: "hunter2"}, true
 	}
+	d.reachable = func(string) bool { return false }
 	var seen Credential
 	d.resolveStreams = func(_ context.Context, _ Camera, cred Credential) (StreamPaths, error) {
 		seen = cred

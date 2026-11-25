@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -263,5 +266,49 @@ func TestCLIUpdateInitializesTelemetryOnlyForExplicitExecution(t *testing.T) {
 	cmd.SetErr(io.Discard)
 	if err := performCLIUpdateWithPlan(cmd, d, p, "2026.10.05-134249"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// wendy update recognizes no updater for a CLI the Wendy plugin's launcher
+// installed: it reports the plugin's advice and never runs an installer.
+// Any other installation keeps what detection found.
+func TestCLIUpdatePluginManagedCLIGetsPluginAdvice(t *testing.T) {
+	home := isolateAIToolHome(t)
+	managed := filepath.Join(home, ".wendy", "cli", "2026.09.16-025644", "wendy")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldExe := cliExecutable
+	t.Cleanup(func() { cliExecutable = oldExe })
+	direct := func(context.Context) (cliupdate.Plan, error) {
+		return cliupdate.Plan{Method: "direct", Channel: "stable", Executable: managed, Guidance: "not owned by a recognized updater"}, nil
+	}
+
+	cliExecutable = func() (string, error) { return managed, nil }
+	d, events := cliUpdaterTestDeps(t)
+	d.detect = pluginAwareDetect(direct)
+	out, _, err := executeCLIUpdater(t, d, "--check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advice := cliupdate.PluginAdvice(runtime.GOOS)
+	if !strings.Contains(out, advice) || strings.Contains(out, "not owned") {
+		t.Errorf("--check output lacks the plugin advice:\n%s", out)
+	}
+	if _, _, err := executeCLIUpdater(t, d, "--yes"); err == nil || err.Error() != advice {
+		t.Errorf("update error = %v, want the plugin advice", err)
+	}
+	for _, event := range *events {
+		if strings.HasPrefix(event, "apply") || event == "cli_update_started" {
+			t.Errorf("a plugin-managed CLI ran the updater: %v", *events)
+		}
+	}
+
+	cliExecutable = func() (string, error) { return filepath.Join(home, "homebrew", "bin", "wendy"), nil }
+	if p, _ := pluginAwareDetect(direct)(context.Background()); p.Method != "direct" || p.Guidance != "not owned by a recognized updater" {
+		t.Errorf("a CLI the plugin did not install got %+v", p)
 	}
 }

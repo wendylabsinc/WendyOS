@@ -34,7 +34,8 @@ func TestEnrollLocalPickerDeviceUsesHighlightedDevice(t *testing.T) {
 			deviceFlag, jsonOutput = "another-device.local", false
 			t.Cleanup(func() { deviceFlag, jsonOutput = oldDevice, oldJSON })
 
-			ctx, cancel := context.WithCancel(context.Background())
+			type selectionKey struct{}
+			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), selectionKey{}, "selected-device"))
 			defer cancel()
 			item := &tui.PickerItem{Name: "Highlighted device", Address: "192.0.2.10"}
 			auth := &config.AuthConfig{
@@ -55,14 +56,15 @@ func TestEnrollLocalPickerDeviceUsesHighlightedDevice(t *testing.T) {
 				return &SelectedDevice{Agent: conn}, nil
 			}
 			promptPickerEnrollmentWifiFn = func(gotCtx context.Context, gotConn *grpcclient.AgentConnection) error {
-				if gotCtx != ctx || gotConn != conn || closed {
-					t.Fatal("WiFi prompt did not receive the live highlighted connection")
+				target, _ := gotCtx.Value(wifiCredentialTargetKey{}).(*SelectedDevice)
+				if gotCtx.Value(selectionKey{}) != "selected-device" || gotCtx.Err() != ctx.Err() || target == nil || target.Agent != conn || gotConn != conn || closed {
+					t.Fatal("WiFi prompt did not receive the live highlighted connection and its selected target")
 				}
 				calls = append(calls, "wifi")
 				return nil
 			}
 			runPickerEnrollmentFn = func(gotCtx context.Context, gotConn *grpcclient.AgentConnection, gotAuth *config.AuthConfig, name string, orgOverride int32, _ ...string) error {
-				if gotCtx != ctx || gotConn != conn || gotAuth != auth || name != "" || orgOverride != 0 || closed {
+				if gotCtx.Value(selectionKey{}) != "selected-device" || gotCtx.Err() != ctx.Err() || gotCtx.Value(enrollmentBindingRecorderKey{}) == nil || gotConn != conn || gotAuth != auth || name != "" || orgOverride != 0 || closed {
 					t.Fatal("enrollment did not receive the live highlighted connection and selected cloud session with normal name/org prompts")
 				}
 				calls = append(calls, "enroll")

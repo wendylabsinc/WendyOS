@@ -30,6 +30,7 @@ test("auth proxy preserves exact endpoint and method permissions", async (t) => 
     [`${auth}/realms/system/.well-known/openid-configuration`, "GET"],
     [`${auth}/realms/system/.well-known/jwks.json`, "GET"],
     ["https://identity.dev.pki.wendy.sh/v1/identity/certificate", "POST"],
+    ["https://est.dev.pki.wendy.sh/.well-known/est/12345678-1234-1234-1234-123456789abc/cacerts?chain_algorithm=ECDSA_P256&full_chain=true", "GET"],
     ["https://api.dev.wendy.sh/.well-known/wendy-cloud-grants/jwks.json", "GET"],
   ]) {
     const before = upstream.mock.callCount();

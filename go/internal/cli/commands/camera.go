@@ -41,6 +41,7 @@ func newCameraCmd() *cobra.Command {
 		// plus depth aligned to it, with a declared-requirement refusal. See
 		// camera_frames.go.
 		newCameraFramesCmd(),
+		newCameraMetadataCmd(),
 		newCameraLoginCmd(),
 		newCameraForgetCmd(),
 		newCameraTestCmd(),
@@ -94,7 +95,7 @@ func cameraServicePreflight(ctx context.Context, conn *grpcclient.AgentConnectio
 }
 
 func newCameraListCmd() *cobra.Command {
-	var refresh bool
+	var refresh, all bool
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List cameras",
@@ -121,6 +122,8 @@ func newCameraListCmd() *cobra.Command {
 				// --refresh runs a discovery round on the device before listing, so a
 				// camera that just came online shows up without waiting for the
 				// agent's own periodic discovery loop.
+				// Its listing always includes unpaired cameras; they are filtered
+				// here, as for ListVideoDevices below.
 				resp, err := conn.VideoService.RefreshCameras(ctx, &agentpb.RefreshCamerasRequest{})
 				if err != nil {
 					if macErr := macOSBetaUnsupportedFeatureError(ctx, conn.AgentService, err, "Camera listing"); macErr != nil {
@@ -130,7 +133,10 @@ func newCameraListCmd() *cobra.Command {
 				}
 				devices = resp.GetDevices()
 			} else {
-				resp, err := conn.VideoService.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{})
+				// Unpaired cameras are always fetched and filtered here, so the
+				// listing can say how many it hid, and an older agent that lists
+				// them regardless is shown the same way.
+				resp, err := conn.VideoService.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 				if err != nil {
 					if macErr := macOSBetaUnsupportedFeatureError(ctx, conn.AgentService, err, "Camera listing"); macErr != nil {
 						return fmt.Errorf("listing cameras: %w", macErr)
@@ -140,28 +146,41 @@ func newCameraListCmd() *cobra.Command {
 				devices = resp.GetDevices()
 			}
 
-			return renderCameraList(devices)
+			return renderCameraList(cmd.OutOrStdout(), devices, all, cameraShareRows(ctx, conn))
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "Run a discovery round on the device before listing")
+	cmd.Flags().BoolVar(&all, "all", false, "Also list network cameras that have no login yet")
 	return cmd
 }
 
 // renderCameraList prints a camera listing as JSON or a table. Factored out of
 // newCameraListCmd's RunE so `camera list` and `camera list --refresh` render
 // through identical code no matter which RPC produced the devices.
-func renderCameraList(devices []*agentpb.VideoDevice) error {
+//
+// Network cameras without a login are left out unless all is set: discovery
+// finds every ONVIF camera on the networks the device is on, and on a shared
+// LAN most belong to someone else. The table says how many it hid.
+//
+// shares maps a device path to the agent's camera-sharing properties; nil, or
+// rows without the share keys (an older agent), leave every status as it was.
+func renderCameraList(w io.Writer, devices []*agentpb.VideoDevice, all bool, shares map[string]map[string]string) error {
+	hidden := 0
+	if !all {
+		devices, hidden = withoutUnpairedCameras(devices)
+	}
 	if jsonOutput {
 		data, err := json.MarshalIndent(devices, "", "  ")
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(data))
+		fmt.Fprintln(w, string(data))
 		return nil
 	}
 
 	if len(devices) == 0 {
-		fmt.Println("No cameras found.")
+		fmt.Fprintln(w, "No cameras found.")
+		printHiddenCamerasHint(w, hidden)
 		return nil
 	}
 
@@ -173,11 +192,61 @@ func renderCameraList(devices []*agentpb.VideoDevice) error {
 			transportLabel(d.GetTransport()),
 			d.GetName(),
 			cameraWhere(d),
-			cameraStatus(d),
+			cameraStatus(d, shares),
 		})
 	}
-	fmt.Print(tui.RenderTable(headers, rows))
+	fmt.Fprint(w, tui.RenderTable(headers, rows))
+	printHiddenCamerasHint(w, hidden)
 	return nil
+}
+
+// cameraShareRows asks the agent for its camera capability rows and returns
+// their properties by device path. Sharing is extra detail, so a failed call
+// or an agent without the call returns nil and the list shows today's status.
+// JSON output carries no status column, so it makes no call.
+func cameraShareRows(ctx context.Context, conn *grpcclient.AgentConnection) map[string]map[string]string {
+	if jsonOutput {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	category := "camera"
+	resp, err := conn.AgentService.ListHardwareCapabilities(ctx, &agentpb.ListHardwareCapabilitiesRequest{CategoryFilter: &category})
+	if err != nil {
+		return nil
+	}
+	rows := make(map[string]map[string]string)
+	for _, c := range resp.GetCapabilities() {
+		if c.GetDevicePath() != "" {
+			rows[c.GetDevicePath()] = c.GetProperties()
+		}
+	}
+	return rows
+}
+
+// withoutUnpairedCameras drops network cameras that have no stored login and
+// reports how many it dropped.
+func withoutUnpairedCameras(devices []*agentpb.VideoDevice) ([]*agentpb.VideoDevice, int) {
+	kept := make([]*agentpb.VideoDevice, 0, len(devices))
+	for _, d := range devices {
+		if d.GetTransport() == agentpb.VideoTransport_VIDEO_TRANSPORT_IP && !d.GetHasCredentials() {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	return kept, len(devices) - len(kept)
+}
+
+func printHiddenCamerasHint(w io.Writer, hidden int) {
+	switch {
+	case hidden == 1:
+		fmt.Fprintln(w, "1 network camera without a login is hidden.")
+	case hidden > 1:
+		fmt.Fprintf(w, "%d network cameras without a login are hidden.\n", hidden)
+	default:
+		return
+	}
+	fmt.Fprintln(w, "Pair one with `wendy device pair`, or list them with `wendy device camera list --all`.")
 }
 
 // transportLabel returns a short label for the camera transport column.
@@ -537,20 +606,23 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 }
 
 // cameraRejoinDelay is how long the viewer waits before rejoining a camera
-// whose producer an episode capture restarted. It is a pause, not a backoff:
+// whose producer the agent restarted (for an episode capture, or for an app
+// that started sharing the camera). It is a pause, not a backoff:
 // the replacement producer is started by the agent as part of the same
 // takeover, so the camera is normally back within one pipeline start. The wait
 // only keeps the client from arriving before the new hub exists.
 const cameraRejoinDelay = 500 * time.Millisecond
 
 // cameraRejoinAttempts bounds the rejoins one `camera view` will make. A
-// takeover is a rare event driven by a campaign trigger; a stream that keeps
-// being restarted is a device busy recording, and saying so beats reconnecting
+// takeover is a rare event (a campaign trigger, or an app starting to share
+// the camera); a stream that keeps being restarted means something on the
+// device keeps taking the camera over, and saying so beats reconnecting
 // forever in a loop the operator has to notice and break.
 const cameraRejoinAttempts = 5
 
 // streamCameraRejoiningRestarts plays a camera stream, rejoining when the
-// agent ends it because an episode capture restarted the producer.
+// agent ends it because it restarted the producer: an episode capture took the
+// camera over, or an app started sharing it. The agent's message names which.
 //
 // The agent's capture policy takes a camera over only from viewers that
 // asserted no stream parameters, and `wendy camera view` with no --width,
@@ -576,10 +648,11 @@ func streamCameraRejoiningRestarts(ctx context.Context, open func() (videoStream
 			return ctx.Err()
 		}
 		if attempt+1 >= cameraRejoinAttempts {
-			return fmt.Errorf("camera producer was restarted by episode capture %d times; the device is busy recording: %w",
+			return fmt.Errorf("camera producer was restarted %d times in a row; something on the device keeps taking the camera over "+
+				"(a recording, or an app starting to share it), so try again later: %w",
 				cameraRejoinAttempts, err)
 		}
-		cliLogln("Camera producer restarted by an episode capture; rejoining the new stream...")
+		cliLogln("The agent restarted the camera producer; rejoining the new stream...")
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

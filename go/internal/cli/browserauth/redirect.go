@@ -186,7 +186,7 @@ func (s *Session) CompleteRedirect(ctx context.Context, callback RedirectCallbac
 		return Profile{}, err
 	}
 	s.meta, s.key, s.privatePEM = attempt.meta, attempt.key, attempt.privatePEM
-	s.tokens, s.profile, s.certificate = attempt.tokens, attempt.profile, attempt.certificate
+	s.tokens, s.profile, s.certificate, s.liteCertificate = attempt.tokens, attempt.profile, attempt.certificate, attempt.liteCertificate
 	s.state, s.verifier, s.redirect, s.started = "", "", "", time.Time{}
 	return profile, nil
 }

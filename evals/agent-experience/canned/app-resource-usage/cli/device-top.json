@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "top"
+  ],
+  "stdout": "{\"host\": {\"containerStorage\": {\"mountpoint\": \"/data\", \"usedBytes\": 107327488, \"totalBytes\": 9990930432}, \"cpuPercent\": 19.047619047619047, \"cpuCount\": 4, \"memUsedBytes\": 432193536, \"memTotalBytes\": 4094455808}, \"containers\": [{\"name\": \"sensor-dashboard\", \"state\": \"running\", \"cpuPercent\": 0, \"memBytes\": 0}]}",
+  "stderr": "",
+  "exit_code": 0
+}

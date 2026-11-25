@@ -89,11 +89,15 @@ func defaults() dependencies {
 	}
 }
 
+// maxOutput must hold one formula's brew info JSON: about 5 KB plus 1 KB per
+// installed keg, and kegs pile up when Homebrew's cleanup is turned off.
+const maxOutput = 4 << 20
+
 type boundedOutput struct{ bytes.Buffer }
 
 func (b *boundedOutput) Write(p []byte) (int, error) {
 	n := len(p)
-	if remaining := 64*1024 - b.Len(); remaining > 0 {
+	if remaining := maxOutput - b.Len(); remaining > 0 {
 		if len(p) > remaining {
 			p = p[:remaining]
 		}
@@ -134,7 +138,10 @@ func detect(ctx context.Context, d dependencies) (Plan, error) {
 				p.Guidance = "Restore the Homebrew installation that owns this executable, then run wendy update."
 				return p, nil
 			}
-			info, infoErr := d.output(ctx, brew, "info", "--json=v2", "--installed", parts[0])
+			// A bare name reports the tap the installed keg came from. --installed
+			// ignores the name and lists every installed formula, and a
+			// tap-qualified name always reports the tap it names.
+			info, infoErr := d.output(ctx, brew, "info", "--json=v2", parts[0])
 			var metadata struct {
 				Formulae []struct{ Name, Tap string } `json:"formulae"`
 			}

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -22,13 +24,45 @@ func addOSCacheCmd(parent *cobra.Command) {
 	parent.AddCommand(cmd)
 }
 
-func newOSCacheListCmd() *cobra.Command {
-	type osCacheEntry struct {
-		Name      string `json:"name"`
-		SizeBytes int64  `json:"sizeBytes"`
-		Size      string `json:"size"`
-	}
+type osCacheEntry struct {
+	Name      string `json:"name"`
+	SizeBytes int64  `json:"sizeBytes"`
+	Size      string `json:"size"`
+}
 
+// listOSCacheEntries lists cached images and extracted Jetson flashpacks, the
+// latter sized as the sum of their files. Flashpack checksum stamps are
+// bookkeeping, not downloads, so they are left out.
+func listOSCacheEntries(dir string) ([]osCacheEntry, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var items []osCacheEntry
+	for _, entry := range entries {
+		name := entry.Name()
+		var size int64
+		switch {
+		case entry.IsDir() && strings.HasSuffix(name, ".flashpack"):
+			size, err = entrySize(filepath.Join(dir, name))
+			if err != nil {
+				return nil, fmt.Errorf("sizing cached flashpack %s: %w", name, err)
+			}
+		case entry.IsDir(), strings.HasSuffix(name, ".flashpack.sha256"):
+			continue
+		default:
+			info, err := entry.Info()
+			if err != nil {
+				return nil, fmt.Errorf("reading OS cache entry info for %s: %w", name, err)
+			}
+			size = info.Size()
+		}
+		items = append(items, osCacheEntry{Name: name, SizeBytes: size, Size: formatSize(size)})
+	}
+	return items, nil
+}
+
+func newOSCacheListCmd() *cobra.Command {
 	printJSON := func(items []osCacheEntry) error {
 		if items == nil {
 			items = []osCacheEntry{}
@@ -54,7 +88,7 @@ func newOSCacheListCmd() *cobra.Command {
 				return err
 			}
 
-			entries, err := os.ReadDir(dir)
+			items, err := listOSCacheEntries(dir)
 			if err != nil {
 				if os.IsNotExist(err) {
 					if explicitJSON {
@@ -64,23 +98,6 @@ func newOSCacheListCmd() *cobra.Command {
 					return nil
 				}
 				return fmt.Errorf("reading cache: %w", err)
-			}
-
-			var items []osCacheEntry
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				info, err := entry.Info()
-				if err != nil {
-					return fmt.Errorf("reading OS cache entry info for %s: %w", entry.Name(), err)
-				}
-				size := info.Size()
-				items = append(items, osCacheEntry{
-					Name:      entry.Name(),
-					SizeBytes: size,
-					Size:      formatSize(size),
-				})
 			}
 
 			if explicitJSON {

@@ -3,6 +3,7 @@ package grpcclient
 import (
 	"context"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"net"
 	"net/http"
 	"net/url"
@@ -195,7 +196,7 @@ func TestTLSConnectionReportsActualTCPFailure(t *testing.T) {
 	stubLinkLocalDial(t, func(context.Context, string) (net.Conn, error) { return nil, wantErr })
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	conn, err := ConnectWithTLSExpecting(ctx, "192.0.2.1:50052", testCertInfo(t), nil, nil)
+	conn, err := ConnectWithTLSExpecting(ctx, "192.0.2.1:50052", testCertInfo(t), nil, &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +230,7 @@ func TestTLSConnectionDoesNotReportHandshakeFailureAsTCPFailure(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	conn, err := ConnectWithTLSExpecting(ctx, "192.0.2.1:50052", testCertInfo(t), nil, nil)
+	conn, err := ConnectWithTLSExpecting(ctx, "192.0.2.1:50052", testCertInfo(t), nil, &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestTLSConnectionExtraDialOptionsTakePrecedence(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	conn, err := ConnectWithTLSExpecting(ctx, "192.0.2.1:50052", testCertInfo(t), nil, nil,
+	conn, err := ConnectWithTLSExpecting(ctx, "192.0.2.1:50052", testCertInfo(t), nil, &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"},
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return nil, net.ErrClosed }))
 	if err != nil {
 		t.Fatal(err)

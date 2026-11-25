@@ -1,7 +1,7 @@
 > **Note:** `wendy device telemetry-stream` is not listed in
 > `wendy device --help`, but it remains fully functional.
 
-Streams all OTel data as a custom JSONL format. This is used by the [VSCode extension](../../../../vscode/) to render the OTel traces, metrics and logs using only a single API call.
+Streams all OTel data as a custom JSONL format. This is used by the [VSCode extension](/docs/advanced/vscode) to render the OTel traces, metrics and logs using only a single API call.
 
 ## Planned: runtime telemetry for embedded apps (not yet shipped)
 

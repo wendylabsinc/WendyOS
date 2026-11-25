@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/meshsession"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"go.uber.org/zap"
 )
@@ -59,10 +60,8 @@ func NewProxy(logger *zap.Logger, dialer PeerDialer, metrics ConnMetrics, vips *
 		metrics: metrics,
 		vips:    vips,
 		origDst: originalDst,
-		// A cold end-to-end QUIC handshake can cross multiple contended BLE
-		// hops before the app port ACK returns. Keep setup bounded while
-		// allowing those high-cost but healthy routes to settle.
-		dialTimeout: 60 * time.Second,
+		// Cover the full end-to-end TLS and app-port setup budget over BLE.
+		dialTimeout: meshsession.TLSAppSessionSetupTimeout,
 	}
 }
 

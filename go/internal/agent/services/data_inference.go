@@ -23,8 +23,6 @@ type inferenceVideo interface {
 	SubscribeSensor(context.Context, string) (sensorSubscription, error)
 }
 
-const campaignAppPrefix = "sh.wendy.campaign."
-
 type campaignInferenceManager struct {
 	service *DataService
 	factory inference.Factory
@@ -32,6 +30,11 @@ type campaignInferenceManager struct {
 	wake    chan struct{}
 	mu      sync.Mutex
 	jobs    map[string]*campaignInferenceJob
+	ctx     context.Context
+	// reconcileMu runs one pass at a time: a pass that read the plans before
+	// a removal must not restart a job that a later pass, run for that
+	// removal, has just retired.
+	reconcileMu sync.Mutex
 }
 
 type campaignInferenceJob struct {
@@ -44,6 +47,12 @@ type campaignInferenceJob struct {
 	status         data.InferenceStatus
 	generations    map[string]uint64
 	nextGeneration atomic.Uint64
+	// pace outlives a worker, so a restarted one is not reported as too slow
+	// a second time.
+	pace inferencePace
+	// scoringSince is when the running model process started, which is where
+	// its count of scored frames begins.
+	scoringSince time.Time
 }
 
 // StartCampaignInference restores persisted inference plans and supervises their
@@ -51,7 +60,7 @@ type campaignInferenceJob struct {
 // camera subscriptions to exit before the video service is shut down.
 func (s *DataService) StartCampaignInference(ctx context.Context, factory inference.Factory, sender CampaignNotificationSender) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), jobs: map[string]*campaignInferenceJob{}}
+	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), ctx: ctx, jobs: map[string]*campaignInferenceJob{}}
 	s.inference = manager // Configured once, before registering the RPC server.
 	done := make(chan struct{})
 	go func() {
@@ -93,6 +102,8 @@ func (m *campaignInferenceManager) stopAll() {
 }
 
 func (m *campaignInferenceManager) reconcile(ctx context.Context) {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
 	campaigns, err := m.service.manager.Campaigns()
 	if err != nil {
 		m.service.manager.Warnf("reading inference campaigns: %v", err)
@@ -136,6 +147,22 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 	}
 }
 
+// reconcileNow runs one pass in the caller's goroutine; it returns once the
+// jobs it retired have stopped.
+func (m *campaignInferenceManager) reconcileNow() { m.reconcile(m.ctx) }
+
+// wakeNow asks the loop for a pass without waiting for it.
+func (m *campaignInferenceManager) wakeNow() {
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
+}
+
+// campaignJobKey is the jobs key of a campaign's inference. Lookups from
+// outside reconcile go through it, so a change of key reaches all of them.
+func campaignJobKey(name string) string { return name }
+
 // Keep retired jobs visible until their process and camera subscriptions exit.
 // Persisting enabled:false only requests shutdown; it does not complete it.
 func (m *campaignInferenceManager) inferenceActive(name string) bool {
@@ -168,6 +195,10 @@ func (m *campaignInferenceManager) snapshot(name, revision string) *data.Inferen
 		snapshot.Sources[source] = state
 	}
 	snapshot.Accelerator = acceleratorSnapshot(job.status.Accelerator, time.Now())
+	if job.status.Throughput != nil {
+		throughput := *job.status.Throughput
+		snapshot.Throughput = &throughput
+	}
 	return &snapshot
 }
 
@@ -205,7 +236,7 @@ func (j *campaignInferenceJob) supervise(ctx context.Context) {
 		j.setState("loading", nil)
 		// A new process reports its own accelerator; the last one's is stale.
 		j.mu.Lock()
-		j.status.Accelerator, j.status.Stats = nil, nil
+		j.status.Accelerator, j.status.Stats, j.status.Throughput = nil, nil, nil
 		j.mu.Unlock()
 		err := j.run(ctx)
 		if ctx.Err() != nil {
@@ -233,6 +264,9 @@ func (j *campaignInferenceJob) supervise(ctx context.Context) {
 // Behind a var for tests.
 var inferenceRetryDelay = 5 * time.Second
 
+// inferenceNow is when a prediction is observed. Behind a var for tests.
+var inferenceNow = time.Now
+
 // inferenceStartError is a worker that did not start, as opposed to one that
 // started and then failed.
 type inferenceStartError struct{ error }
@@ -254,6 +288,9 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 	if err != nil {
 		return inferenceStartError{err}
 	}
+	j.mu.Lock()
+	j.scoringSince = time.Now()
+	j.mu.Unlock()
 	sources := map[string]inferenceSource{}
 	defer func() {
 		cancel()
@@ -365,16 +402,24 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			j.sourceState(result.SourceID, "detecting")
 			attributes := map[string]any{"campaign": j.campaign.Name, "source_id": result.SourceID, "model_version": j.campaign.Inference.Revision, "detections": detections,
 				"input_reference_status": "encoded_stream_decode_does_not_preserve_sample_ids", "runtime_results_dropped": result.DroppedResults}
-			addPicture(attributes, detections, result.Width, result.Height)
-			// What scored the frame: FP16 TensorRT scores differ slightly from
-			// FP32 CPU scores, so a dataset has to be able to tell them apart.
+			if j.campaign.Inference.Task == "image-classification" {
+				j.sourceState(result.SourceID, "classifying")
+				classes := make([]map[string]any, 0, len(detections))
+				for _, d := range detections {
+					classes = append(classes, map[string]any{"label": d.Label, "score": d.Score})
+				}
+				attributes["detections"] = classes
+				attributes["task"] = "image-classification"
+			} else {
+				addPicture(attributes, detections, result.Width, result.Height)
+			}
 			j.predictionProvenance(attributes, result)
 			record := data.ApplicationRecord{Version: 1, Type: "prediction", Model: j.campaign.Inference.Model, Attributes: attributes}
-			if _, err := j.owner.service.manager.RecordCampaignApplication(campaignAppPrefix+j.campaign.Name, record); err != nil {
+			if _, err := j.owner.service.manager.RecordCampaignApplication(data.CampaignAppID(j.campaign.Name), record); err != nil {
 				j.owner.service.manager.Warnf("recording campaign prediction: %v", err)
 			}
 			state := presence[result.SourceID]
-			if state == nil || !state.observe(len(detections) > 0, time.Now(), j.campaign.Inference) {
+			if state == nil || !state.observe(len(detections) > 0, inferenceNow(), j.campaign.Inference, scoringRound(len(sources), result.InferMs)) {
 				continue
 			}
 			record.Type, record.Name = "event", j.campaign.Inference.Event
@@ -419,7 +464,7 @@ func (j *campaignInferenceJob) stream(ctx context.Context, session inference.Ses
 				if err != nil {
 					break
 				}
-				if err := j.owner.service.manager.RecordModelInput(data.ModelInput{AppID: campaignAppPrefix + j.campaign.Name, Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}); err != nil {
+				if err := j.owner.service.manager.RecordModelInput(data.ModelInput{AppID: data.CampaignAppID(j.campaign.Name), Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}); err != nil {
 					j.owner.service.manager.Warnf("recording campaign model input: %v", err)
 				}
 			}
@@ -472,8 +517,21 @@ type inferencePresence struct {
 	emptySince, lastObserved, lastSent time.Time
 }
 
-func (p *inferencePresence) observe(detected bool, now time.Time, config *data.CampaignInference) bool {
-	maxGap := max(5*time.Second, time.Duration(2/config.Rate*float64(time.Second)))
+// scoringRound is how long the model takes to come back to a camera: the time
+// it took to score one frame, for each of the cameras it scores in turn.
+func scoringRound(cameras int, inferMs float64) time.Duration {
+	return time.Duration(float64(cameras) * inferMs * float64(time.Millisecond))
+}
+
+// observe takes one scored frame of a camera and reports whether it raises
+// the event. round is the scoringRound the frame was scored in.
+func (p *inferencePresence) observe(detected bool, now time.Time, config *data.CampaignInference, round time.Duration) bool {
+	// Frames further apart than this are the two sides of an outage, which is
+	// not empty time. A model slower than its rate scores frames that far
+	// apart all the time, so the allowance follows the model, at twice its
+	// round. Before, such a model never saw clear_after of empty frames, and
+	// raised its event once and never again.
+	maxGap := max(5*time.Second, time.Duration(2/config.Rate*float64(time.Second)), 2*round)
 	if now.Sub(p.lastObserved) > maxGap {
 		p.emptySince = time.Time{}
 	}
@@ -573,6 +631,14 @@ func (j *campaignInferenceJob) notifications(ctx context.Context, queue <-chan D
 					}
 				}
 			}
+			if errors.As(err, new(cloudResponseError)) {
+				// Cloud's error text can contain notification content or recipient
+				// details. Keep the useful status code in campaign status and logs,
+				// after retry classification has consumed the original error.
+				// Errors raised on the device before the call say what to fix and
+				// are reported as they are.
+				err = status.Error(status.Code(err), "Cloud notification delivery failed")
+			}
 			j.notificationError(err)
 		}
 	}
@@ -595,6 +661,15 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 			}
 		}
 	}
+	// A disarmed campaign runs nothing, so its inference reports exactly that,
+	// once its worker has stopped, rather than "pending" for a start that is
+	// never coming.
+	if campaign.InferenceStatus != nil && campaign.State == data.CampaignStateDisarmed {
+		campaign.InferenceStatus = &data.InferenceStatus{State: data.CampaignStateDisarmed}
+		if s.inference != nil && s.inference.inferenceActive(campaignJobKey(campaign.Name)) {
+			campaign.InferenceStatus.State = "stopping"
+		}
+	}
 	return campaignMessage(campaign)
 }
 
@@ -605,7 +680,12 @@ func (s *DataService) triggerInference(ctx context.Context, campaign data.Campai
 	if err != nil || current.Revision != campaign.Revision || !current.Inference.IsEnabled() || ctx.Err() != nil {
 		return false, err
 	}
-	if _, err := s.manager.RecordCampaignApplication(campaignAppPrefix+campaign.Name, record); err != nil {
+	// A disarmed campaign's worker is being retired; what it saw last is not
+	// a detection anyone asked for any more.
+	if current.State != data.CampaignStateArmed {
+		return false, nil
+	}
+	if _, err := s.manager.RecordCampaignApplication(data.CampaignAppID(campaign.Name), record); err != nil {
 		return true, err
 	}
 	if _, active := s.manager.ActiveSession(campaign.Name); active {

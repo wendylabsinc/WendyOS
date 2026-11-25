@@ -62,14 +62,15 @@ func main() {
 		fmt.Println(compareRisk(base, head))
 		return
 	}
-	if len(os.Args) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: api-surface-snapshot [compare BASE.json HEAD.json]")
+	docsMode := len(os.Args) == 2 && os.Args[1] == "--docs"
+	if len(os.Args) != 1 && !docsMode {
+		fmt.Fprintln(os.Stderr, "usage: api-surface-snapshot [--docs | compare BASE.json HEAD.json]")
 		os.Exit(2)
 	}
 
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(snapshot(commands.NewRootCmd())); err != nil {
+	if err := encoder.Encode(snapshotForDocs(commands.NewRootCmd(), docsMode)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -228,10 +229,16 @@ func flagMap(flags []flagSurface) map[string]flagSurface {
 }
 
 func snapshot(root *cobra.Command) surface {
+	return snapshotForDocs(root, false)
+}
+
+// Docs include the user-facing VM workflow without exposing internal commands
+// or changing the default API-review snapshot.
+func snapshotForDocs(root *cobra.Command, docsMode bool) surface {
 	result := surface{}
 	var walk func(*cobra.Command)
 	walk = func(cmd *cobra.Command) {
-		if cmd.Hidden {
+		if cmd.Hidden && !(docsMode && cmd.CommandPath() == "wendy vm") {
 			return
 		}
 

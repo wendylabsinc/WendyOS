@@ -1,0 +1,12 @@
+{
+  "provenance_kind": "source_reported_device_formats",
+  "source_commit": "150d427b2a40b161a1847ccdfe9fbdac79cecb9a",
+  "source_file": "swift/WendyAgentCore/Tests/WendyAgentTests/CaptureFormatChoiceTests.swift",
+  "source_description": "The original regression test says these dimensions are as AVFoundation reports the TOPDON thermal camera. No raw inventory capture, timestamp, USB serial, pixel subtype or frame-rate record accompanied that source fixture.",
+  "vendor_id": "2bdf",
+  "product_id": "0102",
+  "dimensions": [[4, 12305], [4, 12621], [8, 12578], [16, 15505], [60, 3299], [256, 192], [256, 196], [256, 392], [512, 384], [512, 484], [520, 192], [644, 384]],
+  "expected_index": 8,
+  "expected_dimensions": [512, 384],
+  "physical_execution": "not_run"
+}

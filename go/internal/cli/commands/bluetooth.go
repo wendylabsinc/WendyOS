@@ -30,13 +30,15 @@ func newBluetoothCmd() *cobra.Command {
 		Use:     "bluetooth",
 		Aliases: []string{"bt"},
 		Short:   "Manage Bluetooth on the target device",
-		Hidden:  true,
+		Hidden:  false,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBluetoothInteractive(cmd)
 		},
 	}
 
 	cmd.AddCommand(
+		newBluetoothPowerCmd(),
+		newBluetoothModeCmd(),
 		newBluetoothListCmd(),
 		newBluetoothConnectCmd(),
 		newBluetoothDisconnectCmd(),
@@ -58,7 +60,7 @@ func runBluetoothInteractive(cmd *cobra.Command) error {
 
 	model := bttable.NewModel(nil).WithHandler(&btTUIHandler{ctx: ctx, agent: conn.AgentService})
 	p := tea.NewProgram(model)
-	if _, err := p.Run(); err != nil {
+	if _, err := tui.RunProgram(p); err != nil {
 		return fmt.Errorf("bluetooth TUI: %w", err)
 	}
 	return nil

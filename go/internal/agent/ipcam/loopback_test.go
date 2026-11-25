@@ -29,6 +29,7 @@ type loopbackHarness struct {
 	nodes        map[int]bool // nr -> exists
 	addNodeCalls []addNodeCall
 	addNodeErr   error
+	shareCalls   []addNodeCall
 	removeCalls  []int
 
 	// removeSignal, if set by a test, receives the removed nr each time
@@ -73,6 +74,16 @@ func (h *loopbackHarness) deps() loopbackDeps {
 				return h.addNodeErr
 			}
 			h.addNodeCalls = append(h.addNodeCalls, addNodeCall{nr: nr, label: label})
+			h.nodes[nr] = true
+			return nil
+		},
+		addShareNode: func(nr int, label string) error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.addNodeErr != nil {
+				return h.addNodeErr
+			}
+			h.shareCalls = append(h.shareCalls, addNodeCall{nr: nr, label: label})
 			h.nodes[nr] = true
 			return nil
 		},
@@ -185,6 +196,11 @@ func TestLoopback_EnsureNodesCreatesMissingAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert cam2: %v", err)
 	}
+	for _, cam := range []Camera{cam1, cam2} {
+		if err := l.creds.Set(cam.MAC, Credential{Username: "admin"}); err != nil {
+			t.Fatalf("store login: %v", err)
+		}
+	}
 
 	if err := l.EnsureNodes(context.Background()); err != nil {
 		t.Fatalf("EnsureNodes() #1 = %v", err)
@@ -206,6 +222,66 @@ func TestLoopback_EnsureNodesCreatesMissingAndIsIdempotent(t *testing.T) {
 	}
 	if calls := h.addNodeCallCount(); calls != 2 {
 		t.Fatalf("addNode called %d times total after a second EnsureNodes, want still 2 (idempotent)", calls)
+	}
+}
+
+// A camera without a stored login is someone else's camera on a shared network,
+// so no entitled container gets a node for it. A node an older agent created for
+// such a camera is removed, so it is not mounted into the next container either.
+func TestLoopback_EnsureNodesSkipsUnpairedCameras(t *testing.T) {
+	h := newLoopbackHarness()
+	h.controlExists = true
+	l, reg := newTestLoopback(t, h)
+
+	paired, err := reg.Upsert(Camera{MAC: "ec:71:db:2a:ae:7e", Address: "10.98.0.10"})
+	if err != nil {
+		t.Fatalf("upsert paired: %v", err)
+	}
+	if err := l.creds.Set(paired.MAC, Credential{Username: "admin"}); err != nil {
+		t.Fatalf("store login: %v", err)
+	}
+	stranger, err := reg.Upsert(Camera{MAC: "3c:52:a1:11:22:33", Address: "192.168.0.42", Model: "Tapo C200"})
+	if err != nil {
+		t.Fatalf("upsert stranger: %v", err)
+	}
+	h.setNodeExists(int(stranger.ID), true)
+
+	if err := l.EnsureNodes(context.Background()); err != nil {
+		t.Fatalf("EnsureNodes() = %v", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.addNodeCalls) != 1 || h.addNodeCalls[0].nr != int(paired.ID) {
+		t.Fatalf("addNode calls = %+v, want only the paired camera %d", h.addNodeCalls, paired.ID)
+	}
+	if len(h.removeCalls) != 1 || h.removeCalls[0] != int(stranger.ID) || h.nodes[int(stranger.ID)] {
+		t.Fatalf("removeNode calls = %v, want the unpaired camera's leftover node %d removed", h.removeCalls, stranger.ID)
+	}
+}
+
+// Startup drops unpaired records (Registry.PruneUnconfirmed), and an older
+// agent created a node for every registered camera. Those nodes are no longer
+// any camera's, so EnsureNodes never sees them; they are removed by ID instead,
+// without loading the module on a device that never had one.
+func TestLoopback_RemoveLeftoverNodes(t *testing.T) {
+	h := newLoopbackHarness()
+	l, _ := newTestLoopback(t, h)
+	h.setNodeExists(201, true)
+	h.setNodeExists(203, true)
+	h.setNodeExists(int(MCUBandStart), true)
+
+	l.RemoveLeftoverNodes([]uint32{201, 202, MCUBandStart})
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.removeCalls) != 1 || h.removeCalls[0] != 201 {
+		t.Fatalf("removeNode calls = %v, want only the existing leftover node 201", h.removeCalls)
+	}
+	if !h.nodes[203] || !h.nodes[int(MCUBandStart)] {
+		t.Fatal("removed a node that was not a dropped network camera's")
+	}
+	if h.modprobeCalls != 0 {
+		t.Fatalf("modprobe called %d times; removing leftovers must not load the module", h.modprobeCalls)
 	}
 }
 
@@ -259,6 +335,9 @@ func TestLoopback_RemoveCameraRemovesNode(t *testing.T) {
 	cam, err := reg.Upsert(Camera{MAC: "ec:71:db:2a:ae:7e", Address: "10.98.0.10"})
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
+	}
+	if err := l.creds.Set(cam.MAC, Credential{Username: "admin"}); err != nil {
+		t.Fatalf("store login: %v", err)
 	}
 	if err := l.EnsureNodes(context.Background()); err != nil {
 		t.Fatalf("EnsureNodes() = %v", err)
@@ -868,7 +947,33 @@ func TestLoopback_CredentialsChangedStartsPendingPump(t *testing.T) {
 	}
 	l.CredentialsChanged(cam.ID)
 
+	// The camera had no node while it was unpaired. Pairing it creates one,
+	// and the running container sees it through its live /dev bind mount.
+	if _, ok := l.NodePath(cam.ID); !ok {
+		t.Fatal("pairing a camera with a running entitled container did not create its node")
+	}
 	pump.next(t) // the previously pending pump now starts.
+}
+
+// With no entitled container running, pairing creates no node: the next
+// container start does, through EnsureNodes, as for every other camera.
+func TestLoopback_CredentialsChangedLeavesNodeCreationToContainerStart(t *testing.T) {
+	h := newLoopbackHarness()
+	h.controlExists = true
+	fc := newFakeClock(time.Unix(1_700_000_000, 0))
+	pump := newFakePump()
+	l, reg, creds := newSupervisedLoopback(t, h, fc, pump.Func())
+	cam, err := reg.Upsert(Camera{MAC: "ec:71:db:2a:ae:7e", Address: "10.98.0.10"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := creds.Set(cam.MAC, Credential{Username: "admin"}); err != nil {
+		t.Fatalf("set credentials: %v", err)
+	}
+	l.CredentialsChanged(cam.ID)
+	if n := h.addNodeCallCount(); n != 0 {
+		t.Fatalf("addNode called %d times with no entitled container, want 0", n)
+	}
 }
 
 // AcquireView must be safe to call, and safe to release, when the
@@ -1429,5 +1534,53 @@ func TestAllocateAuxNodeNumber_BandExhausted(t *testing.T) {
 	}
 	if _, err := l.AllocateAuxNodeNumber(); !errors.Is(err, ErrBandExhausted) {
 		t.Errorf("AllocateAuxNodeNumber() error = %v, want ErrBandExhausted", err)
+	}
+}
+
+// A number the caller holds without a node (a camera share's record across a
+// reboot) is passed over like a taken one; with nothing to skip the allocator
+// is AllocateAuxNodeNumber.
+func TestAllocateAuxNodeNumberSkipping_PassesOverHeldNumbers(t *testing.T) {
+	h := newLoopbackHarness()
+	h.controlExists = true
+	l, _ := newTestLoopback(t, h)
+	h.setNodeExists(IDBandEnd-1, true)
+
+	nr, err := l.AllocateAuxNodeNumberSkipping(func(nr int) bool { return nr == IDBandEnd || nr == IDBandEnd-2 })
+	if err != nil || nr != IDBandEnd-3 {
+		t.Errorf("AllocateAuxNodeNumberSkipping = %d, %v; want %d", nr, err, IDBandEnd-3)
+	}
+	if nr, err := l.AllocateAuxNodeNumberSkipping(nil); err != nil || nr != IDBandEnd {
+		t.Errorf("AllocateAuxNodeNumberSkipping(nil) = %d, %v; want %d", nr, err, IDBandEnd)
+	}
+	if _, err := l.AllocateAuxNodeNumberSkipping(func(int) bool { return true }); !errors.Is(err, ErrBandExhausted) {
+		t.Errorf("skipping every number: error = %v, want ErrBandExhausted", err)
+	}
+}
+
+// A share node goes through the announce_all_caps=1 add; every other node
+// keeps the exclusive-caps add. (The flag itself is set in
+// newLoopbackConfig, covered by the Linux test.)
+func TestLoopback_EnsureShareNodeUsesTheShareAdd(t *testing.T) {
+	h := newLoopbackHarness()
+	h.controlExists = true
+	l, _ := newTestLoopback(t, h)
+	ctx := context.Background()
+
+	if err := l.EnsureAuxNode(ctx, 90, "aux"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.EnsureShareNode(ctx, 91, "share"); err != nil {
+		t.Fatal(err)
+	}
+	// Idempotent.
+	if err := l.EnsureShareNode(ctx, 91, "share"); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.addNodeCalls) != 1 || h.addNodeCalls[0].nr != 90 {
+		t.Fatalf("aux adds = %+v, want only node 90", h.addNodeCalls)
+	}
+	if len(h.shareCalls) != 1 || h.shareCalls[0].nr != 91 || h.shareCalls[0].label != "share" {
+		t.Fatalf("share adds = %+v, want exactly node 91", h.shareCalls)
 	}
 }

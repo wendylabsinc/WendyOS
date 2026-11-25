@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
+	"github.com/wendylabsinc/wendy/go/internal/shared/oomscore"
 )
 
 const ipCameraGStreamerUtility = "ipcam-gstreamer"
@@ -38,6 +39,7 @@ func (s *VideoService) gstreamerFrames(ctx context.Context, args []string, onFra
 		return fmt.Errorf("locating GStreamer helper: %w", err)
 	}
 	cmd := newIPCameraGStreamerCommand(ctx, executable)
+	oomscore.ResetChild(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("creating GStreamer input pipe: %w", err)

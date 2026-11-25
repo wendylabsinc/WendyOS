@@ -37,6 +37,10 @@ type directHarness struct {
 func newDirectHarness(stopAfter int, results ...directResult) *directHarness {
 	h := &directHarness{results: results, stopAfter: stopAfter}
 	m := NewManager(nil, "")
+	// Scheduling tests use a synthetic two-microsecond consensus interval.
+	// Freeze BOOTTIME so host scheduling latency cannot invalidate its
+	// post-write observation. Observation-failure tests supply their own clock.
+	m.boot = func() (int64, error) { return 0, nil }
 	m.query = func(context.Context, []roughtime.Server) (Consensus, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()

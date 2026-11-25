@@ -1,0 +1,10 @@
+{
+  "title": "Use a coding agent",
+  "description": "Set up Claude Code, Codex or ChatGPT to build, deploy and inspect with Wendy",
+  "pages": [
+    "../guides/llm-integration",
+    "../installation/agent-assisted-setup",
+    "../integrations/mcp",
+    "../guides/chatgpt"
+  ]
+}

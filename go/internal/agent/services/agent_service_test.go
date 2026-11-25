@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -147,6 +150,10 @@ func TestGetAgentVersion(t *testing.T) {
 	}
 	if resp.CpuArchitecture != runtime.GOARCH {
 		t.Errorf("arch = %q; want %q", resp.CpuArchitecture, runtime.GOARCH)
+	}
+	metadata := MeshAgentMetadata()
+	if metadata.Version != resp.GetVersion() || metadata.OS != resp.GetOs() || metadata.OSVersion != resp.GetOsVersion() || metadata.DeviceType != resp.GetDeviceType() || metadata.CPUArchitecture != resp.GetCpuArchitecture() {
+		t.Fatalf("signed discovery metadata differs from the agent RPC: %+v", metadata)
 	}
 	// RAM size and CPU core count come from /proc, so they are only
 	// guaranteed on Linux hosts (WDY-1809). Zero means "unknown".
@@ -517,6 +524,11 @@ func sendV1UpdateStream(t *testing.T, stream grpc.BidiStreamingClient[agentpb.Up
 			Chunk: &agentpb.UpdateAgentRequest_Chunk{Data: binaryData},
 		},
 	}); err != nil {
+		if errors.Is(err, io.EOF) {
+			// The server ended the stream, as an early refusal does; its status is on Recv.
+			_, err = stream.Recv()
+			return err
+		}
 		t.Fatalf("send chunk: %v", err)
 	}
 
@@ -532,6 +544,10 @@ func sendV1UpdateStream(t *testing.T, stream grpc.BidiStreamingClient[agentpb.Up
 			},
 		},
 	}); err != nil {
+		if errors.Is(err, io.EOF) {
+			_, err = stream.Recv()
+			return err
+		}
 		t.Fatalf("send control: %v", err)
 	}
 	if err := stream.CloseSend(); err != nil {
@@ -1178,5 +1194,26 @@ func TestGetAgentVersionBinarySHA256EmptyWhenUnreadable(t *testing.T) {
 	}
 	if resp.GetBinarySha256() != "" {
 		t.Errorf("binarySha256 = %q; want empty when the executable cannot be hashed", resp.GetBinarySha256())
+	}
+}
+
+// The CLI refuses a project whose entitlement types the agent does not list,
+// so the agent must list every type it applies.
+func TestGetAgentVersionReportsEntitlementTypes(t *testing.T) {
+	client, cleanup := startAgentServer(t,
+		&mockNetworkManager{},
+		&mockHardwareDiscoverer{},
+		&mockBluetoothManager{},
+	)
+	defer cleanup()
+
+	resp, err := client.GetAgentVersion(context.Background(), &agentpb.GetAgentVersionRequest{})
+	if err != nil {
+		t.Fatalf("GetAgentVersion: %v", err)
+	}
+	for _, want := range []string{"network", "camera", "gpu", "episode-write", "http"} {
+		if !slices.Contains(resp.GetEntitlementTypes(), want) {
+			t.Errorf("entitlement types %v lack %q", resp.GetEntitlementTypes(), want)
+		}
 	}
 }

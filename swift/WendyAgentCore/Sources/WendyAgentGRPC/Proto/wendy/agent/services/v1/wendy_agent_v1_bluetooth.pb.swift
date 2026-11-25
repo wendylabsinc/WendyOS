@@ -8,6 +8,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+public import FoundationEssentials
+#else
+public import Foundation
+#endif
 public import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -164,6 +169,38 @@ public nonisolated struct Wendy_Agent_Services_V1_BluetoothCommand: Sendable {
     set {command = .wifiForget(newValue)}
   }
 
+  public var setupStatus: Wendy_Agent_Services_V1_SetupStatusCommand {
+    get {
+      if case .setupStatus(let v)? = command {return v}
+      return Wendy_Agent_Services_V1_SetupStatusCommand()
+    }
+    set {command = .setupStatus(newValue)}
+  }
+
+  public var setupEnroll: Wendy_Agent_Services_V1_SetupEnrollCommand {
+    get {
+      if case .setupEnroll(let v)? = command {return v}
+      return Wendy_Agent_Services_V1_SetupEnrollCommand()
+    }
+    set {command = .setupEnroll(newValue)}
+  }
+
+  public var setupHello: Wendy_Agent_Services_V1_SetupHello {
+    get {
+      if case .setupHello(let v)? = command {return v}
+      return Wendy_Agent_Services_V1_SetupHello()
+    }
+    set {command = .setupHello(newValue)}
+  }
+
+  public var setupSealed: Wendy_Agent_Services_V1_SetupSealed {
+    get {
+      if case .setupSealed(let v)? = command {return v}
+      return Wendy_Agent_Services_V1_SetupSealed()
+    }
+    set {command = .setupSealed(newValue)}
+  }
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public nonisolated enum OneOf_Command: Equatable, Sendable {
@@ -184,6 +221,10 @@ public nonisolated struct Wendy_Agent_Services_V1_BluetoothCommand: Sendable {
     case wifiSetPriority(Wendy_Agent_Services_V1_WifiSetPriorityCommand)
     case wifiReorder(Wendy_Agent_Services_V1_WifiReorderCommand)
     case wifiForget(Wendy_Agent_Services_V1_WifiForgetCommand)
+    case setupStatus(Wendy_Agent_Services_V1_SetupStatusCommand)
+    case setupEnroll(Wendy_Agent_Services_V1_SetupEnrollCommand)
+    case setupHello(Wendy_Agent_Services_V1_SetupHello)
+    case setupSealed(Wendy_Agent_Services_V1_SetupSealed)
 
   }
 
@@ -562,6 +603,38 @@ public nonisolated struct Wendy_Agent_Services_V1_BluetoothResponse: Sendable {
     set {response = .wifiForget(newValue)}
   }
 
+  public var setupStatus: Wendy_Agent_Services_V1_SetupStatusResponse {
+    get {
+      if case .setupStatus(let v)? = response {return v}
+      return Wendy_Agent_Services_V1_SetupStatusResponse()
+    }
+    set {response = .setupStatus(newValue)}
+  }
+
+  public var setupEnroll: Wendy_Agent_Services_V1_SetupEnrollResponse {
+    get {
+      if case .setupEnroll(let v)? = response {return v}
+      return Wendy_Agent_Services_V1_SetupEnrollResponse()
+    }
+    set {response = .setupEnroll(newValue)}
+  }
+
+  public var setupHello: Wendy_Agent_Services_V1_SetupHello {
+    get {
+      if case .setupHello(let v)? = response {return v}
+      return Wendy_Agent_Services_V1_SetupHello()
+    }
+    set {response = .setupHello(newValue)}
+  }
+
+  public var setupSealed: Wendy_Agent_Services_V1_SetupSealed {
+    get {
+      if case .setupSealed(let v)? = response {return v}
+      return Wendy_Agent_Services_V1_SetupSealed()
+    }
+    set {response = .setupSealed(newValue)}
+  }
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public nonisolated enum OneOf_Response: Equatable, Sendable {
@@ -583,6 +656,10 @@ public nonisolated struct Wendy_Agent_Services_V1_BluetoothResponse: Sendable {
     case wifiSetPriority(Wendy_Agent_Services_V1_WifiSetPriorityResponse)
     case wifiReorder(Wendy_Agent_Services_V1_WifiReorderResponse)
     case wifiForget(Wendy_Agent_Services_V1_WifiForgetResponse)
+    case setupStatus(Wendy_Agent_Services_V1_SetupStatusResponse)
+    case setupEnroll(Wendy_Agent_Services_V1_SetupEnrollResponse)
+    case setupHello(Wendy_Agent_Services_V1_SetupHello)
+    case setupSealed(Wendy_Agent_Services_V1_SetupSealed)
 
   }
 
@@ -1119,13 +1196,120 @@ public nonisolated struct Wendy_Agent_Services_V1_BluetoothDeviceInfo: Sendable 
   fileprivate var _icon: String? = nil
 }
 
+/// Unenrolled-device setup only, on service 7565e9eb-4c20-4b67-9272-d708b397b632,
+/// LE CoC PSM 130. Never dispatch these through the authenticated management service.
+public nonisolated struct Wendy_Agent_Services_V1_SetupStatusCommand: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var requestNonce: Bool = false
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_SetupStatusResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var enrolled: Bool = false
+
+  public var acmeSupported: Bool = false
+
+  public var principalUri: String = String()
+
+  public var deviceClass: String = String()
+
+  public var nonce: String = String()
+
+  public var hardwareID: String = String()
+
+  public var liteSupported: Bool = false
+
+  public var maxConfigSize: UInt32 = 0
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_SetupEnrollCommand: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var cloudHost: String = String()
+
+  public var directoryURL: String = String()
+
+  public var deviceID: String = String()
+
+  public var eabKeyID: String = String()
+
+  public var eabHmacKey: String = String()
+
+  public var liteConfig: Data = Data()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_SetupEnrollResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var principalUri: String = String()
+
+  public var pending: Bool = false
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// Ephemeral X25519 handshake. HKDF-SHA256 salt is client_public || server_public,
+/// info "wendy-ble-setup-v1", 64 bytes: client write key then server write key.
+/// This protects against passive listeners, not active impersonation. Setup has
+/// the same physical-proximity trust as headless BLE Just Works pairing.
+public nonisolated struct Wendy_Agent_Services_V1_SetupHello: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var publicKey: Data = Data()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// AES-256-GCM combined nonce || ciphertext || tag. Nonce is 4 zero bytes plus
+/// a big-endian uint64 request counter starting at 1; response echoes its counter.
+/// Only sealed messages are accepted after the hello, with strictly ordered counters.
+public nonisolated struct Wendy_Agent_Services_V1_SetupSealed: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var data: Data = Data()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate nonisolated let _protobuf_package = "wendy.agent.services.v1"
 
 nonisolated extension Wendy_Agent_Services_V1_BluetoothCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".BluetoothCommand"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}wifi_list\0\u{3}wifi_connect\0\u{3}wifi_status\0\u{3}wifi_disconnect\0\u{3}apps_list\0\u{3}apps_stop\0\u{3}apps_remove\0\u{3}agent_version\0\u{3}hardware_list\0\u{3}bluetooth_list\0\u{3}bluetooth_connect\0\u{3}bluetooth_disconnect\0\u{3}bluetooth_forget\0\u{3}wifi_known_list\0\u{3}wifi_set_priority\0\u{3}wifi_reorder\0\u{3}wifi_forget\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}wifi_list\0\u{3}wifi_connect\0\u{3}wifi_status\0\u{3}wifi_disconnect\0\u{3}apps_list\0\u{3}apps_stop\0\u{3}apps_remove\0\u{3}agent_version\0\u{3}hardware_list\0\u{3}bluetooth_list\0\u{3}bluetooth_connect\0\u{3}bluetooth_disconnect\0\u{3}bluetooth_forget\0\u{3}wifi_known_list\0\u{3}wifi_set_priority\0\u{3}wifi_reorder\0\u{3}wifi_forget\0\u{3}setup_status\0\u{3}setup_enroll\0\u{3}setup_hello\0\u{3}setup_sealed\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1354,6 +1538,58 @@ nonisolated extension Wendy_Agent_Services_V1_BluetoothCommand: SwiftProtobuf.Me
           self.command = .wifiForget(v)
         }
       }()
+      case 18: try {
+        var v: Wendy_Agent_Services_V1_SetupStatusCommand?
+        var hadOneofValue = false
+        if let current = self.command {
+          hadOneofValue = true
+          if case .setupStatus(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.command = .setupStatus(v)
+        }
+      }()
+      case 19: try {
+        var v: Wendy_Agent_Services_V1_SetupEnrollCommand?
+        var hadOneofValue = false
+        if let current = self.command {
+          hadOneofValue = true
+          if case .setupEnroll(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.command = .setupEnroll(v)
+        }
+      }()
+      case 20: try {
+        var v: Wendy_Agent_Services_V1_SetupHello?
+        var hadOneofValue = false
+        if let current = self.command {
+          hadOneofValue = true
+          if case .setupHello(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.command = .setupHello(v)
+        }
+      }()
+      case 21: try {
+        var v: Wendy_Agent_Services_V1_SetupSealed?
+        var hadOneofValue = false
+        if let current = self.command {
+          hadOneofValue = true
+          if case .setupSealed(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.command = .setupSealed(v)
+        }
+      }()
       default: break
       }
     }
@@ -1432,6 +1668,22 @@ nonisolated extension Wendy_Agent_Services_V1_BluetoothCommand: SwiftProtobuf.Me
     case .wifiForget?: try {
       guard case .wifiForget(let v)? = self.command else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 17)
+    }()
+    case .setupStatus?: try {
+      guard case .setupStatus(let v)? = self.command else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 18)
+    }()
+    case .setupEnroll?: try {
+      guard case .setupEnroll(let v)? = self.command else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 19)
+    }()
+    case .setupHello?: try {
+      guard case .setupHello(let v)? = self.command else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 20)
+    }()
+    case .setupSealed?: try {
+      guard case .setupSealed(let v)? = self.command else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 21)
     }()
     case nil: break
     }
@@ -1909,7 +2161,7 @@ nonisolated extension Wendy_Agent_Services_V1_AppsRemoveCommand: SwiftProtobuf.M
 
 nonisolated extension Wendy_Agent_Services_V1_BluetoothResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".BluetoothResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}wifi_list\0\u{3}wifi_connect\0\u{3}wifi_status\0\u{3}wifi_disconnect\0\u{3}apps_list\0\u{3}apps_stop\0\u{3}apps_remove\0\u{3}agent_version\0\u{3}hardware_list\0\u{1}error\0\u{3}bluetooth_list\0\u{3}bluetooth_connect\0\u{3}bluetooth_disconnect\0\u{3}bluetooth_forget\0\u{3}wifi_known_list\0\u{3}wifi_set_priority\0\u{3}wifi_reorder\0\u{3}wifi_forget\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}wifi_list\0\u{3}wifi_connect\0\u{3}wifi_status\0\u{3}wifi_disconnect\0\u{3}apps_list\0\u{3}apps_stop\0\u{3}apps_remove\0\u{3}agent_version\0\u{3}hardware_list\0\u{1}error\0\u{3}bluetooth_list\0\u{3}bluetooth_connect\0\u{3}bluetooth_disconnect\0\u{3}bluetooth_forget\0\u{3}wifi_known_list\0\u{3}wifi_set_priority\0\u{3}wifi_reorder\0\u{3}wifi_forget\0\u{3}setup_status\0\u{3}setup_enroll\0\u{3}setup_hello\0\u{3}setup_sealed\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2151,6 +2403,58 @@ nonisolated extension Wendy_Agent_Services_V1_BluetoothResponse: SwiftProtobuf.M
           self.response = .wifiForget(v)
         }
       }()
+      case 19: try {
+        var v: Wendy_Agent_Services_V1_SetupStatusResponse?
+        var hadOneofValue = false
+        if let current = self.response {
+          hadOneofValue = true
+          if case .setupStatus(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.response = .setupStatus(v)
+        }
+      }()
+      case 20: try {
+        var v: Wendy_Agent_Services_V1_SetupEnrollResponse?
+        var hadOneofValue = false
+        if let current = self.response {
+          hadOneofValue = true
+          if case .setupEnroll(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.response = .setupEnroll(v)
+        }
+      }()
+      case 21: try {
+        var v: Wendy_Agent_Services_V1_SetupHello?
+        var hadOneofValue = false
+        if let current = self.response {
+          hadOneofValue = true
+          if case .setupHello(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.response = .setupHello(v)
+        }
+      }()
+      case 22: try {
+        var v: Wendy_Agent_Services_V1_SetupSealed?
+        var hadOneofValue = false
+        if let current = self.response {
+          hadOneofValue = true
+          if case .setupSealed(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.response = .setupSealed(v)
+        }
+      }()
       default: break
       }
     }
@@ -2233,6 +2537,22 @@ nonisolated extension Wendy_Agent_Services_V1_BluetoothResponse: SwiftProtobuf.M
     case .wifiForget?: try {
       guard case .wifiForget(let v)? = self.response else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 18)
+    }()
+    case .setupStatus?: try {
+      guard case .setupStatus(let v)? = self.response else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 19)
+    }()
+    case .setupEnroll?: try {
+      guard case .setupEnroll(let v)? = self.response else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 20)
+    }()
+    case .setupHello?: try {
+      guard case .setupHello(let v)? = self.response else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 21)
+    }()
+    case .setupSealed?: try {
+      guard case .setupSealed(let v)? = self.response else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 22)
     }()
     case nil: break
     }
@@ -3172,6 +3492,251 @@ nonisolated extension Wendy_Agent_Services_V1_BluetoothDeviceInfo: SwiftProtobuf
     if lhs.trusted != rhs.trusted {return false}
     if lhs.deviceType != rhs.deviceType {return false}
     if lhs._icon != rhs._icon {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_SetupStatusCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetupStatusCommand"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_nonce\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBoolField(value: &self.requestNonce) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.requestNonce != false {
+      try visitor.visitSingularBoolField(value: self.requestNonce, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetupStatusCommand, rhs: Wendy_Agent_Services_V1_SetupStatusCommand) -> Bool {
+    if lhs.requestNonce != rhs.requestNonce {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_SetupStatusResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetupStatusResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}enrolled\0\u{3}acme_supported\0\u{3}principal_uri\0\u{3}device_class\0\u{1}nonce\0\u{3}hardware_id\0\u{3}lite_supported\0\u{3}max_config_size\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBoolField(value: &self.enrolled) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.acmeSupported) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.principalUri) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.deviceClass) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.nonce) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self.hardwareID) }()
+      case 7: try { try decoder.decodeSingularBoolField(value: &self.liteSupported) }()
+      case 8: try { try decoder.decodeSingularUInt32Field(value: &self.maxConfigSize) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.enrolled != false {
+      try visitor.visitSingularBoolField(value: self.enrolled, fieldNumber: 1)
+    }
+    if self.acmeSupported != false {
+      try visitor.visitSingularBoolField(value: self.acmeSupported, fieldNumber: 2)
+    }
+    if !self.principalUri.isEmpty {
+      try visitor.visitSingularStringField(value: self.principalUri, fieldNumber: 3)
+    }
+    if !self.deviceClass.isEmpty {
+      try visitor.visitSingularStringField(value: self.deviceClass, fieldNumber: 4)
+    }
+    if !self.nonce.isEmpty {
+      try visitor.visitSingularStringField(value: self.nonce, fieldNumber: 5)
+    }
+    if !self.hardwareID.isEmpty {
+      try visitor.visitSingularStringField(value: self.hardwareID, fieldNumber: 6)
+    }
+    if self.liteSupported != false {
+      try visitor.visitSingularBoolField(value: self.liteSupported, fieldNumber: 7)
+    }
+    if self.maxConfigSize != 0 {
+      try visitor.visitSingularUInt32Field(value: self.maxConfigSize, fieldNumber: 8)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetupStatusResponse, rhs: Wendy_Agent_Services_V1_SetupStatusResponse) -> Bool {
+    if lhs.enrolled != rhs.enrolled {return false}
+    if lhs.acmeSupported != rhs.acmeSupported {return false}
+    if lhs.principalUri != rhs.principalUri {return false}
+    if lhs.deviceClass != rhs.deviceClass {return false}
+    if lhs.nonce != rhs.nonce {return false}
+    if lhs.hardwareID != rhs.hardwareID {return false}
+    if lhs.liteSupported != rhs.liteSupported {return false}
+    if lhs.maxConfigSize != rhs.maxConfigSize {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_SetupEnrollCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetupEnrollCommand"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}cloud_host\0\u{3}directory_url\0\u{3}device_id\0\u{3}eab_key_id\0\u{3}eab_hmac_key\0\u{3}lite_config\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.cloudHost) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.directoryURL) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.deviceID) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.eabKeyID) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.eabHmacKey) }()
+      case 6: try { try decoder.decodeSingularBytesField(value: &self.liteConfig) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.cloudHost.isEmpty {
+      try visitor.visitSingularStringField(value: self.cloudHost, fieldNumber: 1)
+    }
+    if !self.directoryURL.isEmpty {
+      try visitor.visitSingularStringField(value: self.directoryURL, fieldNumber: 2)
+    }
+    if !self.deviceID.isEmpty {
+      try visitor.visitSingularStringField(value: self.deviceID, fieldNumber: 3)
+    }
+    if !self.eabKeyID.isEmpty {
+      try visitor.visitSingularStringField(value: self.eabKeyID, fieldNumber: 4)
+    }
+    if !self.eabHmacKey.isEmpty {
+      try visitor.visitSingularStringField(value: self.eabHmacKey, fieldNumber: 5)
+    }
+    if !self.liteConfig.isEmpty {
+      try visitor.visitSingularBytesField(value: self.liteConfig, fieldNumber: 6)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetupEnrollCommand, rhs: Wendy_Agent_Services_V1_SetupEnrollCommand) -> Bool {
+    if lhs.cloudHost != rhs.cloudHost {return false}
+    if lhs.directoryURL != rhs.directoryURL {return false}
+    if lhs.deviceID != rhs.deviceID {return false}
+    if lhs.eabKeyID != rhs.eabKeyID {return false}
+    if lhs.eabHmacKey != rhs.eabHmacKey {return false}
+    if lhs.liteConfig != rhs.liteConfig {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_SetupEnrollResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetupEnrollResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}principal_uri\0\u{1}pending\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.principalUri) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.pending) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.principalUri.isEmpty {
+      try visitor.visitSingularStringField(value: self.principalUri, fieldNumber: 1)
+    }
+    if self.pending != false {
+      try visitor.visitSingularBoolField(value: self.pending, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetupEnrollResponse, rhs: Wendy_Agent_Services_V1_SetupEnrollResponse) -> Bool {
+    if lhs.principalUri != rhs.principalUri {return false}
+    if lhs.pending != rhs.pending {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_SetupHello: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetupHello"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}public_key\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.publicKey) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.publicKey.isEmpty {
+      try visitor.visitSingularBytesField(value: self.publicKey, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetupHello, rhs: Wendy_Agent_Services_V1_SetupHello) -> Bool {
+    if lhs.publicKey != rhs.publicKey {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_SetupSealed: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SetupSealed"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}data\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.data) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.data.isEmpty {
+      try visitor.visitSingularBytesField(value: self.data, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_SetupSealed, rhs: Wendy_Agent_Services_V1_SetupSealed) -> Bool {
+    if lhs.data != rhs.data {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

@@ -1,10 +1,10 @@
 ---
-title: Wrapping a C Library in Swift
-description: Learn how to wrap C libraries in Swift for safe, ergonomic embedded Linux development
+title: Wrapping a C library in Swift
+description: wrap C libraries in Swift for safe, ergonomic embedded Linux development
 language: swift
 ---
 
-## Wrapping C Libraries in Swift
+## Wrapping C libraries in Swift
 
 When developing embedded Linux applications for robotics and physical AI, working with C and C++ libraries is a fact of life. Hardware drivers, computer vision libraries, and system-level APIs are predominantly written in C and C++. However, this doesn't mean you have to write everything in these languages. Memory safety and ergonomics are critically important, especially when controlling physical hardware.
 
@@ -28,7 +28,7 @@ Swift provides excellent C and C++ interoperability, allowing you to leverage ex
   **Building a WendyOS app?** Start the app shell with `mkdir grayskull-app && cd grayskull-app && wendy init --app-id grayskull-app --target wendyos --language swift --no-extra-entitlements --assistant skip`, then add the C library wrapper code from this tutorial.
 </Callout>
 
-## Why Wrap C Libraries in Swift?
+## Why wrap C libraries in Swift?
 
 **Memory Safety**: Swift's automatic reference counting (ARC) and type system prevent common C bugs like use-after-free, null pointer dereferences, and buffer overflows.
 
@@ -38,7 +38,7 @@ Swift provides excellent C and C++ interoperability, allowing you to leverage ex
 
 **Best of Both Worlds**: Use battle-tested C libraries for low-level operations while keeping your application logic in safe, maintainable Swift.
 
-## Swift's C/C++ Interoperability
+## Swift's C/C++ interoperability
 
 Swift has excellent C and C++ interoperability, especially in Swift 6.2 which includes:
 
@@ -50,7 +50,7 @@ Swift has excellent C and C++ interoperability, especially in Swift 6.2 which in
 
 For comprehensive documentation, see the [official Swift C++ Interop guide](https://www.swift.org/documentation/cxx-interop/).
 
-## Real-World Example: Grayskull Computer Vision Library
+## Real-world example: Grayskull computer vision library
 
 Let's walk through wrapping [Grayskull](https://github.com/zserge/grayskull), a tiny, dependency-free computer vision library designed for embedded systems. We'll use [grayskull-swift](https://github.com/wendylabsinc/grayskull-swift) as our example.
 
@@ -64,7 +64,7 @@ Grayskull is perfect for embedded Linux applications:
 
 But Grayskull is written in C, with manual memory management and pointer-heavy APIs. We'll wrap it in Swift to make it safe and ergonomic.
 
-## Project Structure
+## Project structure
 
 Our Swift wrapper will use a git submodule to include the C library:
 
@@ -83,7 +83,7 @@ grayskull-swift/
 └── Package.swift           # Swift Package Manager manifest
 ```
 
-## Step 1: Adding the C Library as a Submodule
+## Step 1: Adding the C library as a submodule
 
 First, add the C library as a git submodule:
 
@@ -155,7 +155,7 @@ let package = Package(
 )
 ```
 
-### Why a Separate CGrayskull Target?
+### Why a separate CGrayskull target?
 
 You might wonder why we need a separate `CGrayskull` target instead of importing the C headers directly into our Swift code. Here's why:
 
@@ -185,7 +185,7 @@ You might wonder why we need a separate `CGrayskull` target instead of importing
 
 Without the separate target, you'd need to manually manage C compilation, header paths, and linking, which is error-prone and platform-specific. The CGrayskull target encapsulates all of this complexity into a single, declarative configuration.
 
-## Step 3: Create a Safe Swift Wrapper
+## Step 3: Create a safe Swift wrapper
 
 Now we'll wrap the C API in safe Swift. Let's say Grayskull has this C function:
 
@@ -239,7 +239,7 @@ public struct GrayskullImage: Sendable {
 }
 ```
 
-## Step 4: Implement Thread-Safe Storage
+## Step 4: Implement thread-safe storage
 
 The `ImageStorage` class handles memory management and thread safety:
 
@@ -312,7 +312,7 @@ final class ImageStorage: @unchecked Sendable {
 - **Value semantics**: Copy-on-write ensures Swift's value semantics work correctly
 - **Platform compatibility**: Uses `os_unfair_lock` on Darwin, `pthread_mutex` elsewhere
 
-## Step 5: Add High-Level Operations
+## Step 5: Add high-level operations
 
 Now we can add ergonomic, functional-style operations:
 
@@ -359,7 +359,7 @@ This enables clean, functional-style image processing:
 let edges = image.sobel().thresholded(128)
 ```
 
-## Step 6: Add Utility Methods
+## Step 6: Add utility methods
 
 Add useful utility methods for working with images on Linux:
 
@@ -423,7 +423,7 @@ extension GrayskullImage {
 
 These utilities let you work with images on embedded Linux systems without platform-specific frameworks.
 
-## Step 7: Add Swift Concurrency Support
+## Step 7: Add Swift concurrency support
 
 Mark your types as `Sendable` for safe concurrent use:
 
@@ -446,7 +446,7 @@ extension GrayskullImage {
 }
 ```
 
-## Using Your Wrapped Library
+## Using your wrapped library
 
 Now you can use the library with clean, safe Swift code:
 
@@ -474,25 +474,25 @@ let loaded = try GrayskullImage(contentsOfPGM: "/tmp/edges.pgm")
 print("Loaded image: \(loaded.width)x\(loaded.height)")
 ```
 
-## Best Practices
+## Best practices
 
-### 1. Safety First
+### 1. Safety first
 - Validate all inputs (dimensions, coordinates, parameters)
 - Use `precondition` for programmer errors
 - Use `guard` for runtime errors
 - Never expose raw pointers in your public API
 
-### 2. Memory Management
+### 2. Memory management
 - Use reference-counted storage classes for C resources
 - Implement `deinit` to clean up C resources
 - Use `withUnsafePointer` patterns to avoid dangling pointers
 
-### 3. Thread Safety
+### 3. Thread safety
 - Use locks to protect access to mutable C state
 - Make your Swift types `Sendable` when appropriate
 - Document any threading restrictions
 
-### 4. Value Semantics
+### 4. Value semantics
 - Implement copy-on-write for mutable operations
 - Use `isKnownUniquelyReferenced` to optimize copies
 - Make your types immutable when possible
@@ -507,7 +507,7 @@ print("Loaded image: \(loaded.width)x\(loaded.height)")
 - Test memory safety with Thread Sanitizer
 - Test concurrent access scenarios
 
-## Run Again on WendyOS
+## Run on WendyOS
 
 Your wrapped library works seamlessly on WendyOS:
 
@@ -523,11 +523,11 @@ wendy run
 
 The C library compiles natively for ARM64, and your Swift wrapper provides the same safe, ergonomic API across development and deployment.
 
-## Publishing Your Package
+## Publishing your package
 
 Now that you've created a useful Swift wrapper, let's publish it as an open source package so others can use it.
 
-### Step 1: Prepare Your Repository
+### Step 1: Prepare your repository
 
 Ensure your repository has:
 
@@ -546,7 +546,7 @@ Create a good README with:
 - Link to the C library you're wrapping
 - Requirements (Swift version, platforms)
 
-### Step 2: Create a Git Tag
+### Step 2: Create a Git tag
 
 Swift Package Manager uses git tags for versioning. Create your first release:
 
@@ -570,7 +570,7 @@ Follow [Semantic Versioning](https://semver.org/):
 - `1.0.1` for bug fixes
 - `2.0.0` for breaking changes
 
-### Step 3: Create a GitHub Release
+### Step 3: Create a GitHub release
 
 Use the GitHub CLI to create a release:
 
@@ -666,7 +666,7 @@ Check your package page at:
 https://swiftpackageindex.com/yourusername/grayskull-swift
 ```
 
-### Step 5: Maintain Your Package
+### Step 5: Maintain your package
 
 **For Bug Fixes:**
 ```bash
@@ -718,7 +718,7 @@ gh release create 1.0.0 \
 Migration guide: See MIGRATION.md"
 ```
 
-## Complete Example: Grayskull-Swift
+## Complete example: Grayskull-Swift
 
 For a complete, production-ready example of wrapping a C library in Swift, see:
 
@@ -732,7 +732,7 @@ This example includes:
 - Swift 6 concurrency support
 - Published on Swift Package Index
 
-## Learn More
+## Learn more
 
 - **Official Swift C++ Interop Guide**: [https://www.swift.org/documentation/cxx-interop/](https://www.swift.org/documentation/cxx-interop/)
 - **Grayskull Interactive Demo**: [https://zserge.com/grayskull/](https://zserge.com/grayskull/)
@@ -740,7 +740,10 @@ This example includes:
 - **Grayskull-Swift Wrapper**: [https://github.com/wendylabsinc/grayskull-swift](https://github.com/wendylabsinc/grayskull-swift)
 - **Swift Package Index**: [https://swiftpackageindex.com/](https://swiftpackageindex.com/)
 
-## Next Steps
+## Next steps
+
+- Read [hardware access](/docs/hardware) to give an app cameras, microphones, speakers, Bluetooth, or a GPU.
+- Try the [tutorials in other languages](/docs/guides/tutorials).
 
 Now that you understand how to wrap C libraries in Swift and publish them:
 

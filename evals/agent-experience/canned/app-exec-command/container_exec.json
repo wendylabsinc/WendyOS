@@ -1,0 +1,24 @@
+{
+  "tool": "container_exec",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"exit_code\": 0, \"stderr\": \"\", \"stdout\": \"Python 3.12.15\\n\", \"truncated\": false}"
+        }
+      ],
+      "structuredContent": {
+        "exit_code": 0,
+        "stderr": "",
+        "stdout": "Python 3.12.15\n",
+        "truncated": false
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  }
+}

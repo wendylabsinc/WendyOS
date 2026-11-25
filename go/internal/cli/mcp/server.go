@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -51,7 +52,9 @@ type mcpServer struct {
 	toolGroups           []string
 	toolProfile          string
 	discoverLANFn        func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
+	meshDirectoryFn      func(context.Context) (sessionbroker.OperatorDirectory, error)
 	usbSetupNoticeFn     func() string
+	wifiSetupConnectFn   WiFiSetupConnectFunc
 	mu                   sync.RWMutex
 	proxyDiag            []proxyDiagEntry
 	containerMCP         *containerMCPManager
@@ -69,6 +72,11 @@ type mcpServer struct {
 	binding              *BindingPolicy // set by wendy cloud mcp; nil for the local stdio server
 	relay                bool           // serving a hosted chat through the relay: the published manifest only
 	relayProfile         *relayManifestProfile
+	// The device certificate watch (device_certificate.go), guarded by mu.
+	transientConnectErrFn func(error) bool
+	renewLoginFn          func(context.Context, config.CertificateInfo) error
+	certWatchRetrying     *grpcclient.AgentConnection // the connection whose failed reconnect is already noted
+	certWatchRenewed      *grpcclient.AgentConnection // the connection whose login renewal has run
 }
 
 // Server is the wendy MCP server, named for callers that configure it before
@@ -77,7 +85,7 @@ type Server = mcpServer
 
 // SetStartupConnect configures the optional device connection attempted after
 // the MCP stdio server starts accepting requests. Keeping this work off the
-// protocol startup path prevents an offline default device from delaying the
+// protocol startup path prevents an offline startup device from delaying the
 // initialize handshake until the MCP host times out.
 func (s *mcpServer) SetStartupConnect(fn func(context.Context)) {
 	s.mu.Lock()
@@ -87,10 +95,11 @@ func (s *mcpServer) SetStartupConnect(fn func(context.Context)) {
 
 func New(cfg *config.Config, connectFn ConnectFunc) *mcpServer {
 	return &mcpServer{
-		cfg:           cfg,
-		connectFn:     connectFn,
-		cloudTunnels:  make(map[string]*mcpCloudTunnel),
-		discoverLANFn: discovery.DiscoverLAN,
+		cfg:             cfg,
+		connectFn:       connectFn,
+		cloudTunnels:    make(map[string]*mcpCloudTunnel),
+		discoverLANFn:   discovery.DiscoverLAN,
+		meshDirectoryFn: sessionbroker.ReadOperatorDirectoryAutomatic,
 	}
 }
 
@@ -189,6 +198,20 @@ func (s *mcpServer) SetUSBSetupNotice(fn func() string) {
 	s.usbSetupNoticeFn = fn
 }
 
+// WiFiSetupConnectFunc opens a connection for one Wi-Fi tool call. unverified
+// reports a plaintext setup connection to an unbound device that only
+// self-reported NotProvisioned; nothing authenticated that peer.
+type WiFiSetupConnectFunc func(ctx context.Context, device string) (conn *grpcclient.AgentConnection, unverified bool, err error)
+
+// SetWiFiSetupConnect enables the Wi-Fi tools' device argument, which reaches
+// a first-boot device that device_connect refuses for lack of an expected
+// identity. The connection lasts one call and never becomes the session's.
+func (s *mcpServer) SetWiFiSetupConnect(fn WiFiSetupConnectFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wifiSetupConnectFn = fn
+}
+
 // SetConnType records the transport type of the active connection ("direct" or "cloud").
 func (s *mcpServer) SetConnType(t string) {
 	s.mu.Lock()
@@ -231,7 +254,7 @@ func (s *mcpServer) ConnectTo(ctx context.Context, address string) error {
 // ConnectToOnStartup connects only if no explicit connection change occurred
 // while the attempt was in flight. Once stdio is serving, a device_connect,
 // cloud_connect, or device_disconnect request must take precedence over the
-// automatic default-device connection.
+// automatic startup connection.
 func (s *mcpServer) ConnectToOnStartup(ctx context.Context, address string) error {
 	if s.connectFn == nil {
 		return fmt.Errorf("no connect function configured")
@@ -283,12 +306,20 @@ func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 			s.relayProfile = profile
 		}
 	}
+	// Groups and profiles control discovery only. mcp-go's tool filters also
+	// gate calls before middleware, bypassing our structured relay refusals
+	// and binding audit log. Filter list responses instead; call authorization
+	// stays in relayManifestMiddleware and bindingMiddleware below.
+	hooks := &server.Hooks{}
+	hooks.AddAfterListTools(func(ctx context.Context, _ any, _ *mcpgo.ListToolsRequest, result *mcpgo.ListToolsResult) {
+		result.Tools = s.filterManifestTools(ctx, result.Tools)
+	})
 	srv := server.NewMCPServer("wendy", version.Version,
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(true, false),
 		server.WithPromptCapabilities(false),
 		server.WithInstructions(instructions),
-		server.WithToolFilter(s.filterManifestTools),
+		server.WithHooks(hooks),
 	)
 	srv.Use(s.relayManifestMiddleware, s.bindingMiddleware(srv))
 	catalog, err := s.skillCatalog()
@@ -365,6 +396,7 @@ func (s *mcpServer) run(ctx context.Context, serve func(*server.MCPServer) error
 	defer stopContainerMCP()
 	go s.runStartupConnect(startupCtx)
 	go s.runCLIUpdateChecks(startupCtx, time.Hour)
+	go s.runDeviceCertificateWatch(startupCtx, deviceCertificateCheckInterval)
 
 	return serve(srv)
 }

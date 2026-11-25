@@ -79,11 +79,10 @@ settings for development or a self-hosted deployment.
 | `--cloud`, `--cloud-grpc` | Override the dashboard and Cloud API endpoints. |
 | `--resource` | Override the Cloud API authentication audience. |
 | `--pki-identity-endpoint`, `--pki-resource` | Override the certificate service URL and audience. |
-| `--api-key` | Use local authentication. |
 | `--legacy` | Use the older dashboard sign-in flow. |
 
 Current personal sign-ins support both device access and signed Cloud changes.
-Legacy and local-API-key sign-ins cannot authorize all current Cloud operations;
+Legacy sign-ins cannot authorize all current Cloud operations;
 sign in with the default browser flow if a command requires it.
 
 See [certificate renewal](./refresh-certs.md) for connection troubleshooting.

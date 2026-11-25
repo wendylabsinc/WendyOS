@@ -1,5 +1,5 @@
 ---
-title: Threat Model
+title: Threat model
 description: WendyOS architecture, trust boundaries, and STRIDE threat analysis with current mitigation status
 ---
 
@@ -71,7 +71,7 @@ Each row leads with the existing control, then notes hardening underway. Severit
 | ID | Severity | Status | Summary |
 |----|----------|--------|---------|
 | TM-S-01 | HIGH (inherent; accepted by design) | 📋 Planned | Mitigated by design: unprovisioned devices use a plaintext channel by design; provisioning is the mitigation and establishes mTLS for all subsequent communication. The pre-provisioning window is warned to operators; pre-enrollment at imaging time eliminates it entirely. Hardening underway: narrowing the plaintext port to `ProvisioningService` only, and adding ECDH-protected enrollment token transit. |
-| TM-S-02 | HIGH | 📋 Planned | Mitigated by TLS 1.2+ enforcement on cloud connections and CLI host pinning on `set-default`. Hardening underway: embedding a pinned cloud CA in the firmware image. |
+| TM-S-02 | HIGH | 📋 Planned | Mitigated by TLS 1.2+ enforcement on cloud connections and CLI host pinning on first connection. Hardening underway: embedding a pinned cloud CA in the firmware image. |
 | TM-S-03 | HIGH | 📋 Planned | Mitigated by: certificates stored at user-level permissions, a 2-year maximum lifetime, and CLI org/host pinning rejecting certs from other orgs. The 2-year ceiling is deliberate — it lets air-gapped and intermittently connected devices operate without relying on frequent online renewal; connected deployments can use shorter lifetimes. Hardening underway: certificate revocation infrastructure (OCSP/CRL) and automatic renewal for connected devices. Offline devices will require a short-lived, offline-capable operator certificate to interact; that handshake staples an OCSP revocation list, so revocation is enforced even without an online path on the device itself. Developer certificates will also carry operator-specific permissions, so each RPC is authorized against the caller's cert claims rather than treating any valid cert as fully privileged — limiting the blast radius of a stolen certificate. |
 
 ### Tampering
@@ -120,7 +120,7 @@ Each row leads with the existing control, then notes hardening underway. Severit
 Beyond the per-threat hardening noted above:
 
 - **Codesigning, PKI & certificate improvements (🛠 In progress, targeted for Q3 2026).** cosign image-signature verification, `wendy-agent` binary signing, OS artifact signing, cloud-CA pinning, OCSP/CRL revocation with OCSP-stapled offline operator certificates, and operator-scoped permissions in developer certificates.
-- **Physical tamper-resistance of the hardware platform.** Hardware-backed protection of key material (HSM/TPM), establishing a root of trust so the device private key cannot be extracted via physical access, is 🛠 in progress. On supported platforms, fuse burning (one-time-programmable eFuses) to lock secure-boot configuration and prevent flashing unsigned firmware or downgrading the bootloader is 📋 planned.
+- **Physical tamper-resistance of the hardware platform.** Hardware-backed protection of key material (HSM/TPM), establishing a root of trust so the device private key cannot be extracted via physical access, is 🛠 in progress. Secure boot and immutable RootFS are also 🛠 in progress. On supported platforms, fuse burning (one-time-programmable eFuses) to lock secure-boot configuration and prevent flashing unsigned firmware or downgrading the bootloader is 📋 planned.
 
 ## Out of Scope
 

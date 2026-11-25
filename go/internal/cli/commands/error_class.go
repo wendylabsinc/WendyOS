@@ -11,6 +11,8 @@ import (
 var (
 	errBuildFailed           = errors.New("build failed")
 	errBuilderUnavailable    = errors.New("builder unavailable")
+	errDiskSpaceLow          = errors.New("not enough disk space")
+	errBuildxMissing         = errors.New("Docker Buildx is not installed")
 	errNoDevice              = errors.New("no device")
 	errDeviceOffline         = errors.New("device offline")
 	errDeviceUnreachable     = errors.New("device unreachable")
@@ -59,6 +61,7 @@ func ErrorClass(err error) string {
 	var missing *errCloudDeviceNotFound
 	var orgMismatch orgMismatchDeviceError
 	var agentDown agentNotListeningError
+	var noLogin missingLoginError
 	var certErr cloudCertError
 	switch {
 	// A SIGTERM outranks whatever the interrupted operation reported: the run
@@ -69,6 +72,8 @@ func ErrorClass(err error) string {
 		return "device_identity_mismatch"
 	case errors.As(err, &orgMismatch):
 		return "device_org_mismatch"
+	case expiredLoginFrom(err) != nil:
+		return "auth_login_expired"
 	case errors.Is(err, errTLSHandshakeRejected):
 		return "device_tls_rejected"
 	case errors.Is(err, errProvisionedAgentUnauthorized):
@@ -81,6 +86,10 @@ func ErrorClass(err error) string {
 		return "device_auth_required"
 	case errors.Is(err, errDeviceNotResolved):
 		return "device_not_resolved"
+	// No stored login to try a saved device with. Nothing was dialled, so this
+	// is the missing login, not a device that failed to answer.
+	case errors.As(err, &noLogin):
+		return "auth_required"
 	case errors.Is(err, errNoAuthenticatedEndpoint), errors.Is(err, errDeviceUnreachable), errors.As(err, &agentDown):
 		return "device_unreachable"
 	case errors.Is(err, config.ErrNotLoggedIn):
@@ -103,6 +112,12 @@ func ErrorClass(err error) string {
 		return "registry_auth"
 	case isRegistryUnavailable(err):
 		return "registry_unavailable"
+	// Refused before a build for lack of space: the same class as the OS
+	// error the build would otherwise have ended with. Ahead of
+	// builder_unavailable because a pre-build refusal can name both, and
+	// disk_full is how callers know nothing was deployed.
+	case errors.Is(err, errDiskSpaceLow):
+		return "disk_full"
 	case errors.Is(err, errBuilderUnavailable):
 		return "builder_unavailable"
 	// A missing executable during a build is a missing tool, not a failed

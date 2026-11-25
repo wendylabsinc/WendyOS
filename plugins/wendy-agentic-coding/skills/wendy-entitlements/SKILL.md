@@ -29,6 +29,7 @@ Ask what the app actually touches, then choose the smallest entitlement set:
 - Raw USB devices: `usb`.
 - I2C bus devices: `i2c`.
 - GPIO chips: `gpio`.
+- Arduino UNO Q sketch (Modulinos): `arduino-bridge`, plus wendy.json `mcu`.
 - SPI devices: `spi`.
 - Serial ports (USB-serial adapters, servo buses): `serial`.
 - HID/input event devices: `input`.
@@ -50,7 +51,7 @@ capabilities and installed CLI validation:
 | `gpu` | none | none | Jetson: adds NVIDIA device nodes, env vars, CDI wiring. Raspberry Pi: exposes `/dev/vcio` for board telemetry. |
 | `display` | none | none | Grants `/dev/dri` (GPU render nodes) and the WendyOS compositor's Wayland socket; allows the container to present to a locally-attached monitor as a Wayland client. Requires a display-enabled WendyOS image; on headless images the socket is absent so nothing renders. On Jetson, GPU graphics userspace is injected from the host via CDI. At most one per app. |
 | `audio` | none | none | Adds audio group, mounts `/dev/snd`, allows sound devices, and mounts PipeWire/Pulse sockets when present. |
-| `camera` | none | `mode`, `allowlist` | Canonical V4L2/camera entitlement; allows major 81, bind-mounts host `/dev` for live camera hotplug, and bind-mounts `/run/udev` read-only for libcamera CSI enumeration. |
+| `camera` | none | `mode`, `allowlist` | Canonical V4L2/camera entitlement; apps share the camera unless `"mode": "direct"` (exact) gives the real device; allows major 81, bind-mounts host `/dev` for live camera hotplug, and bind-mounts `/run/udev` read-only for libcamera CSI enumeration. |
 | `video` | none | `mode`, `allowlist` | Deprecated compatibility alias for `camera`; prefer `camera` in new configs. |
 | `persist` | `name`, `path` | none | Creates/binds `/var/lib/wendy/volumes/<name>` to the container `path`; volume names are shared across apps. Linux/WendyOS mounts are `noexec`. |
 | `bluetooth` | none | `mode` | Uses a filtered `xdg-dbus-proxy` socket for BlueZ. Do not assume unrestricted host D-Bus access. |
@@ -58,6 +59,7 @@ capabilities and installed CLI validation:
 | `usb` | none | none | Mounts `/dev/bus/usb` and allows USB character devices. |
 | `i2c` | `device` | none | Binds `/dev/<device>` such as `/dev/i2c-1` and allows I2C devices. |
 | `gpio` | none | `pins` | Mounts existing `/dev/gpiochip0` through `/dev/gpiochip7`; `pins` are documentation/validation, access is chip-level. |
+| `arduino-bridge` | none | none | UNO Q only. Mounts `/run/arduino-router`, adds its group, sets `APP_SOCKET`. |
 | `spi` | none | none | Mounts existing `/dev/spidev*` nodes and adds the host `spi` group when present. |
 | `input` | none | none | Adds input group, mounts `/dev/input`, and allows input event devices. |
 | `serial` | `device` | none | Binds `/dev/<device>` (e.g. `/dev/ttyACM0`) and adds the `dialout` group. USB-only; on-board UARTs (`ttyAMA*`, `ttyS*`) are not supported. |

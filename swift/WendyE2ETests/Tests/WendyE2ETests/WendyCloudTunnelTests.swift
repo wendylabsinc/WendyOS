@@ -29,7 +29,7 @@ struct `'wendy cloud tunnel'` {
                 #expect(stdout.contains("Usage:"))
                 #expect(
                     stdout.contains(
-                        "wendy cloud tunnel <local-port>:<remote-port>[/udp] [flags]"
+                        "wendy cloud tunnel [<local-port>:<remote-port>[/udp]] [flags]"
                     )
                 )
                 #expect(stdout.contains("--broker-url"))

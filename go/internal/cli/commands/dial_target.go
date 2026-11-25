@@ -20,26 +20,20 @@ import (
 // exactly what let a spoofed mDNS answer redirect a connection to another
 // same-CA host.
 type dialTarget struct {
-	// PinKey is the name the user asked for (--device value, saved default, or
-	// the picker's device name) — never the resolved IP, which changes on
+	// PinKey is the name the user asked for (--device value or the picker's
+	// device name) — never the resolved IP, which changes on
 	// ordinary DHCP churn and would train users to unpin reflexively. An empty
-	// PinKey disables pin enforcement for this dial.
+	// PinKey cannot supply an expected identity for an enrolled-device dial.
 	PinKey string
-	// PinnedKey is the key the governing pin is ACTUALLY filed under, which is
-	// not always PinKey: lookupPin resolves a pin across every name the device
-	// answers to, so dialling "wendyos-calm-zinnia" can be governed by a pin
-	// recorded under the cloud roster's "calm-zinnia". Empty when no pin
-	// governs this dial.
-	//
-	// It exists because a refusal has to name a key `wendy device unpin` can
-	// act on. Naming the dialled key when an alias holds the pin sends the user
-	// to a command that clears nothing, and the next dial refuses identically —
-	// a permanent dead end dressed up as an escape hatch.
+	// PinnedKey is the selected-name key holding the saved binding. Empty
+	// when that name has no binding. Refusals use it for recovery guidance.
 	PinnedKey string
 	// Addr is the host:port actually dialed, and the first of Candidates when
 	// there are several. It stays the single "primary" address so every caller
 	// and diagnostic that only ever wanted one address keeps working.
 	Addr string
+	// A discovered endpoint explicitly advertising mTLS has no plaintext rung.
+	RequiresMTLS bool
 	// Candidates are every address this dial may try, in the order to try them
 	// (see orderDialCandidates: IPv4, then routable IPv6, then link-local/ULA).
 	// Empty means "just Addr" — read it through dialCandidates, never directly.
@@ -92,12 +86,9 @@ func (t dialTarget) refusalKey() string {
 // target's Expected or refusalKey. Deriving both from the same resolution makes
 // that disagreement unrepresentable.
 //
-// PinnedKey is non-empty for exactly the dials lookupPin found a pin for, and
-// never empty when it did: the key comes from pinCandidateKeys, which drops
-// empty candidates, so "a pin governs" and "we know the key it is filed under"
-// are the same fact. Expected is deliberately NOT consulted — it is set only
-// when a pin names an asset, so a pin without one would read as unpinned, and
-// the constraint Expected carries is enforced in VerifyConnection, not here.
+// PinnedKey is non-empty exactly when the selected name has a saved pin.
+// Expected is deliberately not consulted: older organization-only pins still
+// forbid plaintext even though they cannot supply a complete device identity.
 func (t dialTarget) pinned() bool {
 	return t.PinnedKey != ""
 }
@@ -126,9 +117,8 @@ var identityMismatchFn = (*grpcclient.AgentConnection).IdentityMismatch
 var pinMismatchFn = (*grpcclient.AgentConnection).PinMismatch
 
 // newDialTarget resolves the pin for pinKey and returns a target constrained by
-// it. Key resolution deliberately may read discovery-derived names: choosing
-// the wrong key can only ever produce a mismatch — a stricter outcome — never
-// a bypass, because the trust decision itself stays on the certificate.
+// it. Only the selected name's saved binding supplies the expected identity;
+// discovery supplies routing addresses, never alternate identity bindings.
 func newDialTarget(pinKey, addr string) dialTarget {
 	return newDialTargetCandidates(pinKey, []string{addr})
 }
@@ -154,11 +144,8 @@ func newDialTargetCandidates(pinKey string, addrs []string) dialTarget {
 	return target
 }
 
-// governingPin resolves the pin that governs pinKey across every name the
-// device answers to, returning it and the key it is actually filed under. It is
-// the single reader of pin state on the dial path, so the identity a dial
-// enforces, the fact that it is pinned, and the key a refusal names can never
-// disagree about which pin they are talking about.
+// governingPin reads the selected name's saved binding once, so TLS checks,
+// plaintext refusal and recovery guidance all use the same pin state.
 func governingPin(pinKey string) (config.DevicePin, string, bool) {
 	if pinKey == "" {
 		return config.DevicePin{}, "", false
@@ -201,7 +188,7 @@ func governingPin(pinKey string) (config.DevicePin, string, bool) {
 // always did (see typedVMBarePinKey).
 func pinKeyForAddr(addr string) string {
 	// SplitHostPort accepts non-numeric service names, so vm:dev would
-	// otherwise become just "vm" when set-default/unpin derives its key.
+	// otherwise become just "vm" when unpin derives its key.
 	if name, matched, err := simulatorName(addr); err == nil && matched {
 		return vmDeviceIDPrefix + name
 	}
@@ -283,22 +270,6 @@ func runningVMAgentPort(name string) (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-// dialPinKeyForDevice is the pin key a dial to device — as typed for --device
-// or set-default — is checked under. It adds the default agent port and
-// re-aims a running VM's mTLS forward first, exactly as resolveDeviceAddress
-// does, because a running VM's forward is keyed by its port: `set-default
-// 127.0.0.1` dials 127.0.0.1:50051, which is checked under vm:<name> while a
-// VM forwards that port and under the bare 127.0.0.1 otherwise.
-func dialPinKeyForDevice(device string) string {
-	if _, matched, err := simulatorName(device); matched || err != nil {
-		return pinKeyForAddr(device)
-	}
-	if _, _, err := net.SplitHostPort(device); err != nil {
-		device = hostPort(device, defaultAgentPort)
-	}
-	return pinKeyForAddr(vmForwardDialAddr(device))
 }
 
 // typedVMBarePinKey is the key a connection judged under pinKey, and dialled
@@ -396,12 +367,12 @@ func isLoopbackHost(host string) bool {
 }
 
 // expectedIdentityFor returns the asset identity pinned for pinKey, or nil when
-// the host is unpinned or its pin predates asset ids. Nil means "first contact
-// is permissive" — the posture that keeps legacy and unprovisioned devices
-// working; the pin is written on the first successful connect.
+// the host is unpinned or its pin predates asset ids. Enrolled-device mTLS
+// refuses that missing binding; obtain it through trusted enrollment or Cloud
+// inventory before connecting. Pre-provisioning plaintext is a separate path.
 //
-// The lookup goes through lookupPin, so a pin recorded under any of the
-// device's names — hostname, mesh name, or display name — is honoured here.
+// Only a saved binding for the selected name can supply this identity.
+// Unauthenticated discovery aliases cannot create or replace that binding.
 func expectedIdentityFor(pinKey string) *certs.WendyIdentity {
 	pin, _, ok := governingPin(pinKey)
 	if !ok {
@@ -430,32 +401,11 @@ func expectedIdentityForPin(pin config.DevicePin) *certs.WendyIdentity {
 	return &certs.WendyIdentity{OrgID: int32(pin.OrgID), EntityType: certs.EntityAsset, EntityID: pin.AssetID}
 }
 
-// pinCandidateKeys returns the keys a pin for pinKey may have been recorded
-// under, most-specific first: the name the caller dialed, then — from the
-// discovery-cache entry whose hostname matches it — that device's mesh name and
-// display name. One device answers to all three, and different surfaces record
-// under different ones: enforceDevicePin records the dialed mDNS hostname
-// (wendyos-calm-zinnia), cloud seeding records the asset name the roster
-// carries (calm-zinnia, which is the cache's display name), and mesh dials name
-// the device by its mesh name. A cloud Asset carries only {Id, Name} — no
-// hostname — so the cloud side cannot record under the dial key, and the
-// reconciliation has to happen here on lookup.
-//
-// Duplicates are dropped under the same normalisation the pin store applies, so
-// an alias that is only a cosmetic variant of the dialed name never produces a
-// second, redundant candidate, and empty names are never looked up.
-//
-// Reading discovery-derived names to pick a key is safe FOR LOOKUP in a way
-// that reading them to make a trust decision would not be: consulting an extra
-// candidate can only ever FIND a pin, never discard one, so an attacker-chosen
-// alias can at most impose a constraint that the real device fails — a stricter
-// outcome, not a bypass. The trust decision itself stays on the certificate.
-//
-// That justification is about lookup and does not carry to clearing. A caller
-// that DELETES every candidate turns the same attacker-chosen alias into a way
-// to drop another device's pin, which is a bypass — see clearPinsGoverning,
-// which consumes this list but removes an alias's pin only when it names the
-// same device as the governing one.
+// pinCandidateKeys returns the selected name and discovery-cache alias hints
+// for removing redundant saved entries. Names are deduplicated using the pin
+// store's normalization. These unauthenticated hints never supply an expected
+// identity: clearPinsGoverning removes an alias only when its saved binding
+// names the same device as the selected name's own binding.
 func pinCandidateKeys(pinKey string) []string {
 	if pinKey == "" {
 		return nil
@@ -480,50 +430,19 @@ func pinCandidateKeys(pinKey string) []string {
 	return candidates
 }
 
-// lookupPin resolves the pin governing pinKey across every candidate key,
-// returning it, the key it was found under, and whether there was one.
-//
-// A cloud-sourced pin outranks a LAN-sourced one wherever each sits in the
-// candidate order: cloud learned the binding from the org's cloud over an
-// authenticated session, while a LAN pin records only what some host on the
-// local network presented. Among pins of equal source the earliest candidate
-// wins, which keeps the dialed name authoritative over an alias.
-//
-// That precedence yields to one invariant: an asset-less cloud pin never
-// displaces an incumbent carrying an asset id. Cloud authority decides WHICH
-// binding to believe, and applying it is worth nothing if it leaves
-// expectedIdentityFor with no binding to enforce — a host constrained to one
-// asset would become constrained to none, which is exactly the same-CA-host
-// redirect this path exists to stop. An asset-less pin is a real state, not a
-// hypothetical: config's EvaluateDevicePin carries a dedicated branch for a
-// cloud-sourced pin with no asset id.
-//
-// Because the search only ever adds keys, a host pinned under pinKey stays
-// pinned no matter what the cache says or fails to say — the property that lets
-// the cache be consulted best-effort without a cache outage quietly switching
-// enforcement off.
+// lookupPin reads the binding for the selected name. Cloud may authenticate its
+// own inventory names, but discovery cannot assert that a different hostname
+// is an alias for one of them. Verified enrollment saves additional names as
+// explicit bindings instead.
 func lookupPin(cfg *config.Config, pinKey string) (config.DevicePin, string, bool) {
-	if cfg == nil {
+	if cfg == nil || pinKey == "" {
 		return config.DevicePin{}, "", false
 	}
-	var best config.DevicePin
-	var bestKey string
-	found := false
-	for _, key := range pinCandidateKeys(pinKey) {
-		pin, ok := cfg.DevicePinFor(key)
-		if !ok {
-			continue
-		}
-		if !found {
-			best, bestKey, found = pin, key, true
-			continue
-		}
-		if best.Source != config.PinSourceCloud && pin.Source == config.PinSourceCloud &&
-			(pin.AssetID != "" || best.AssetID == "") {
-			best, bestKey = pin, key
-		}
+	pin, ok := cfg.DevicePinFor(pinKey)
+	if !ok {
+		return config.DevicePin{}, "", false
 	}
-	return best, bestKey, found
+	return pin, pinKey, true
 }
 
 // errDeviceIdentityRefused is what every refusal in this package answers
@@ -541,6 +460,9 @@ type deviceIdentityRefusalError struct {
 	msg        string
 	diagnostic *devicePinDiagnostic
 	cause      error
+	// accept saves the identity the device presented, after the user
+	// confirmed it (see acceptChangedIdentity). nil for every other refusal.
+	accept func() error
 }
 
 func (e *deviceIdentityRefusalError) Error() string { return e.msg }
@@ -558,16 +480,16 @@ func refuseIdentity(format string, args ...any) *deviceIdentityRefusalError {
 	return &deviceIdentityRefusalError{msg: fmt.Sprintf(format, args...)}
 }
 
-// identityRefusal renders a wrong-device rejection. Same text in interactive,
-// JSON, and non-interactive modes — there is deliberately no "trust this?"
-// prompt, because a MITM warning that can be dismissed gets dismissed.
+// identityRefusal renders a wrong-device rejection. The front doors ask an
+// interactive user whether to trust the presented identity, as SSH does for a
+// changed host key; without a terminal it stays a refusal.
 func identityRefusal(pinKey string, im *certs.IdentityMismatchError) error {
 	saved, now := identityMismatchSides(im)
-	return refuseDevicePin(devicePinDiagnostic{
-		hostname: pinKey,
-		heading:  fmt.Sprintf("Connection blocked: device %q identity changed.", pinKey),
-		details:  fmt.Sprintf("Saved: %s\nNow:   %s", saved, now),
-	})
+	var accept func() error
+	if im.GotPrincipal != "" || im.GotAsset != "" {
+		accept = saveChangedIdentity(pinKey, observedDeviceIdentity{mTLS: true, orgID: int(im.GotOrg), assetID: im.GotAsset, principal: im.GotPrincipal})
+	}
+	return refuseChangedIdentity(pinKey, fmt.Sprintf("Saved: %s\nNow:   %s", saved, now), accept)
 }
 
 // identityMismatchSides names the expected and presented identities. A SPIFFE
@@ -611,9 +533,12 @@ type noAuthenticatedEndpointError struct {
 	candidates []string
 	certSeen   bool
 	// diagnostic is set only when the device answered without TLS — the
-	// unprovisioned case, which is told how to unpin. Unwrap exposes it, styled
-	// like the identity refusals it then reads as.
+	// unprovisioned case. Unwrap exposes it, styled like the identity refusals
+	// it then reads as.
 	diagnostic *devicePinDiagnostic
+	// accept forgets the saved identity once the user confirms connecting to
+	// the device as unenrolled (see acceptChangedIdentity). Set with diagnostic.
+	accept func() error
 }
 
 func (e *noAuthenticatedEndpointError) Error() string { return e.msg }
@@ -647,6 +572,59 @@ func (e *unprovisionedRefusal) Error() string { return e.msg }
 // steps it shares.
 func (e *unprovisionedRefusal) CLIMessage() string { return e.diagnostic.message(true) }
 
+// missingLoginError is the pinned refusal when this CLI holds no client
+// certificate at all (see pinnedRefusalError). No authenticated connection
+// could be attempted, so nothing is known about the device: not whether it is
+// reachable, and not which identity it would present. The message says only
+// that, and that signing in is the next step. The refusal stays in the chain,
+// so every caller that branches on it does what it did before.
+type missingLoginError struct {
+	refusal *noAuthenticatedEndpointError
+}
+
+// missingLoginStep matches the step `wendy discover` gives for the same
+// situation (missingLANCredentials).
+const missingLoginStep = "Run 'wendy auth login' with an account that can access the device's organization, then retry."
+
+func (e missingLoginError) Error() string {
+	device := "this device"
+	if e.refusal.pinnedKey != "" {
+		device = fmt.Sprintf("device %q", e.refusal.pinnedKey)
+	}
+	return "Not signed in: this CLI has no client certificates, so it could not attempt an authenticated connection to " + device + ".\n" +
+		"The saved pin is intact; unpinning the device is not the fix.\n  " + missingLoginStep
+}
+
+// NextSteps exposes the sign-in step the message ends with to JSON mode.
+func (e missingLoginError) NextSteps() []string { return []string{missingLoginStep} }
+
+func (e missingLoginError) Unwrap() error { return e.refusal }
+
+// orgOnlyBindingError refuses a device whose saved binding names an
+// organization but no device. Older CLIs saved these. No certificate can
+// satisfy one, so the device stays refused until the binding is cleared: say
+// which one it is and how, rather than only that an identity is required.
+type orgOnlyBindingError struct {
+	// key is the name the binding is saved under, which `wendy device unpin`
+	// has to be handed to clear it.
+	key string
+}
+
+func (e orgOnlyBindingError) step() string {
+	return "Clear the saved identity, then connect again: wendy device unpin " + shellQuoteArg(e.key)
+}
+
+func (e orgOnlyBindingError) Error() string {
+	return fmt.Sprintf("The identity this CLI saved for %q names an organization but no device, so it cannot verify the device that answers.\n  ", e.key) + e.step()
+}
+
+// NextSteps exposes the unpin step the message ends with to JSON mode.
+func (e orgOnlyBindingError) NextSteps() []string { return []string{e.step()} }
+
+// Is keeps the refusal a missing expected identity: recovery, the Cloud name
+// fallback and the unauthenticated-transport guard all stop on that sentinel.
+func (e orgOnlyBindingError) Is(target error) bool { return target == certs.ErrExpectedDeviceIdentity }
+
 // blocksUnauthenticatedFallback reports whether err forbids reaching this device
 // over a transport that enforces nothing — today the picker's Bluetooth
 // fallback, where attemptBLEConnect sets no ExpectedIdentity and
@@ -661,7 +639,7 @@ func (e *unprovisionedRefusal) CLIMessage() string { return e.diagnostic.message
 //   - errNoAuthenticatedEndpoint: nothing authenticated answered a host we hold
 //     a PIN for — meaning we have reached this device over mTLS before and know
 //     it authenticates. An unauthenticated BLE peer advertising its name is not
-//     evidence of being that device, and BLE checks nothing, so accepting one
+//     evidence of being that device, so accepting one
 //     here would be the downgrade the pin exists to prevent. The error is
 //     raised only under target.pinned(), so an unpinned device that simply did
 //     not answer still gets its fallback — which is what that fallback is for.
@@ -672,7 +650,7 @@ func (e *unprovisionedRefusal) CLIMessage() string { return e.diagnostic.message
 // facts apart. It is not licence to route a pinned device onto an
 // unauthenticated transport.
 func blocksUnauthenticatedFallback(err error) bool {
-	return errors.Is(err, errDeviceIdentityRefused) || errors.Is(err, errNoAuthenticatedEndpoint)
+	return errors.Is(err, errDeviceIdentityRefused) || errors.Is(err, errNoAuthenticatedEndpoint) || errors.Is(err, certs.ErrExpectedDeviceIdentity)
 }
 
 // pinnedHostNoAuthenticatedEndpointError renders the honest version of what
@@ -723,12 +701,14 @@ func pinnedHostNoAuthenticatedEndpointError(pinKey string, candidates []string, 
 				strings.Join(silent, ", "), strings.Join(hostsOf(plaintext), ", "))
 		}
 		diagnostic := devicePinDiagnostic{
-			hostname: pinKey,
-			heading:  fmt.Sprintf("Connection blocked: device %q is pinned to an enrolled identity but now answers unprovisioned.", pinKey),
-			details:  details,
+			hostname:   pinKey,
+			heading:    fmt.Sprintf("Connection blocked: device %q is pinned to an enrolled identity but now answers unprovisioned.", pinKey),
+			details:    details,
+			unenrolled: true,
 		}
 		failure.msg = diagnostic.message(false)
 		failure.diagnostic = &diagnostic
+		failure.accept = forgetSavedIdentity(pinKey)
 		return failure
 	}
 	var where string
@@ -992,41 +972,27 @@ func describeAddrFamilies(v4, v6 int) string {
 }
 
 // spkiRefusal renders the OTHER pin's rejection: the SPKI store's, which is
-// keyed by the certificate's own asset URN rather than by hostname and fires
-// when a device's public key changes while its pinned certificate is still
-// valid.
-//
-// Without this the store's PinMismatchError reached the user only as whatever
-// text survived gRPC's handshake wrapper — a message that names neither the
-// host as the user knows it nor any way out, leaving hand-editing
-// known_devices.json as the only recovery. The SPKI store has no hostname in
-// it, so the key comes from the dial: pinKey when there is one, the store's own
-// display name otherwise.
-//
-// The command it prints names pm.Key — the SPKI store's own key — not the
-// hostname, even though the hostname is what the user recognises. Naming the
-// hostname is what made this refusal a dead end for the two populations that
-// hit it most: the picker and `wendy device list` dial the IP first, so the
-// message named an IP that keys nothing and whose asset nothing in local state
-// can derive; and agents that never advertise `orgid` (the Swift macOS agent,
-// Linux agents before 2026-07-18) leave the discovery cache with no identity to
-// derive it from either. pm.Key is in hand at the moment of refusal and is
-// exactly what the store is keyed by, so `wendy device unpin <urn>` reaches the
-// entry directly — and clears any config pin naming the same identity with it.
+// keyed by the certificate's own identity rather than by hostname and fires
+// when a device's public key changes while its certificate still names the
+// same device. The SPKI store has no hostname in it, so the name comes from
+// the dial: pinKey when there is one, the store's own display name otherwise.
+// Accepting it forgets the old key, so the next connection records the new one.
 func spkiRefusal(pinKey string, pm *devicepin.PinMismatchError) error {
 	named := pinKey
 	if named == "" {
 		named = pm.DisplayName
 	}
-	// A store key is always present in a real mismatch; fall back to the name
-	// only so a hand-built error still points at something.
-	unpinArg := pm.Key
-	if unpinArg == "" {
-		unpinArg = named
+	// The certificate named the identity this key is saved for, so the warning
+	// is about the key and not about a different identity.
+	refusal := refuseDevicePinRefusal(devicePinDiagnostic{
+		hostname: named,
+		details:  fmt.Sprintf("Identity: %s\nSaved key: %s\nNow key:   %s", pm.Key, pm.Want, pm.Got),
+		changed:  true, keyChanged: true,
+	})
+	refusal.accept = func() error {
+		_, err := removeSPKIPinsReporting([]string{pm.Key})
+		return err
 	}
-	refusal := refuseIdentity(
-		"device %q presented a different certificate key than the one pinned for %s (pinned %s, now %s); refusing to connect — if its certificate was legitimately reissued, run 'wendy device unpin %s'",
-		named, pm.Key, pm.Want, pm.Got, unpinArg)
 	refusal.cause = pm
 	return refusal
 }

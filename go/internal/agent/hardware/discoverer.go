@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 
@@ -24,6 +25,26 @@ type SystemHardwareDiscoverer struct {
 	discoverGPUs       func() []gpudiscovery.Device
 	classifyTransport  func(base string) (camera.Transport, string)
 	enumerateLibcamera func(ctx context.Context) (map[string]string, error)
+	listVideoNodes     func() ([]string, error)
+
+	shareMu       sync.RWMutex
+	shareReporter CameraShareReporter
+}
+
+// CameraShareReporter tells camera discovery which video nodes the agent
+// created for camera sharing, and how each real camera is shared.
+type CameraShareReporter interface {
+	// IsShareNode reports whether path is a share node, which is not a camera.
+	IsShareNode(path string) bool
+	// CameraShareReport returns share properties by device path.
+	CameraShareReport(ctx context.Context) map[string]map[string]string
+}
+
+// SetCameraShareReporter sets the reporter; nil restores plain discovery.
+func (d *SystemHardwareDiscoverer) SetCameraShareReporter(r CameraShareReporter) {
+	d.shareMu.Lock()
+	d.shareReporter = r
+	d.shareMu.Unlock()
 }
 
 func NewSystemHardwareDiscoverer(logger *zap.Logger) *SystemHardwareDiscoverer {
@@ -31,6 +52,7 @@ func NewSystemHardwareDiscoverer(logger *zap.Logger) *SystemHardwareDiscoverer {
 		logger:             logger,
 		classifyTransport:  camera.Classify,
 		enumerateLibcamera: camera.EnumerateLibcamera,
+		listVideoNodes:     func() ([]string, error) { return filepath.Glob("/dev/video*") },
 	}
 }
 
@@ -243,9 +265,17 @@ func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabil
 func (d *SystemHardwareDiscoverer) discoverCamera(ctx context.Context) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
 	var caps []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
 
-	entries, err := filepath.Glob("/dev/video*")
+	entries, err := d.listVideoNodes()
 	if err != nil {
 		return nil
+	}
+
+	d.shareMu.RLock()
+	reporter := d.shareReporter
+	d.shareMu.RUnlock()
+	var shares map[string]map[string]string
+	if reporter != nil {
+		shares = reporter.CameraShareReport(ctx)
 	}
 
 	libcameraIDs, libErr := d.enumerateLibcamera(ctx)
@@ -260,6 +290,9 @@ func (d *SystemHardwareDiscoverer) discoverCamera(ctx context.Context) []*agentp
 	var pendings []pending
 
 	for _, path := range entries {
+		if reporter != nil && reporter.IsShareNode(path) {
+			continue
+		}
 		base := filepath.Base(path)
 		devNum := strings.TrimPrefix(base, "video")
 
@@ -273,6 +306,9 @@ func (d *SystemHardwareDiscoverer) discoverCamera(ctx context.Context) []*agentp
 		props := map[string]string{"transport": transport.String()}
 		if driver != "" {
 			props["driver"] = driver
+		}
+		for k, v := range shares[path] {
+			props[k] = v
 		}
 
 		c := &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{

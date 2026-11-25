@@ -1,7 +1,7 @@
 # `wendy device enroll`
 
 Add a device to your Wendy Cloud organization so you can manage it remotely.
-For a new board, first follow its [installation guide](/docs/#2-set-up-a-device).
+For a new board, first follow its [installation guide](/docs/installation).
 For Wendy Lite, use the [USB enrollment guide](/docs/advanced/cli/lite-enrollment).
 
 ## Enroll a device
@@ -41,6 +41,15 @@ Renaming it does not change that identity.
 ## Requirements and troubleshooting
 
 - You need a current agent and permission to enroll in the selected organization.
+- The device needs a route to the internet: it contacts the certificate service
+  itself to enroll. A device connected over USB alone has none. Set up Wi-Fi
+  first with [`wendy device wifi connect`](./wifi.md#unenrolled-devices), or
+  plug in Ethernet. When the device reports that it has no internet route, the
+  CLI stops before anything is reserved in Cloud.
+- If enrollment fails after Cloud registered the device, its name stays
+  reserved and enrolling again under that name is refused as taken. Run the
+  `wendy cloud device unenroll --device ...` command the error prints to remove
+  the reserved asset, fix what stopped the device, then enroll again.
 - A Mac target needs macOS 26 or later for Cloud enrollment. On macOS 15 you can
   still run local apps; update macOS before enrolling.
 - If the device was intentionally reset or reflashed, the CLI may ask whether

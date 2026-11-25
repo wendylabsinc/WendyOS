@@ -406,7 +406,7 @@ func TestVMStartWithoutPortOnARunningVMSaysSoInsteadOfMoving(t *testing.T) {
 	t.Cleanup(func() { vmStatusFn = saved })
 	// Fails, so a regression stops in resolveVMSpec instead of launching QEMU.
 	savedQEMU, preparedLaunch := ensureQEMUFn, false
-	ensureQEMUFn = func(context.Context) error {
+	ensureQEMUFn = func(context.Context, vm.Arch) error {
 		preparedLaunch = true
 		return errors.New("test: no emulator")
 	}

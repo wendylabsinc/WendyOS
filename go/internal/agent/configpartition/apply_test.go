@@ -259,7 +259,7 @@ func TestApplyWendyConf_DeletesFileAfterApply(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	applyWendyConf(logger, dir)
+	applyWendyConf(logger, dir, t.TempDir())
 
 	if _, err := os.Stat(conf); !os.IsNotExist(err) {
 		t.Error("wendy.conf should be deleted after applyWendyConf")
@@ -269,7 +269,7 @@ func TestApplyWendyConf_DeletesFileAfterApply(t *testing.T) {
 func TestApplyWendyConf_NoFile(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	// Should return without panic when file doesn't exist.
-	applyWendyConf(logger, t.TempDir())
+	applyWendyConf(logger, t.TempDir(), t.TempDir())
 }
 
 func TestValidDeviceName(t *testing.T) {
@@ -756,5 +756,20 @@ func TestApplyPreProvisioningWriteFailurePreservesHandoff(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestApplyBinaryUpdateDropsAMarkerLeftWithoutASeed(t *testing.T) {
+	cfg := t.TempDir()
+	marker := filepath.Join(cfg, localAgentMarker)
+	// An older agent installed the seed and did not know the marker.
+	if err := os.WriteFile(marker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if applyBinaryUpdate(zap.NewNop(), cfg, filepath.Join(t.TempDir(), "wendy-agent")) {
+		t.Fatal("nothing to install")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("a marker without its seed must go")
 	}
 }

@@ -1,0 +1,54 @@
+{
+  "tool": "container_list",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"containers\": [{\"app_name\": \"sensor-dashboard\", \"app_version\": \"latest\", \"failure_count\": 0, \"running_state\": \"STOPPED\"}]}"
+        }
+      ],
+      "structuredContent": {
+        "containers": [
+          {
+            "app_name": "sensor-dashboard",
+            "app_version": "latest",
+            "failure_count": 0,
+            "running_state": "STOPPED"
+          }
+        ]
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  },
+  "after": {
+    "actions": [
+      "tool:container_start",
+      "cli:device apps start"
+    ],
+    "replies": [
+      {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"containers\": [{\"app_name\": \"sensor-dashboard\", \"app_version\": \"latest\", \"failure_count\": 0, \"running_state\": \"RUNNING\"}]}"
+          }
+        ],
+        "structuredContent": {
+          "containers": [
+            {
+              "app_name": "sensor-dashboard",
+              "app_version": "latest",
+              "failure_count": 0,
+              "running_state": "RUNNING"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

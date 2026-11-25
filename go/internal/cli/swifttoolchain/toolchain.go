@@ -427,7 +427,7 @@ func findSwiftProductWithOptions(
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return "", fmt.Errorf("product picker: %w", err)
 	}

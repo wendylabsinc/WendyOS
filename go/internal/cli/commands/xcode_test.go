@@ -3,14 +3,20 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 // ---------------------------------------------------------------------------
@@ -914,5 +920,38 @@ func TestAssembleXcodeSyncEntries_SandboxAndFiles(t *testing.T) {
 	}
 	if !remotes["ops/Brewfile"] {
 		t.Error("expected explicit Brewfile entry")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runMacOSXcodeWithAgent
+// ---------------------------------------------------------------------------
+
+// countingVersionAgent counts GetAgentVersion calls.
+type countingVersionAgent struct {
+	agentpb.WendyAgentServiceClient
+	calls int
+}
+
+func (a *countingVersionAgent) GetAgentVersion(context.Context, *agentpb.GetAgentVersionRequest, ...grpc.CallOption) (*agentpb.GetAgentVersionResponse, error) {
+	a.calls++
+	return &agentpb.GetAgentVersionResponse{CpuArchitecture: runtime.GOARCH}, nil
+}
+
+// runWithAgentRecorded fetches the device version just before an Xcode run,
+// so the Xcode path must reuse it rather than ask the device again.
+func TestRunMacOSXcodeWithAgentReusesCachedVersion(t *testing.T) {
+	agent := &countingVersionAgent{}
+	conn := &grpcclient.AgentConnection{AgentService: agent}
+	// An architecture the host can never match stops the run at the first
+	// check, and only the cached response carries it.
+	conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: "darwin", CpuArchitecture: "cached-arch"})
+
+	err := runMacOSXcodeWithAgent(context.Background(), conn, t.TempDir(), &appconfig.AppConfig{AppID: "app"}, runOptions{})
+	if !errors.Is(err, errProjectTargetMismatch) || !strings.Contains(err.Error(), "cached-arch") {
+		t.Fatalf("err = %v, want the architecture mismatch from the cached version", err)
+	}
+	if agent.calls != 0 {
+		t.Fatalf("GetAgentVersion called %d times, want 0: the cached version should be reused", agent.calls)
 	}
 }

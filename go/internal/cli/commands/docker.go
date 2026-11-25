@@ -294,6 +294,13 @@ func appleContainerPushScheme(registryImage string) (string, error) {
 // authentication and verifies the CLI has the necessary certs.
 // Returns an error if the device is provisioned but no CLI certs are available.
 func requireRegistryAuth(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	if strings.HasPrefix(conn.Host, "unix:") {
+		// A container with the admin entitlement reaches the agent over its
+		// socket with no client certificates; the socket is its credential.
+		// If a registry push is ever really needed over the socket, it fails
+		// with its own error.
+		return nil
+	}
 	resp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
 	if err != nil {
 		return nil // can't determine provisioning status; let the push fail naturally
@@ -1569,6 +1576,9 @@ func ensureOCIExportBuilder(ctx context.Context, w io.Writer) (string, error) {
 			"--driver-opt", "network=host",
 		)
 		if out, err := cmd.CombinedOutput(); err != nil {
+			if missing := buildxMissingError(ctx); missing != nil {
+				return "", missing
+			}
 			return "", fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
 		}
 	}
@@ -1684,18 +1694,39 @@ func buildkitRegistryConfig(registryAddr string, plainHTTP bool, keypair *[2]str
 // here: callers update the existing container in place so its BuildKit state
 // volume survives dynamic proxy-port and certificate changes.
 func ensureRegistryBuilderInstance(ctx context.Context, builderName string) (created bool, err error) {
-	if exec.CommandContext(ctx, "docker", "buildx", "inspect", builderName).Run() == nil {
+	if imageBuilderCommandContext(ctx, "docker", "buildx", "inspect", builderName).Run() == nil {
 		return false, nil
 	}
-	cmd := exec.CommandContext(ctx, "docker", "buildx", "create",
+	cmd := imageBuilderCommandContext(ctx, "docker", "buildx", "create",
 		"--name", builderName,
 		"--driver", "docker-container",
 		"--driver-opt", "network=host",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if missing := buildxMissingError(ctx); missing != nil {
+			return false, missing
+		}
 		return false, fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
 	}
 	return true, nil
+}
+
+// buildxMissingError explains a failed buildx command whose cause is that
+// Docker has no Buildx plugin, and returns nil for any other cause. It runs
+// only after a buildx command failed, so a working install never pays for it.
+func buildxMissingError(ctx context.Context) error {
+	if imageBuilderCommandContext(ctx, "docker", "buildx", "version").Run() == nil {
+		return nil
+	}
+	return buildxNotInstalledError()
+}
+
+// buildxNotInstalledError is the refusal for a Docker install without the
+// Buildx plugin, shared by the pre-build check and buildxMissingError.
+func buildxNotInstalledError() error {
+	return withNextSteps(commandErrorf(errBuilderUnavailable, "%w; wendy builds images with it", errBuildxMissing),
+		"Install the Docker Buildx plugin: https://docs.docker.com/go/buildx/ (Docker Desktop, OrbStack and Rancher Desktop include it).",
+		"Check it with `docker buildx version`, then run again.")
 }
 
 // ensurePlaintextBuilder ensures the "wendy" buildx builder exists with plain
@@ -2488,9 +2519,9 @@ func noteComposeChunkStall(logOutput io.Writer, chunkErr error, cfg chunkUploadC
 // prepared image is registered under repo:latest, so Compose's existing
 // CreateContainer orchestration can consume it without a registry round-trip.
 //
-// Agents that predate PrepareImage (or any other non-build chunk-path failure)
-// fall back to pushing this exact already-built layout to the device registry;
-// the image is never rebuilt for the fallback.
+// In auto mode, missing chunk RPCs fall back to pushing this exact already-
+// built layout through the existing registry route. Cloud v2 stops on other
+// chunk failures; LAN and legacy Cloud keep their broader fallback behavior.
 func buildAndPrepareComposeImageForAgent(ctx context.Context, conn *grpcclient.AgentConnection, regPort int, agentOS, builder, dir, repo, platform, dockerfile string, buildArgs map[string]string, cacheKey string, streamOutput, logOutput io.Writer) error {
 	return buildAndPrepareComposeImage(ctx, conn, regPort, agentOS, builder, dir, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput, true)
 }
@@ -2500,11 +2531,11 @@ func buildAndPrepareComposeImageForAgentForce(ctx context.Context, conn *grpccli
 }
 
 func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConnection, regPort int, agentOS, builder, dir, repo, platform, dockerfile string, buildArgs map[string]string, cacheKey string, streamOutput, logOutput io.Writer, allowRegistryFallback bool) error {
-	normalized, err := normalizeImageBuilder(builder)
+	normalized, err := resolveOCIExportBuilder(builder)
 	if err != nil {
 		return err
 	}
-	if normalized != imageBuilderDocker {
+	if normalized != imageBuilderDocker && normalized != imageBuilderBuildkit {
 		return buildAndPushImageForAgent(ctx, conn, regPort, agentOS, builder, dir, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput)
 	}
 
@@ -2522,7 +2553,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 	defer func() { _ = gcOCILayoutDir(layoutDir) }()
 
 	native, err := buildOrUpdateOCILayout(dir, dockerfile, platform, resolvedStagefileBackend(ctx), buildArgs, layoutDir, func() error {
-		return buildImageToOCILayoutDirWithDocker(ctx, dir, dockerfile, platform, buildArgs, layoutDir, streamOutput, logOutput)
+		return buildImageToOCILayoutDir(ctx, dir, dockerfile, platform, buildArgs, normalized, layoutDir, streamOutput, logOutput)
 	})
 	if err != nil {
 		return err
@@ -2570,15 +2601,28 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 			ImageConfig:    imageConfig,
 			ImageSignature: imageSignature,
 		})
+		if prepareErr != nil && conn.IsCloudV2 {
+			return &cloudImagePrepareError{prepareErr}
+		}
 		return prepareErr
 	}
 	uploadCfg := chunkUploadConfigFor(ctx, conn)
-	if _, chunkErr := pushLayersByChunksWithStrictPrepareOutput(ctx, conn.ContainerService, layers, prepare, streamOutput, uploadCfg); chunkErr == nil {
+	var progress *chunkPushProgress
+	if conn.IsCloudV2 {
+		progress = newChunkPushProgress()
+	}
+	if _, chunkErr := pushLayersByChunksWithPrepareMode(ctx, conn.ContainerService, layers, prepare, streamOutput, true, progress, uploadCfg); chunkErr == nil {
 		fmt.Fprintf(logOutput, "[chunks] prepared %s from missing content\n", imageName)
 		return nil
 	} else if ctx.Err() != nil {
 		return chunkErr
-	} else if blocksChunkPrepareFallback(chunkErr) {
+	} else if conn.IsCloudV2 && (!allowRegistryFallback || !isUnimplementedRPCError(chunkErr)) {
+		fmt.Fprintf(logOutput, "[chunks] image preparation failed: %v\n", chunkErr)
+		if retryableTunnelError(chunkErr) {
+			return cloudChunkTransferError(conn.Host, progress.Snapshot(), chunkErr, nil)
+		}
+		return cloudChunkDeployFailure(chunkErr)
+	} else if blocksChunkPrepareFallback(chunkErr) || chunkFailureRepeatsOnRegistryPush(chunkErr, builder) {
 		return chunkErr
 	} else if !allowRegistryFallback {
 		noteComposeChunkStall(logOutput, chunkErr, uploadCfg)
@@ -2925,6 +2969,22 @@ var ensureBuildxBuilderMu sync.Mutex
 type registryProxyEntry struct {
 	addr    string
 	dialErr func() error
+	ready   chan struct{} // Closed after connection-lifetime registration completes.
+	err     error         // Protected by dockerRegistryProxyCacheMu.
+}
+
+func (e *registryProxyEntry) result(ctx context.Context) (string, func(), func() error, error) {
+	select {
+	case <-e.ready:
+	case <-ctx.Done():
+		return "", nil, nil, ctx.Err()
+	}
+	dockerRegistryProxyCacheMu.Lock()
+	defer dockerRegistryProxyCacheMu.Unlock()
+	if e.err != nil {
+		return "", nil, nil, e.err
+	}
+	return e.addr, func() {}, e.dialErr, nil
 }
 
 // dockerRegistryProxyAddrs caches one proxy entry per AgentConnection. The
@@ -2933,7 +2993,7 @@ type registryProxyEntry struct {
 // builds and no builder teardown races can kill an in-flight push.
 var (
 	dockerRegistryProxyCacheMu sync.Mutex
-	dockerRegistryProxyAddrs   = map[*grpcclient.AgentConnection]registryProxyEntry{}
+	dockerRegistryProxyAddrs   = map[*grpcclient.AgentConnection]*registryProxyEntry{}
 )
 
 // resolveRegistryForAgent determines how Docker buildx should reach the
@@ -2946,14 +3006,14 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	if err != nil {
 		return "", nil, nil, err
 	}
-	// Hold the lock for the entire operation so concurrent callers block rather
-	// than each starting their own proxy. Proxy creation is just a local
+	// Hold the lock during cache lookup and proxy creation so concurrent callers
+	// share one proxy. Proxy creation is just a local
 	// net.Listen call, so the lock is held only briefly.
 	dockerRegistryProxyCacheMu.Lock()
-	defer dockerRegistryProxyCacheMu.Unlock()
 
 	if entry, ok := dockerRegistryProxyAddrs[conn]; ok {
-		return entry.addr, func() {}, entry.dialErr, nil
+		dockerRegistryProxyCacheMu.Unlock()
+		return entry.result(ctx)
 	}
 
 	// Start a proxy tied to context.Background so it outlives this push and is
@@ -2964,6 +3024,7 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	if conn.RegistryDialer == nil {
 		addr, stopProxy, dialErr, err = resolveRegistry(context.Background(), conn.Host, port)
 		if err != nil {
+			dockerRegistryProxyCacheMu.Unlock()
 			return "", nil, nil, err
 		}
 	} else {
@@ -2972,6 +3033,7 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 			return conn.RegistryDialer(ctx, port)
 		})
 		if proxyErr != nil {
+			dockerRegistryProxyCacheMu.Unlock()
 			return "", nil, nil, fmt.Errorf("starting cloud registry proxy: %w", proxyErr)
 		}
 		stopProxy = proxy.Close
@@ -2983,15 +3045,24 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 		}
 	}
 
-	dockerRegistryProxyAddrs[conn] = registryProxyEntry{addr: addr, dialErr: dialErr}
-	conn.ExtraClosers = append(conn.ExtraClosers, closeFunc(func() {
+	entry := &registryProxyEntry{addr: addr, dialErr: dialErr, ready: make(chan struct{})}
+	dockerRegistryProxyAddrs[conn] = entry
+	// AddCloser closes a late helper synchronously if shutdown has begun.
+	// Release the cache lock before registration because cleanup takes it too.
+	// Cache hits wait for registration so they cannot return a rejected proxy.
+	dockerRegistryProxyCacheMu.Unlock()
+	conn.AddCloser(closeFunc(func() {
 		dockerRegistryProxyCacheMu.Lock()
-		delete(dockerRegistryProxyAddrs, conn)
+		entry.err = errors.New("selected device connection has closed")
+		if dockerRegistryProxyAddrs[conn] == entry {
+			delete(dockerRegistryProxyAddrs, conn)
+		}
 		dockerRegistryProxyCacheMu.Unlock()
 		stopProxy()
 	}))
+	close(entry.ready)
 
-	return addr, func() {}, dialErr, nil
+	return entry.result(ctx)
 }
 
 // resolveRegistryForSwift is like resolveRegistry but for the Swift container
@@ -3446,7 +3517,7 @@ func (p *registryProxy) Port() int {
 	return p.listener.Addr().(*net.TCPAddr).Port
 }
 
-// Close stops the proxy and waits for the serve loop to exit.
+// Close stops the proxy and waits for its listener and active relays to exit.
 func (p *registryProxy) Close() {
 	p.cancel()
 	p.listener.Close()
@@ -3469,17 +3540,27 @@ func (p *registryProxy) LastDialError() error {
 
 func (p *registryProxy) serve(ctx context.Context) {
 	defer close(p.done)
+	var relays sync.WaitGroup
+	defer relays.Wait()
 	for {
 		conn, err := p.listener.Accept()
 		if err != nil {
 			return
 		}
-		go p.forward(ctx, conn)
+		relays.Add(1)
+		go func() {
+			defer relays.Done()
+			p.forward(ctx, conn)
+		}()
 	}
 }
 
 func (p *registryProxy) forward(ctx context.Context, client net.Conn) {
 	defer client.Close()
+	// Cancellation must interrupt established transfers as well as dialing:
+	// closing the listening socket alone leaves both io.Copy calls running.
+	stopClient := context.AfterFunc(ctx, func() { client.Close() })
+	defer stopClient()
 
 	// Test-only fault injection: with probability WENDY_REGISTRY_CHAOS, drop the
 	// connection before forwarding to simulate the device-registry tunnel
@@ -3499,10 +3580,15 @@ func (p *registryProxy) forward(ctx context.Context, client net.Conn) {
 	// healthy push as "registry unavailable".
 	p.recordDialErr(nil)
 	defer remote.Close()
+	stopRemote := context.AfterFunc(ctx, func() { remote.Close() })
+	defer stopRemote()
 
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(remote, client); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(client, remote); done <- struct{}{} }()
+	<-done
+	client.Close()
+	remote.Close()
 	<-done
 }
 

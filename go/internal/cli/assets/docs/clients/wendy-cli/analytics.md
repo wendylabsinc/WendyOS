@@ -65,7 +65,7 @@ Every event is an anonymous JSON object. The fields sent are:
 | `command_name` | string | Canonical command path, e.g. `"wendy device wifi connect"` |
 | `command_root` | string | Top-level command token |
 | `duration_ms` | integer | Command duration in milliseconds |
-| `success` | boolean | Whether the command completed without error |
+| `success` | boolean | `false` for failures; completed work, lifecycle progress, and explicit cancellation use `true`. Use the event and `properties.outcome` to distinguish completion from progress or cancellation |
 | `error_class` | string | Bounded enum describing the error category (never free-form error text) |
 | `cli_version` | string | CLI version string |
 | `os` | string | Operating system (`GOOS`) |
@@ -82,6 +82,10 @@ The installer emits `install_started`, `install_progress`, and `install_finished
 Runs emit `run_started`, `run_progress`, and `run_finished`. `app_started` is emitted immediately when the agent acknowledges container start, before attached logs end. `app_ready` is emitted only after the attached run's configured readiness check succeeds. A failed check emits `app_readiness_failed` with a canned diagnostic even when the attached command continues streaming logs. Detached runs do not claim readiness. Multi-service, Compose, fleet and provider paths do not yet all report these application milestones; command success must not substitute for a missing acknowledgement.
 
 Lifecycle properties include the current `stage` and `step`, `outcome`, `entrypoint` (`cli`, `mcp`, or `tour`), interactive-terminal status, duration and a subprocess exit code when available. Run diagnostics retain `unknown` for checks not actually observed, including authentication and build prerequisites. Recognized project and selected/reachable target checks become true only after their corresponding operations succeed. Tour events may include the selected route (`physical`, `simulator`, or `existing_device`). Failures include a stable `error_code` and an `error_detail` selected from fixed remediation sentences. Unknown failures use `step_failed` and a diagnostic-report instruction; they do not assert a root cause. No arbitrary error text is sent.
+
+Start/progress events and explicit cancellations are not errors. They carry `success=true` with `outcome=started` or `outcome=cancelled`. Cancelled CLI commands, MCP calls, and deployments retain their bounded cancellation class and add `outcome=cancelled`; this does not change command exit codes or award completion milestones. Deadlines, panics, usage errors, and unclassified failures still carry `success=false`. An unknown outcome is not promoted to success.
+
+Older releases recorded progress and cancellation as `success=false`. For historical command-error reports, filter to `event='command_executed'` and `success=false`, excluding the `context_canceled`, `user_cancelled`, and `cancelled` classes. Do not sum command failures with lifecycle failures from the same operation. Completion reports must use the terminal event and outcome, rather than `success=true` alone.
 
 MCP tools use an attempt ID per call. The run subprocess inherits that ID. Durable installation jobs preserve their attempt ID across worker processes and first-boot verification. IDs do not identify people or join browser sessions to CLI installations. Installation method is currently `unknown`; acquisition source and OS version are unavailable and are not inferred from shell environment variables.
 
@@ -139,13 +143,14 @@ categories across commands, including `run`, `watch`, `build`, and device comman
 | `device_auth_required` | A provisioned agent requires authentication that the CLI could not satisfy. |
 | `auth_required`, `auth_session_ambiguous` | Cloud login is missing, or multiple sessions require an explicit choice. |
 | `auth_certificate_failed` | Cloud certificate issuance/renewal returned a structured failure. |
+| `auth_login_expired` | The device refused this computer's login because it has expired. Either renewing it failed, or the CLI did not try: the login has no refresh token (a service account), the command is read-only monitoring, or the command already tried one renewal, for another device. |
 | `registry_auth`, `registry_unavailable` | Required registry credentials/transport are unavailable, or the Mac agent has no reachable registry. |
 | `transfer_failed` | Chunk upload, file sync, or a separate image push failed. |
 | `container_start_failed` | The agent's create/start stream ended before confirming completion. |
 | `readiness_timeout` | The application's TCP readiness probe did not succeed in time. |
 | `user_cancelled`, `context_canceled`, `context_deadline` | A picker or operation was cancelled, or its context deadline expired. |
 | `network_dns`, `network_timeout`, `network_refused`, `network_unreachable`, `connection_closed` | A typed network error identifies DNS, timeout, refused connection, unreachable network/host, or reset/broken pipe. |
-| `permission_denied`, `file_not_found`, `disk_full` | An underlying OS error identifies a local resource failure. |
+| `permission_denied`, `file_not_found`, `disk_full` | An underlying OS error identifies a local resource failure. `disk_full` also covers `wendy run` refusing a run when this computer or the device has too little free disk space. |
 | `unexpected_eof`, `process_failed` | An unclassified operation ended with a truncated stream or a subprocess exit failure. |
 | `other` | The error has no recognized category or typed cause. Its message is still never sent. |
 
@@ -166,6 +171,37 @@ only stored `other` or `grpc_other` cannot be reclassified without additional
 failure data.
 
 The CLI stores a private, timestamp-only `activation-state.json` in the active config directory after a successful install operation. A later `run_started` clears the waiting window. On a subsequent CLI launch, it emits `next_launch_no_run_24h` and `next_launch_no_run_7d` when each threshold has elapsed. Each threshold is acknowledged only after successful HTTP delivery, so failed sends can retry on later launches. These are observations of returning installations; they do not classify absent users as abandoned. The check follows analytics opt-out and creates no state when disabled. Delivery remains best-effort, and concurrent CLI processes can duplicate a threshold observation.
+
+## Outcomes and recovery reporting
+
+`command_executed` and `deploy_completed` include an explicit `outcome` of
+`completed`, `failed`, or `cancelled`. Activation events retain their existing
+outcomes. Failed outcomes include allowlisted diagnostic codes and fixed
+explanations. The CLI also sends that fixed explanation as top-level
+`error_detail` for receivers that do not yet persist properties. Arbitrary error
+messages, runtime output, paths, and credentials are not included. Versions
+beginning with `dev-` count as development builds in telemetry.
+
+The repository's `go/scripts/analytics/recovery.sql` reports observed run
+attempts, verified readiness, failures, cancellation, missing terminal events,
+and later readiness on the same installation. It requires the v2 storage schema
+in [Cloud PR #798](https://github.com/wendylabsinc/cloud/pull/798).
+
+Run it against a database with that schema using an explicit observation window
+and ingestion cutoff:
+
+```sh
+psql "$DATABASE_URL" -v start=2026-11-09 -v end=2026-11-16 \
+  -v as_of=2026-11-17 -f go/scripts/analytics/recovery.sql
+```
+
+The query separates installations with an observed development build during the
+window. It cannot identify every internal installation. Missing readiness stays
+unknown, and an app-start acknowledgement does not count as readiness. The
+first observed attempt in the window is not necessarily the installation's
+first-ever attempt. Later readiness on the same installation is an observation,
+not proof that the same app recovered. Legacy events without attempt IDs cannot
+support these measurements. Event delivery remains best-effort.
 
 ## Opting out
 

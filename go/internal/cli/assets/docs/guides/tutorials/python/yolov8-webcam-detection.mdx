@@ -1,6 +1,6 @@
 ---
-title: YOLOv8 Webcam Detection
-description: Build a full-screen real-time object detection app with YOLOv8, WebSocket streaming, and a canvas overlay on WendyOS
+title: YOLOv8 webcam detection
+description: Build a full-screen real-time object detection app with YOLOv8, WebSocket streaming, and a canvas overlay
 language: python
 ---
 
@@ -10,13 +10,15 @@ import { Accordions, Accordion } from 'fumadocs-ui/components/accordion';
 
 ![YOLOv8 Demo](/images/guides/yolov8-demo.gif)
 
-## Real-Time COCO Object Detection with YOLOv8
+## Real-time COCO object detection with YOLOv8
 
-This guide walks you through building a complete webcam detection application that runs YOLOv8 on a WendyOS device. The app features a full-screen video feed with bounding box overlays drawn on a canvas, a confidence slider, and a live count of identified objects from the COCO dataset (80 classes including people, cars, animals, and everyday objects).
+YOLO is an object detector: it predicts class labels, bounding boxes, and confidence scores from an image. Use it to find known object categories in a camera feed. A box does not give you depth or a robot destination. This example runs YOLOv8 and displays its 80 COCO classes with a confidence slider.
+
+Compare detections on clear, blurred, and partly obscured objects. Record missed objects and false positives as well as inference delay; a smooth overlay alone does not establish accuracy.
 
 The complete sample is available in the [samples repository](https://github.com/wendylabsinc/samples/tree/main/python/yolov8).
 
-### What You'll Build
+### What you'll build
 
 - A FastAPI backend that captures webcam frames (via GStreamer, with an OpenCV fallback) and runs YOLOv8 inference in a background thread
 - A WebSocket stream that sends raw JPEG frames alongside JSON detection metadata
@@ -35,7 +37,7 @@ The complete sample is available in the [samples repository](https://github.com/
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy YOLO camera template:
 
@@ -62,11 +64,72 @@ The complete sample is available in the [samples repository](https://github.com/
   </Step>
 </Steps>
 
-## Code Breakdown
+## What happens when it runs
+
+The webcam must be connected to the Jetson before the app starts.
+
+`wendy run` does three things:
+1. Build the Docker image (cross-compiling for ARM64)
+2. Push the image to your device's local registry
+3. Start the container with the configured entitlements
+
+```
+wendy run
+✔︎ Searching for WendyOS devices [5.0s]
+✔︎ Which device?: wendyos-zestful-stork.local [USB, LAN]
+✔︎ Builder ready [0.2s]
+✔︎ Container built and uploaded successfully! [45.2s]
+✔ Success
+  Started app
+INFO:     Uvicorn running on http://0.0.0.0:3005
+INFO:     Loading YOLOv8n model (CUDA: True)...
+INFO:     YOLOv8n ready — 80 COCO classes, backend: yolov8n.pt
+```
+
+Your browser will open automatically once the detection server is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
+
+```
+http://wendyos-zestful-stork.local:3005
+```
+
+Replace the hostname with your device's actual hostname.
+
+## Speeding up uploads
+
+The Ultralytics Jetson image is large (5-9 GB), which can make initial deployments slow over Wi-Fi.
+
+### Use USB-3 direct connection
+
+For the fastest uploads, connect your laptop directly to the Jetson via USB-C:
+
+1. Use a **USB 3.0 or USB-C cable** (not USB 2.0)
+2. The Wendy CLI will automatically detect the USB connection
+3. Uploads over USB are significantly faster than Wi-Fi or Ethernet
+
+```bash
+# The CLI will show [USB] when connected via USB
+wendy discover
+╭─────────────────────────────────────┬───────────────────╮
+│ Device                              │ Connection        │
+├─────────────────────────────────────┼───────────────────┤
+│ wendyos-zestful-stork.local         │ USB, LAN          │
+╰─────────────────────────────────────┴───────────────────╯
+```
+
+<CliShot flow="discover" step="devices" alt="wendy discover showing a WendyOS device reachable over USB and LAN" />
+
+### Subsequent deploys are fast
+
+Docker layer caching means that after the initial upload:
+- Only changed layers are uploaded
+- Code changes typically upload in seconds
+- The large base image layers are cached on the device
+
+## Code breakdown
 
 ![Webcam Setup](/images/webcam-setup.png)
 
-### Understanding the Architecture
+### Understanding the architecture
 
 This sample uses a **multi-stage Dockerfile that selects its base image at build time** via the `WENDY_PLATFORM` build arg, which the Wendy CLI injects after probing the target device:
 
@@ -81,7 +144,7 @@ Frames flow through the app like this:
 4. The browser renders the JPEG in an `<img>` and **draws the boxes on a `<canvas>` overlay**, so slow inference never stalls the video
 
 <Callout type="warning">
-**Large Image Size**: The Jetson CUDA base image is large (several GB). Initial uploads to your device can be slow depending on your network connection. See the [Speeding Up Uploads](#speeding-up-uploads) section for tips. The YOLOv8n weights file is small (~6 MB) and is baked into the image at build time so the app works offline.
+**Large Image Size**: The Jetson CUDA base image is large (several GB). Initial uploads to your device can be slow depending on your network connection. See the [Speeding up uploads](#speeding-up-uploads) section for tips. The YOLOv8n weights file is small (~6 MB) and is baked into the image at build time so the app works offline.
 </Callout>
 
 
@@ -161,7 +224,7 @@ Frames flow through the app like this:
   </Step>
 
   <Step>
-    ### Understanding the Backend
+    ### Understanding the backend
 
     The FastAPI backend (`app.py`) captures frames with GStreamer, runs YOLOv8 inference on a **separate background thread**, and ships raw JPEG frames plus JSON detection metadata to the browser over a WebSocket. Capturing and inference are decoupled so a slow inference pass never stalls the video.
 
@@ -285,7 +348,7 @@ Frames flow through the app like this:
   </Step>
 
   <Step>
-    ### Understanding the Frontend
+    ### Understanding the frontend
 
     The frontend is a single `index.html` file (Tailwind via CDN). A fullscreen `<img>` shows the raw JPEG frames, and a `<canvas id="overlay">` is positioned on top to draw the bounding boxes:
 
@@ -350,7 +413,7 @@ Frames flow through the app like this:
   </Step>
 
   <Step>
-    ### Configure Entitlements
+    ### Configure entitlements
 
     The generated `wendy.json` specifies the required device permissions. Note the longer readiness timeout — the YOLO/CUDA image and model load can take a while on first start:
 
@@ -391,71 +454,6 @@ Frames flow through the app like this:
   </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Connect your USB webcam to the Jetson, then run:
-
-```bash
-wendy run
-```
-
-The CLI will:
-1. Build the Docker image (cross-compiling for ARM64)
-2. Push the image to your device's local registry
-3. Start the container with the configured entitlements
-
-```
-wendy run
-✔︎ Searching for WendyOS devices [5.0s]
-✔︎ Which device?: wendyos-zestful-stork.local [USB, LAN]
-✔︎ Builder ready [0.2s]
-✔︎ Container built and uploaded successfully! [45.2s]
-✔ Success
-  Started app
-INFO:     Uvicorn running on http://0.0.0.0:3005
-INFO:     Loading YOLOv8n model (CUDA: True)...
-INFO:     YOLOv8n ready — 80 COCO classes, backend: yolov8n.pt
-```
-
-Your browser will open automatically once the detection server is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
-
-```
-http://wendyos-zestful-stork.local:3005
-```
-
-Replace the hostname with your device's actual hostname.
-
-## Speeding Up Uploads
-
-The Ultralytics Jetson image is large (5-9 GB), which can make initial deployments slow over Wi-Fi.
-
-### Use USB-3 Direct Connection
-
-For the fastest uploads, connect your laptop directly to the Jetson via USB-C:
-
-1. Use a **USB 3.0 or USB-C cable** (not USB 2.0)
-2. The Wendy CLI will automatically detect the USB connection
-3. Uploads over USB are significantly faster than Wi-Fi or Ethernet
-
-```bash
-# The CLI will show [USB] when connected via USB
-wendy discover
-╭─────────────────────────────────────┬───────────────────╮
-│ Device                              │ Connection        │
-├─────────────────────────────────────┼───────────────────┤
-│ wendyos-zestful-stork.local         │ USB, LAN          │
-╰─────────────────────────────────────┴───────────────────╯
-```
-
-<CliShot flow="discover" step="devices" alt="wendy discover showing a WendyOS device reachable over USB and LAN" />
-
-### Subsequent Deploys Are Fast
-
-Docker layer caching means that after the initial upload:
-- Only changed layers are uploaded
-- Code changes typically upload in seconds
-- The large base image layers are cached on the device
-
 ## Troubleshooting
 
 <Accordions>
@@ -490,7 +488,11 @@ Docker layer caching means that after the initial upload:
   </Accordion>
 </Accordions>
 
-## Next Steps
+## Next steps
+
+Continue with [Read a robot camera with OpenCV](/docs/guides/tutorials/python/robot-camera-opencv) to process frames from a Go2 or ROS 2 camera in a Python container.
+
+More ideas for this app:
 
 - Modify the detection filter in `app.py` to only show specific object classes
 - Add audio alerts when certain objects are detected

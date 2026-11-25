@@ -1,19 +1,21 @@
 ---
-title: Read a Robot Camera with OpenCV
+title: Read a robot camera with OpenCV
 description: Read a Go2 or ROS 2 camera through WendyOS and process its frames in a Python container
 language: python
 ---
 
 Build a Python app that reads a robot's camera and reports the percentage of edge pixels in sampled frames. WendyOS receives the ROS 2 video topic and exposes it as a camera device. The app uses OpenCV and does not need a ROS 2 client library.
 
+Run these commands in an interactive terminal. Select the intended device when prompted and check any automatically selected default.
+
 ## Before you start
 
-- Install the [Wendy CLI](/docs/#1-install-the-wendy-cli) on your computer.
+- Install the [Wendy CLI](/docs/installation/cli) on your computer.
 - Connect a Linux WendyOS device to the robot's wired network. The device must run an agent with ROS 2 camera bridging and have compatible v4l2loopback 0.15.x support. WendyOS uses 0.15.4; Ubuntu 22.04's packaged 0.12.7 module does not provide the required API.
 - Have a camera topic publishing on that network. This tutorial uses a Unitree Go2's `/frontvideostream`. Standard `sensor_msgs/msg/Image` topics with supported color or grayscale encodings, and JPEG `sensor_msgs/msg/CompressedImage` topics, also work. Float depth images are not supported by this bridge.
 - Have a local container builder available to `wendy run`.
 
-The commands below use `robot-companion` as the Wendy device name. Replace it with the name shown by `wendy discover`. The app only reads camera frames and sends no robot commands.
+Select the robot companion when prompted, and use the same target for preview, deployment, and cleanup. The app only reads camera frames and sends no robot commands.
 
 Host-facing ROS 2 camera discovery uses domain 0 on wired interfaces. Keep the robot and companion on a trusted network. See [ROS 2 camera topics](/docs/hardware/camera#ros-2-camera-topics) for discovery scope and driver details.
 
@@ -22,13 +24,13 @@ Host-facing ROS 2 camera discovery uses domain 0 on wired interfaces. Keep the r
 Run these commands on your computer:
 
 ```bash
-wendy device camera list --device robot-companion
+wendy device camera list
 ```
 
 Find the row named **Unitree Go2 front camera**, or the row for your image topic. ROS 2 camera IDs are allocated from 128 through 199. This example uses ID 128; use the ID from your own listing in both the preview command and the app configuration below.
 
 ```bash
-wendy device camera view --device robot-companion --id 128
+wendy device camera view --id 128
 ```
 
 Check that the preview shows new frames as the scene changes. A listed camera alone does not prove that frames are arriving. Close the preview with Ctrl-C before starting the app so the preview and OpenCV do not compete for the same capture node.
@@ -142,7 +144,7 @@ The app retries during startup because a loopback node can appear before its fir
 From the project directory on your computer:
 
 ```bash
-wendy run --device robot-companion --no-restart
+wendy run --no-restart
 ```
 
 After the build and deployment, look for output in this form. The resolution and percentages depend on your camera and scene:
@@ -162,7 +164,7 @@ You can replace `edge_percentage` with an object detector or another OpenCV oper
 Press Ctrl-C in the attached `wendy run` session to stop the app. To remove the tutorial app and reclaim its image data:
 
 ```bash
-wendy device apps remove robot-camera-opencv --device robot-companion --cleanup
+wendy device apps remove robot-camera-opencv --cleanup
 ```
 
 ## Troubleshooting
@@ -177,3 +179,7 @@ wendy device apps remove robot-camera-opencv --device robot-companion --cleanup
 | Capture never receives a first frame | Check the publisher and wired connection. A device node may exist while the publisher is silent. |
 
 For another camera source, see [IP camera container access](/docs/hardware/camera#container-access). IP cameras need stored credentials and use IDs from 200 through 255; their loopback nodes carry the selected sub-stream.
+
+## Next steps
+
+Continue with [Analyze raw camera frames](/docs/guides/tutorials/python/raw-camera-frames) to read uncompressed frames and inspect their pixel values.

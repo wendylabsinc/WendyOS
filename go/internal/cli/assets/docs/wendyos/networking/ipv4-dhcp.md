@@ -56,7 +56,7 @@ In this mode the host receives an address from `10.42.0.2`–`10.42.0.5` and the
 
 ### Easiest — let `wendy discover` set it up (Linux)
 
-On a Linux host, `wendy discover` auto-detects a USB-C-tethered Wendy device
+On a Linux host, `wendy discover` auto-detects a USB-tethered Wendy device
 whose host link isn't configured and offers to set it up for you. Accept the
 prompt and enter your sudo password; the CLI brings the gadget interface up via
 a link-local NetworkManager profile (IPv4 `169.254.0.0/16` and IPv6 `fe80::/64`,

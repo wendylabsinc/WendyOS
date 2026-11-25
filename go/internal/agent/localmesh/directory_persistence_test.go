@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestDirectoryWithdrawalSurvivesRestart(t *testing.T) {
+func TestDirectoryForeignReceiveLeaseIsForgottenAtRestart(t *testing.T) {
 	d, chain, key, device, now := directoryFixture(t)
 	var saved []DirectoryReceipt
 	if err := d.SetPersistence(nil, func(r []DirectoryReceipt) error { saved = append([]DirectoryReceipt(nil), r...); return nil }, now); err != nil {
@@ -31,20 +31,23 @@ func TestDirectoryWithdrawalSurvivesRestart(t *testing.T) {
 	if len(restored.Snapshot(now.Add(2*time.Second))) != 0 {
 		t.Fatal("history restored as presence")
 	}
-	if _, err := restored.Accept(old, now.Add(2*time.Second)); !errors.Is(err, ErrStaleManifest) {
-		t.Fatal("withdrawal forgotten", err)
+	if len(saved) != 0 {
+		t.Fatal("receive-local watermarks were persisted")
+	}
+	if changed, err := restored.Accept(old, now.Add(2*time.Second)); err != nil || !changed {
+		t.Fatal("reboot did not first-learn local lease", changed, err)
 	}
 }
 
-func TestDirectoryPersistenceFailureDoesNotPublish(t *testing.T) {
+func TestDirectoryReceiveLeaseDoesNotDependOnForeignDiskPersistence(t *testing.T) {
 	d, chain, key, device, now := directoryFixture(t)
 	d.SetPersistence(nil, func([]DirectoryReceipt) error { return errors.New("disk unavailable") }, now)
 	m := routeManifest(device, now)
 	w, _ := SignManifest(m, chain, key, now)
-	if _, err := d.Accept(w, now); err == nil {
-		t.Fatal("storage failure ignored")
+	if changed, err := d.Accept(w, now); err != nil || !changed {
+		t.Fatal("RAM lease depended on disk callback", changed, err)
 	}
-	if len(d.Snapshot(now)) != 0 {
-		t.Fatal("uncommitted manifest published")
+	if len(d.Snapshot(now)) != 1 {
+		t.Fatal("valid receive-local lease missing")
 	}
 }

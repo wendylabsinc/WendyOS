@@ -25,7 +25,7 @@ func runChildEnvironment(base []string, target commandTarget) []string {
 }
 
 // mcpDefaultAgentPort is the CLI's plaintext agent port; the CLI derives the
-// mTLS port from it, exactly as for the startup default device.
+// mTLS port from it, exactly as for the startup device.
 const mcpDefaultAgentPort = 50051
 
 // withDefaultAgentPort renders a bare host as host:port.
@@ -41,6 +41,10 @@ func withDefaultAgentPort(host string) string {
 // the session's device, so the agent must connect to the deployed one first.
 // It returns "" when target is the connected target.
 func (s *mcpServer) runNextStep(target commandTarget) string {
+	if target.Transport == "socket" {
+		// The agent socket is the session's own device; there is nothing to connect to.
+		return ""
+	}
 	_, _, session := s.connectionSnapshot()
 	deployed := runTargetIdentity(target)
 	connect := fmt.Sprintf("device_connect(device=%q)", deployed)

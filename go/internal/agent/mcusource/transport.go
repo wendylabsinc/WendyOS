@@ -48,3 +48,11 @@ func (t *tcpTransport) Stream(ctx context.Context, channels []uint32) (<-chan *s
 
 // TCP sessions own their connections; FetchManifest and the stream closer release them.
 func (t *tcpTransport) Close() error { return nil }
+
+func (t *tcpTransport) streamFrames(ctx context.Context, channels []uint32, frames frameSink) (func() error, error) {
+	s, err := connectFrames(ctx, t.d, t.addr, channels, frames)
+	if err != nil {
+		return nil, err
+	}
+	return s.Close, nil
+}

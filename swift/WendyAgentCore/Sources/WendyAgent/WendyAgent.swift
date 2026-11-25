@@ -9,7 +9,7 @@ import WendyAgentGRPC
 import X509
 
 public actor WendyAgent {
-    private typealias PosixGRPCServer = GRPCServer<HTTP2ServerTransport.Posix>
+    typealias PosixGRPCServer = GRPCServer<HTTP2ServerTransport.Posix>
 
     /// The Wendy Agent version from the main bundle Info.plist.
     public nonisolated static let version: String = {
@@ -37,22 +37,43 @@ public actor WendyAgent {
     private let runningExecutableSHA256: String
     private let reportedVersion: @Sendable () -> String
     private let probesLinuxContainerRuntime: Bool
+    private let stateDirectoryOverride: URL?
+    private let makeVideoService: @Sendable () -> VideoService
+    private let makeProvisioningService: @Sendable (URL) -> ProvisioningService
+
+    private var stateDirectory: URL {
+        self.stateDirectoryOverride ?? WendyAgentPaths.stateDirectory
+    }
 
     public init(configuration: WendyAgentConfiguration = .init()) {
         self.init(configuration: configuration, probesLinuxContainerRuntime: true)
     }
 
     /// Test-only seams for listener fixtures outside the signed app bundle.
-    /// They can supply a version and avoid starting container runtimes/registries.
+    /// They isolate state and capture while retaining production service registration.
     init(
         configuration: WendyAgentConfiguration,
         probesLinuxContainerRuntime: Bool,
-        reportedVersion: @escaping @Sendable () -> String = { WendyAgent.version }
+        reportedVersion: @escaping @Sendable () -> String = { WendyAgent.version },
+        stateDirectory: URL? = nil,
+        makeVideoService: @escaping @Sendable () -> VideoService = { VideoService() },
+        makeProvisioningService: @escaping @Sendable (URL) -> ProvisioningService = {
+            ProvisioningService(configPath: $0)
+        }
     ) {
         self.configuration = configuration
         self.reportedVersion = reportedVersion
         self.runningExecutableSHA256 = AgentExecutableDigest.sha256(at: Bundle.main.executableURL)
         self.probesLinuxContainerRuntime = probesLinuxContainerRuntime
+        self.stateDirectoryOverride = stateDirectory
+        self.makeVideoService = makeVideoService
+        let registryRoot = stateDirectory ?? WendyAgentPaths.stateDirectory
+        let registryStore = BlobStore(root: registryRoot)
+        self.deliveryAuthority = BuildDeliveryAuthority(
+            directory: registryRoot.appendingPathComponent("build-delivery"),
+            images: registryStore
+        )
+        self.makeProvisioningService = makeProvisioningService
     }
 
     public func start() async throws {
@@ -253,6 +274,7 @@ public actor WendyAgent {
     /// Rebuilt (with callbacks re-wired) every time the main server starts so the
     /// next provision/unprovision transition still fires.
     private var provisioningService: ProvisioningService?
+    private let deliveryAuthority: BuildDeliveryAuthority
     /// Whether the main server is currently running in mTLS mode (provisioned) as
     /// opposed to plaintext (unprovisioned).
     private var mainServerIsMTLS = false
@@ -342,7 +364,7 @@ public actor WendyAgent {
         linuxBackend: (any LinuxContainerBackend)?,
         broadcaster: TelemetryBroadcaster
     ) async throws {
-        let stateDirectory = WendyAgentPaths.stateDirectory
+        let stateDirectory = self.stateDirectory
         let appsBase = stateDirectory.appendingPathComponent("apps")
 
         let containerService = ContainerService(
@@ -367,7 +389,7 @@ public actor WendyAgent {
         // handler *before* it returns; they MUST NOT await the server switch or
         // graceful shutdown would deadlock on the in-flight RPC. Each callback
         // therefore kicks off the switch in a detached task and returns at once.
-        let provisioningService = ProvisioningService(configPath: stateDirectory)
+        let provisioningService = self.makeProvisioningService(stateDirectory)
         self.provisioningService = provisioningService
         await provisioningService.setCallbacks(
             onProvisioned: { [weak self] _ in
@@ -379,18 +401,36 @@ public actor WendyAgent {
             },
             onUnprovisioned: { [weak self] in
                 Task { await self?.handleUnprovisioned() }
+            },
+            onBeforeUnprovisioned: { [authority = self.deliveryAuthority] in
+                try await authority.closeAndRemove()
             }
         )
         let info = await provisioningService.provisioningInfo()
         // When enrolled, run mTLS on `port + 1`; otherwise plaintext on `port`.
         let certs = info.enrolled ? await provisioningService.provisioningCerts() : nil
+        let (deliveryOrgMode, _) = ClientCertAuthorizer.OrgEnforcementMode.parse(
+            ProcessInfo.processInfo.environment["WENDY_MTLS_ORG_ENFORCEMENT"]
+        )
+        do {
+            try await deliveryAuthority.configure(
+                certPEM: certs?.certPEM,
+                chainPEM: certs?.chainPEM,
+                orgMode: deliveryOrgMode
+            )
+        } catch {
+            logger.error(
+                "Operator delivery disabled: durable authorization recovery failed",
+                metadata: ["error": "\(error)"]
+            )
+        }
 
         // SECURITY: accepted risk, matching the Linux agent. Before enrollment
         // the camera, like the other services here, is reachable without
         // authentication by anyone who can reach the plaintext setup listener.
         // A way to provision devices locally, so unenrolled devices can
         // require a credential, is planned to replace this.
-        let videoService = VideoService()
+        let videoService = self.makeVideoService()
         let services: [any RegistrableRPCService] = [
             AgentService(
                 reportedVersion: self.reportedVersion,
@@ -406,6 +446,13 @@ public actor WendyAgent {
             RobotArmService(path: stateDirectory.appendingPathComponent("robot-arm-bindings.json")),
             provisioningService,
             ProvisioningServiceV2(v1: provisioningService),
+            BuildDeliveryService(
+                authority: deliveryAuthority,
+                expectedScope: certs.flatMap {
+                    ClientCertAuthorizer.scope(fromLeafPEM: $0.certPEM)
+                },
+                orgMode: deliveryOrgMode
+            ),
             TelemetryService(broadcaster: broadcaster),
             FileSyncService(appsBase: appsBase),
             videoService,
@@ -455,7 +502,14 @@ public actor WendyAgent {
         certs: ProvisioningService.ProvisioningCerts?,
         port: Int
     ) async throws -> (server: PosixGRPCServer, task: Task<Void, any Error>, port: Int) {
-        let server = try self.makeMainServer(services: services, certs: certs, port: port)
+        let server = try Self.makeMainServer(
+            services: services,
+            certs: certs,
+            host: self.configuration.host,
+            port: port,
+            environment: ProcessInfo.processInfo.environment,
+            logger: self.logger
+        )
         let task = Self.makeServeTask(server: server)
 
         do {
@@ -534,14 +588,21 @@ public actor WendyAgent {
 
     /// Builds the main gRPC server on the requested port. Passing zero lets the
     /// OS choose a free port after the preferred port collides.
-    private func makeMainServer(
+    nonisolated static func makeMainServer(
         services: [any RegistrableRPCService],
         certs: ProvisioningService.ProvisioningCerts?,
-        port: Int
+        host: String,
+        port: Int,
+        environment: [String: String],
+        logger: Logger
     ) throws -> PosixGRPCServer {
         let security: HTTP2ServerTransport.Posix.TransportSecurity
         if let certs {
-            security = try self.mTLSSecurity(certs: certs)
+            security = try Self.makeMTLSSecurity(
+                certs: certs,
+                environment: environment,
+                logger: logger
+            )
         } else {
             security = .plaintext
         }
@@ -549,19 +610,30 @@ public actor WendyAgent {
         return PosixGRPCServer(
             transport: HTTP2ServerTransport.Posix(
                 address: {
-                    switch self.configuration.host {
+                    switch host {
                     case "::", "::1":
-                        .ipv6(host: self.configuration.host, port: port)
+                        .ipv6(host: host, port: port)
                     case "localhost":
                         .ipv4(host: "127.0.0.1", port: port)
                     default:
-                        .ipv4(host: self.configuration.host, port: port)
+                        .ipv4(host: host, port: port)
                     }
                 }(),
                 transportSecurity: security,
                 config: Self.mainServerConfig
             ),
-            services: services
+            services: services,
+            interceptors: certs.map {
+                [
+                    RPCIdentityInterceptor(
+                        expectedScope: ClientCertAuthorizer.scope(fromLeafPEM: $0.certPEM),
+                        logger: logger,
+                        orgMode: ClientCertAuthorizer.OrgEnforcementMode.parse(
+                            environment["WENDY_MTLS_ORG_ENFORCEMENT"]
+                        ).mode
+                    )
+                ]
+            } ?? []
         )
     }
 
@@ -586,30 +658,12 @@ public actor WendyAgent {
         }
     }
 
-    /// Constructs the mTLS transport security for the main server.
-    ///
-    /// `clientCertificateVerification` is `.noHostnameVerification` (rather than
-    /// `.noVerification`) for two reasons: a client certificate is required, and
-    /// NIOSSL only invokes `customVerificationCallback` when verification is not
-    /// disabled. The custom callback fully REPLACES BoringSSL's chain validation,
-    /// so `ClientCertAuthorizer` performs the complete verification itself: it
-    /// builds a verified path to the device's own CA trust roots AND applies the
-    /// org-enforcement policy (`WENDY_MTLS_ORG_ENFORCEMENT`, default grace). It
-    /// fails closed. The device's org is derived once, here, from the device's
-    /// own leaf certificate — never by calling back into the provisioning actor
-    /// from the event loop.
-    private func mTLSSecurity(
-        certs: ProvisioningService.ProvisioningCerts
-    ) throws -> HTTP2ServerTransport.Posix.TransportSecurity {
-        try Self.makeMTLSSecurity(
-            certs: certs,
-            environment: ProcessInfo.processInfo.environment,
-            logger: self.logger
-        )
-    }
-
     /// The production mTLS transport security, factored out so tests can stand
     /// up a real gRPC listener with exactly the configuration the agent uses.
+    /// A client certificate is required. The custom verification callback fully
+    /// replaces BoringSSL chain verification, so ClientCertAuthorizer validates
+    /// the complete path against this device's trust roots and applies the
+    /// configured tenant policy before the RPC identity interceptor runs.
     nonisolated static func makeMTLSSecurity(
         certs: ProvisioningService.ProvisioningCerts,
         environment: [String: String],
@@ -729,7 +783,8 @@ public actor WendyAgent {
             tls: enrolled,
             assetID: enrolled ? info?.assetID : nil,
             orgID: enrolled ? info?.orgID : nil,
-            caps: enrolled ? ["sensors"] : []
+            caps: enrolled ? ["sensors"] : [],
+            principalURI: enrolled ? info?.principalURI : nil
         )
 
         let runtime = try await advertiser.start()
@@ -902,7 +957,7 @@ public actor WendyAgent {
     private func startPullRegistryIfNeeded() {
         guard self.pullRegistryTask == nil else { return }
         let registry = AgentImageRegistry(
-            store: BlobStore(root: WendyAgentPaths.stateDirectory),
+            store: BlobStore(root: self.stateDirectory),
             configuration: .init(
                 host: LocalRegistryRef.pullHost,
                 port: LocalRegistryRef.pullPort,
@@ -944,14 +999,15 @@ public actor WendyAgent {
             tls = RegistryTLS.makeConfiguration(certs: certs, logger: self.logger)
         }
         let registry = AgentImageRegistry(
-            store: BlobStore(root: WendyAgentPaths.stateDirectory),
+            store: BlobStore(root: self.stateDirectory),
             configuration: .init(
                 host: self.configuration.host,
                 port: LocalRegistryRef.pushPort,
                 tls: tls,
                 routes: .pushAndPull,
                 label: "push"
-            )
+            ),
+            authority: self.deliveryAuthority
         )
         let logger = self.logger
         self.pushRegistryTask = Task {

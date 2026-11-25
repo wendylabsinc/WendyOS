@@ -62,13 +62,13 @@ func encodeProtoJSON(out io.Writer, message proto.Message) error {
 
 func newDataCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "data", Short: "Record and retrieve synchronized device data"}
-	cmd.AddCommand(newDataExportStreamCmd(), newDataSourcesCmd(), newDataRecordCmd(), newDataStopCmd(), newDataStatusCmd(), newDataEpisodesCmd(), newDataInspectCmd(), newDataDownloadCmd(), newDataCampaignCmd())
+	cmd.AddCommand(newDataExportStreamCmd(), newDataSourcesCmd(), newDataRecordCmd(), newDataStopCmd(), newDataStatusCmd(), newDataEpisodesCmd(), newDataInspectCmd(), newDataDownloadCmd(), newDataDeleteCmd(), newDataCampaignCmd())
 	return cmd
 }
 
 func newDataCampaignCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "campaign", Short: "Deploy and run flight-recorder campaign plans"}
-	cmd.AddCommand(newDataCampaignDeployCmd(), newDataCampaignListCmd(), newDataCampaignInspectCmd(), newDataCampaignTriggerCmd())
+	cmd.AddCommand(newDataCampaignDeployCmd(), newDataCampaignListCmd(), newDataCampaignInspectCmd(), newDataCampaignTriggerCmd(), newDataCampaignArmCmd(), newDataCampaignDisarmCmd(), newDataCampaignRemoveCmd())
 	return cmd
 }
 
@@ -96,7 +96,7 @@ func newDataCampaignDeployCmd() *cobra.Command {
 			return err
 		}
 		defer conn.Close()
-		if err := registerCloudApps(cmd.Context(), conn, []string{"campaign:" + plan.Name}, skipCloudRegistration); err != nil {
+		if err := registerCloudApps(cmd.Context(), conn, []string{data.CampaignAppID(plan.Name)}, skipCloudRegistration); err != nil {
 			return err
 		}
 		campaign, err := conn.DataService.CampaignDeploy(cmd.Context(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})

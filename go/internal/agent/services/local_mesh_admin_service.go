@@ -129,6 +129,11 @@ func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers lo
 	out := savedIntent(sharing, carriers)
 	if s.runtime != nil {
 		runtime := s.runtime()
+		// The runtime polls saved configuration. Its previous disabled state
+		// does not describe a newly saved opt-in, even on the next status RPC.
+		if sharing.Participate && runtime.State == "disabled" {
+			return out
+		}
 		out.RuntimeAvailable = runtime.Available
 		if runtime.State != "" {
 			out.State = runtime.State

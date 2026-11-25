@@ -75,7 +75,7 @@ Run `cat /proc/cmdline` on the device to see the full command line it booted wit
 
 | Parameter | Description |
 |-----------|-------------|
-| `console=serial0,115200` | Hardware UART console (alias for the model-appropriate UART device). See [uart.md](uart.md). |
+| `console=serial0,115200` | Hardware UART console (alias for the model-appropriate UART device). See [uart.md](./uart.md). |
 | `console=tty1` | HDMI framebuffer console added by WendyOS |
 | `root=/dev/mmcblk0p<N>` | Selected A/B slot, appended by `boot.scr` (`/dev/nvme0n1p<N>` on the RPi 5 NVMe image) |
 | `root=PARTUUID=<uuid>` | Selected A/B slot when an RPi 4 boots the image from a disk other than the one it was built for |
@@ -103,7 +103,7 @@ On RPi 5, boot order and PCIe probe are stored in the EEPROM, not in `config.txt
 
 Both services are guarded by flag files (`/var/lib/wendyos/eeprom-updated`, `/var/lib/wendyos/eeprom-nvme-updated`) so they run at most once per device. If an update is needed, the service stages it with `rpi-eeprom-update` and reboots.
 
-See [eeprom.md](eeprom.md) for full details on reading and writing EEPROM settings.
+See [eeprom.md](./eeprom.md) for full details on reading and writing EEPROM settings.
 
 ## Reading current boot configuration
 

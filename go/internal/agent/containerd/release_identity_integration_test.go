@@ -17,7 +17,7 @@ import (
 // containerd, like the other integration tests.
 func TestIntegrationCreateLabelsReleaseIdentity(t *testing.T) {
 	c, ctx := newIntegrationClient(t)
-	img := pullReplaceTestImage(t, c, ctx)
+	img := createReplaceTestImage(t, c, ctx)
 	const release = "0b6f2c1e-8a3d-4c5e-9f00-1234567890ab"
 
 	for app, releaseID := range map[string]*string{"recorded-app": proto.String(release), "unrecorded-app": nil} {

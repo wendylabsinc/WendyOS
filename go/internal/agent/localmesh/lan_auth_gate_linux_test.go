@@ -73,7 +73,7 @@ func TestLANAuthGatePeer(t *testing.T) {
 		}
 		return
 	}
-	creds, err := NewCredentials(cfg.Identity.Certificate, cfg.Identity.Chain, cfg.Identity.Key)
+	creds, err := newTestCredentials(cfg.Identity.Certificate, cfg.Identity.Chain, cfg.Identity.Key)
 	if err != nil {
 		t.Fatal(err)
 	}

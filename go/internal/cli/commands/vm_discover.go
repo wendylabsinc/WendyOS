@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -151,7 +152,12 @@ var (
 
 func discoverLocalTargets(ctx context.Context, opts discovery.DiscoveryOptions) (*models.DevicesCollection, error) {
 	var vms []models.LANDevice
+	var mesh sessionbroker.OperatorDirectory
 	var wg sync.WaitGroup
+	if includeMeshDiscovery(opts) {
+		wg.Add(1)
+		go func() { defer wg.Done(); mesh = readMeshDiscovery(ctx) }()
+	}
 	// Same filter as the USB-direct probe: both synthesise LAN-type rows, so
 	// both run exactly when LAN discovery would.
 	if shouldProbeUSBDirect(opts) {
@@ -170,6 +176,14 @@ func discoverLocalTargets(ctx context.Context, opts discovery.DiscoveryOptions) 
 	// caller that renders a partial result. Both of today's callers surface
 	// the error instead, which is why the error is still returned.
 	attachSimulators(collection, vms)
+	if includeMeshDiscovery(opts) {
+		// A deliberately long physical scan must not publish an old mesh view
+		// as current. Refresh just this cheap observation when it aged out.
+		if mesh.State == "ready" && time.Now().UnixMilli()-mesh.Captured > 10000 && ctx.Err() == nil {
+			mesh = readMeshDiscovery(ctx)
+		}
+		collection.MeshDevices, collection.MeshDiscovery = meshCollection(mesh)
+	}
 	return collection, err
 }
 
@@ -181,7 +195,7 @@ func attachSimulators(collection *models.DevicesCollection, vms []models.LANDevi
 }
 
 // isSimulatorBoard reports whether a device type names one of the Builder's
-// VM boards (vmDeviceKey and its x86 sibling). A positive signal: no physical
+// VM boards (vm-arm64 and vm-x86-64). A positive signal: no physical
 // board id starts this way, so a real device can never be filed as a VM.
 func isSimulatorBoard(deviceType string) bool {
 	return strings.HasPrefix(deviceType, "vm-")
@@ -275,7 +289,7 @@ func (f *simulatorFilter) Changed() <-chan struct{} { return f.changed }
 // re-check what it has listed. Bounded by the boot budget: a VM that never
 // answers is one that never announced itself either.
 func (f *simulatorFilter) learn(ctx context.Context, name string, port int) {
-	deadline := time.Now().Add(simulatorBootTimeout())
+	deadline := time.Now().Add(simulatorBootTimeout(name))
 	for {
 		if hostname := askVMHostname(ctx, name, port); hostname != "" {
 			// Best-effort: a store that cannot be written costs the next

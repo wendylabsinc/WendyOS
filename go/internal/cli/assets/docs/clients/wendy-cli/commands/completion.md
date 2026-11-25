@@ -115,9 +115,9 @@ The prompt is intentionally unobtrusive and is **never** shown when:
 - the session is non-interactive (no TTY) or output is machine-readable (`--json`),
 - completions are already installed (`completionInstalled`) or the prompt was dismissed (`completionPromptDismissed`),
 - the first-run analytics notice or a CLI-update prompt is shown in the same invocation (the prompt never stacks on top of those),
-- the command runs its own completion flow — `wendy completion …` and [`wendy tour`](tour.md) — or is an internal helper.
+- the command runs its own completion flow — `wendy completion …` and [`wendy tour`](./tour.md) — or is an internal helper.
 
-> **See also:** [`wendy tour`](tour.md) includes a completions step that installs shell completions as part of first-time setup. Completing the tour, or installing completions there, suppresses this ambient prompt.
+> **See also:** [`wendy tour`](./tour.md) includes a completions step that installs shell completions as part of first-time setup. Completing the tour, or installing completions there, suppresses this ambient prompt.
 
 ### Config fields
 

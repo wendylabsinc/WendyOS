@@ -1,10 +1,10 @@
 ---
-title: Simple Web Server
-description: Build a long-running HTTP server on WendyOS using C++
+title: Simple web server
+description: Build a long-running HTTP server using C++
 language: cpp
 ---
 
-## Building a Web Server with Drogon
+## Building a web server with Drogon
 
 Often times you'll want a long-running server where you can make HTTP or WebSocket calls to your WendyOS device. This allows your device to accept incoming requests and respond to them, making it easy to build interactive applications or APIs that can be accessed from other devices on your network.
 
@@ -15,11 +15,11 @@ This guide shows you how to build a web server using [Drogon](https://drogon.org
 - Wendy CLI installed on your development machine
 - A WendyOS device plugged in over USB or connectable over Wi-Fi
 
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy C++ web server template:
 
@@ -46,11 +46,50 @@ This guide shows you how to build a web server using [Drogon](https://drogon.org
   </Step>
 </Steps>
 
-## Code Breakdown
+## Test your server on WendyOS
+
+After deploying your server, the `postStart` hook opens your browser automatically when the readiness probe passes. You can also open your browser manually and navigate to:
+
+```
+http://wendyos-true-probe.local:3000
+```
+
+<Callout type="warning">
+  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output. Don't forget to include the port.
+</Callout>
+
+The default route returns:
+
+```json
+{"message":"hello-world"}
+```
+
+This confirms your web server is successfully running on your WendyOS device and accepting requests from your network.
+
+## Verifying deployment
+
+You can verify the server container is running by listing the applications on your device:
+
+```bash
+wendy device apps list
+✔︎ Searching for WendyOS devices [5.3s]
+✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
+╭───────────────┬─────────┬─────────┬──────────╮
+│ App           │ Version │ State   │ Failures │
+├───────────────┼─────────┼─────────┼──────────┤
+│ simple-server │ 0.1.0   │ Running │ 0        │
+╰───────────────┴─────────┴─────────┴──────────╯
+```
+
+<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running simple-server app" />
+
+Because the server stays up to serve requests, it shows as "Running" with `0` failures.
+
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Generated Web Server
+    ### Generated web server
 
     The generated `main.cpp` registers three routes on a Drogon server listening on port `3000`:
 
@@ -238,56 +277,7 @@ This guide shows you how to build a web server using [Drogon](https://drogon.org
   </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Deploy your containerized web server to your WendyOS device:
-
-```bash
-wendy run
-```
-
-The Wendy CLI will build your container, transfer it to your device, and run it with the appropriate port mapping.
-
-## Test Your Server on WendyOS
-
-After deploying your server, the `postStart` hook opens your browser automatically when the readiness probe passes. You can also open your browser manually and navigate to:
-
-```
-http://wendyos-true-probe.local:3000
-```
-
-<Callout type="warning">
-  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output. Don't forget to include the port.
-</Callout>
-
-The default route returns:
-
-```json
-{"message":"hello-world"}
-```
-
-This confirms your web server is successfully running on your WendyOS device and accepting requests from your network.
-
-## Verifying Deployment
-
-You can verify the server container is running by listing the applications on your device:
-
-```bash
-wendy device apps list
-✔︎ Searching for WendyOS devices [5.3s]
-✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
-╭───────────────┬─────────┬─────────┬──────────╮
-│ App           │ Version │ State   │ Failures │
-├───────────────┼─────────┼─────────┼──────────┤
-│ simple-server │ 0.1.0   │ Running │ 0        │
-╰───────────────┴─────────┴─────────┴──────────╯
-```
-
-<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running simple-server app" />
-
-Because the server stays up to serve requests, it shows as "Running" with `0` failures.
-
-## More Code Notes
+## More code notes
 
 Let's break down what the code does:
 
@@ -299,7 +289,7 @@ Let's break down what the code does:
 
 4. **Start the server**: `app().addListener("0.0.0.0", 3000)` binds the listener and `app().run()` blocks, serving connections on port `3000`.
 
-## Alternative Frameworks
+## Alternative frameworks
 
 While the template uses Drogon, other excellent C++ web frameworks are available:
 
@@ -310,22 +300,11 @@ While the template uses Drogon, other excellent C++ web frameworks are available
 
 All of these frameworks can be containerized and deployed to WendyOS following a similar Docker-based approach.
 
-## Next Steps
-
-Now that you have a basic web server running:
-
-- Add more routes to handle different endpoints
-- Implement PUT and DELETE routes for a full REST API
-- Add request validation and error handling
-- Parse query parameters
-- Connect to WendyOS device features to control hardware via HTTP
-- Implement WebSocket support for real-time communication (see the [Camera Feed](/docs/guides/tutorials/cpp/camera) guide)
-
 <Accordions>
   <Accordion title="Testing the app on your own machine">
     There are times when you might not have a WendyOS device around. The easiest way to test locally is with Docker, which mirrors how the app is built and run on the device.
 
-    ### Using Docker Locally
+    **Using Docker locally**
 
     Build and run the container, mapping the port:
 
@@ -334,7 +313,7 @@ Now that you have a basic web server running:
     docker run --platform linux/arm64 -p 3000:3000 simple-server
     ```
 
-    ### Test Your Server
+    **Test your server**
 
     Open another terminal and test the default route with curl:
 
@@ -379,3 +358,16 @@ Now that you have a basic web server running:
     </Callout>
   </Accordion>
 </Accordions>
+
+## Next steps
+
+Continue with [Camera feed in C++](/docs/guides/tutorials/cpp/camera) to stream a USB camera to the browser over a WebSocket.
+
+Now that you have a basic web server running:
+
+- Add more routes to handle different endpoints
+- Implement PUT and DELETE routes for a full REST API
+- Add request validation and error handling
+- Parse query parameters
+- Connect to WendyOS device features to control hardware via HTTP
+- Implement WebSocket support for real-time communication

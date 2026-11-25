@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -39,7 +40,7 @@ func newDiscoverCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "discover",
-		Short: "Discover local and cloud WendyOS devices",
+		Short: "Discover nearby, mesh, and Cloud Wendy devices",
 		Long:  "Continuously discover WendyOS devices in Nearby, Simulator, and Cloud tabs until Ctrl+C. Use --timeout to scan local devices once for a fixed duration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var opts discovery.DiscoveryOptions
@@ -51,18 +52,22 @@ func newDiscoverCmd() *cobra.Command {
 				opts.Types = []models.InterfaceType{models.InterfaceLAN}
 			case "bluetooth":
 				opts.Types = []models.InterfaceType{models.InterfaceBluetooth}
+			case "mesh":
+				opts.Types = []models.InterfaceType{models.InterfaceMesh}
 			case "external":
 				opts.Types = []models.InterfaceType{models.InterfaceExternal}
 			case "all", "":
 				// discover all types
 			default:
-				return fmt.Errorf("unknown discovery type: %s (valid: usb, lan, bluetooth, external, all)", discoverType)
+				return fmt.Errorf("unknown discovery type: %s (valid: usb, lan, bluetooth, external, mesh, all)", discoverType)
 			}
 
-			// Pre-flight: on Linux, if a USB-C Wendy device is tethered but its
+			// Pre-flight: on Linux, if a Wendy USB device is tethered but its
 			// host link isn't configured, offer to set it up so it shows up in
 			// the scan below. No-op on other platforms / non-interactive runs.
-			_ = maybeOfferUSBSetup(cmd.Context())
+			if discoverType != "mesh" {
+				_ = maybeOfferUSBSetup(cmd.Context())
+			}
 
 			timeoutSet := cmd.Flags().Changed("timeout")
 
@@ -91,7 +96,7 @@ func newDiscoverCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&discoverType, "type", "all", "Local discovery type: usb, lan, bluetooth, external, all")
+	cmd.Flags().StringVar(&discoverType, "type", "all", "Local discovery type: usb, lan, bluetooth, external, mesh, all")
 	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "Scan once for this duration then exit")
 
 	return cmd
@@ -244,7 +249,7 @@ func discoverOnce(ctx context.Context, opts discovery.DiscoveryOptions, includeL
 		p.Send(work())
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -281,11 +286,11 @@ func noDevicesHint() string {
 		return "Hints:\n" +
 			"  • Is avahi-daemon running?   systemctl status avahi-daemon\n" +
 			"  • Firewall blocking mDNS?    sudo ufw allow 5353/udp   (if ufw is active)\n" +
-			"  • USB-C tethered device?     re-run 'wendy discover' and accept the USB setup prompt\n" +
+			"  • USB-tethered device?       re-run 'wendy discover' and accept the USB setup prompt\n" +
 			"  • Or connect directly by IP: wendy device connect <ip>:50051"
 	}
 	return "Hints:\n" +
-		"  • Device powered on and on the same network (or USB-C tethered).\n" +
+		"  • Device powered on and on the same network (or USB-tethered).\n" +
 		"  • mDNS uses UDP 5353 — make sure a firewall isn't blocking it.\n" +
 		"  • Or connect directly by IP: wendy device connect <ip>:50051"
 }
@@ -387,7 +392,7 @@ func discoverContinuousWithCloudAuth(ctx context.Context, opts discovery.Discove
 	// Alt screen: the table grows to fill the window, and the alternate
 	// buffer restores the user's terminal content when the TUI exits.
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -500,6 +505,7 @@ func waitExternalSnapshot(p providers.DeviceProvider, ch <-chan []models.Externa
 
 // discoverDeviceInfo is the JSON structure copied to the clipboard.
 type discoverDeviceInfo struct {
+	Mesh         *models.MeshDevice   `json:"mesh,omitempty"`
 	ProbeFailure *models.ProbeFailure `json:"probeFailure,omitempty"`
 	ID           int32                `json:"id,omitempty"`
 	Name         string               `json:"name"`
@@ -511,18 +517,13 @@ type discoverDeviceInfo struct {
 }
 
 type discoverTableItem struct {
-	picker  tui.PickerItem
-	info    discoverDeviceInfo
-	lanName string
-	// lanKey is discoverycache.Key(ID, DisplayName) for this row's LAN
-	// device — the same identity upsertLANDevice merges rows by. It is the
-	// map key into m.probe, kept distinct from lanName (which stays a plain
-	// display name for the 'u'-key update lookup in lanDeviceAddr) so a
-	// DisplayName change or a DisplayName collision between two different
-	// device IDs can never orphan or cross-wire a probe state. Empty for
-	// non-LAN rows.
-	lanKey        string
-	defaultDevice string
+	picker       tui.PickerItem
+	info         discoverDeviceInfo
+	selectionKey string
+	// lanKey is the discovery cache identity used to merge LAN rows and track
+	// their probe state. lanPinKey identifies the same row's update target.
+	lanKey    string
+	lanPinKey string
 }
 
 // flashClearMsg is sent after a delay to clear the flash message.
@@ -693,6 +694,9 @@ func (m discoverModel) scanExternalProvider(p providers.DeviceProvider) tea.Cmd 
 
 func (m discoverModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	if includeMeshDiscovery(m.opts) {
+		cmds = append(cmds, m.startMeshStream())
+	}
 	if m.shouldDiscover(models.InterfaceUSB) {
 		cmds = append(cmds, m.scanUSB())
 	}
@@ -766,8 +770,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			item := items[cursor]
-			addr := lanDeviceAddr(m.collection, item.lanName)
-			if addr == "" {
+			if item.lanKey == "" || item.info.Address == "" {
 				m.flashMessage = "Update is only supported for LAN devices."
 				m.flashIsError = true
 				return m, clearFlashAfter(3 * time.Second)
@@ -777,30 +780,19 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatingDeviceName = item.info.Name
 			m.flashMessage = "Checking " + item.info.Name + "..."
 			m.flashIsError = false
-			return m, m.startDeviceUpdateCmd(addr, item.info.Name)
-		case "d":
-			items := m.tableItems
-			cursor := m.table.Cursor()
-			if len(items) > 0 && cursor >= 0 && cursor < len(items) {
-				// A toggle, as on the Simulator and Cloud tabs: 'd' on the
-				// row the ✦ is already on clears it.
-				if discoverItemIsDefault(items[cursor], discoverDefaultKey()) {
-					_ = saveDefaultDevice("")
-					m.flashMessage = "Default device cleared."
-				} else {
-					deviceID := items[cursor].defaultDevice
-					_ = saveDefaultDevice(deviceID)
-					m.flashMessage = "Default device set to: " + deviceID
-				}
-				m.flashIsError = false
-				m.refreshTable()
-				return m, clearFlashAfter(3 * time.Second)
-			}
-			return m, nil
+			return m, m.startDeviceUpdateCmd(item.info.Address, item.info.Name, item.lanPinKey)
 		}
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
 		return m, cmd
+	case meshSnapshotMsg:
+		m.hasResults = true
+		m.collection.MeshDevices, m.collection.MeshDiscovery = meshCollection(msg.snapshot)
+		m.refreshTable()
+		if msg.ch != nil {
+			return m, waitMeshSnapshot(msg.ch)
+		}
+		return m, nil
 	case usbScanMsg:
 		m.collection.USBDevices = msg.devices
 		m.hasResults = true
@@ -839,7 +831,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		key := discoverycache.Key(msg.ev.Device.ID, msg.ev.Device.DisplayName)
 		m.probe[key], _ = lanRowState(msg.ev)
 		m.hasResults = true
-		m.refreshTable()
+		m.refreshTableReplacingLANKey(msg.ev.Supersedes, key)
 		return m, waitLANEvent(msg.ch)
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -967,9 +959,16 @@ func (m discoverModel) View() string {
 		if m.canScrollTable() {
 			scrollHint = ", ←/→ scroll"
 		}
-		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, d toggle default, q quit")) + "\n")
+		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, q quit")) + "\n")
 	}
 
+	if state := m.collection.MeshDiscovery; state != nil && state.State != "not-connected" {
+		suffix := ""
+		if state.Truncated {
+			suffix = " (incomplete snapshot)"
+		}
+		sb.WriteString(m.viewLine(dimStyle.Render("  Wendy Net: "+state.State+suffix)) + "\n")
+	}
 	if warning := m.bleWarningLine(); warning != "" {
 		sb.WriteString(m.viewLine(dimStyle.Render("  Bluetooth: "+warning)) + "\n")
 	}
@@ -1104,12 +1103,27 @@ func (m discoverModel) bleWarningLine() string {
 }
 
 func (m *discoverModel) refreshTable() {
+	m.refreshTableReplacingLANKey("", "")
+}
+
+func (m *discoverModel) refreshTableReplacingLANKey(previousLANKey, newLANKey string) {
+	previousCursor := m.table.Cursor()
+	var selectedKey string
+	if previousCursor >= 0 && previousCursor < len(m.tableItems) {
+		item := m.tableItems[previousCursor]
+		if discoverRowIndex(m.tableItems, item.selectionKey) == previousCursor {
+			selectedKey = item.selectionKey
+			if previousLANKey != "" && item.lanKey == previousLANKey {
+				selectedKey = "lan:" + newLANKey
+			}
+		}
+	}
 	m.tableItems = discoverTableItems(m.collection)
 	// Stamp each LAN row with its probe state (and the current spinner frame
 	// while connecting) so the Agent/OS columns animate / show the error glyph.
 	frame := m.spinner.View()
 	for i := range m.tableItems {
-		if m.tableItems[i].lanName == "" {
+		if m.tableItems[i].lanKey == "" {
 			continue
 		}
 		st := m.probe[m.tableItems[i].lanKey]
@@ -1121,11 +1135,22 @@ func (m *discoverModel) refreshTable() {
 		}
 	}
 	pickerItems := discoverPickerItems(m.tableItems)
-	cols, rows := tui.PickerDeviceTableData(pickerItems, discoverDefaultKey(), true)
+	cols, rows := tui.PickerDeviceTableData(pickerItems, "", false)
+	// The marker column comes and goes with the provisioned glyphs, and bubbles
+	// re-renders the current rows against new columns: clear them first.
+	if len(cols) != len(m.table.Columns()) {
+		m.table.SetRows(nil)
+	}
 	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
-	if len(rows) > 0 && m.table.Cursor() < 0 {
-		m.table.SetCursor(0)
+	if len(rows) > 0 {
+		cursor := discoverRowIndex(m.tableItems, selectedKey)
+		if cursor < 0 {
+			cursor = min(max(previousCursor, 0), len(rows)-1)
+		}
+		if cursor != m.table.Cursor() {
+			m.table.SetCursor(cursor)
+		}
 	}
 	m.table.SetWidth(tui.PickerTableWidth(m.table.Columns()))
 	height := m.windowHeight
@@ -1133,6 +1158,23 @@ func (m *discoverModel) refreshTable() {
 		height = max(1, height-tui.PickerHintHeight(pickerItems, m.windowWidth, "  ⚠  "))
 	}
 	m.table.SetHeight(tui.PickerTableHeight(len(rows), height))
+}
+
+// An absent or ambiguous identity falls back to the previous row position.
+func discoverRowIndex(items []discoverTableItem, key string) int {
+	if key == "" {
+		return -1
+	}
+	found := -1
+	for i, item := range items {
+		if item.selectionKey == key {
+			if found >= 0 {
+				return -1
+			}
+			found = i
+		}
+	}
+	return found
 }
 
 // selectedHint returns the hint for the highlighted table row, e.g. the
@@ -1167,24 +1209,17 @@ func (m discoverModel) tableViewportWidth() int {
 	return tui.PickerTableWidth(m.table.Columns())
 }
 
-func lanDeviceAddr(collection *models.DevicesCollection, displayName string) string {
-	for i := range collection.LANDevices {
-		d := &collection.LANDevices[i]
-		if strings.EqualFold(d.DisplayName, displayName) {
-			return preferredLANAddress(*d)
-		}
-	}
-	return ""
-}
-
-func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
+func (m discoverModel) startDeviceUpdateCmd(addr, name, pinKey string) tea.Cmd {
 	ctx := m.ctx
+	if pinKey == "" {
+		pinKey = pinKeyForAddr(addr)
+	}
 	return func() tea.Msg {
-		latestVer, _, err := resolveAgentVersion(false)
+		latestVer, _, err := resolveAgentVersionFn(false)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("resolving agent version: %w", err)}
 		}
-		conn, err := connectWithAutoTLS(ctx, addr)
+		conn, _, err := connectWithAutoTLSDiagnosticsKeyed(ctx, addr, pinKey)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("connecting to device: %w", err)}
 		}
@@ -1223,12 +1258,20 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
 		}
 		conn.Close() // agent is restarting
 
-		newConn, err := waitForAgentRestart(ctx, addr)
+		newConn, err := waitForAgentRestartKeyed(ctx, addr, pinKey)
 		if err != nil {
-			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			if versionResp.GetSupervision() == nil {
+				return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			}
+			// A trial that never listens is replaced only at its deadline.
+			newConn = nil
 		}
+		reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+			return waitForAgentRestartKeyed(ctx, addr, pinKey)
+		}
+		_, newConn, err = awaitAgentVerdict(ctx, newConn, reconnect, sha256Hash, func() {})
 		newConn.Close()
-		return discoverUpdateDoneMsg{deviceName: name}
+		return discoverUpdateDoneMsg{deviceName: name, err: err}
 	}
 }
 
@@ -1237,7 +1280,7 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
 func renderDeviceTable(collection *models.DevicesCollection) string {
 	items := discoverTableItems(collection)
 	pickerItems := discoverPickerItems(items)
-	cols, rows := tui.PickerDeviceTableData(pickerItems, discoverDefaultKey(), true)
+	cols, rows := tui.PickerDeviceTableData(pickerItems, "", false)
 	if len(rows) == 0 {
 		return ""
 	}
@@ -1266,9 +1309,9 @@ func newDiscoverTable(interactive bool) tui.BubbleTable {
 // noise. (The interactive `wendy discover` table uses tui.PickerDeviceTableData,
 // not these.) The full address is still available in the clipboard JSON.
 var (
-	discoverTableHeaders   = []string{"", "Name", "Type", "Version"}
-	discoverTableMinWidths = []int{3, 12, 10, 10}
-	discoverTableMaxWidths = []int{3, 33, 20, 16}
+	discoverTableHeaders   = []string{"Name", "Type", "Version"}
+	discoverTableMinWidths = []int{12, 10, 10}
+	discoverTableMaxWidths = []int{33, 20, 16}
 )
 
 var deviceTypeNames = map[string]string{
@@ -1474,6 +1517,26 @@ func annotateLANUSBFromEthernet(collection *models.DevicesCollection) {
 	}
 }
 
+// lanDeviceInterfaces returns the lower-cased names of the host interfaces
+// that devices were seen on: the interface mDNS answered on and the zone of
+// every scoped address.
+func lanDeviceInterfaces(devices []models.LANDevice) map[string]bool {
+	interfaces := make(map[string]bool)
+	add := func(name string) {
+		if name != "" {
+			interfaces[strings.ToLower(name)] = true
+		}
+	}
+	for i := range devices {
+		add(devices[i].NetworkInterface)
+		add(interfaceNameFromScopedAddress(devices[i].IPAddress))
+		for _, addr := range devices[i].Addresses {
+			add(interfaceNameFromScopedAddress(addr))
+		}
+	}
+	return interfaces
+}
+
 func interfaceNameFromScopedAddress(addr string) string {
 	_, zone, ok := strings.Cut(addr, "%")
 	if !ok {
@@ -1493,13 +1556,6 @@ func ethernetInterfaceUSBSummary(iface models.EthernetInterface) string {
 	return label
 }
 
-func discoverDefaultKey() string {
-	if cfg, err := config.Load(); err == nil {
-		return strings.ToLower(cfg.DefaultDevice)
-	}
-	return ""
-}
-
 func discoverTableItems(collection *models.DevicesCollection) []discoverTableItem {
 	var items []discoverTableItem
 	if collection == nil {
@@ -1507,9 +1563,23 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 	}
 	annotateLANUSBFromEthernet(collection)
 
+	lanInterfaces := lanDeviceInterfaces(collection.LANDevices)
 	for _, d := range collection.USBDevices {
+		if d.NetworkInterface != "" && lanInterfaces[strings.ToLower(d.NetworkInterface)] {
+			// The board answers on its USB network link, so it already has a
+			// row with an address and agent. A second row would only repeat
+			// its USB product name.
+			continue
+		}
 		deviceType := "USB"
+		var selectionKey string
+		if d.SerialNumber != "" {
+			selectionKey = "usb-serial:" + d.VendorID + ":" + d.ProductID + ":" + d.SerialNumber
+		} else if d.NetworkInterface != "" {
+			selectionKey = "usb-interface:" + d.NetworkInterface
+		}
 		items = append(items, discoverTableItem{
+			selectionKey: selectionKey,
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),
 				Type:          deviceType,
@@ -1527,7 +1597,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address: d.Hostname,
 				Version: d.AgentVersion,
 			},
-			defaultDevice: firstNonEmpty(d.Hostname, d.DisplayName),
 		})
 	}
 	for _, d := range collection.MergedDevices() {
@@ -1537,14 +1606,19 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			usb = d.LAN.USB
 		}
 		address := d.Address()
-		defaultDevice := d.DisplayName
-		lanName := ""
-		lanKey := ""
+		var lanKey, lanPinKey string
 		if d.LAN != nil {
-			lanName = d.LAN.DisplayName
 			lanKey = discoverycache.Key(d.LAN.ID, d.LAN.DisplayName)
+			lanPinKey = pinKeyForLANDevice(d.LAN)
 			address = preferredLANAddress(*d.LAN)
-			defaultDevice = firstNonEmpty(d.LAN.Hostname, d.LAN.IPAddress, d.LAN.DisplayName)
+		}
+		hint := lanProbeHint(d.LAN)
+		key := d.DisplayName
+		if d.Mesh != nil {
+			key = d.Mesh.Principal
+			if d.LAN == nil {
+				hint = meshPathHint(d.Mesh)
+			}
 		}
 		provisioned := lanProvisionedDisplay(d.LAN)
 		var failure *models.ProbeFailure
@@ -1556,6 +1630,7 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			probe = tui.ProbeFailed
 		}
 		items = append(items, discoverTableItem{
+			selectionKey: discoverMergedSelectionKey(d, lanKey),
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),
 				Type:          deviceType,
@@ -1563,16 +1638,17 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address:       address,
 				AgentVersion:  discovery.SanitiseDisplayName(d.AgentVersion),
 				AgentOutdated: agentBehindCLI(version.Version, d.AgentVersion),
-				OS:            d.OS,
+				OS:            d.DisplayOS(),
 				OSVersion:     d.OSVersion,
 				Provisioned:   provisioned,
-				Hint:          lanProbeHint(d.LAN),
+				Hint:          hint,
 				Probe:         probe,
-				DedupKey:      d.DisplayName,
+				DedupKey:      key,
 				SortKey:       deviceSortKey(d.DisplayName, usb),
 			},
 			info: discoverDeviceInfo{
 				Name:         d.DisplayName,
+				Mesh:         d.Mesh,
 				Type:         deviceType,
 				USB:          usb,
 				Address:      address,
@@ -1580,9 +1656,8 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Provisioned:  provisioned,
 				ProbeFailure: failure,
 			},
-			lanName:       lanName,
-			lanKey:        lanKey,
-			defaultDevice: defaultDevice,
+			lanKey:    lanKey,
+			lanPinKey: lanPinKey,
 		})
 	}
 	for _, d := range collection.Simulators {
@@ -1591,6 +1666,7 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 		const deviceType = "Simulator"
 		address := preferredLANAddress(d)
 		items = append(items, discoverTableItem{
+			selectionKey: "simulator:" + d.ID,
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),
 				Type:          deviceType,
@@ -1608,7 +1684,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address: address,
 				Version: d.AgentVersion,
 			},
-			defaultDevice: d.ID,
 		})
 	}
 	for _, d := range collection.ExternalDevices {
@@ -1619,6 +1694,7 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 		addr := externalProviderAddress(d.ProviderKey, d.ID)
 		deviceType := externalProviderDisplayName(d.ProviderKey)
 		items = append(items, discoverTableItem{
+			selectionKey: "provider:" + d.ProviderKey + ":" + d.ID,
 			picker: tui.PickerItem{
 				Name:    discovery.SanitiseDisplayName(d.DisplayName),
 				Type:    deviceType,
@@ -1637,7 +1713,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address: addr,
 				Version: d.AgentVersion,
 			},
-			defaultDevice: firstNonEmpty(d.ID, d.DisplayName),
 		})
 	}
 
@@ -1648,26 +1723,34 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 	return items
 }
 
+func discoverMergedSelectionKey(device models.DiscoveredDevice, lanKey string) string {
+	switch {
+	case lanKey != "":
+		return "lan:" + lanKey
+	case len(device.Externals) > 0:
+		// Merged provider rows are Wendy Lite boards. Use the same identity
+		// that groups their USB, LAN and BLE sightings.
+		external := device.Externals[0]
+		if id := external.LiteDedupID(); id != "" {
+			return "lite:" + id
+		}
+		return "lite-connection:" + external.ID
+	case device.Mesh != nil:
+		return "mesh:" + device.Mesh.Principal
+	case device.Bluetooth != nil:
+		if id := firstNonEmpty(device.Bluetooth.ID, device.Bluetooth.Address); id != "" {
+			return "ble:" + id
+		}
+	}
+	return ""
+}
+
 func discoverPickerItems(items []discoverTableItem) []tui.PickerItem {
 	pickerItems := make([]tui.PickerItem, 0, len(items))
 	for _, item := range items {
-		pickerItems = append(pickerItems, discoverPickerItem(item))
+		pickerItems = append(pickerItems, item.picker)
 	}
 	return pickerItems
-}
-
-func discoverPickerItem(item discoverTableItem) tui.PickerItem {
-	pickerItem := item.picker
-	if item.defaultDevice != "" {
-		pickerItem.DefaultKeys = append(pickerItem.DefaultKeys, item.defaultDevice)
-	}
-	return pickerItem
-}
-
-// discoverItemIsDefault reports whether item is the row the ✦ marks, matching
-// it the same way the table does.
-func discoverItemIsDefault(item discoverTableItem, defaultKey string) bool {
-	return tui.PickerItemIsDefault(discoverPickerItem(item), defaultKey)
 }
 
 func discoverSortKey(item tui.PickerItem) string {
