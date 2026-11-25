@@ -344,8 +344,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 		preset = noPreset
 	}
 	if existing := s.shareOfCamera(containerID, id); existing != nil {
-		if existing.mode.asksWhat(decision.Mode) && existing.stamp == stamp && existing.askedFormat == decision.AskedFormat {
-			s.restateSharePreset(containerID, existing, preset)
+		if existing.mode.asksWhat(decision.Mode) && existing.stamp == stamp && existing.preset == preset && existing.askedFormat == decision.AskedFormat {
 			return
 		}
 		// A record left from an earlier container of this name: this
@@ -355,7 +354,7 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 			return
 		}
 		s.shareLogger().Info(fmt.Sprintf("camera share: %s was created again: its share of %s was %s and is made again as %s",
-			containerID, dev.GetName(), describeShareNode(existing.mode, existing.stamp)+describeStatedPreset(s.sharePreset(existing)),
+			containerID, dev.GetName(), describeShareNode(existing.mode, existing.stamp)+describeStatedPreset(existing.preset),
 			describeShareNode(decision.Mode, stamp)+describeStatedPreset(preset)))
 	}
 
@@ -408,29 +407,6 @@ func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID
 	if !noted {
 		s.warnOfSettingsNote(containerID, dev, settingsNote)
 	}
-}
-
-func (s *VideoService) sharePreset(r *shareRecord) appconfig.EncodePreset {
-	s.shares.mu.Lock()
-	defer s.shares.mu.Unlock()
-	return r.preset
-}
-
-// restateSharePreset gives a record a create found again the preset the
-// container's entitlements state now. The node declares nothing of the preset,
-// so it stays as it is; the pump states the record's preset at each join, so
-// one that is reading keeps the preset it joined with until it joins again.
-func (s *VideoService) restateSharePreset(containerID string, r *shareRecord, preset appconfig.EncodePreset) {
-	s.shares.mu.Lock()
-	before := r.preset
-	r.preset = preset
-	s.shares.mu.Unlock()
-	if before == preset {
-		return
-	}
-	s.persistCameraShares()
-	s.shareLogger().Info(fmt.Sprintf("camera share: %s was created again: its share of %s was %s and is now %s; its node stays as it is",
-		containerID, r.cameraName, describeShareNode(r.mode, r.stamp)+describeStatedPreset(before), describeShareNode(r.mode, r.stamp)+describeStatedPreset(preset)))
 }
 
 // noteSettingsOnRecord gives the container's record of a camera, when it has
@@ -1041,7 +1017,7 @@ func (s *VideoService) joinShare(ctx context.Context, r *shareRecord) (shareSubs
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "camera %s is at %s, which is not a video node", r.cameraName, path)
 	}
-	return s.joinHubForShare(ctx, path, uint32(devID), r.mode, s.sharePreset(r))
+	return s.joinHubForShare(ctx, path, uint32(devID), r.mode, r.preset)
 }
 
 // currentSharePath resolves the record's camera to its present /dev path. When
@@ -1575,7 +1551,7 @@ func (s *VideoService) adoptShare(containerID string, r *shareRecord) {
 	start := s.attachSharePumpLocked(containerID, r, node)
 	s.shares.mu.Unlock()
 	start()
-	s.shareLogger().Info(fmt.Sprintf("camera share: %s adopted %s for %s at %s", containerID, path, r.cameraName, describeShareNode(r.mode, r.stamp)+describeStatedPreset(s.sharePreset(r))))
+	s.shareLogger().Info(fmt.Sprintf("camera share: %s adopted %s for %s at %s", containerID, path, r.cameraName, describeShareNode(r.mode, r.stamp)+describeStatedPreset(r.preset)))
 	s.checkAdoptedModeLater(containerID, r)
 }
 

@@ -284,64 +284,65 @@ func TestCameraShareState_AShareWithoutAPresetSavesNoKey(t *testing.T) {
 	}
 }
 
-// A container created again with another preset keeps its node: the node
-// declares nothing of the preset. Its record, its state file entry and the
-// preset its pump states at its next join take the new one.
-func TestCreateCameraShares_ACreateWithAnotherPresetKeepsTheNodeAndStatesTheNewOne(t *testing.T) {
+// A container created again with another preset gets its node made again, as
+// with another format or stamp: the pump of the new node states the new
+// preset from its first join, so the node never states one its pump has not.
+func TestCreateCameraShares_ACreateWithAnotherPresetMakesTheNodeAgain(t *testing.T) {
 	h := newCSHarness(t, csC920())
 	sfCanDeriveFrames(h.s)
 	installFakeProducers(h.s)
 	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{spH264At("veryfast")})
-	before := h.records("cv-a")[0]
-	node, opened := before.node, len(h.openedNodes())
-	statedAtAJoin := func() appconfig.EncodePreset {
+	statedAtAJoin := func(r *shareRecord) appconfig.EncodePreset {
 		t.Helper()
-		sub, err := h.s.joinShare(context.Background(), before)
+		sub, err := h.s.joinShare(context.Background(), r)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer sub.Leave()
 		return currentHub(h.s, "/dev/video4").statedPreset()
 	}
-	if got := statedAtAJoin(); got != appconfig.EncodePresetVeryfast {
+	if got := statedAtAJoin(h.records("cv-a")[0]); got != appconfig.EncodePresetVeryfast {
 		t.Fatalf("the pump's join states %q, want veryfast", got)
 	}
 
-	for _, step := range []struct {
+	described := func(preset appconfig.EncodePreset) string {
+		return "1280x720 H264, 30 fps, format h264, stamp time" + describeStatedPreset(preset)
+	}
+	for i, step := range []struct {
 		preset string
 		want   appconfig.EncodePreset
-		line   string
 	}{
-		{"medium", appconfig.EncodePresetMedium, "camera share: cv-a was created again: its share of C920 was 1280x720 H264, 30 fps, format h264, stamp time, preset veryfast " +
-			"and is now 1280x720 H264, 30 fps, format h264, stamp time, preset medium; its node stays as it is"},
-		{"", noPreset, "camera share: cv-a was created again: its share of C920 was 1280x720 H264, 30 fps, format h264, stamp time, preset medium " +
-			"and is now 1280x720 H264, 30 fps, format h264, stamp time; its node stays as it is"},
+		{"medium", appconfig.EncodePresetMedium},
+		{"", noPreset},
 	} {
+		stale := h.records("cv-a")[0]
+		staleNode := stale.io.(*csNode)
 		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{spH264At(step.preset)})
+		h.drainRemovals()
 		records := h.records("cv-a")
-		if len(records) != 1 || records[0] != before || records[0].node != node || len(h.openedNodes()) != opened {
-			t.Fatalf("preset %q: the share was made again: %+v, %d nodes opened; logs: %v", step.preset, records, len(h.openedNodes()), h.logs.All())
+		if len(records) != 1 || records[0] == stale || len(h.openedNodes()) != i+2 || staleNode.closes.Load() != 1 {
+			t.Fatalf("preset %q: records = %+v with %d nodes opened and the stale one closed %d times, want one new record on a new node; logs: %v",
+				step.preset, records, len(h.openedNodes()), staleNode.closes.Load(), h.logs.All())
 		}
-		if got := h.s.sharePreset(before); got != step.want {
-			t.Errorf("preset %q: the record states %q", step.preset, got)
+		r := records[0]
+		if r.preset != step.want || r.mode != sfH264Mode {
+			t.Errorf("preset %q: the new record is %s", step.preset, describeShareNode(r.mode, r.stamp)+describeStatedPreset(r.preset))
 		}
-		if got := statedAtAJoin(); got != step.want {
-			t.Errorf("preset %q: the pump's next join states %q", step.preset, got)
+		if got := statedAtAJoin(r); got != step.want {
+			t.Errorf("preset %q: the new node's pump states %q at its join", step.preset, got)
 		}
 		if saved, _ := h.stateShares("cv-a")[0]["preset"].(string); saved != step.want.String() {
 			t.Errorf("preset %q: the state file holds %q", step.preset, saved)
 		}
-		if n := h.logged(step.line); n != 1 {
-			t.Errorf("preset %q: %d lines say the preset changed, want one; logs: %v", step.preset, n, h.logs.All())
+		line := "camera share: cv-a was created again: its share of C920 was " + described(stale.preset) + " and is made again as " + described(step.want)
+		if n := h.logged(line); n != 1 {
+			t.Errorf("preset %q: %q logged %d times; logs: %v", step.preset, line, n, h.logs.All())
 		}
 	}
-	lines := h.logged("was created again")
+	opened := len(h.openedNodes())
 	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{spH264At("")})
-	if n := h.logged("was created again"); n != lines {
-		t.Errorf("a create with the same preset logged a change: %v", h.logs.All())
-	}
-	if n := h.logged("is made again"); n != 0 {
-		t.Errorf("the node was made again for a preset: %v", h.logs.All())
+	if len(h.openedNodes()) != opened {
+		t.Errorf("a create with the same preset made the node again: %v", h.logs.All())
 	}
 }
 

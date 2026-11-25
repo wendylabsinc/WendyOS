@@ -125,8 +125,7 @@ type shareRecord struct {
 	mode         sharedMode
 	stamp        string
 	// preset is what the app states for the encoder of its h264 node; unset
-	// for a node of another format. A create that finds the record again may
-	// change it (restateSharePreset), so it is read under cameraShares.mu.
+	// for a node of another format.
 	preset appconfig.EncodePreset
 	// askedFormat is the format the app's entitlement asked for when the
 	// camera could not be declared in it and the node serves another format
