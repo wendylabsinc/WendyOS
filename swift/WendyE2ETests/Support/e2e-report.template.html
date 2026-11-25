@@ -352,16 +352,28 @@
       position: sticky;
       top: 0;
       z-index: 10;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
+      display: grid;
+      gap: 12px;
       margin: 24px 0;
       padding: 12px;
       background: var(--card);
       border: 1px solid var(--line);
       box-shadow: 0 10px 28px var(--shadow-strong);
       backdrop-filter: blur(12px);
+    }
+
+    .filter-row {
+      display: grid;
+      grid-template-columns: 10rem minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+    }
+
+    .filter-options {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
     }
 
     .filter-label {
@@ -1311,6 +1323,7 @@
       .compact-stats .outcome-pill b { font-size: 16px; }
       .compact-stats .outcome-pill .badge { font-size: 9px; }
       .filter-bar { position: static; }
+      .filter-row { grid-template-columns: minmax(0, 1fr); }
       .filter-count { flex-basis: 100%; margin-left: 0; }
       .search-field { flex-basis: 100%; }
       .test-summary {
@@ -1406,17 +1419,26 @@
 
     {{TARGET_OVERVIEW}}
 
-    <section class="filter-bar" aria-label="Filter tests by status">
-      <span class="filter-label">Filter</span>
-      <button class="filter-button" type="button" data-filter="all" aria-pressed="true">All</button>
-      <button class="filter-button" type="button" data-filter="pass" aria-pressed="false">Passed</button>
-      <button class="filter-button" type="button" data-filter="flaked" aria-pressed="false">Flaked</button>
-      <button class="filter-button" type="button" data-filter="fail" aria-pressed="false">Failed</button>
-      <button class="filter-button" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>
-      <button class="filter-button" type="button" data-filter="unknown" aria-pressed="false">Unknown</button>
-      <button class="filter-button" type="button" data-filter="ai" aria-pressed="false">AI</button>
-      <input class="search-field" type="search" data-search placeholder="Search tests…" aria-label="Search tests" />
-      <span class="filter-count" data-filter-count>{{VISIBLE_TEST_COUNT}} of {{TOTAL_TEST_COUNT}} tests shown</span>
+    <section class="filter-bar" aria-label="Filter tests">
+      <div class="filter-row" role="group" aria-labelledby="outcome-label">
+        <span class="filter-label" id="outcome-label">Filter by outcome:</span>
+        <div class="filter-options" title="Command-click or Ctrl-click to select multiple filters">
+          <button class="filter-button" type="button" data-filter="all" aria-pressed="true">All</button>
+          <button class="filter-button" type="button" data-filter="pass" aria-pressed="false">Passed</button>
+          <button class="filter-button" type="button" data-filter="flaked" aria-pressed="false">Flaked</button>
+          <button class="filter-button" type="button" data-filter="fail" aria-pressed="false">Failed</button>
+          <button class="filter-button" type="button" data-filter="skipped" aria-pressed="false">Skipped</button>
+          <button class="filter-button" type="button" data-filter="unknown" aria-pressed="false">Unknown</button>
+          <button class="filter-button" type="button" data-filter="ai" aria-pressed="false">AI</button>
+        </div>
+      </div>
+      <div class="filter-row">
+        <label class="filter-label" for="test-search">Search tests:</label>
+        <div class="filter-options">
+          <input id="test-search" class="search-field" type="search" data-search placeholder="Search tests…" />
+          <span class="filter-count" data-filter-count>{{VISIBLE_TEST_COUNT}} of {{TOTAL_TEST_COUNT}} tests shown</span>
+        </div>
+      </div>
     </section>
 
     <!-- Repeat this .card section once per test file. Use prose display names, e.g. WendyAnalyticsTests.swift → Wendy Analytics. Set data-has-ai-review to true when the suite/file has generated AI review issues. -->
@@ -1498,12 +1520,12 @@
       const themeToggleIcon = document.querySelector('[data-theme-toggle-icon]');
       const themeToggleLabel = document.querySelector('[data-theme-toggle-label]');
       const reportButtons = Array.from(document.querySelectorAll('.report-button'));
-      let activeFilter = defaultFilter();
-
-      function defaultFilter() {
-        if (tests.some(test => testStatusSet(test).has('fail'))) return 'fail';
-        if (tests.some(test => testStatusSet(test).has('flaked'))) return 'flaked';
-        return 'all';
+      const activeFilters = new Set();
+      for (const status of ['fail', 'flaked']) {
+        if (tests.some(test => testStatusSet(test).has(status))) {
+          activeFilters.add(status);
+          break;
+        }
       }
 
       function testStatusSet(test) {
@@ -1584,9 +1606,8 @@
 
         for (const test of tests) {
           const statuses = testStatusSet(test);
-          const statusMatches = activeFilter === 'all'
-            || statuses.has(activeFilter)
-            || (activeFilter === 'ai' && test.dataset.hasAiReview === 'true');
+          if (test.dataset.hasAiReview === 'true') statuses.add('ai');
+          const statusMatches = !activeFilters.size || [...statuses].some(status => activeFilters.has(status));
           const searchMatches = query === '' || test.textContent.toLowerCase().includes(query);
           const matches = statusMatches && searchMatches;
           test.classList.toggle('is-hidden', !matches);
@@ -1595,27 +1616,31 @@
 
         for (const card of cards) {
           const hasVisibleTest = Boolean(card.querySelector('[data-test-status]:not(.is-hidden)'));
-          const suiteAIMatches = activeFilter === 'ai'
+          const suiteAIMatches = activeFilters.has('ai')
             && card.dataset.hasAiReview === 'true'
             && (query === '' || card.textContent.toLowerCase().includes(query));
           card.classList.toggle('is-hidden', !(hasVisibleTest || suiteAIMatches));
         }
 
         for (const button of buttons) {
-          button.setAttribute('aria-pressed', String(button.dataset.filter === activeFilter));
+          button.setAttribute('aria-pressed', String(button.dataset.filter === 'all' ? !activeFilters.size : activeFilters.has(button.dataset.filter)));
         }
 
-        document.body.classList.toggle('ai-filter-active', activeFilter === 'ai');
+        document.body.classList.toggle('ai-filter-active', activeFilters.has('ai'));
 
         if (count) {
-          const suffix = query ? ` matching “${search.value}”` : '';
-          count.textContent = `${visible} of ${tests.length} tests shown${suffix}`;
+          count.textContent = `${visible} of ${tests.length} tests shown`;
         }
       }
 
       for (const button of buttons) {
-        button.addEventListener('click', () => {
-          activeFilter = button.dataset.filter;
+        button.addEventListener('click', event => {
+          const filter = button.dataset.filter;
+          if (filter === 'all' || !(event.metaKey || event.ctrlKey)) activeFilters.clear();
+          if (filter !== 'all') {
+            if (activeFilters.has(filter)) activeFilters.delete(filter);
+            else activeFilters.add(filter);
+          }
           applyFilters();
         });
       }
