@@ -1,0 +1,232 @@
+name: Shared AI Compatibility Review
+
+on:
+  workflow_call:
+    inputs:
+      automation_sha:
+        description: Full WendyOS automation SHA, identical to the reusable workflow pin
+        required: true
+        type: string
+      pr_number:
+        description: Same-repository open PR for manual dry-run
+        default: ''
+        type: string
+      expected_head_sha:
+        description: Approved immutable PR head for manual dry-run
+        default: ''
+        type: string
+      dry_run:
+        description: Validate without comments, labels or reviewer mutations
+        default: false
+        type: boolean
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+permissions: {}
+# Concurrency belongs to the caller. Reusing its github.workflow group here
+# would cancel the caller itself because reusable workflows inherit context.
+env:
+  REPO: ${{ github.repository }}
+  AUTOMATION_SHA: ${{ inputs.automation_sha }}
+  PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+  EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_head_sha }}
+  EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  DRY_RUN: ${{ inputs.dry_run }}
+  CLAUDE_MODEL: claude-opus-5-5
+
+jobs:
+  review:
+    name: Review API decisions and compatibility
+    if: >-
+      github.event_name == 'pull_request' && !inputs.dry_run &&
+      contains(github.event.pull_request.labels.*.name, 'review: api') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'review: api') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps: &review-steps
+      - name: Validate immutable automation pin
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const sha = process.env.AUTOMATION_SHA;
+            if (!/^[0-9a-f]{40}$/.test(sha || '')) throw new Error('automation_sha must be a full commit SHA');
+            if (context.eventName === 'workflow_dispatch' && process.env.DRY_RUN !== 'true') {
+              throw new Error('Manual validation requires dry_run=true');
+            }
+            // Automatic callers must carry this exact pin on trusted main.
+            // The caller context does not expose the called workflow's SHA.
+            // Dispatch instead uses the explicitly selected caller revision.
+            const workflow = process.env.GITHUB_WORKFLOW_REF;
+            const prefix = `${context.repo.owner}/${context.repo.repo}/`;
+            if (!workflow?.startsWith(prefix)) throw new Error('Invalid caller workflow identity');
+            const path = workflow.slice(prefix.length).split('@')[0];
+            if (!/^\.github\/workflows\/[^/]+\.ya?ml$/.test(path)) throw new Error('Invalid caller workflow path');
+            const refs = context.eventName === 'workflow_dispatch'
+              ? [process.env.GITHUB_WORKFLOW_SHA] : ['main', process.env.GITHUB_WORKFLOW_SHA];
+            for (const ref of refs) {
+              const {data} = await github.rest.repos.getContent({...context.repo, path, ref});
+              if (data.encoding !== 'base64' || !data.content) throw new Error('Could not read trusted caller');
+              const text = Buffer.from(data.content, 'base64').toString('utf8');
+              const workflowPins = [...text.matchAll(/^\s+uses:\s+wendylabsinc\/WendyOS\/\.github\/workflows\/api-review-shared\.yml@([0-9a-f]{40})\s*(?:#.*)?$/gm)].map(m => m[1]);
+              const codePins = [...text.matchAll(/^\s+automation_sha:\s*['"]?([0-9a-f]{40})['"]?\s*(?:#.*)?$/gm)].map(m => m[1]);
+              if (workflowPins.length !== 1 || codePins.length !== 1 || workflowPins[0] !== sha || codePins[0] !== sha) {
+                throw new Error('Caller workflow and automation code must use the same trusted full SHA');
+              }
+            }
+
+      - name: Check out pinned trusted review automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: wendylabsinc/WendyOS
+          ref: ${{ inputs.automation_sha }}
+          path: review-automation
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Fetch trusted destination and current PR metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          gh api "repos/$REPO" > "$RUNNER_TEMP/api-review-repository.json"
+          gh api "repos/$REPO/pulls/$PR_NUMBER" > "$RUNNER_TEMP/api-review-pr-meta.json"
+          python3 - <<'PY'
+          import json, os, re, sys
+          sys.path.insert(0, 'review-automation/.github/scripts')
+          from compatibility_review import repository_destination
+          from review_sources import ReviewError
+          directory = os.environ['RUNNER_TEMP']
+          repository_destination(json.load(open(directory + '/api-review-repository.json')), os.environ['REPO'])
+          pr = json.load(open(directory + '/api-review-pr-meta.json'))
+          if (not re.fullmatch(r'[0-9a-f]{40}', pr['base']['sha'])
+              or pr['number'] != int(os.environ['PR_NUMBER']) or pr['state'] != 'open'
+              or pr['head']['sha'] != os.environ['EXPECTED_HEAD_SHA']
+              or pr['head']['repo']['full_name'] != os.environ['REPO']
+              or pr['base']['repo']['full_name'] != os.environ['REPO']
+              or pr['user']['login'] == 'dependabot[bot]'
+              or os.environ['GITHUB_ACTOR'] == 'dependabot[bot]'
+              or os.environ['EXPECTED_BASE_SHA'] and pr['base']['sha'] != os.environ['EXPECTED_BASE_SHA']):
+              raise ReviewError('PR identity/revision/state changed or target is excluded')
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              out.write('EXPECTED_BASE_SHA=' + pr['base']['sha'] + '\n')
+          PY
+
+      - name: Read target Git objects without checking out source files
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ env.EXPECTED_HEAD_SHA }}
+          fetch-depth: 0
+          path: review-target
+          sparse-checkout: /__review_no_worktree_files__
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Prepare complete immutable diff and previous state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          diff_base_sha=$(git -C review-target merge-base "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA")
+          [[ "$diff_base_sha" =~ ^[0-9a-f]{40}$ ]]
+          git -C review-target diff --no-ext-diff --no-textconv --find-renames \
+            "$diff_base_sha" "$EXPECTED_HEAD_SHA" -- > "$RUNNER_TEMP/api-review-pr.diff"
+          gh api "repos/$REPO/pulls/$PR_NUMBER" > "$RUNNER_TEMP/api-review-current-meta.json"
+          jq -e --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.head.sha == $head and .base.sha == $base and .state == "open"' \
+            "$RUNNER_TEMP/api-review-current-meta.json" > /dev/null
+          jq --arg diff_base_sha "$diff_base_sha" '. + {diff_base_sha: $diff_base_sha}' \
+            "$RUNNER_TEMP/api-review-pr-meta.json" > "$RUNNER_TEMP/api-review-pr-meta.tmp"
+          mv "$RUNNER_TEMP/api-review-pr-meta.tmp" "$RUNNER_TEMP/api-review-pr-meta.json"
+          python3 review-automation/.github/scripts/api_review_comment.py fetch-state --destination-bound \
+            --repo "$REPO" --pr-number "$PR_NUMBER" --output "$RUNNER_TEMP/previous-api-review.json"
+
+      - name: Install pinned SDK
+        run: pip install --quiet anthropic==0.97.0
+
+      - name: Review API decisions and compatibility
+        id: review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ANTHROPIC_API_KEY//[[:space:]]/}" ]]; then
+            echo "::error::ANTHROPIC_API_KEY is unavailable; no review was performed."
+            exit 1
+          fi
+          python3 review-automation/.github/scripts/api_review.py review \
+            --source-repository "$GITHUB_WORKSPACE/review-target" \
+            --repository-metadata "$RUNNER_TEMP/api-review-repository.json" \
+            --metadata "$RUNNER_TEMP/api-review-pr-meta.json" --diff "$RUNNER_TEMP/api-review-pr.diff" \
+            --previous "$RUNNER_TEMP/previous-api-review.json" \
+            --repo "$REPO" --pr-number "$PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" --expected-base-sha "$EXPECTED_BASE_SHA" \
+            --output "$RUNNER_TEMP/api-review-result.json" --model "$CLAUDE_MODEL"
+
+      - name: Guard destination privacy before artifact upload
+        id: destination-result
+        if: always() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Visibility can change during inference. Re-read before any upload.
+          gh api "repos/$REPO" > "$RUNNER_TEMP/api-review-current-repository.json"
+          python3 review-automation/.github/scripts/api_review.py guard-destination \
+            --result "$RUNNER_TEMP/api-review-result.json" --repo "$REPO" \
+            --repository-metadata "$RUNNER_TEMP/api-review-current-repository.json"
+
+      - name: Preserve review result in caller repository
+        if: always() && steps.destination-result.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: api-review-${{ env.PR_NUMBER }}-${{ env.EXPECTED_HEAD_SHA }}
+          path: ${{ runner.temp }}/api-review-result.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish checklist or validate publication without mutations
+        if: always() && steps.destination-result.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dry_run_args=()
+          if [[ "$DRY_RUN" == 'true' ]]; then dry_run_args=(--dry-run); fi
+          python3 review-automation/.github/scripts/api_review_comment.py publish --destination-bound \
+            "${dry_run_args[@]}" --result "$RUNNER_TEMP/api-review-result.json" \
+            --repo "$REPO" --pr-number "$PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" --expected-base-sha "$EXPECTED_BASE_SHA"
+
+  validate:
+    name: Validate review without publication
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && inputs.dry_run &&
+      contains(github.event.pull_request.labels.*.name, 'review: api') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'review: api') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps: *review-steps

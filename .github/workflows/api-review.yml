@@ -260,6 +260,7 @@ jobs:
           python3 .github/scripts/api_review_workflow_test.py
           python3 .github/scripts/compatibility_review_test.py
           python3 .github/scripts/compatibility_state_test.py
+          python3 .github/scripts/api_review_rollout_test.py
 
   validate-candidate:
     name: Validate candidate API review without publication
