@@ -417,19 +417,27 @@ webcam captured as JPEG without encoding; a camera that hands on no frames of
 its own is recorded as video whatever `store` says.
 
 `preset` applies only where the device encodes the camera's video in
-software; a slower preset spends more CPU on each frame for fewer bits. A
-camera has one encoder for all its consumers: recordings, apps and viewers.
-It runs at the fastest preset any of them states, so the encoder never costs
-more than the cheapest request on that camera allows, and at `ultrafast` when
-none states one. The encoder restarts to change preset: at once to a faster
-one, and to a slower one after 30 seconds in which no consumer called for the
-faster one; a recording goes on in a new segment file. The deployment warning
-names the preset, and the source's detail in the episode manifest says how
-many video frames were not encoded at the preset requested: at another
-preset, or by the camera itself or an encoder that takes no preset. Any other
-`preset` value, `preset` on a source that is not a camera, with
-`store: frames` or with `mode: snapshot` is rejected, and an agent older than
-the release that added `preset` rejects a campaign that uses the key.
+software with an encoder that takes one; a slower preset spends more CPU on
+each frame for fewer bits. A camera has one encoder for all its consumers:
+recordings, apps and viewers. It runs at the fastest preset any of them
+states, so the encoder never costs more than the cheapest request on that
+camera allows, and at `ultrafast` when none states one. The encoder restarts
+to change preset: at once to a faster one, and to a slower one after 30
+seconds in which no consumer called for the faster one. A recording goes on
+in a new segment file from the new encoder's first key frame, and the camera
+frames that became no stored video meanwhile count as drops. The deployment
+warning names the preset, and the source's detail in the episode manifest
+says how many video frames were encoded at another one.
+
+A preset is not applied where no encoder takes it: the device encodes with a
+hardware encoder or another element without presets, the camera produces
+H.264 itself (a network camera, a webcam with H.264 output), or the camera's
+pipeline always runs at the default preset (a SensorLink camera, a Jetson CSI
+sensor). `wendy data campaign deploy` warns of each such camera with the
+reason, and the source's detail in the episode manifest gives the same
+reason. Any other `preset` value, `preset` on a source that is not a camera,
+with `store: frames` or with `mode: snapshot` is rejected, and an agent older
+than the release that added `preset` rejects a campaign that uses the key.
 
 What each adapter honors today: cameras implement `continuous` and `snapshot`,
 audio implements `continuous` and `threshold`, and the ROS 2 and telemetry

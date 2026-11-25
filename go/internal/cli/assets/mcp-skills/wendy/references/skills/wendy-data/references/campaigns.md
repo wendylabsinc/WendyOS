@@ -93,18 +93,25 @@ device deployment; it does not fan deployment out to every fleet member.
 - `preset` on a camera source that stores video sets how fast the software
   H.264 encoder works: `ultrafast`, `superfast`, `veryfast`, `faster`, `fast`
   or `medium`, fastest first. A slower preset spends more CPU on each frame for
-  fewer bits. It applies only where the device encodes that video in software.
-  A camera has one encoder for all its consumers (recordings, apps and
-  viewers), which runs at the fastest preset any of them states, so it never
-  costs more than the cheapest request on that camera allows, and at
+  fewer bits. A camera has one encoder for all its consumers (recordings, apps
+  and viewers), which runs at the fastest preset any of them states, so it
+  never costs more than the cheapest request on that camera allows, and at
   `ultrafast` when none states one. The encoder restarts to change preset: at
   once to a faster one, and to a slower one after 30 seconds in which no
-  consumer called for the faster one; the recording goes on in a new segment
-  file. The deploy warning names the preset, and the source's detail in the
-  episode manifest says how many video frames were not encoded at the preset
-  requested. `preset` is rejected on a source that is not a camera, with
-  `store: frames` and with `mode: snapshot`, and an agent from before it
-  rejects the campaign as it does any unknown field.
+  consumer called for the faster one. The recording goes on in a new segment
+  file from the new encoder's first key frame, and the camera frames that
+  became no stored video meanwhile count as drops. The deploy warning names
+  the preset, and the source's detail in the episode manifest says how many
+  video frames were encoded at another one.
+- A preset is not applied where no encoder takes it: the device encodes with
+  a hardware encoder or another element without presets, the camera produces
+  H.264 itself (a network camera, a webcam with H.264 output), or the camera's
+  pipeline always runs at the default (a SensorLink camera, a Jetson CSI
+  sensor). `wendy data campaign deploy` warns of each such camera with the
+  reason, and the episode manifest gives the same reason. `preset` is rejected
+  on a source that is not a camera, with `store: frames` and with
+  `mode: snapshot`, and an agent from before it rejects the campaign as it
+  does any unknown field.
 - Audio supports `continuous` and `threshold`, such as
   `trigger: "level_db > -20"` and `fragment: 30s`. ROS 2 and telemetry support
   `continuous`. Other mode/kind combinations validate, warn, and record

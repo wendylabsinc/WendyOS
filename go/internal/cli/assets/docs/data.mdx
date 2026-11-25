@@ -209,11 +209,12 @@ A camera source that stores video can also set `preset`, how fast the
 software H.264 encoder works: `ultrafast`, `superfast`, `veryfast`, `faster`,
 `fast` or `medium`, fastest first. A slower preset spends more CPU on each
 frame for fewer bits. It applies only where the device encodes the video in
-software. A camera has one encoder for all its consumers, which runs at the
-fastest preset any of them states, so it never costs more than the cheapest
-request on that camera allows, and at `ultrafast` when none states one. The
-source's detail in the episode manifest says when video was not encoded at the
-preset requested.
+software with an encoder that takes one. A camera has one encoder for all its
+consumers, which runs at the fastest preset any of them states, so it never
+costs more than the cheapest request on that camera allows, and at `ultrafast`
+when none states one. `wendy data campaign deploy` warns of a camera whose
+video the preset will not reach, with the reason, and the source's detail in
+the episode manifest says when video was not encoded at the preset requested.
 
 ```yaml
 sources:

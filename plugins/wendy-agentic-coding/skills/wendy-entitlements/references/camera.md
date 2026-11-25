@@ -88,5 +88,5 @@ seconds.
 An agent from before stable id and `v4l2:` entries matches only the exact
 device path or name. An agent from before `format` and `stamp` reads neither of
 them nor the allowlist and gives every camera pictures stamped with the capture
-time. An agent from before `preset` does not read it. `wendy run` says so when
-the app asks for something the device's agent does not read.
+time. `wendy run` says so when the app asks for something the device's agent
+does not read.
