@@ -286,11 +286,11 @@ func TestRegisterInProcessCamera(t *testing.T) {
 	again()
 }
 
-// fakeGStreamer installs gst-inspect-1.0 and gst-launch-1.0 stand-ins on PATH.
+// fakeInProcessGStreamer installs gst-inspect-1.0 and gst-launch-1.0 stand-ins on PATH.
 // The launcher appends its arguments to the returned file, one line per run,
 // then runs body. With body "exec /bin/cat" the "encoded" stream is exactly the
 // bytes written to the pipeline, which is what the tests below check.
-func fakeGStreamer(t *testing.T, body string) (argsFile string) {
+func fakeInProcessGStreamer(t *testing.T, body string) (argsFile string) {
 	t.Helper()
 	dir := t.TempDir()
 	argsFile = filepath.Join(dir, "launches")
@@ -424,7 +424,7 @@ func waitUnwatched(t *testing.T, s *VideoService, feed *rawvideo.Feed) {
 // /dev/video node, delivers what the pipeline encodes, shares it between
 // viewers, and stops it when the last viewer leaves.
 func TestInProcessCameraLiveView(t *testing.T) {
-	argsFile := fakeGStreamer(t, "exec /bin/cat")
+	argsFile := fakeInProcessGStreamer(t, "exec /bin/cat")
 	s, feed, _ := newInProcessTestService(t)
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -458,7 +458,7 @@ func TestInProcessCameraLiveView(t *testing.T) {
 }
 
 func TestInProcessCameraFormatChangeEndsTheStream(t *testing.T) {
-	argsFile := fakeGStreamer(t, "exec /bin/cat")
+	argsFile := fakeInProcessGStreamer(t, "exec /bin/cat")
 	s, feed, _ := newInProcessTestService(t)
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -492,7 +492,7 @@ func TestInProcessCameraFormatChangeEndsTheStream(t *testing.T) {
 }
 
 func TestInProcessCameraEncoderCrash(t *testing.T) {
-	argsFile := fakeGStreamer(t, "/usr/bin/head -c 16\necho 'ERROR: from element x264enc0: encoder exploded' >&2\nexit 1")
+	argsFile := fakeInProcessGStreamer(t, "/usr/bin/head -c 16\necho 'ERROR: from element x264enc0: encoder exploded' >&2\nexit 1")
 	s, feed, _ := newInProcessTestService(t)
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -515,7 +515,7 @@ func TestInProcessCameraEncoderCrash(t *testing.T) {
 }
 
 func TestInProcessCameraUnregisterEndsTheStream(t *testing.T) {
-	fakeGStreamer(t, "exec /bin/cat")
+	fakeInProcessGStreamer(t, "exec /bin/cat")
 	s, feed, unregister := newInProcessTestService(t)
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -540,7 +540,7 @@ func TestInProcessCameraUnregisterEndsTheStream(t *testing.T) {
 // reading must not stall the driver's capture loop. Frames are large enough
 // that two fill the pipe; the driver publishes many more.
 func TestInProcessCameraStalledEncoderNeverBlocksTheDriver(t *testing.T) {
-	fakeGStreamer(t, "printf encoded\nexec /bin/sleep 30")
+	fakeInProcessGStreamer(t, "printf encoded\nexec /bin/sleep 30")
 	s, feed, _ := newInProcessTestService(t)
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -574,7 +574,7 @@ func TestInProcessCameraStalledEncoderNeverBlocksTheDriver(t *testing.T) {
 }
 
 func TestInProcessCameraRefusals(t *testing.T) {
-	fakeGStreamer(t, "exec /bin/cat")
+	fakeInProcessGStreamer(t, "exec /bin/cat")
 	shortenInProcessStall(t, 50*time.Millisecond)
 	s, _, _ := newInProcessTestService(t)
 

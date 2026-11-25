@@ -164,7 +164,7 @@ func TestUSBThermalLiveViewStreamsOnlyWhileWatched(t *testing.T) {
 // is what registers the camera.
 func TestUSBThermalLiveViewRoutesEncodedAndRaw(t *testing.T) {
 	shortenUSBThermalLivePolls(t)
-	fakeGStreamer(t, "exec /bin/cat") // the "encoded" stream is the pipeline's input
+	fakeInProcessGStreamer(t, "exec /bin/cat") // the "encoded" stream is the pipeline's input
 	svc, fake := newUSBThermalTestService(t)
 	id := uint32(usbthermal.IDBandStart)
 	if _, ok := svc.inProcessCameraByID(id); ok {
