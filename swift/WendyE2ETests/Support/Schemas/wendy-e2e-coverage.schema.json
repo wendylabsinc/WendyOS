@@ -249,6 +249,7 @@
             "required": ["buildInfo", "sha256"],
             "properties": {
               "buildInfo": {"type": "string"},
+              "buildInfoError": {"type": "string"},
               "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"}
             }
           }
