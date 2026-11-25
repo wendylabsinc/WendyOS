@@ -355,7 +355,7 @@ func TestCreateCameraSharesPassesTheLabelsEntitlements(t *testing.T) {
 		{appconfig.CameraIdentity{Path: "/dev/video4", Name: "Other"}, appconfig.CameraFormatPixels, appconfig.CameraStampTime},
 		{appconfig.CameraIdentity{Path: "/dev/video6", StableID: c920StableID, Name: "HD Pro Webcam C920: HD Pro Webc"}, appconfig.CameraFormatH264, appconfig.CameraStampFrame},
 	} {
-		if format, stamp, conflicts := appconfig.CameraNodeSettings(got, tc.camera); format != tc.format || stamp != tc.stamp || len(conflicts) != 0 {
+		if format, stamp, _, conflicts := appconfig.CameraNodeSettings(got, tc.camera); format != tc.format || stamp != tc.stamp || len(conflicts) != 0 {
 			t.Errorf("%+v: settings from the passed entitlements = (%q, %q) with conflicts %q, want (%q, %q)", tc.camera, format, stamp, conflicts, tc.format, tc.stamp)
 		}
 	}
@@ -419,7 +419,7 @@ func TestCameraEntriesAreReadBackFromADeploysLabels(t *testing.T) {
 				t.Fatalf("entries passed to the share manager = %+v, want %+v", passed, tc.entitlements)
 			}
 			for _, cam := range tc.cameras {
-				if format, stamp, _ := appconfig.CameraNodeSettings(passed, appconfig.CameraIdentity{Path: cam.path, Name: cam.name}); format != cam.format || stamp != cam.stamp {
+				if format, stamp, _, _ := appconfig.CameraNodeSettings(passed, appconfig.CameraIdentity{Path: cam.path, Name: cam.name}); format != cam.format || stamp != cam.stamp {
 					t.Errorf("%s (%s): node settings = (%q, %q), want (%q, %q)", cam.path, cam.name, format, stamp, cam.format, cam.stamp)
 				}
 			}

@@ -81,7 +81,7 @@ func TestCameraShareNotice_NamesEachCamerasFormatAndStampFromTheEntitlement(t *t
 func TestCameraShareNotice_AnAgentThatReadsNoNodeSettingsServesPicturesWithCaptureTimes(t *testing.T) {
 	rows := []*hwCap{shareRowAt("Brio 101 (video0)", "/dev/video0", map[string]string{"pixels": "1280x720 YUYV, 30 fps"})}
 	shared := `Camera: this app shares Brio 101 (video0) at 1280x720 YUYV, 30 fps, format pixels, stamp time. For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
-	const readsNone = `Camera: the agent on this device does not read a camera entitlement's format, stamp or allowlist: every shared camera's node carries pictures stamped with the capture time until the agent is updated.`
+	const readsNone = `Camera: the agent on this device does not read a camera entitlement's format, stamp, preset or allowlist: every shared camera's node carries pictures stamped with the capture time until the agent is updated.`
 	for name, cfg := range map[string]*appconfig.AppConfig{
 		"format and stamp":           cameraCfg(appconfig.CameraFormatH264, appconfig.CameraStampFrame),
 		"allowlist naming the path":  cameraCfg(appconfig.CameraFormatNative, appconfig.CameraStampFrame, "/dev/video0"),
@@ -481,5 +481,148 @@ func TestCameraSoftwareEncoderNotices_OneLineForEachCameraWhoseH264NodeIsEncoded
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+func h264CfgAt(preset string, allowlist ...string) *appconfig.AppConfig {
+	return &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: allowlist, Format: appconfig.CameraFormatH264, Preset: preset},
+	}}
+}
+
+// c920RowEncodedAtAPreset is the camera's row from an agent that applies a
+// stated preset to the software encoder of the camera's h264 node.
+func c920RowEncodedAtAPreset() *hwCap {
+	row := c920RowEncodedInSoftware()
+	row.Properties[camerashare.KeyH264DefaultPreset] = "ultrafast"
+	return row
+}
+
+const c920EncodedSoftwareAt = `Camera: HD Pro Webcam C920: HD Pro Webc (video0): its H.264 is encoded in software (x264enc) `
+
+const noEncoderOtherwise = ` on this device for as long as this app reads its node. "format": "native" or "pixels" run no encoder.`
+
+func TestCameraSoftwareEncoderNotices_NameThePresetTheEncoderWillRunAt(t *testing.T) {
+	rows := []*hwCap{c920RowEncodedAtAPreset()}
+	for name, tc := range map[string]struct {
+		cfg  *appconfig.AppConfig
+		want string
+	}{
+		"the app states a preset": {
+			h264CfgAt("veryfast"),
+			c920EncodedSoftwareAt + `at preset veryfast, or at a faster one that another consumer of the camera states,` + noEncoderOtherwise,
+		},
+		"the app states none": {
+			h264CfgAt(""),
+			c920EncodedSoftwareAt + `at preset ultrafast, or at the fastest one that a consumer of the camera states,` + noEncoderOtherwise,
+		},
+		"the entry naming the camera decides": {
+			&appconfig.AppConfig{Entitlements: append(h264CfgAt("medium", c920StableID).Entitlements, h264CfgAt("fast", "/dev/video9").Entitlements...)},
+			c920EncodedSoftwareAt + `at preset medium, or at a faster one that another consumer of the camera states,` + noEncoderOtherwise,
+		},
+	} {
+		if got := cameraSoftwareEncoderNotices([]*appconfig.AppConfig{tc.cfg}, rows); !slices.Equal(got, []string{tc.want}) {
+			t.Errorf("%s:\ngot  %q\nwant %q", name, got, tc.want)
+		}
+	}
+}
+
+// The default the line names is the agent's, which may be built from another
+// list than this command line.
+func TestCameraSoftwareEncoderNotices_TheDefaultPresetIsTheOneTheAgentReports(t *testing.T) {
+	row := c920RowEncodedAtAPreset()
+	row.Properties[camerashare.KeyH264DefaultPreset] = "superfast"
+	want := c920EncodedSoftwareAt + `at preset superfast, or at the fastest one that a consumer of the camera states,` + noEncoderOtherwise
+	if got := cameraSoftwareEncoderNotices([]*appconfig.AppConfig{h264CfgAt("")}, []*hwCap{row}); !slices.Equal(got, []string{want}) {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+// An agent that says nothing of presets is not said to apply one.
+func TestCameraSoftwareEncoderNotices_NameNoPresetForAnAgentThatReportsNone(t *testing.T) {
+	for _, cfg := range []*appconfig.AppConfig{h264CfgAt(""), h264CfgAt("veryfast")} {
+		if got := cameraSoftwareEncoderNotices([]*appconfig.AppConfig{cfg}, []*hwCap{c920RowEncodedInSoftware()}); !slices.Equal(got, []string{c920EncodedSoftware}) {
+			t.Errorf("got  %q\nwant %q", got, c920EncodedSoftware)
+		}
+	}
+}
+
+func TestCameraPresetNotices_AStatedPresetTheDeviceDoesNotApplyIsSaidWithTheAgentsReason(t *testing.T) {
+	const why = "this device encodes H.264 with nvv4l2h264enc, which takes no preset"
+	hardware := c920Row()
+	hardware.Properties[camerashare.KeyH264PresetIgnored] = why
+	want := []string{`Camera: HD Pro Webcam C920: HD Pro Webc (video0): "preset": "veryfast" is not applied: ` + why + `.`}
+	if got := cameraPresetNotices([]*appconfig.AppConfig{h264CfgAt("veryfast")}, []*hwCap{hardware}); !slices.Equal(got, want) {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+	if got := printedCameraNotice(t, []*hwCap{hardware}, h264CfgAt("veryfast"), h264CfgAt("veryfast", c920StableID)); !slices.Equal(got, append([]string{c920SharedH264}, want...)) {
+		t.Errorf("two services printed %q\nwant the share line and %q", got, want)
+	}
+	if got := cameraPresetNotices([]*appconfig.AppConfig{h264CfgAt("")}, []*hwCap{hardware}); len(got) != 0 {
+		t.Errorf("an app that states no preset was told %q", got)
+	}
+}
+
+func TestCameraPresetNotices_AnAgentFromBeforePresetsIsSaidNotToReadOne(t *testing.T) {
+	const notRead = `Camera: the agent on this device does not read a camera entitlement's preset: "preset": "veryfast" has no effect until the agent is updated.`
+	for name, row := range map[string]*hwCap{
+		"an agent that names its software encoder": c920RowEncodedInSoftware(),
+		"an agent that names no encoder":           c920Row(),
+		"an agent from before stable ids":          c920RowFromAnAgentBeforeStableIDs(),
+	} {
+		if got := cameraPresetNotices([]*appconfig.AppConfig{h264CfgAt("veryfast")}, []*hwCap{row, row}); !slices.Equal(got, []string{notRead}) {
+			t.Errorf("%s:\ngot  %q\nwant %q", name, got, notRead)
+		}
+		if got := cameraPresetNotices([]*appconfig.AppConfig{h264CfgAt("")}, []*hwCap{row}); len(got) != 0 {
+			t.Errorf("%s: an app that states no preset was told %q", name, got)
+		}
+	}
+}
+
+func TestCameraPresetNotices_NothingIsSaidWhereThePresetIsAppliedOrNoH264NodeIsServed(t *testing.T) {
+	withoutH264Node := c920RowEncodedAtAPreset()
+	delete(withoutH264Node.Properties, camerashare.KeyModeOfFormat(appconfig.CameraFormatH264))
+	withoutH264Node.Properties[camerashare.KeyUnavailableOfFormat(appconfig.CameraFormatH264)] = "the camera's own frames are not captured whole"
+	for name, tc := range map[string]struct {
+		row *hwCap
+		cfg *appconfig.AppConfig
+	}{
+		"the agent applies the preset":                {c920RowEncodedAtAPreset(), h264CfgAt("veryfast")},
+		"the app asked for h264 and is served other":  {withoutH264Node, h264CfgAt("veryfast")},
+		"the preset is stated for another camera":     {c920Row(), &appconfig.AppConfig{Entitlements: append(h264CfgAt("fast", "/dev/video9").Entitlements, h264CfgAt("", c920StableID).Entitlements...)}},
+		"the app takes the real device":               {c920Row(), shareCfg("direct")},
+		"an agent that reads no node settings at all": {shareRowAt("Brio 101 (video0)", "/dev/video0", map[string]string{"pixels": "1280x720 YUYV, 30 fps"}), h264CfgAt("veryfast")},
+	} {
+		if got := cameraPresetNotices([]*appconfig.AppConfig{tc.cfg}, []*hwCap{tc.row}); len(got) != 0 {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+}
+
+func TestPrintCameraShareNotice_ThePresetLinesFollowTheEncoderLine(t *testing.T) {
+	applied := printedCameraNotice(t, []*hwCap{c920RowEncodedAtAPreset()}, h264CfgAt("veryfast"))
+	wantApplied := []string{c920SharedH264, c920EncodedSoftwareAt + `at preset veryfast, or at a faster one that another consumer of the camera states,` + noEncoderOtherwise}
+	if !slices.Equal(applied, wantApplied) {
+		t.Errorf("printed %q\nwant    %q", applied, wantApplied)
+	}
+	software := c920RowEncodedInSoftware()
+	software.Properties[camerashare.KeyH264Encoder] = "openh264enc (software)"
+	software.Properties[camerashare.KeyH264PresetIgnored] = "this device encodes H.264 with openh264enc, which takes no preset"
+	ignored := printedCameraNotice(t, []*hwCap{software}, h264CfgAt("fast"))
+	wantIgnored := []string{
+		c920SharedH264,
+		`Camera: HD Pro Webcam C920: HD Pro Webc (video0): its H.264 is encoded in software (openh264enc)` + noEncoderOtherwise,
+		`Camera: HD Pro Webcam C920: HD Pro Webc (video0): "preset": "fast" is not applied: this device encodes H.264 with openh264enc, which takes no preset.`,
+	}
+	if !slices.Equal(ignored, wantIgnored) {
+		t.Errorf("printed %q\nwant    %q", ignored, wantIgnored)
+	}
+}
+
+func TestAgentWithoutNodeSettingsNotice_CoversAStatedPreset(t *testing.T) {
+	rows := []*hwCap{shareRowAt("Brio 101 (video0)", "/dev/video0", map[string]string{"pixels": "1280x720 YUYV, 30 fps"})}
+	cfg := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Preset: "veryfast"}}}
+	if got := agentWithoutNodeSettingsNotice([]*appconfig.AppConfig{cfg}, rows); !strings.Contains(got, "does not read a camera entitlement's format, stamp, preset or allowlist") {
+		t.Errorf("got %q", got)
 	}
 }

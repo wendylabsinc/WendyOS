@@ -609,3 +609,52 @@ func TestProjectEditsCameraNodeFormatAndStamp(t *testing.T) {
 		t.Fatal("rejected format changed the file")
 	}
 }
+
+func TestProjectAddsAndEditsCameraPreset(t *testing.T) {
+	_, path := projectTestSetup(t, `{"appId":"robot"}`)
+	if _, err := projectTestCommand(t, "add", "camera", "--format", "h264", "--preset", "veryfast", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	if saved := readProjectTestFile(t, path); !strings.Contains(saved, `"preset": "veryfast"`) || !strings.Contains(saved, `"format": "h264"`) {
+		t.Fatalf("add camera --preset did not write the preset: %s", saved)
+	}
+	if _, err := projectTestCommand(t, "edit", "camera", "--preset", "medium", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	saved := readProjectTestFile(t, path)
+	if !strings.Contains(saved, `"preset": "medium"`) {
+		t.Fatalf("edit camera --preset did not write the preset: %s", saved)
+	}
+	for args, want := range map[string]string{
+		"--preset slow":     `camera preset must be one of "ultrafast", "superfast", "veryfast", "faster", "fast", "medium"; got "slow"`,
+		"--format native":   `camera preset applies only to format "h264": a node of format "native" runs no encoder`,
+		"--preset veryslow": `got "veryslow"`,
+	} {
+		_, err := projectTestCommand(t, append(append([]string{"edit", "camera"}, strings.Fields(args)...), "--file", path)...)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("edit camera %s: error = %v, want %q", args, err, want)
+		}
+		if readProjectTestFile(t, path) != saved {
+			t.Fatalf("edit camera %s changed the file", args)
+		}
+	}
+}
+
+func TestProjectCameraPresetFlagListsThePresets(t *testing.T) {
+	for _, feature := range []string{"camera", "video"} {
+		var hint string
+		for _, field := range projectFields(feature) {
+			if field.flag == "preset" {
+				hint = field.hint
+			}
+		}
+		if hint == "" {
+			t.Fatalf("%s has no --preset flag", feature)
+		}
+		for _, preset := range appconfig.EncodePresets {
+			if !strings.Contains(hint, preset) {
+				t.Errorf("%s --preset help %q does not list %s", feature, hint, preset)
+			}
+		}
+	}
+}

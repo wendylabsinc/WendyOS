@@ -46,7 +46,7 @@ func TestWendyDataModelAppExampleValidates(t *testing.T) {
 	// The app matches each frame it reads to the frame the episode recorded:
 	// it needs the camera's own frames and the agent's frame number in each
 	// buffer's timestamp.
-	if format, stamp, _ := CameraNodeSettings(cfg.Entitlements, CameraIdentity{Path: "/dev/video0"}); format != CameraFormatNative || stamp != CameraStampFrame {
+	if format, stamp, _, _ := CameraNodeSettings(cfg.Entitlements, CameraIdentity{Path: "/dev/video0"}); format != CameraFormatNative || stamp != CameraStampFrame {
 		t.Errorf("the app's camera node is format %q, stamp %q; want native frames stamped with their frame number", format, stamp)
 	}
 

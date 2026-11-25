@@ -49,6 +49,9 @@ func EntitlementAnnotationValue(e Entitlement) string {
 		if e.Stamp != "" {
 			parts = append(parts, "stamp="+e.Stamp)
 		}
+		if e.Preset != "" {
+			parts = append(parts, "preset="+e.Preset)
+		}
 	}
 	if e.Name != "" {
 		parts = append(parts, "name="+e.Name)
@@ -112,6 +115,10 @@ func ParseEntitlementAnnotation(entType, value string) Entitlement {
 		case "stamp":
 			if isCameraEntitlement(ent) {
 				ent.Stamp = val
+			}
+		case "preset":
+			if isCameraEntitlement(ent) {
+				ent.Preset = val
 			}
 		case "name":
 			ent.Name = val

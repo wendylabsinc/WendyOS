@@ -56,7 +56,8 @@ func cameraIdentityOf(c *cameraRow) appconfig.CameraIdentity {
 
 // agentGeneration is what the agent that listed a device's camera rows does
 // with a camera entitlement's format, stamp and allowlist, as far as its rows
-// tell.
+// tell. Whether it reads a preset is told by each camera's row instead
+// (cameraPresetNotices).
 type agentGeneration int
 
 const (
@@ -96,12 +97,12 @@ func agentGenerationOf(cams []*cameraRow) agentGeneration {
 }
 
 // nodeSettingsOf resolves a camera's node settings as its agent will.
-func nodeSettingsOf(entitlements []appconfig.Entitlement, c *cameraRow, generation agentGeneration) (format, stamp string, conflicts []string) {
+func nodeSettingsOf(entitlements []appconfig.Entitlement, c *cameraRow, generation agentGeneration) (format, stamp string, preset appconfig.EncodePreset, conflicts []string) {
 	switch generation {
 	case agentMatchingStableIDs:
 		return appconfig.CameraNodeSettings(entitlements, cameraIdentityOf(c))
 	case agentWithoutNodeSettings:
-		return appconfig.CameraFormats[0], appconfig.CameraStamps[0], nil
+		return appconfig.CameraFormats[0], appconfig.CameraStamps[0], appconfig.EncodePresetUnset, nil
 	}
 	return appconfig.CameraNodeSettingsByPathOrName(entitlements, c.GetDevicePath(), cameraNameOf(c.GetDescription()))
 }
@@ -170,7 +171,7 @@ func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
 	var entries []string
 	for _, c := range cams {
 		for _, cfg := range sharingConfigs(cfgs) {
-			asked, stamp, _ := nodeSettingsOf(cfg.Entitlements, c, generation)
+			asked, stamp, _, _ := nodeSettingsOf(cfg.Entitlements, c, generation)
 			served, mode := servedNodeOf(c, asked)
 			if mode == "" {
 				continue
@@ -192,9 +193,25 @@ func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
 	return fmt.Sprintf("Camera: this app shares %s. For the real device (its own formats, sizes and controls), set \"mode\": \"direct\" on the camera entitlement.", strings.Join(entries, "; "))
 }
 
+// presetTheEncoderWillRunAt says at which preset the encoder of a camera's
+// h264 node will run for an app that states one, or none: the camera has one
+// encoder for all its consumers. It is "" for a row whose agent does not say
+// it applies presets to that encoder.
+func presetTheEncoderWillRunAt(c *cameraRow, stated appconfig.EncodePreset) string {
+	fallback := c.GetProperties()[camerashare.KeyH264DefaultPreset]
+	switch {
+	case fallback == "":
+		return ""
+	case stated == appconfig.EncodePresetUnset:
+		return fmt.Sprintf(" at preset %s, or at the fastest one that a consumer of the camera states,", fallback)
+	}
+	return fmt.Sprintf(" at preset %s, or at a faster one that another consumer of the camera states,", stated)
+}
+
 // cameraSoftwareEncoderNotices returns one line for each camera whose node
 // for one of the configs is H.264 that the device's agent says it makes with a
-// software encoder. An agent that does not say so gets none.
+// software encoder, with the preset where the agent applies one. An agent that
+// does not say so gets none.
 func cameraSoftwareEncoderNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow) []string {
 	generation := agentGenerationOf(cams)
 	var lines []string
@@ -204,14 +221,39 @@ func cameraSoftwareEncoderNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow
 			continue
 		}
 		for _, cfg := range sharingConfigs(cfgs) {
-			asked, _, _ := nodeSettingsOf(cfg.Entitlements, c, generation)
+			asked, _, preset, _ := nodeSettingsOf(cfg.Entitlements, c, generation)
 			if served, _ := servedNodeOf(c, asked); served == appconfig.CameraFormatH264 {
-				lines = appendOnce(lines, fmt.Sprintf("Camera: %s: its H.264 is encoded in software (%s) on this device for as long as this app reads its node. "+
-					"\"format\": \"native\" or \"pixels\" run no encoder.", c.GetDescription(), encoder))
+				lines = appendOnce(lines, fmt.Sprintf("Camera: %s: its H.264 is encoded in software (%s)%s on this device for as long as this app reads its node. "+
+					"\"format\": \"native\" or \"pixels\" run no encoder.", c.GetDescription(), encoder, presetTheEncoderWillRunAt(c, preset)))
 			}
 		}
 	}
 	return lines
+}
+
+// cameraPresetNotices returns a line for each camera whose h264 node an app
+// states a preset for that the device does not apply, with the agent's reason,
+// and one line for an agent whose rows say nothing of presets: it is from
+// before them.
+func cameraPresetNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow) []string {
+	generation := agentGenerationOf(cams)
+	var lines, unread []string
+	for _, c := range cams {
+		props := c.GetProperties()
+		for _, cfg := range sharingConfigs(cfgs) {
+			asked, _, preset, _ := nodeSettingsOf(cfg.Entitlements, c, generation)
+			if served, _ := servedNodeOf(c, asked); served != appconfig.CameraFormatH264 || preset == appconfig.EncodePresetUnset {
+				continue
+			}
+			switch why := props[camerashare.KeyH264PresetIgnored]; {
+			case why != "":
+				lines = appendOnce(lines, fmt.Sprintf("Camera: %s: \"preset\": %q is not applied: %s.", c.GetDescription(), preset, why))
+			case props[camerashare.KeyH264DefaultPreset] == "":
+				unread = appendOnce(unread, fmt.Sprintf("Camera: the agent on this device does not read a camera entitlement's preset: \"preset\": %q has no effect until the agent is updated.", preset))
+			}
+		}
+	}
+	return append(lines, unread...)
 }
 
 // cameraSettingsConflictNotices returns one line for each shared camera whose
@@ -226,7 +268,7 @@ func cameraSettingsConflictNotices(cfgs []*appconfig.AppConfig, cams []*cameraRo
 			continue
 		}
 		for _, cfg := range sharingConfigs(cfgs) {
-			if _, _, conflicts := nodeSettingsOf(cfg.Entitlements, c, generation); len(conflicts) > 0 {
+			if _, _, _, conflicts := nodeSettingsOf(cfg.Entitlements, c, generation); len(conflicts) > 0 {
 				lines = appendOnce(lines, fmt.Sprintf("Camera: %s: %s.", c.GetDescription(), strings.Join(conflicts, "; ")))
 			}
 		}
@@ -286,8 +328,8 @@ func cameraAllowlistNotices(cfgs []*appconfig.AppConfig, cams []*cameraRow) []st
 }
 
 // agentWithoutNodeSettingsNotice returns the line for an app that sets a
-// camera entry's format, stamp or allowlist on a device whose agent reads none
-// of them, and "" otherwise.
+// camera entry's format, stamp, preset or allowlist on a device whose agent
+// reads none of them, and "" otherwise.
 func agentWithoutNodeSettingsNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
 	if agentGenerationOf(cams) != agentWithoutNodeSettings {
 		return ""
@@ -295,8 +337,8 @@ func agentWithoutNodeSettingsNotice(cfgs []*appconfig.AppConfig, cams []*cameraR
 	for _, cfg := range sharingConfigs(cfgs) {
 		for _, e := range cfg.Entitlements {
 			isCamera := e.Type == appconfig.EntitlementCamera || e.Type == appconfig.EntitlementVideo
-			if isCamera && (e.Format != "" || e.Stamp != "" || len(e.Allowlist) > 0) {
-				return "Camera: the agent on this device does not read a camera entitlement's format, stamp or allowlist: " +
+			if isCamera && (e.Format != "" || e.Stamp != "" || e.Preset != "" || len(e.Allowlist) > 0) {
+				return "Camera: the agent on this device does not read a camera entitlement's format, stamp, preset or allowlist: " +
 					"every shared camera's node carries pictures stamped with the capture time until the agent is updated."
 			}
 		}
@@ -306,7 +348,8 @@ func agentWithoutNodeSettingsNotice(cfgs []*appconfig.AppConfig, cams []*cameraR
 
 // printCameraShareNotice prints the notice when the agent says the app's
 // camera will be shared, then which of its nodes a software encoder feeds,
-// what its entries disagree on and which allowlist entries configure nothing.
+// which stated presets are not applied, what its entries disagree on and which
+// allowlist entries configure nothing.
 // Any failure or delay prints nothing, and so does an agent whose rows say
 // nothing of sharing.
 func printCameraShareNotice(ctx context.Context, conn *grpcclient.AgentConnection, cfgs ...*appconfig.AppConfig) {
@@ -325,6 +368,7 @@ func printCameraShareNotice(ctx context.Context, conn *grpcclient.AgentConnectio
 		lines = append(lines, line)
 	}
 	lines = append(lines, cameraSoftwareEncoderNotices(cfgs, resp.GetCapabilities())...)
+	lines = append(lines, cameraPresetNotices(cfgs, resp.GetCapabilities())...)
 	if line := agentWithoutNodeSettingsNotice(cfgs, resp.GetCapabilities()); line != "" {
 		lines = append(lines, line)
 	}

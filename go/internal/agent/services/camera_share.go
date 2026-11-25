@@ -313,7 +313,7 @@ func (s *VideoService) noteFreshStartSupport(err error) {
 
 // createCameraShare shares one camera with a container, or logs why not.
 func (s *VideoService) createCameraShare(ctx context.Context, containerID, appID string, dev *agentpb.VideoDevice, entitlements []appconfig.Entitlement, creation *shareCreation) {
-	format, stamp, conflicts := appconfig.CameraNodeSettings(entitlements,
+	format, stamp, _, conflicts := appconfig.CameraNodeSettings(entitlements,
 		appconfig.CameraIdentity{Path: dev.GetPath(), StableID: dev.GetStableId(), Name: dev.GetName()})
 	settingsNote := strings.Join(conflicts, "; ")
 	noted := s.noteSettingsOnRecord(containerID, dev, settingsNote, creation)

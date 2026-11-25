@@ -143,12 +143,12 @@ var allowedKeys = map[string][]string{
 	EntitlementBluetooth:     {"type", "mode"},
 	EntitlementAvahi:         {"type"},
 	EntitlementNAN:           {"type"},
-	EntitlementVideo:         {"type", "mode", "allowlist", "format", "stamp"},
+	EntitlementVideo:         {"type", "mode", "allowlist", "format", "stamp", "preset"},
 	EntitlementGPU:           {"type"},
 	EntitlementNPU:           {"type"},
 	EntitlementPersist:       {"type", "name", "path"},
 	EntitlementAudio:         {"type"},
-	EntitlementCamera:        {"type", "mode", "allowlist", "format", "stamp", "user", "password"},
+	EntitlementCamera:        {"type", "mode", "allowlist", "format", "stamp", "preset", "user", "password"},
 	EntitlementUSB:           {"type"},
 	EntitlementI2C:           {"type", "device"},
 	EntitlementGPIO:          {"type", "pins"},
@@ -589,6 +589,16 @@ func (c CameraIdentity) NamedBy(entry string) bool {
 type cameraClaim struct {
 	by            string
 	format, stamp string
+	preset        EncodePreset
+}
+
+const noEncodePreset = "no preset"
+
+func (c cameraClaim) presetAsked() string {
+	if c.preset == EncodePresetUnset {
+		return noEncodePreset
+	}
+	return c.preset.String()
 }
 
 func (c cameraClaim) asker() string {
@@ -610,7 +620,7 @@ func listClaims(claims []cameraClaim, describe func(cameraClaim) string) string 
 }
 
 // CameraNodeSettings reports the format and stamp of the node an app gets for
-// a camera. An entry's allowlist names the camera by its stable id (as the
+// a camera, and the encoder preset the app states for it. An entry's allowlist names the camera by its stable id (as the
 // camera list prints it, or without a "by-id:" prefix), its device path (alone
 // or after "v4l2:") or its name. An entry naming the stable id decides before
 // one naming the path, which decides before one naming the name, which decides
@@ -619,20 +629,21 @@ func listClaims(claims []cameraClaim, describe func(cameraClaim) string) string 
 // The result does not depend on the order of the entries, because the agent
 // rebuilds them from container labels sorted by type and never sees manifest
 // order: when the deciding entries disagree on a setting, that setting is the
-// default. The labels may also come from a newer or older command line, so a
-// value this build does not know resolves to the default.
+// default, and no preset is stated. The labels may also come from a newer or
+// older command line, so a value this build does not know resolves to the
+// default, and a preset it does not know states none.
 //
 // conflicts holds one sentence for each setting on which the entries that
 // apply to the camera differ, the format's first. They quote allowlist entries
 // as written, which is not where the camera is now.
-func CameraNodeSettings(entitlements []Entitlement, camera CameraIdentity) (format, stamp string, conflicts []string) {
+func CameraNodeSettings(entitlements []Entitlement, camera CameraIdentity) (format, stamp string, preset EncodePreset, conflicts []string) {
 	return settleCameraNode(entitlements, camera.spellings())
 }
 
 // CameraNodeSettingsByPathOrName is CameraNodeSettings as an agent from before
 // stable ids resolves it: an allowlist entry names a camera only by its exact
 // device path or its exact name.
-func CameraNodeSettingsByPathOrName(entitlements []Entitlement, cameraPath, cameraName string) (format, stamp string, conflicts []string) {
+func CameraNodeSettingsByPathOrName(entitlements []Entitlement, cameraPath, cameraName string) (format, stamp string, preset EncodePreset, conflicts []string) {
 	var spellings cameraSpellings
 	if cameraPath != "" {
 		spellings[cameraByPath] = []string{cameraPath}
@@ -643,13 +654,13 @@ func CameraNodeSettingsByPathOrName(entitlements []Entitlement, cameraPath, came
 	return settleCameraNode(entitlements, spellings)
 }
 
-func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (format, stamp string, conflicts []string) {
+func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (format, stamp string, preset EncodePreset, conflicts []string) {
 	var claims [cameraRanks][]cameraClaim
 	for _, e := range entitlements {
 		if !isCameraEntitlement(e) || e.Mode == CameraModeDirect {
 			continue
 		}
-		claim := cameraClaim{format: knownOrDefault(e.Format, CameraFormats), stamp: knownOrDefault(e.Stamp, CameraStamps)}
+		claim := cameraClaim{format: knownOrDefault(e.Format, CameraFormats), stamp: knownOrDefault(e.Stamp, CameraStamps), preset: ParseEncodePreset(e.Preset)}
 		if len(e.Allowlist) == 0 {
 			claims[cameraByNoAllowlist] = append(claims[cameraByNoAllowlist], claim)
 			continue
@@ -665,7 +676,7 @@ func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (fo
 	}
 	deciding := slices.IndexFunc(claims[:], func(tier []cameraClaim) bool { return len(tier) > 0 })
 	if deciding < 0 {
-		return CameraFormats[0], CameraStamps[0], nil
+		return CameraFormats[0], CameraStamps[0], EncodePresetUnset, nil
 	}
 	settle := func(setting, fallback string, asked func(cameraClaim) string) string {
 		ask := func(c cameraClaim) string { return c.asker() + " asks for " + asked(c) }
@@ -692,7 +703,8 @@ func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (fo
 	}
 	format = settle("format", CameraFormats[0], func(c cameraClaim) string { return c.format })
 	stamp = settle("stamp", CameraStamps[0], func(c cameraClaim) string { return c.stamp })
-	return format, stamp, conflicts
+	preset = ParseEncodePreset(settle("preset", noEncodePreset, cameraClaim.presetAsked))
+	return format, stamp, preset, conflicts
 }
 
 // CameraAllowlistEntries lists, in manifest order and once each, the allowlist
@@ -721,6 +733,7 @@ type Entitlement struct {
 	Allowlist []string                   `json:"allowlist,omitempty"` // Camera, Video
 	Format    string                     `json:"format,omitempty"`    // Camera, Video
 	Stamp     string                     `json:"stamp,omitempty"`     // Camera, Video
+	Preset    string                     `json:"preset,omitempty"`    // Camera, Video
 	Name      string                     `json:"name,omitempty"`      // Persist
 	Path      string                     `json:"path,omitempty"`      // Persist
 	Device    string                     `json:"device,omitempty"`    // I2C, Serial
@@ -876,10 +889,13 @@ func validateCameraEntries(entries []locatedEntitlement) error {
 	if err := validateCameraNodeSettingsWithDirect(entries); err != nil {
 		return err
 	}
+	if err := validateCameraPresetsHaveAnEncoder(entries); err != nil {
+		return err
+	}
 	return validateCameraClaims(entries)
 }
 
-// validateCameraNodeSettingsWithDirect rejects format or stamp on any camera or
+// validateCameraNodeSettingsWithDirect rejects format, stamp or preset on any camera or
 // video entry of a container that has a direct entry: one direct entry gives
 // the whole container the real device (CameraShareChoice), so no entry gets a
 // node.
@@ -900,6 +916,8 @@ func validateCameraNodeSettingsWithDirect(entries []locatedEntitlement) error {
 			key = "format"
 		case e.Stamp != "":
 			key = "stamp"
+		case e.Preset != "":
+			key = "preset"
 		default:
 			continue
 		}
@@ -910,6 +928,27 @@ func validateCameraNodeSettingsWithDirect(entries []locatedEntitlement) error {
 		return fmt.Errorf("%s: %s %s cannot be combined with mode %q%s: the app gets the real device, so there is no camera node to configure", e.location, e.Type, key, CameraModeDirect, where)
 	}
 	return nil
+}
+
+// validateCameraPresetsHaveAnEncoder rejects a preset on an entry whose node
+// is not H.264: the encoder runs only for an h264 node.
+func validateCameraPresetsHaveAnEncoder(entries []locatedEntitlement) error {
+	for _, e := range entries {
+		if !isCameraEntitlement(e.Entitlement) || e.Preset == "" {
+			continue
+		}
+		if format := knownOrDefault(e.Format, CameraFormats); format != CameraFormatH264 {
+			return fmt.Errorf("%s: %s preset applies only to format %q: a node of format %q runs no encoder", e.location, e.Type, CameraFormatH264, format)
+		}
+	}
+	return nil
+}
+
+func quotedOrUnset(value string) string {
+	if value == "" {
+		return "unset"
+	}
+	return fmt.Sprintf("%q", value)
 }
 
 // spellingWithoutDevice reduces the spellings of one camera that can be told
@@ -948,7 +987,8 @@ func cameraAllowlistOverlap(earlier, later []string) string {
 // every camera, and an entry with one claims the cameras it lists, compared as
 // written apart from the spellings spellingWithoutDevice reduces. Entries that
 // agree after defaults are accepted, because manifests with several plain
-// camera entries predate format and stamp.
+// camera entries predate format and stamp. An entry that states no preset
+// differs from one that states one.
 func validateCameraClaims(entries []locatedEntitlement) error {
 	for j, later := range entries {
 		if !isCameraEntitlement(later.Entitlement) {
@@ -962,14 +1002,13 @@ func validateCameraClaims(entries []locatedEntitlement) error {
 			for _, setting := range []struct {
 				key            string
 				earlier, later string
-				accepted       []string
 			}{
-				{"format", earlier.Format, later.Format, CameraFormats},
-				{"stamp", earlier.Stamp, later.Stamp, CameraStamps},
+				{"format", knownOrDefault(earlier.Format, CameraFormats), knownOrDefault(later.Format, CameraFormats)},
+				{"stamp", knownOrDefault(earlier.Stamp, CameraStamps), knownOrDefault(later.Stamp, CameraStamps)},
+				{"preset", ParseEncodePreset(earlier.Preset).String(), ParseEncodePreset(later.Preset).String()},
 			} {
-				a, b := knownOrDefault(setting.earlier, setting.accepted), knownOrDefault(setting.later, setting.accepted)
-				if a != b {
-					differences = append(differences, fmt.Sprintf("%s (%q and %q)", setting.key, a, b))
+				if setting.earlier != setting.later {
+					differences = append(differences, fmt.Sprintf("%s (%s and %s)", setting.key, quotedOrUnset(setting.earlier), quotedOrUnset(setting.later)))
 				}
 			}
 			if len(differences) == 0 {
@@ -1082,6 +1121,9 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 				return err
 			}
 			if err := validateCameraNodeSettingValue(e, "stamp", e.Stamp, CameraStamps, prefix, i); err != nil {
+				return err
+			}
+			if err := validateCameraNodeSettingValue(e, "preset", e.Preset, EncodePresets, prefix, i); err != nil {
 				return err
 			}
 		case EntitlementGPIO:

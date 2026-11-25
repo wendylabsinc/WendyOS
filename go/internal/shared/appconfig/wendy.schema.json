@@ -284,7 +284,7 @@
             "allowlist": {
               "type": "array",
               "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
-              "description": "Cameras this entry's format and stamp apply to, each named by its stable_id (a by-id one preferred), path or name as `wendy device camera list --json` prints them. An entry cannot be empty. Omit to apply them to every camera."
+              "description": "Cameras this entry's format, stamp and preset apply to, each named by its stable_id (a by-id one preferred), path or name as `wendy device camera list --json` prints them. An entry cannot be empty. Omit to apply them to every camera."
             },
             "format": {
               "type": "string",
@@ -297,6 +297,11 @@
               "enum": ["time", "frame"],
               "default": "time",
               "description": "What each frame's timestamp field holds on the app's camera node: \"time\" for the capture time, \"frame\" for the agent's frame number."
+            },
+            "preset": {
+              "type": "string",
+              "enum": ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"],
+              "description": "How fast the software H.264 encoder works for the app's \"h264\" camera node, fastest first: a slower preset spends more CPU on each frame for fewer bits. Only with \"format\": \"h264\", and applied only where the device encodes H.264 in software. One encoder serves every consumer of a camera and runs at the fastest preset any of them states, \"ultrafast\" when none states one."
             }
           },
           "required": ["type"],
@@ -355,7 +360,7 @@
             "allowlist": {
               "type": "array",
               "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
-              "description": "Cameras this entry's format and stamp apply to, each named by its stable_id (a by-id one preferred), path or name as `wendy device camera list --json` prints them. An entry cannot be empty. Omit to apply them to every camera."
+              "description": "Cameras this entry's format, stamp and preset apply to, each named by its stable_id (a by-id one preferred), path or name as `wendy device camera list --json` prints them. An entry cannot be empty. Omit to apply them to every camera."
             },
             "format": {
               "type": "string",
@@ -368,6 +373,11 @@
               "enum": ["time", "frame"],
               "default": "time",
               "description": "What each frame's timestamp field holds on the app's camera node: \"time\" for the capture time, \"frame\" for the agent's frame number."
+            },
+            "preset": {
+              "type": "string",
+              "enum": ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"],
+              "description": "How fast the software H.264 encoder works for the app's \"h264\" camera node, fastest first: a slower preset spends more CPU on each frame for fewer bits. Only with \"format\": \"h264\", and applied only where the device encodes H.264 in software. One encoder serves every consumer of a camera and runs at the fastest preset any of them states, \"ultrafast\" when none states one."
             },
             "user": {
               "type": "string",

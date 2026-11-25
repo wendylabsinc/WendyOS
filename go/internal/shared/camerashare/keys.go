@@ -28,6 +28,17 @@ const (
 	// software. A camera that produces H.264 itself, an element that is not
 	// known to be software, and an agent from before the key set none.
 	KeyH264Encoder = "h264_encoder"
+	// KeyH264DefaultPreset is the preset the encoder of the camera's h264
+	// mode runs at when no consumer of the camera states one, e.g.
+	// "ultrafast". A row has it only where the agent applies a stated preset:
+	// that mode is made by an encoder that takes one.
+	KeyH264DefaultPreset = "h264_default_preset"
+	// KeyH264PresetIgnored is why a preset stated for the camera's h264 node
+	// is not applied, e.g. "this device encodes H.264 with nvv4l2h264enc,
+	// which takes no preset". An agent that reads presets sets this key or
+	// KeyH264DefaultPreset on every row with an h264 mode, and an agent from
+	// before presets neither.
+	KeyH264PresetIgnored = "h264_preset_ignored"
 )
 
 const softwareEncoderSuffix = " (software)"

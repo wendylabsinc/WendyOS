@@ -451,7 +451,7 @@ func TestCameraNodeSettings(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			format, stamp, _ := CameraNodeSettings(tt.in, CameraIdentity{Path: path, Name: name})
+			format, stamp, _, _ := CameraNodeSettings(tt.in, CameraIdentity{Path: path, Name: name})
 			if format != tt.wantFormat || stamp != tt.wantStamp {
 				t.Fatalf("CameraNodeSettings() = (%q, %q), want (%q, %q)", format, stamp, tt.wantFormat, tt.wantStamp)
 			}
@@ -461,7 +461,7 @@ func TestCameraNodeSettings(t *testing.T) {
 
 func TestCameraNodeSettings_UnknownCameraIdentityMatchesNoAllowlist(t *testing.T) {
 	in := []Entitlement{{Type: EntitlementCamera, Allowlist: []string{""}, Format: "native", Stamp: "frame"}}
-	if format, stamp, _ := CameraNodeSettings(in, CameraIdentity{}); format != "pixels" || stamp != "time" {
+	if format, stamp, _, _ := CameraNodeSettings(in, CameraIdentity{}); format != "pixels" || stamp != "time" {
 		t.Fatalf("CameraNodeSettings() = (%q, %q), want the defaults", format, stamp)
 	}
 }
@@ -520,7 +520,7 @@ func TestCameraNodeSettings_DoesNotDependOnEntryOrder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, order := range entitlementOrders(tt.in) {
-				format, stamp, _ := CameraNodeSettings(order, CameraIdentity{Path: path, Name: name})
+				format, stamp, _, _ := CameraNodeSettings(order, CameraIdentity{Path: path, Name: name})
 				if format != tt.wantFormat || stamp != tt.wantStamp {
 					t.Errorf("CameraNodeSettings(%+v) = (%q, %q), want (%q, %q)", order, format, stamp, tt.wantFormat, tt.wantStamp)
 				}
@@ -583,7 +583,7 @@ func TestCameraNodeSettings_AnAllowlistNamesACameraByEveryIdentifierItIsShownBy(
 			if tt.named {
 				wantFormat, wantStamp = "native", "frame"
 			}
-			format, stamp, conflicts := CameraNodeSettings(in, tt.camera)
+			format, stamp, _, conflicts := CameraNodeSettings(in, tt.camera)
 			if format != wantFormat || stamp != wantStamp || len(conflicts) != 0 {
 				t.Fatalf("CameraNodeSettings() = (%q, %q, %q), want (%q, %q) and no conflict", format, stamp, conflicts, wantFormat, wantStamp)
 			}
@@ -682,7 +682,7 @@ func TestCameraNodeSettings_TheMostSpecificIdentifierDecidesInAnyEntryOrder(t *t
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, order := range entitlementOrders(tt.in) {
-				format, stamp, conflicts := CameraNodeSettings(order, c920)
+				format, stamp, _, conflicts := CameraNodeSettings(order, c920)
 				if format != tt.wantFormat || stamp != tt.wantStamp || !slices.Equal(conflicts, tt.wantConflicts) {
 					t.Fatalf("CameraNodeSettings(%+v) = (%q, %q)\nconflicts %q\nwant (%q, %q)\nconflicts %q",
 						order, format, stamp, conflicts, tt.wantFormat, tt.wantStamp, tt.wantConflicts)
@@ -743,7 +743,7 @@ func TestCameraNodeSettingsByPathOrName_ResolvesAsAnAgentFromBeforeStableIDsDoes
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, order := range entitlementOrders(tt.in) {
-				format, stamp, conflicts := CameraNodeSettingsByPathOrName(order, c920.Path, c920.Name)
+				format, stamp, _, conflicts := CameraNodeSettingsByPathOrName(order, c920.Path, c920.Name)
 				if format != tt.wantFormat || stamp != tt.wantStamp || !slices.Equal(conflicts, tt.wantConflicts) {
 					t.Fatalf("CameraNodeSettingsByPathOrName(%+v) = (%q, %q)\nconflicts %q\nwant (%q, %q)\nconflicts %q",
 						order, format, stamp, conflicts, tt.wantFormat, tt.wantStamp, tt.wantConflicts)
@@ -813,7 +813,7 @@ func TestCameraNodeSettings_UnknownValuesResolveToTheDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := []Entitlement{ParseEntitlementAnnotation(EntitlementCamera, "format="+tt.format+",stamp="+tt.stamp)}
-			format, stamp, _ := CameraNodeSettings(in, CameraIdentity{Path: "/dev/video0", Name: "Brio 101"})
+			format, stamp, _, _ := CameraNodeSettings(in, CameraIdentity{Path: "/dev/video0", Name: "Brio 101"})
 			if format != tt.wantFormat || stamp != tt.wantStamp {
 				t.Fatalf("CameraNodeSettings() = (%q, %q), want (%q, %q)", format, stamp, tt.wantFormat, tt.wantStamp)
 			}
