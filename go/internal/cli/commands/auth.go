@@ -83,6 +83,7 @@ func newAuthCmd() *cobra.Command {
 		newAuthDefaultCmd(),
 		newAuthListOrgsCmd(),
 		newAuthServiceAccountCmd(),
+		newAuthLocalKeyCmd(),
 	)
 
 	return cmd

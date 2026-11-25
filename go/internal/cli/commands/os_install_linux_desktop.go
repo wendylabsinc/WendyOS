@@ -125,6 +125,9 @@ var linuxDesktopConfigLoad = config.Load
 // short-lived enrollment token and prints the pre-enrollment one-liner. It
 // never writes a drive or downloads an image.
 func installDesktop(ctx context.Context, preOpts preEnrollOptions, deviceName, machineLabel string) error {
+	if err := refuseClose(preOpts, machineLabel); err != nil {
+		return err
+	}
 	interactive := isInteractiveTerminal()
 
 	cfg, err := linuxDesktopConfigLoad()

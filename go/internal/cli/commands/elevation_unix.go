@@ -142,19 +142,24 @@ func buildSudoReexecArgs(self string, origArgs []string) []string {
 // already in thorSudoPreserveEnv, so sudo passes it through. Harmless on macOS,
 // where os.UserCacheDir() ignores XDG_CACHE_HOME.
 func pinCacheDirEnv(environ []string, cacheBase string) []string {
-	const key = "XDG_CACHE_HOME="
+	return pinEnv(environ, "XDG_CACHE_HOME", cacheBase)
+}
+
+// pinEnv returns environ with name set to value.
+func pinEnv(environ []string, name, value string) []string {
+	key := name + "="
 	out := make([]string, 0, len(environ)+1)
 	replaced := false
 	for _, e := range environ {
 		if strings.HasPrefix(e, key) {
-			out = append(out, key+cacheBase)
+			out = append(out, key+value)
 			replaced = true
 			continue
 		}
 		out = append(out, e)
 	}
 	if !replaced {
-		out = append(out, key+cacheBase)
+		out = append(out, key+value)
 	}
 	return out
 }
@@ -244,6 +249,12 @@ func ensureThorRootAccess() error {
 	env := thorTelemetryEnv(os.Environ())
 	if base, cerr := os.UserCacheDir(); cerr == nil {
 		env = pinCacheDirEnv(env, base)
+	}
+	// Pin the config dir the same way: the elevated run must load the local
+	// key this user already has (os install --close creates it before
+	// elevating), never look for one under /root.
+	if dir, cerr := config.ConfigDir(); cerr == nil {
+		env = pinEnv(env, "WENDY_CONFIG_DIR", dir)
 	}
 	// syscall.Exec replaces this process image; on success it never returns.
 	// Flush first so even a cancelled sudo prompt leaves a record of the attempt.

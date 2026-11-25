@@ -91,7 +91,10 @@ type AgentConnection struct {
 	IsMTLS         bool                    // true when connected via mutual TLS
 	IsSessionProxy bool                    // true when Conn reaches a local session broker retaining the mTLS transport
 	CertInfo       *config.CertificateInfo // cert used to establish mTLS; nil for plaintext
-	RegistryDialer func(context.Context, int) (net.Conn, error)
+	// IsLocalOperator is true when the connection proved this computer's
+	// local key to a Closed device (ConnectWithLocalKey). CertInfo is nil then.
+	IsLocalOperator bool
+	RegistryDialer  func(context.Context, int) (net.Conn, error)
 	// IsCloudV2 identifies Cloud v2 connections, where the CLI surfaces
 	// transport drops without an automatic registry fallback. LAN and legacy Cloud
 	// connections leave it false.
@@ -170,6 +173,15 @@ type AgentConnection struct {
 	// out of gRPC's handshake-failure string. nil for connections that never
 	// install the sink.
 	pinMismatch *atomic.Pointer[devicepin.PinMismatchError]
+	// notLocalDevice is set when a local-key dial met a cloud-enrolled
+	// device (see NotLocalDevice). nil for every other connection.
+	notLocalDevice *atomic.Bool
+	// localDeviceVerified holds the device key a local-key dial verified
+	// (see LocalDeviceKey).
+	localDeviceVerified *atomic.Pointer[[]byte]
+	// deviceRefusedKey is set when a device that proved its key answered a
+	// local-key dial with a TLS alert (see DeviceRefusedKey).
+	deviceRefusedKey *atomic.Bool
 	// tcpDial records failures before TCP connected, separately from TLS errors.
 	// nil when gRPC owns dialing, including HTTP CONNECT proxy transports.
 	tcpDial *agentTCPDialState

@@ -2882,7 +2882,10 @@ func resolveRegistryForImageBuilder(ctx context.Context, conn *grpcclient.AgentC
 	switch normalized {
 	case imageBuilderDocker:
 		registryAddr, cleanup, dialErr, err = resolveRegistryForAgent(ctx, conn, port)
-		return registryAddr, cleanup, conn.IsMTLS, dialErr, err
+		// A Closed device reached with this computer's key is pushed to
+		// through a loopback proxy that holds the key, so BuildKit itself
+		// pushes plain HTTP.
+		return registryAddr, cleanup, conn.IsMTLS && !conn.IsLocalOperator, dialErr, err
 	case imageBuilderAppleContainer:
 		return resolveRegistryForAppleContainer(ctx, conn, port)
 	default:
@@ -3006,6 +3009,10 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	if err != nil {
 		return "", nil, nil, err
 	}
+	registryDial, err := registryDialerFor(ctx, conn)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	// Hold the lock during cache lookup and proxy creation so concurrent callers
 	// share one proxy. Proxy creation is just a local
 	// net.Listen call, so the lock is held only briefly.
@@ -3021,7 +3028,7 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	var addr string
 	var stopProxy func()
 
-	if conn.RegistryDialer == nil {
+	if registryDial == nil {
 		addr, stopProxy, dialErr, err = resolveRegistry(context.Background(), conn.Host, port)
 		if err != nil {
 			dockerRegistryProxyCacheMu.Unlock()
@@ -3030,7 +3037,7 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	} else {
 		// Bind loopback only; the Docker VM forwards host.docker.internal to it.
 		proxy, proxyErr := startRegistryProxyWithDialer(context.Background(), registryProxyListenAddr, func(ctx context.Context) (net.Conn, error) {
-			return conn.RegistryDialer(ctx, port)
+			return registryDial(ctx, port)
 		})
 		if proxyErr != nil {
 			dockerRegistryProxyCacheMu.Unlock()
@@ -3102,8 +3109,12 @@ func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentCon
 	if err != nil {
 		return "", false, nil, nil, err
 	}
-	if conn.RegistryDialer == nil {
-		if conn.IsMTLS {
+	registryDial, err := registryDialerFor(ctx, conn)
+	if err != nil {
+		return "", false, nil, nil, err
+	}
+	if registryDial == nil {
+		if conn.IsMTLS && !conn.IsLocalOperator {
 			// Provisioned LAN device: the registry speaks HTTPS with a cert signed
 			// by the Wendy Cloud Root CA, which is not in the macOS system keychain.
 			// Stand up a local HTTP reverse proxy that terminates TLS with mTLS so
@@ -3138,9 +3149,10 @@ func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentCon
 	// plugin sent plain HTTP straight into the TLS listener and every
 	// tunnel deploy to an enrolled device hung on GET /v2/ (WDY-1868).
 	dial := func(ctx context.Context) (net.Conn, error) {
-		return conn.RegistryDialer(ctx, port)
+		return registryDial(ctx, port)
 	}
-	if conn.IsMTLS {
+	// This computer's key already wrapped a Closed device's dial in TLS.
+	if conn.IsMTLS && !conn.IsLocalOperator {
 		certInfo := loadCLICert()
 		if certInfo == nil {
 			return "", false, nil, nil, commandErrorf(errRegistryAuth, "mTLS connection but no CLI certificates available")

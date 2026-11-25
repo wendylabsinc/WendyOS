@@ -165,7 +165,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			if err != nil {
 				return false, err
 			}
-			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail, agentSeed{local: opts.Agent, nightly: opts.Nightly, arch: "arm64"}); err != nil {
+			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail, agentSeed{local: opts.Agent, nightly: opts.Nightly, arch: "arm64", ownerKeys: opts.PreEnroll.ownerKeys}); err != nil {
 				return false, err
 			}
 			flashPlan, err = t234.LoadXMLPlan(layoutPath, workspace, fp.Manifest.RootfsDevice)

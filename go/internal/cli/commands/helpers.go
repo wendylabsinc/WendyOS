@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/netip"
 	"os"
@@ -644,11 +645,15 @@ var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, 
 	}
 	defer conn.Close()
 
+	// A local-key connection to a Closed device is TLS but not the cloud
+	// mTLS this flag stands for (a Provisioned row, its mTLS port advertised):
+	// a Closed device advertises its plaintext port.
+	cloudMTLS := conn.IsMTLS && !conn.IsLocalOperator
 	resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 	if err != nil {
-		return conn.IsMTLS, resp, errors.Join(mtlsErr, err)
+		return cloudMTLS, resp, errors.Join(mtlsErr, err)
 	}
-	return conn.IsMTLS, resp, nil
+	return cloudMTLS, resp, nil
 }
 
 var discoverLANDevices = func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
@@ -2711,6 +2716,22 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		if conn != nil {
 			return conn, nil, nil
 		}
+	}
+	// The local key: the credential of a Closed device. Tried after the cloud
+	// certificates, which an enrolled device requires and which a Closed
+	// device fails fast (its self-signed certificate chains to no CA we hold).
+	localConn, local, localRefusal := dialLocalOperatorFn(ctx, target, candidates)
+	if localConn != nil {
+		return localConn, nil, nil
+	}
+	if localRefusal != nil && !errors.Is(localRefusal, context.Canceled) && !errors.Is(localRefusal, context.DeadlineExceeded) {
+		return nil, walk.lastMTLSErr, localRefusal
+	}
+	// A device that proved itself Closed on the key port explains the cloud
+	// certificate's failure: it is not enrolled, so the local rung's verdict
+	// (ask an owner, the keyless set) wins over clock and login advice.
+	closedSeen := local.keyRefused != "" || local.verifiedProbeErr != nil
+	if len(allCerts) > 0 && len(candidates) > 0 && !closedSeen {
 		if walk.primaryRejectedOurCert() {
 			// A genuine cross-org mismatch (device's org is one we hold no cert
 			// for) gets a clear, actionable message. A same-org failure (observed
@@ -2738,6 +2759,13 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, walk.lastMTLSErr, err
+	}
+	if refusal := localDialRefusal(target, local, len(walk.allCerts) > 0, nil); refusal != nil {
+		return nil, walk.lastMTLSErr, refusal
+	}
+	if local.keyRefused != "" {
+		conn, err := dialClosedKeyless(ctx, target, local.keyRefused)
+		return conn, walk.lastMTLSErr, err
 	}
 	if target.pinned() || target.Expected != nil {
 		// A host we have already reached over mTLS must never be reached
@@ -2769,6 +2797,9 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	// first RPC — walking here would spend dials that cannot report which of them
 	// actually worked. The authenticated walk above is where reachability gets
 	// established; cacheFastPathReachable is what proves a plaintext one.
+	if local.keyErr != nil && !errors.Is(local.keyErr, fs.ErrNotExist) && !jsonOutput {
+		fmt.Fprintf(os.Stderr, "Warning: this computer's local key was not used: %v\n", local.keyErr)
+	}
 	conn, err := plaintextConnectFn(ctx, target.Addr)
 	if err != nil || len(allCerts) == 0 {
 		return conn, walk.lastMTLSErr, err
@@ -2805,6 +2836,9 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 // but does not report itself unenrolled. A real enrolled agent serves only
 // TLS, so nothing is sent to it.
 var errEnrolledWithoutTLS = errors.New("the device answered without TLS but does not report itself as unenrolled, so the CLI will not use that connection. Check that the device name or address is correct, then retry")
+
+// dialLocalOperatorFn is a seam over dialLocalOperator.
+var dialLocalOperatorFn = dialLocalOperator
 
 // dialAgentLadder is dialAgentLadderWithCerts with the CLI's stored certs
 // in config order — the shape every non-fast-path caller wants.

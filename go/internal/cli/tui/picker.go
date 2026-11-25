@@ -122,7 +122,7 @@ type PickerItem struct {
 	AgentVersion string
 	OS           string // distro/OS name (e.g. "ubuntu"); shown alongside OSVersion
 	OSVersion    string
-	Provisioned  string // "Provisioned" or "Unprovisioned" when known, empty otherwise
+	Provisioned  string // "Provisioned", "Unprovisioned" or "Closed" when known, empty otherwise
 	Hint         string // optional footer text shown when this item is highlighted
 
 	// Probe reflects whether the agent version/OS probe for this row is in
@@ -970,6 +970,9 @@ const (
 
 	LegendOutdated = GlyphOutdated + " agent older than CLI"
 	LegendInsecure = GlyphInsecure + " not using mTLS"
+	// GlyphClosed marks an unenrolled device that only admits trusted keys.
+	GlyphClosed  = "◐"
+	LegendClosed = GlyphClosed + " closed (trusted keys only)"
 )
 
 // DeviceTableLegendBase documents the glyphs the device table always explains.
@@ -990,12 +993,16 @@ func DeviceTableLegend(items []PickerItem) string {
 // deviceLegendWarnings returns the legend entries for the warning glyphs items
 // render, in glyph order. Empty when no row carries one.
 func deviceLegendWarnings(items []PickerItem) []string {
-	var outdated, insecure bool
+	var closed, outdated, insecure bool
 	for _, item := range items {
+		closed = closed || item.Provisioned == "Closed"
 		outdated = outdated || itemShowsOutdated(item)
 		insecure = insecure || item.Insecure
 	}
 	var entries []string
+	if closed {
+		entries = append(entries, LegendClosed)
+	}
 	if outdated {
 		entries = append(entries, LegendOutdated)
 	}
@@ -1038,6 +1045,8 @@ func provisionedGlyph(provisioned string) string {
 		return "●"
 	case "Unprovisioned":
 		return "○"
+	case "Closed":
+		return GlyphClosed
 	}
 	return ""
 }

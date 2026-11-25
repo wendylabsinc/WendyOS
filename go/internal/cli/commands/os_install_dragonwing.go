@@ -462,6 +462,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 		plan: plan, dev: dev, board: board,
 		seedDir: seedDir, zerosPath: zerosPath,
 		creds: creds, name: name, provJSON: provJSON, agent: agent, nightly: nightly,
+		ownerKeys: preOpts.ownerKeys,
 	}
 	failedID, err := runFlashSteps(fmt.Sprintf("Flashing WendyOS %s", plan.version),
 		run.steps(flashCtx), cancelFlash, logW)
@@ -482,6 +483,7 @@ type dragonwingFlashRun struct {
 	provJSON  []byte
 	agent     *localInstallAgent
 	nightly   bool
+	ownerKeys []byte
 
 	bundleDir string
 	flash     *qdl.FlashPlan
@@ -523,7 +525,7 @@ func (r *dragonwingFlashRun) steps(ctx context.Context) []flashStep {
 			// first write command: a failure discovered mid-flash leaves the
 			// board half-written with the GPT still unpatched.
 			flash, err := planDragonwingFlash(r.seedDir, r.bundleDir, r.zerosPath,
-				r.creds, r.name, r.provJSON, out, detail, r.warn, agentSeed{local: r.agent, nightly: r.nightly, arch: "arm64"})
+				r.creds, r.name, r.provJSON, out, detail, r.warn, agentSeed{local: r.agent, nightly: r.nightly, arch: "arm64", ownerKeys: r.ownerKeys})
 			if err != nil {
 				return false, errors.Join(err, errDragonwingNothingWritten)
 			}
@@ -608,7 +610,7 @@ func planDragonwingFlash(seedDir, bundleDir, zerosPath string, creds []wendyconf
 	// factory reset, and a surviving provisioning.json would re-enrol the fresh
 	// install as the previous device.
 	if err != nil {
-		if seed.local != nil || provisioningRequired(creds, deviceName, provJSON) {
+		if seed.local != nil || len(seed.ownerKeys) > 0 || provisioningRequired(creds, deviceName, provJSON) {
 			return nil, err
 		}
 		// Worded for both outcomes: the warning is printed whether or not the

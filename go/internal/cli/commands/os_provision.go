@@ -278,6 +278,9 @@ func writeConfigFiles(mountPoint string, agent configAgent, creds []wendyconf.Wi
 type configAgent struct {
 	data  []byte
 	local bool
+	// ownerKeys is the access file the agent installs at first start
+	// (preEnrollOptions.ownerKeys); written whether or not data is.
+	ownerKeys []byte
 }
 
 // writeConfigFilesTo writes the config-partition files to any target. The agent
@@ -329,6 +332,12 @@ func writeConfigFilesTo(t configTarget, agent configAgent, creds []wendyconf.Wif
 	if len(enrollmentJSON) > 0 {
 		if err := t.WriteFile("acme-enrollment.json", enrollmentJSON, 0o600); err != nil {
 			return fmt.Errorf("writing acme-enrollment.json to config partition: %w", err)
+		}
+	}
+
+	if len(agent.ownerKeys) > 0 {
+		if err := t.WriteFile(ownerKeysSeedFile, agent.ownerKeys, 0o600); err != nil {
+			return fmt.Errorf("writing %s to config partition: %w", ownerKeysSeedFile, err)
 		}
 	}
 

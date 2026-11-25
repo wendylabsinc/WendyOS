@@ -302,6 +302,10 @@ func clearPinsGoverning(cfg *config.Config, pinKey string) []clearedPin {
 		identityKeys = append(identityKeys, key)
 	}
 
+	// A Closed device's key is pinned under the name itself: its
+	// certificate carries no identity to file it under.
+	identityKeys = append(identityKeys, devicepin.LocalPinKey(pinKey))
+
 	return append(cleared, removeSPKIPins(identityKeys)...)
 }
 
