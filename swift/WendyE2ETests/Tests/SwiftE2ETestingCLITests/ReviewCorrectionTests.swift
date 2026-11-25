@@ -6,6 +6,145 @@ import Testing
 
 @Suite(.serialized)
 struct `reviewed coverage corrections` {
+    @Test(arguments: [false, true])
+    func `observation sidecars preserve uncollected and requested missing states`(
+        requested: Bool
+    ) throws {
+        let f = try GoCoverageFixture(build: false)
+        let input = f.repo.appendingPathComponent("run-input/swift.sidecar.local.0001")
+        try CoverageIO.write(
+            ["coverageRequested": requested, "exitStatus": requested ? 9 : 0],
+            to: input.appendingPathComponent("attempt.json")
+        )
+        for path in [
+            "observations/.DS_Store", "observations/notes.txt", "observations/suite/.DS_Store",
+            "observations/suite/notes.txt",
+        ] {
+            try FileManager.default.createDirectory(
+                at: input.appendingPathComponent(path).deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data("sidecar".utf8).write(to: input.appendingPathComponent(path))
+        }
+        #expect(try GoCoverage.wasRequested(run: input) == requested)
+        #expect(try GoCoverage.nativeFiles(run: input).isEmpty)
+        let output = f.repo.appendingPathComponent("run-output")
+        var command = try AggregateCommand.parse([
+            "--package-dir", f.repo.path, "--repo", f.repo.path,
+            "--output-dir", output.path, input.path,
+        ])
+        if requested {
+            #expect(throws: (any Error).self) { try command.run() }
+            let result = try CoverageIO.read(
+                output.appendingPathComponent("swift.sidecar/coverage/summary.json")
+            )
+            #expect(result["status"] as? String == "incomplete")
+            #expect(
+                (result["errors"] as? [String] ?? []).contains {
+                    $0.contains("source provenance is missing")
+                }
+            )
+        } else {
+            try command.run()
+            #expect(
+                !CoverageIO.exists(
+                    output.appendingPathComponent("swift.sidecar/coverage/summary.json")
+                )
+            )
+        }
+        #expect(CoverageIO.exists(output.appendingPathComponent("swift.sidecar/overview.json")))
+    }
+
+    @Test func `observation sidecars do not change collected native evidence or cleanup`() throws {
+        let f = try GoCoverageFixture()
+        try f.attempt()
+        let directory = "observations/suite/test"
+        let native = try f.native(directory + "/coverage/go")
+        try f.invoke(native, "left")
+        try f.records([f.record("test", directory: directory)])
+        let originals = try GoCoverage.nativeFiles(run: f.run)
+        // Real orphan counters still reveal requested/broken collection, even
+        // when the attempt flag says false and provenance has gone missing.
+        let orphan = f.repo.appendingPathComponent("run-input/swift.orphan.local.0001")
+        try FileManager.default.createDirectory(
+            at: orphan.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: f.run, to: orphan)
+        try CoverageIO.remove(orphan.appendingPathComponent("coverage/source.json"))
+        try CoverageIO.remove(orphan.appendingPathComponent("coverage/tests.json"))
+        try CoverageIO.write(
+            ["coverageRequested": false],
+            to: orphan.appendingPathComponent("attempt.json")
+        )
+        #expect(try GoCoverage.wasRequested(run: orphan))
+        var missing = try AggregateCommand.parse([
+            "--package-dir", f.repo.path, "--repo", f.repo.path,
+            "--output-dir", f.repo.appendingPathComponent("run-orphan-output").path, orphan.path,
+        ])
+        #expect(throws: (any Error).self) { try missing.run() }
+        let incomplete = try CoverageIO.read(
+            f.repo.appendingPathComponent("run-orphan-output/swift.orphan/coverage/summary.json")
+        )
+        #expect(incomplete["status"] as? String == "incomplete")
+        #expect(
+            (incomplete["errors"] as? [String] ?? []).contains {
+                $0.contains("source provenance is missing")
+            }
+        )
+        for path in [
+            "observations/.DS_Store", "observations/notes.txt", "observations/suite/.DS_Store",
+            "observations/suite/notes.txt",
+        ] {
+            try Data("sidecar".utf8).write(to: f.run.appendingPathComponent(path))
+        }
+        #expect(try GoCoverage.nativeFiles(run: f.run) == originals)
+        let expected = try GoCoverage.profile(
+            [native],
+            destination: f.repo.appendingPathComponent("run-expected"),
+            source: f.source
+        )
+        let input = f.repo.appendingPathComponent("run-input/swift.sidecar.local.0001")
+        try FileManager.default.createDirectory(
+            at: input.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: f.run, to: input)
+        let output = f.repo.appendingPathComponent("run-output")
+        var command = try AggregateCommand.parse([
+            "--package-dir", f.repo.path, "--repo", f.repo.path,
+            "--output-dir", output.path, input.path,
+        ])
+        try command.run()
+        let result = try CoverageIO.read(
+            output.appendingPathComponent("swift.sidecar/coverage/summary.json")
+        )
+        #expect(result["status"] as? String == "collected")
+        #expect((result["errors"] as? [String])?.isEmpty == true)
+        let total = try #require(result["summary"] as? [String: Any])
+        #expect(total["covered"] as? Int == expected["covered"] as? Int)
+        #expect(total["statements"] as? Int == expected["statements"] as? Int)
+        #expect(
+            try Data(
+                contentsOf: output.appendingPathComponent("swift.sidecar/coverage/coverage.out")
+            ) == Data(contentsOf: f.repo.appendingPathComponent("run-expected/coverage.out"))
+        )
+        #expect(CoverageIO.exists(output.appendingPathComponent("swift.sidecar/overview.json")))
+        #expect(CoverageIO.exists(input.appendingPathComponent("coverage/go-native.tar.gz")))
+        #expect(
+            try String(
+                contentsOf: input.appendingPathComponent("observations/.DS_Store"),
+                encoding: .utf8
+            ) == "sidecar"
+        )
+        #expect(
+            try String(
+                contentsOf: input.appendingPathComponent("observations/suite/.DS_Store"),
+                encoding: .utf8
+            ) == "sidecar"
+        )
+    }
+
     @Test func `uncollected attempts preserve a compatible collected source union`() throws {
         let f = try GoCoverageFixture()
         try f.attempt()
