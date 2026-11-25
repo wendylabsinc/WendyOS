@@ -170,11 +170,12 @@ struct E2EGitComparison {
         }
         let files = source["files"] as! [String: Any]
         var changed: [String: Set<Int>] = [:]
-        let known = Set(GoCoverage.sourcePaths(files))
+        let measuredPaths = Set(GoCoverage.sourcePaths(files))
         for path in try changedPaths()
         where path.hasPrefix("go/") && path.hasSuffix(".go") && !path.hasSuffix("_test.go")
             && !path.split(separator: "/").contains("testdata")
             && !path.hasPrefix("go/internal/testfixture/")
+            && (path != "go/internal/cli/closedtest/closedtest.go" || measuredPaths.contains(path))
             && !GoCoverage.hookPaths.contains(path)
         {
             guard let text = try blob(head, path: path), try !GoCoverage.generated(text) else {
@@ -216,7 +217,7 @@ struct E2EGitComparison {
                 }
             }
         }
-        let missing = Set(changed.keys).subtracting(known).sorted()
+        let missing = Set(changed.keys).subtracting(measuredPaths).sorted()
         let statements = blocks.values.reduce(0) { $0 + $1.statements }
         let covered = blocks.values.reduce(0) { $0 + ($1.count > 0 ? $1.statements : 0) }
         let status =

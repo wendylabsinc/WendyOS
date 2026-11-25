@@ -214,7 +214,9 @@ blocks (including several blocks on one physical line) contribute. No semantic
 Go lexer or AST filter is used. Removed lines, `_test.go`, `testdata`, the
 repository’s `go/internal/testfixture/` test helpers, generated files (header or
 `linguist-generated` attribute), nonproduction paths and test-only
-hooks are excluded. Production `go/` paths such as simulator code remain eligible.
+hooks are excluded. The Closed-device CLI test helper
+(`go/internal/cli/closedtest/closedtest.go`) is also excluded when it is absent
+from the measured binaries. Production `go/` paths such as simulator code remain eligible.
 Changed eligible files absent from the measured build are explicitly incomplete;
 no eligible blocks means **Not applicable**, never 100%. Wrong revisions or an
 unresolvable range produce an unavailable comparison and a stderr warning,
