@@ -134,7 +134,7 @@ func promoteCheck(ctx context.Context, op *registryOp, cfg *appconfig.AppConfig,
 	if err != nil {
 		return "", err
 	}
-	return platform, checkDeployConfig(config, cfg.RequiredEnv)
+	return platform, checkDeployConfig(config, cfg.RequiredEnv, removeConfigFix)
 }
 
 // deviceArch is the Go architecture name of a device's CPU as Cloud lists

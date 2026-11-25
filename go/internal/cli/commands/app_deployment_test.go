@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -378,5 +380,43 @@ func TestResumeFindsAnInterruptedRemovalUnderAReusedName(t *testing.T) {
 	fake.pending[oldID][0].Revision = maxRevision
 	if err := runResume(ctx, op, "sh.wendy.example", oldID, changeFlags{yes: true}, io.Discard, false); err != nil || len(fake.removed) != 2 {
 		t.Fatalf("resume by id: %v, removals %d", err, len(fake.removed))
+	}
+}
+
+// M15: a setting devices refuse is refused before signing, naming the
+// setting, the rule and a command that works. Deploy can leave a release
+// default out with --remove-config; rollback runs the same check as deploy
+// and update.
+func TestDeviceRefusedSettingNamesItAndAFix(t *testing.T) {
+	ctx := context.Background()
+	for _, cmd := range []*cobra.Command{newAppDeployCmd(), newAppPromoteCmd()} {
+		if cmd.Flags().Lookup("remove-config") == nil {
+			t.Fatalf("%s has no --remove-config", cmd.Name())
+		}
+	}
+	op, fake, releaseID := stepsFixture(t)
+	fake.defaults[releaseID] = `{"LOG_LEVEL":"info","ROS_DOMAIN_ID":"7"}`
+	a := allFlags(releaseID)
+	a.config = nil
+	err := runDeploy(ctx, op, a, io.Discard, false)
+	if err == nil || !strings.Contains(err.Error(), `Devices refuse the setting ROS_DOMAIN_ID: configuration name "ROS_DOMAIN_ID" is set by the agent itself. Leave it out with: wendy app deploy --app sh.wendy.example`) ||
+		!strings.Contains(err.Error(), "--remove-config ROS_DOMAIN_ID") || len(fake.assigned) != 0 {
+		t.Fatalf("a refused release default: %v", err)
+	}
+	a.remove = []string{"ROS_DOMAIN_ID"}
+	if err := runDeploy(ctx, op, a, io.Discard, false); err != nil || strings.Contains(fake.assigned[0].GetConfigJson(), "ROS_DOMAIN_ID") {
+		t.Fatalf("left out: %v", err)
+	}
+
+	op, fake, _, depID := deployedFixture(t)
+	if err := runUpdate(ctx, op, "sh.wendy.example", "line-3", changeFlags{config: []string{"LOG_LEVEL=debug"}, yes: true}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	fake.history[depID][0].ConfigJson = `{"LOG_LEVEL":"info","OTEL_SERVICE_NAME":"x"}` // stored before the check
+	n := len(fake.assigned)
+	err = runRollback(ctx, op, "sh.wendy.example", "line-3", changeFlags{to: 1, yes: true}, io.Discard, false)
+	if err == nil || !strings.HasPrefix(err.Error(), `Revision 1 sets OTEL_SERVICE_NAME, which devices refuse: configuration name "OTEL_SERVICE_NAME" is set by the agent itself.`) ||
+		!strings.Contains(err.Error(), "Choose another revision; the current one already runs release") || len(fake.assigned) != n {
+		t.Fatalf("rollback to a refused setting: %v", err)
 	}
 }

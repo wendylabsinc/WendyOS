@@ -46,10 +46,11 @@ wendy app rotate --deployment <deployment-id> --device <device-uuid> [--device .
   devices as one new revision. It shows what changes and asks before it
   sends anything (`--yes` skips the question). `--remove-config NAME` drops
   a setting.
-- deploy and update check the configuration as a device does (names are
-  environment variable names, values are text, numbers or true/false, and
-  names the agent sets itself are refused) and name the setting before
-  anything is sent.
+- deploy, update, rollback and promote check the configuration as a device
+  does (names are environment variable names, values are text, numbers or
+  true/false, and names the agent sets itself are refused). Before anything
+  is sent, a refusal names the setting, the rule and a command that works.
+  `--remove-config NAME` on deploy leaves a release default out.
 - **deployment rollback** restores an earlier revision's release,
   configuration, run state and devices as a new revision. It shows the
   release and configuration it restores before you confirm.
@@ -72,6 +73,7 @@ the machine that created the deployment.
 | `--name` | 3 The deployment's name |
 | `--move` | 3 Move devices from another deployment of the app |
 | `--config NAME=VALUE`, `--config-file` | 4 What configuration? The release's defaults otherwise |
+| `--remove-config NAME` | 4 Leave a setting out (repeatable) |
 | `--run`, `--install-only` | 5 Should it run now? |
 | `--keep-trying` | 5 How long offline devices keep trying: 7d, 30d, 60d (default) or 1y |
 | `--note` | 6 Note for the history |

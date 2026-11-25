@@ -99,6 +99,7 @@ func (a *deployAnswers) bindSteps(cmd *cobra.Command) {
 	f.BoolVar(&a.move, "move", false, "3  Move chosen devices that run the app in another deployment into this one")
 	f.StringArrayVar(&a.config, "config", nil, "4  What configuration? NAME=VALUE (repeatable)")
 	f.StringVar(&a.configFile, "config-file", "", "4  What configuration? A JSON object of named values")
+	f.StringArrayVar(&a.remove, "remove-config", nil, "4  What configuration? Leave a setting out, by name (repeatable)")
 	f.BoolVar(&a.run, "run", false, "5  Run it now")
 	f.BoolVar(&a.installOnly, "install-only", false, "5  Install only, keep it stopped")
 	f.StringVar(&a.keepTrying, "keep-trying", "", "5  How long offline devices keep trying: 7d, 30d, 60d (default) or 1y")
@@ -286,7 +287,11 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 	if err != nil {
 		return err
 	}
-	if err := checkDeployConfig(config, a.required); err != nil {
+	if err := checkDeployConfig(config, a.required, func(name string) string {
+		b := a
+		b.remove = append(slices.Clone(a.remove), name)
+		return "Leave it out with: " + deployCommand(b)
+	}); err != nil {
 		return err
 	}
 	plan.config = config
@@ -401,6 +406,7 @@ func deployCommand(a deployAnswers) string {
 	add("--name", a.name)
 	add("--config", a.config...)
 	add("--config-file", a.configFile)
+	add("--remove-config", a.remove...)
 	add("--keep-trying", a.keepTrying)
 	add("--note", a.note)
 	add("--digest", a.digest)
@@ -488,15 +494,47 @@ func deployConfig(defaults string, a deployAnswers, interactive bool, say func(s
 }
 
 // checkDeployConfig refuses a configuration that leaves a required setting
-// empty or that a device would refuse.
-func checkDeployConfig(config string, required []string) error {
+// empty or that a device would refuse, naming the setting, the rule and
+// fix(setting): a command that leaves it out.
+func checkDeployConfig(config string, required []string, fix func(string) string) error {
 	if err := checkRequired(config, required); err != nil {
 		return err
 	}
-	if err := appconfig.CheckDeploymentConfig(config); err != nil {
-		return usageErrorf("Devices refuse this configuration: %v. Change that setting with --config NAME=VALUE, or leave it out.", err)
+	name, err := refusedSetting(config)
+	switch {
+	case err == nil:
+		return nil
+	case name == "":
+		return usageErrorf("Devices refuse this configuration: %v. Leave settings out with --remove-config NAME.", err)
 	}
-	return nil
+	return usageErrorf("Devices refuse the setting %s: %v. %s", name, err, fix(name))
+}
+
+// removeConfigFix is the advice for a refused setting name when the
+// command that refused it takes --remove-config.
+func removeConfigFix(name string) string {
+	return fmt.Sprintf("Add --remove-config %s to the same command to leave it out, or change it with --config %s=VALUE.", name, name)
+}
+
+// refusedSetting runs the device's check of config (appconfig.
+// CheckDeploymentConfig). When one setting alone breaks the rule, it returns
+// that setting's name with its refusal; a rule about the whole configuration
+// (its size, its number of settings) has no name.
+func refusedSetting(config string) (string, error) {
+	err := appconfig.CheckDeploymentConfig(config)
+	if err == nil {
+		return "", nil
+	}
+	var values map[string]json.RawMessage
+	if json.Unmarshal([]byte(config), &values) == nil {
+		for _, name := range slices.Sorted(maps.Keys(values)) {
+			one, _ := json.Marshal(map[string]json.RawMessage{name: values[name]})
+			if e := appconfig.CheckDeploymentConfig(string(one)); e != nil {
+				return name, e
+			}
+		}
+	}
+	return "", err
 }
 
 // releaseRequired is the settings rel requires (wendy.json requiredEnv,

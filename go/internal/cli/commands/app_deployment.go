@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +17,6 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
-	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -269,8 +269,8 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 	if err := checkRequired(orDefault(req.ConfigJson, d.GetConfigJson()), releaseRequired(release)); err != nil {
 		return err
 	}
-	if err := appconfig.CheckDeploymentConfig(orDefault(req.ConfigJson, d.GetConfigJson())); err != nil {
-		return usageErrorf("Devices refuse this configuration: %v. Remove that setting with --remove-config NAME, or change it with --config NAME=VALUE.", err)
+	if err := checkDeployConfig(orDefault(req.ConfigJson, d.GetConfigJson()), nil, removeConfigFix); err != nil {
+		return err
 	}
 	if len(review) == 0 && req.Validity == nil {
 		return usageErrorf("Nothing to change. Add --release, --config, --remove-config, --start, --stop, --add-device, --remove-device, --add-tag, --remove-tag, --add-site, --remove-site or --keep-trying.")
@@ -348,6 +348,10 @@ func runRollback(ctx context.Context, op *registryOp, appID, name string, c chan
 			return usageErrorf("Revision %d leaves %s empty, which release %s requires. Choose another revision, or use wendy app deployment update --release %s --config %s=<value>.",
 				c.to, name, rels[i].GetName(), rels[i].GetName(), name)
 		}
+	}
+	// And the device's own check, as deploy and update run it.
+	if setting, err := refusedSetting(target.GetConfigJson()); err != nil {
+		return rollbackRefusal(appID, name, c.to, d, target, rels, setting, err)
 	}
 	cur, err := op.revisionDevices(ctx, d.GetId(), d.GetRevision())
 	if err != nil {
@@ -822,4 +826,29 @@ func orDefault[T any](p *T, def T) T {
 		return *p
 	}
 	return def
+}
+
+// rollbackRefusal is the error for rolling deployment d back to revision
+// to, whose configuration devices refuse (setting is "" for a rule about the
+// whole configuration). The command it gives moves to that revision's
+// release with the current configuration, which update checks again.
+func rollbackRefusal(appID, name string, to int32, d *cloudpb.Deployment, target *cloudpb.DeploymentRevision, rels []*cloudpb.AppRelease, setting string, refused error) error {
+	what := fmt.Sprintf("Revision %d's configuration", to)
+	if setting != "" {
+		what = fmt.Sprintf("Revision %d sets %s", to, setting)
+	}
+	release := releaseName(rels, target.GetAppReleaseId())
+	fix := []string{"wendy app deployment update", shellQuoteArg(appID + "/" + name)}
+	if target.GetAppReleaseId() != d.GetAppReleaseId() {
+		fix = append(fix, "--release", shellQuoteArg(release))
+	}
+	var current map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(d.GetConfigJson()), &current)
+	if _, has := current[setting]; has && setting != "" {
+		fix = append(fix, "--remove-config", shellQuoteArg(setting))
+	}
+	if len(fix) == 2 {
+		return usageErrorf("%s, which devices refuse: %v. Choose another revision; the current one already runs release %s.", what, refused, release)
+	}
+	return usageErrorf("%s, which devices refuse: %v. Choose another revision, or keep the current configuration with: %s", what, refused, strings.Join(fix, " "))
 }
