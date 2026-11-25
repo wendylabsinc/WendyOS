@@ -8,7 +8,7 @@ package services
 // usbfs; this file is the thin layer that puts it in front of clients:
 //
 //   - ListVideoDevices and RefreshCameras list it, with an id from
-//     usbthermal's band (88-95) and a serial-based stable id;
+//     usbthermal's band (88-95) and a USB-port-based stable id;
 //   - StreamVideo serves its raw thermal frames (VIDEO_CODEC_RAW) through an
 //     ordinary hub, so subscriber accounting, drop handling and teardown are
 //     the same as for every other camera, and the hub's last subscriber leaving

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const exxonStableID = "by-id:usb-TOPDON_TECHNOLOGY_Co.__Ltd._TC001_Max_YFDVS000000000001-thermal"
+const exxonStableID = "by-path:usb-1-2.3-thermal"
 
 // TestListFindsTheTC001Max: the camera is found from sysfs alone, by its USB
 // ids, and nothing else on the bus is.
@@ -48,13 +48,13 @@ func TestListFindsTheTC001Max(t *testing.T) {
 	if _, ok := m.Lookup(IDBandStart + 1); ok {
 		t.Fatal("Lookup answered for an id no camera holds")
 	}
-	if _, ok := m.ResolveStableID("by-id:usb-TOPDON_TECHNOLOGY_Co.__Ltd._TC001_Max_YFDVS00000000000"); ok {
+	if _, ok := m.ResolveStableID("by-path:usb-1-2.3-therma"); ok {
 		t.Fatal("a prefix of the stable id resolved: the match must be exact")
 	}
 }
 
 // TestTwinsSharingASerial: two cameras with the same factory serial cannot
-// share one by-id name; the second is named by its port, as udev does.
+// share one identity; both are named by their USB port.
 func TestTwinsSharingASerial(t *testing.T) {
 	b := newFakeBus(t)
 	b.plugTC001Max("1-2.3", 15)
@@ -72,6 +72,90 @@ func TestTwinsSharingASerial(t *testing.T) {
 	}
 }
 
+// The identity of a surviving camera must not depend on which other cameras
+// are present, which appeared first, or whether the agent has restarted.
+func TestTwinIdentitySurvivesTopologyChanges(t *testing.T) {
+	for _, firstPort := range []string{"1-2.3", "1-2.4"} {
+		t.Run(firstPort, func(t *testing.T) {
+			b := newFakeBus(t)
+			b.plugTC001Max(firstPort, 15)
+			m := newTestManager(t, b, nil)
+			first := m.List()[0]
+			otherPort := "1-2.3"
+			if firstPort == otherPort {
+				otherPort = "1-2.4"
+			}
+			b.plugTC001Max(otherPort, 16)
+			before := m.List()
+			if len(before) != 2 {
+				t.Fatalf("listed %d cameras, want 2", len(before))
+			}
+			byPort := map[string]Listing{}
+			for _, l := range before {
+				byPort[l.Port] = l
+			}
+			if got := byPort[firstPort]; got.StableID != first.StableID || got.ID != first.ID {
+				t.Fatalf("adding a twin changed the first camera: before %+v, after %+v", first, got)
+			}
+			// Exercise the same locate callback that an existing subscriber
+			// uses to reopen its camera after a USB disconnect.
+			departing, err := m.Camera(first.StableID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b.unplug(firstPort)
+			remaining := m.List()
+			want := byPort[otherPort]
+			if len(remaining) != 1 || remaining[0].StableID != want.StableID || remaining[0].ID != want.ID {
+				t.Fatalf("unplug transferred identity: got %+v, want %+v", remaining, want)
+			}
+			if a, ok := departing.locate(); ok {
+				t.Fatalf("disconnected camera's subscriber would reopen its twin: %+v", a)
+			}
+			if _, ok := m.ResolveStableID(first.StableID); ok {
+				t.Fatal("disconnected camera's stable ID resolved to its twin")
+			}
+			restarted := newTestManager(t, b, nil)
+			if got := restarted.List(); len(got) != 1 || got[0].StableID != want.StableID {
+				t.Fatalf("restart changed the surviving identity: %+v", got)
+			}
+			b.plugTC001Max(firstPort, 27) // same port, new USB address
+			if a, ok := departing.locate(); !ok || a.port != firstPort || a.devNum != 27 {
+				t.Fatalf("subscriber did not return to its original port: %+v, %v", a, ok)
+			}
+			for _, l := range m.List() {
+				want := byPort[l.Port]
+				if l.StableID != want.StableID || l.ID != want.ID {
+					t.Fatalf("replug changed identity: got %+v, want %+v", l, want)
+				}
+			}
+		})
+	}
+}
+
+func TestFactorySerialIsNeverAnAlias(t *testing.T) {
+	b := newFakeBus(t)
+	b.plugTC001Max("1-2.3", 15)
+	m := newTestManager(t, b, nil)
+	legacy := "by-id:usb-TOPDON_TECHNOLOGY_Co.__Ltd._TC001_Max_YFDVS000000000001-thermal"
+	if _, ok := m.ResolveStableID(legacy); ok {
+		t.Fatal("an ambiguous factory serial must not resolve to whichever camera is attached")
+	}
+	if _, err := m.Camera(legacy); err == nil {
+		t.Fatal("an ambiguous factory serial must not open a camera")
+	}
+	before := m.List()[0]
+	b.unplug("1-2.3")
+	b.plugTC001Max("2-1", 19)
+	after := m.List()[0]
+	if after.StableID == before.StableID {
+		t.Fatal("moving to another port must not keep a port-based identity")
+	}
+	if _, ok := m.ResolveStableID(before.StableID); ok {
+		t.Fatal("an empty port's stable ID resolved to a camera on another port")
+	}
+}
+
 // TestNoSerialMeansByPath: a camera with no serial has only its port.
 func TestNoSerialMeansByPath(t *testing.T) {
 	b := newFakeBus(t)
@@ -80,21 +164,6 @@ func TestNoSerialMeansByPath(t *testing.T) {
 	got := m.List()
 	if len(got) != 1 || got[0].StableID != "by-path:usb-3-1-thermal" || got[0].Model != "TC001 Max" {
 		t.Fatalf("listing %+v", got)
-	}
-}
-
-func TestUdevClean(t *testing.T) {
-	cases := map[string]string{
-		"TOPDON TECHNOLOGY Co., Ltd.": "TOPDON_TECHNOLOGY_Co.__Ltd.",
-		"  TC001   Max ":              "TC001_Max",
-		"a/b\\c*d":                    "a_b_c_d",
-		"keep #+-.:=@_":               "keep_#+-.:=@_",
-		"Ünïcode":                     "Ünïcode",
-	}
-	for in, want := range cases {
-		if got := udevClean(in); got != want {
-			t.Errorf("udevClean(%q) = %q, want %q", in, got, want)
-		}
 	}
 }
 
