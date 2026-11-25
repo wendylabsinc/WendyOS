@@ -209,9 +209,14 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 			// Key rotation: the new statement (wrap, key id, expiry) is held
 			// and nothing is applied again. Only a pull that succeeded counts
 			// as done; after a refused or failed one the copy is pulled again.
+			// The held statement decides: the app's last outcome may be a
+			// later container stop or a refused newer revision's.
 			prev, o := st.Assignments[dep], st.Outcomes[app]
-			if prev.Pulled && o != nil && o.EntryID == prev.EntryID && pullSucceeded(o.Outcome) {
+			switch {
+			case prev.Pulled && o != nil && o.EntryID == prev.EntryID && pullSucceeded(o.Outcome):
 				held.Pulled, outcome = true, o.Outcome
+			case prev.Pulled && prev.Applied:
+				held.Pulled, outcome = true, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED
 			}
 		}
 		// The statement this one replaces on the device, started again if

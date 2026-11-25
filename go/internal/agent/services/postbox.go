@@ -1143,6 +1143,11 @@ func (p *Postbox) settleCommitted(ctx context.Context, pend *postboxPending) (cl
 		default:
 			// A rotation copy of a pull that ended: the outcome that pull
 			// recorded, never "applied" for an app that was not started.
+			// Held as applied, it was: the app's last outcome may be a later
+			// container stop's or a refused newer revision's.
+			if a.Applied {
+				return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
+			}
 			if o := st.Outcomes[a.AppID]; o != nil {
 				return o.Outcome, "", nil
 			}

@@ -680,3 +680,41 @@ func TestPostboxRefusalReporting(t *testing.T) {
 		}
 	}
 }
+
+// M4: a rotation copy of an applied statement is not pulled or started
+// again after a later entry (a Cloud stop) took the app's outcome, so the
+// stopped app stays stopped; a committed copy settles as applied.
+func TestPostboxRotationAfterAStopKeepsTheAppStopped(t *testing.T) {
+	f := newPBFixture(t)
+	assign, rec := f.pulledRelease(1)
+	f.control("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, nil)
+	f.cycle()
+	if f.outcome("web").EntryID == f.held(assign.GetDeploymentId()).EntryID {
+		t.Fatal("setup: the stop did not take the app's outcome")
+	}
+	starts := len(rec.starts)
+	rot := proto.Clone(assign).(*cloudpbv2.DeviceAssignment)
+	rot.DeploymentKeyId = "k2"
+	rot.ExpiresAt = timestamppb.New(f.now.Add(2 * time.Hour))
+	f.assignEntry(rot)
+	f.cycle()
+	f.p.waitPulls()
+	if len(rec.starts) != starts || len(rec.imported) != 1 {
+		t.Fatalf("starts %d→%d, imports %d: want the rotation copy held, not started again", starts, len(rec.starts), len(rec.imported))
+	}
+	if h := f.held(assign.GetDeploymentId()); !h.Pulled || !h.Applied {
+		t.Fatalf("held pulled %v applied %v: want the copy held as pulled and applied", h.Pulled, h.Applied)
+	}
+
+	g := newPBFixture(t)
+	if err := g.p.load(g.uri); err != nil {
+		t.Fatal(err)
+	}
+	g.p.mu.Lock()
+	g.p.state.Assignments = map[string]*postboxAssignment{"d": {AppID: "web", EntryID: 3, Pulled: true, Applied: true, DesiredState: cloudpbv2.Running_RUNNING.String()}}
+	g.p.state.Outcomes = map[string]*postboxOutcome{"web": {EntryID: 2, Outcome: cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED}}
+	g.p.mu.Unlock()
+	if o, _, _ := g.p.settleCommitted(context.Background(), &postboxPending{EntryID: 3, AppID: "web", Committed: true}); o != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
+		t.Fatalf("settled %v, want APPLIED for a copy held as applied", o)
+	}
+}
