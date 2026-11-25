@@ -3,6 +3,7 @@ package litebuild
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -25,19 +26,36 @@ func (p *TUIPrompter) help(q Question) {
 	}
 }
 
+// warningText returns the warning messages of option i, on one line.
+func warningText(q Question, i int) string {
+	if i >= len(q.Warnings) {
+		return ""
+	}
+	messages := make([]string, len(q.Warnings[i]))
+	for j, w := range q.Warnings[i] {
+		messages[j] = w.Message
+	}
+	return strings.Join(messages, " ")
+}
+
 func (p *TUIPrompter) answered(q Question, value any) {
 	fmt.Fprintln(p.Out, tui.SuccessMessage(fmt.Sprintf("%s: %s", q.Attr.Title(), q.Attr.Label(value))))
 }
 
-// Select shows a picker with the label of each option.
-func (p *TUIPrompter) Select(q Question) (int, error) {
-	p.help(q)
+// selectPicker returns the picker of a Select question, with the default
+// answer highlighted. An option with a warning has a ⚠ after its label, and
+// its warning under the list while it is highlighted.
+func selectPicker(q Question) tui.PickerModel {
 	items := make([]tui.PickerItem, len(q.Options))
 	defaultKey := ""
 	for i, v := range q.Options {
 		key := q.Attr.Key(v)
 		// SortKey keeps the enum order (the picker sorts by name otherwise).
 		items[i] = tui.PickerItem{Name: q.Attr.Label(v), DedupKey: key, SortKey: fmt.Sprintf("%04d", i), Value: i}
+		if text := warningText(q, i); text != "" {
+			items[i].Name += " ⚠"
+			items[i].Hint = "⚠ " + text
+		}
 		if q.Default != nil && v == q.Default {
 			defaultKey = key
 		}
@@ -47,6 +65,13 @@ func (p *TUIPrompter) Select(q Question) (int, error) {
 	model, _ = model.Update(tui.PickerDoneMsg{})
 	picker = model.(tui.PickerModel)
 	picker.FocusItem(defaultKey)
+	return picker
+}
+
+// Select shows a picker with the label of each option (see selectPicker).
+func (p *TUIPrompter) Select(q Question) (int, error) {
+	p.help(q)
+	picker := selectPicker(q)
 
 	final, err := tui.RunProgram(tea.NewProgram(picker, p.options()...))
 	if err != nil {
@@ -67,9 +92,19 @@ func (p *TUIPrompter) Select(q Question) (int, error) {
 
 // Confirm asks a yes/no question with the Yes/No prompt of the install
 // questions (for example "Set up WiFi on first boot?"). The default is Yes
-// when display.default is true, else No.
+// when display.default is true, else No. The warning of an answer is shown
+// above the prompt.
 func (p *TUIPrompter) Confirm(q Question) (bool, error) {
 	p.help(q)
+	for i, v := range q.Options {
+		if text := warningText(q, i); text != "" {
+			answer := "No"
+			if v == true {
+				answer = "Yes"
+			}
+			fmt.Fprintln(p.Out, tui.WarningMessage("If you answer "+answer+": "+text))
+		}
+	}
 	question := q.Attr.Title() + "?"
 	var answer bool
 	var err error
@@ -104,4 +139,9 @@ func (p *TUIPrompter) Text(q Question, validate func(string) error) (string, err
 // Info shows a value that needs no question.
 func (p *TUIPrompter) Info(attr *Attribute, value any, reason string) {
 	fmt.Fprintln(p.Out, tui.SuccessMessage(fmt.Sprintf("%s: %s", attr.Title(), attr.Label(value)))+" "+tui.Dim("("+reason+")"))
+}
+
+// Warn shows a warning of the configuration.
+func (p *TUIPrompter) Warn(w Warning) {
+	fmt.Fprintln(p.Out, tui.WarningMessage(w.Message))
 }

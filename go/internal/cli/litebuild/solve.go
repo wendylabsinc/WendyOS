@@ -30,7 +30,7 @@ type Solver struct {
 	// Order is the evaluation order: each node after its dependencies.
 	Order   []string
 	rank    map[string]int
-	setters []*Rule // the rules that are not valid: false, in evaluation order
+	setters []*Rule // the rules with a target (not valid: false or warn), in evaluation order
 }
 
 // NewSolver builds the dependency graph of the model and checks that it
@@ -48,8 +48,9 @@ func NewSolver(m *Model) (*Solver, error) {
 	}
 	// A rule is evaluated at the first of its targets in the graph order.
 	// All the attributes in its condition come before, so they are final.
+	// A valid: false or warn rule has no target: it reads the final values.
 	for _, rule := range m.Rules {
-		if !rule.Forbidden {
+		if len(rule.Targets()) > 0 {
 			s.setters = append(s.setters, rule)
 		}
 	}
@@ -182,6 +183,7 @@ type Solution struct {
 	Sdkconfig []string
 	Applied   []*Rule // rules with a true condition, file order
 	Forbidden []*Rule // valid: false rules with a true condition, file order
+	Warnings  []*Rule // warn rules with a true condition, file order
 }
 
 // Allowed is true when no valid: false rule matches the solved values.
@@ -243,6 +245,9 @@ func (s *Solver) Evaluate(inputs map[string]any, sources map[string]string) (*So
 	for _, rule := range s.Model.Rules {
 		if rule.Forbidden && rule.Applies(sol.Values) {
 			sol.Forbidden = append(sol.Forbidden, rule)
+		}
+		if rule.Warning != nil && rule.Applies(sol.Values) {
+			sol.Warnings = append(sol.Warnings, rule)
 		}
 	}
 

@@ -144,9 +144,10 @@ func readLiteFirmwareFile(ctx context.Context, path string) ([]byte, error) {
 // esp-emu does not have. 8MiB of flash gives the WASM runtime its partition
 // table and native apps their OTA slots, and stays below the 16 MiB that
 // prepareLiteFlash accepts. A simulator has no camera or microphone and is
-// never enrolled, so SensorLink and the Cloud tunnel are off. The master
-// configuration derives the other values from these; a question left is an
-// error (liteSimulatorPrompter).
+// never enrolled, so SensorLink and the Cloud tunnel are off. The ESP32-C6
+// has no PSRAM: the certificate chain is ECDSA P-256 (ML-DSA gives a
+// warning without PSRAM). The master configuration derives the other values
+// from these; a question left is an error (liteSimulatorPrompter).
 func liteSimulatorAttrs(profile string) map[string]string {
 	appType := "wasm"
 	if profile == vm.ProfileWendyLiteNative {
@@ -159,6 +160,7 @@ func liteSimulatorAttrs(profile string) map[string]string {
 		litebuild.AppType: appType,
 		"sensor_link_av":  "false",
 		"cloud_tunnel":    "false",
+		"chain_algorithm": "ecdsa_p256",
 	}
 }
 

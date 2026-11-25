@@ -143,12 +143,14 @@ type liteTestCommits struct {
 	release string // tag v1.0.0, the latest release
 	nightly string // tag nightly
 	branch  string // the tip of the branch feature/x
+	future  string // the tip of the branch future: master configuration format 2.0
 }
 
 // liteTestRepo makes a local wendy-lite repository, which the tests clone
 // through a file:// URL, as the flow clones GitHub. Its commits change
-// file.txt to "old", "release", "nightly" and "branch"; all but the first
-// have a master configuration. It returns the URL and the commits.
+// file.txt to "old", "release", "nightly", "branch" and "future"; all but
+// the first have a master configuration, the last one in format 2.0. It
+// returns the URL and the commits.
 func liteTestRepo(t *testing.T) (string, liteTestCommits) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -194,6 +196,9 @@ func liteTestRepo(t *testing.T) (string, liteTestCommits) {
 	git("tag", "nightly")
 	git("checkout", "--quiet", "-b", "feature/x")
 	c.branch = commit("branch")
+	git("checkout", "--quiet", "-b", "future")
+	write(litebuild.MasterConfFile, "format_version: \"2.0\"\nattributes: {}\nnew_section: {}\n")
+	c.future = commit("future")
 	return "file://" + filepath.ToSlash(repo), c
 }
 
@@ -251,6 +256,16 @@ func TestOpenLiteBuildFolder(t *testing.T) {
 	before := liteBuildFolders(t, root)
 	if _, _, _, err := openLiteBuildFolder(ctx, io.Discard, url, false, "0.9.0"); err == nil || err.Error() != "Wendy Lite 0.9.0 is not compatible with this version of the CLI. Specify a Wendy Lite version with --version" {
 		t.Errorf("version without master configuration: %v", err)
+	}
+	if after := liteBuildFolders(t, root); !slices.Equal(after, before) {
+		t.Errorf("the build folders changed from %q to %q", before, after)
+	}
+
+	// A newer master configuration format: update the CLI or choose
+	// another version, and the cache does not change.
+	newer := "Wendy Lite future (" + commits.future[:7] + ") needs a newer version of the CLI. Update the CLI or specify a Wendy Lite version with --version"
+	if _, _, _, err := openLiteBuildFolder(ctx, io.Discard, url, false, "future"); err == nil || err.Error() != newer {
+		t.Errorf("newer format: %v", err)
 	}
 	if after := liteBuildFolders(t, root); !slices.Equal(after, before) {
 		t.Errorf("the build folders changed from %q to %q", before, after)

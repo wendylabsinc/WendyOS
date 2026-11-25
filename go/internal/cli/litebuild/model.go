@@ -20,8 +20,10 @@ const Sdkconfig = "sdkconfig"
 // DisplaySection is the top-level key of the display information.
 const DisplaySection = "display"
 
-// FormatVersions lists the format_version values that this code reads.
-var FormatVersions = []string{"1.0"}
+// FormatMajor is the major format_version that this code reads: it reads
+// every "1.<minor>". A minor version must stay readable by an older reader
+// of the same major.
+const FormatMajor = 1
 
 var types = []string{TypeString, TypeSize, TypeBoolean}
 
@@ -55,8 +57,11 @@ func where(location string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if ce, ok := err.(*ConfError); ok {
-		return &ConfError{Msg: location + ": " + ce.Msg}
+	switch e := err.(type) {
+	case *ConfError:
+		return &ConfError{Msg: location + ": " + e.Msg}
+	case *FormatVersionError:
+		return &FormatVersionError{Version: e.Version, Newer: e.Newer, msg: location + ": " + e.msg}
 	}
 	return err
 }

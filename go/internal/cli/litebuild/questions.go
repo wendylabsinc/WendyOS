@@ -28,6 +28,12 @@ type Question struct {
 	// (Configurator.Previous) when it is allowed, else display.default when
 	// it is allowed, else nil.
 	Default any
+	// Warnings[i] are the warnings that answer Options[i] gives: their
+	// condition is true in every allowed configuration with that answer,
+	// and not with every answer. nil when no answer gives a warning. After
+	// the answer, Run reports the warnings of the answer with
+	// Prompter.Warn.
+	Warnings [][]Warning
 }
 
 // Prompter asks the questions.
@@ -41,6 +47,10 @@ type Prompter interface {
 	Text(q Question, validate func(string) error) (string, error)
 	// Info shows a value that needs no question.
 	Info(attr *Attribute, value any, reason string)
+	// Warn shows a warning of the configuration, once: after the answer
+	// that gives it, or at the end of Run when no answer gives it (given
+	// values, a text answer).
+	Warn(w Warning)
 }
 
 // Step is one attribute of the run, in question order.
@@ -82,6 +92,8 @@ type Configurator struct {
 	// forbiddenAt[k]: the valid: false rules whose condition reads only
 	// attributes before position k: their result is final at position k.
 	forbiddenAt [][]*Rule
+	// warnRules are the warn rules, file order. They read the final values.
+	warnRules []*Rule
 
 	// Previous are the values of an earlier run, by attribute name (see
 	// LoadAnswers). The previous value of a question is its default when it
@@ -151,6 +163,10 @@ func NewConfigurator(m *Model, extra map[string][]string) (*Configurator, error)
 	c.rulesAt = make([][]*Rule, len(c.order)+1)
 	c.forbiddenAt = make([][]*Rule, len(c.order)+1)
 	for _, rule := range m.Rules {
+		if rule.Warning != nil {
+			c.warnRules = append(c.warnRules, rule)
+			continue
+		}
 		if rule.Forbidden {
 			k := 0
 			for name := range rule.Reads() {
@@ -278,7 +294,15 @@ func (c *Configurator) asked(s *state, k int) bool {
 // feasible tells if the walk from position k can reach an allowed
 // configuration: some answers to the next questions give no conflict, no
 // valid: false rule and no missing required value.
-func (c *Configurator) feasible(s *state, k int) bool {
+func (c *Configurator) feasible(s *state, k int) bool { return c.explore(s, k, nil) }
+
+// explore is feasible. With falseSeen (one entry per c.warnRules), it also
+// sets falseSeen[i] when the condition of warn rule i is false in an
+// allowed configuration that it reaches. It then goes on after the first
+// allowed configuration, until each entry is set or every configuration is
+// visited: a warning that stays unset is true in every allowed
+// configuration.
+func (c *Configurator) explore(s *state, k int, falseSeen []bool) bool {
 	s = s.clone()
 	for ; k < len(c.order); k++ {
 		if c.forbidden(s, k) || c.apply(s, k) != nil || !c.givenKept(s, k) {
@@ -288,18 +312,27 @@ func (c *Configurator) feasible(s *state, k int) bool {
 			continue
 		}
 		attr := c.order[k]
+		found := false
 		for _, v := range c.domain(attr) {
 			s.values[attr.Name] = v
-			if c.feasible(s, k+1) {
-				return true
+			if c.explore(s, k+1, falseSeen) {
+				found = true
+				if !slices.Contains(falseSeen, false) {
+					return true
+				}
 			}
 		}
+		return found
+	}
+	if c.forbidden(s, len(c.order)) || len(c.solver.FindMissing(s.values, c.required)) > 0 {
 		return false
 	}
-	if c.forbidden(s, len(c.order)) {
-		return false
+	for i, rule := range c.warnRules {
+		if falseSeen != nil && !rule.Applies(s.values) {
+			falseSeen[i] = true
+		}
 	}
-	return len(c.solver.FindMissing(s.values, c.required)) == 0
+	return true
 }
 
 // givenKept tells if the given value of the attribute at position k, if
@@ -362,9 +395,56 @@ func (c *Configurator) givenError() error {
 func (c *Configurator) try(s *state, k int, v any) bool {
 	name := c.order[k].Name
 	s.values[name] = v
-	ok := c.feasible(s, k+1)
-	delete(s.values, name)
-	return ok
+	defer delete(s.values, name)
+	return c.feasible(s, k+1)
+}
+
+// tryWarnings is try. It also returns the warn rules that are true in
+// every allowed configuration with v (see explore), in file order.
+func (c *Configurator) tryWarnings(s *state, k int, v any) (bool, []*Rule) {
+	name := c.order[k].Name
+	s.values[name] = v
+	defer delete(s.values, name)
+	if len(c.warnRules) == 0 {
+		return c.feasible(s, k+1), nil
+	}
+	falseSeen := make([]bool, len(c.warnRules))
+	if !c.explore(s, k+1, falseSeen) {
+		return false, nil
+	}
+	var certain []*Rule
+	for i, rule := range c.warnRules {
+		if !falseSeen[i] {
+			certain = append(certain, rule)
+		}
+	}
+	return true, certain
+}
+
+// optionWarnings returns, for each option, its warn rules (certain[i], see
+// tryWarnings) without those of every option, which an earlier answer or a
+// given value decided, and without those already shown. nil: none.
+func optionWarnings(certain [][]*Rule, shown map[*Rule]bool) [][]*Rule {
+	var result [][]*Rule
+	for i, rules := range certain {
+		for _, rule := range rules {
+			everyOption := true
+			for _, other := range certain {
+				if !slices.Contains(other, rule) {
+					everyOption = false
+					break
+				}
+			}
+			if everyOption || shown[rule] {
+				continue
+			}
+			if result == nil {
+				result = make([][]*Rule, len(certain))
+			}
+			result[i] = append(result[i], rule)
+		}
+	}
+	return result
 }
 
 // domain returns the values to try for an attribute: its given value, its
@@ -458,6 +538,15 @@ func (c *Configurator) Run(p Prompter) (*Result, error) {
 	}
 	inputs := map[string]any{}
 	var steps []Step
+	shown := map[*Rule]bool{} // the warnings that Prompter.Warn showed
+	warn := func(rules []*Rule) {
+		for _, rule := range rules {
+			if !shown[rule] {
+				shown[rule] = true
+				p.Warn(*rule.Warning)
+			}
+		}
+	}
 	for k, attr := range c.order {
 		// Not possible after a feasible answer; kept as a safety check.
 		if c.forbidden(s, k) {
@@ -493,9 +582,11 @@ func (c *Configurator) Run(p Prompter) (*Result, error) {
 			value, err = c.askText(p, s, k)
 		} else {
 			var options []any
+			var certain [][]*Rule
 			for _, v := range c.domain(attr) {
-				if c.try(s, k, v) {
+				if ok, rules := c.tryWarnings(s, k, v); ok {
 					options = append(options, v)
+					certain = append(certain, rules)
 				}
 			}
 			switch len(options) {
@@ -517,7 +608,19 @@ func (c *Configurator) Run(p Prompter) (*Result, error) {
 						break
 					}
 				}
+				warnings := optionWarnings(certain, shown)
+				if warnings != nil {
+					q.Warnings = make([][]Warning, len(options))
+					for i, rules := range warnings {
+						for _, rule := range rules {
+							q.Warnings[i] = append(q.Warnings[i], *rule.Warning)
+						}
+					}
+				}
 				value, err = ask(p, q)
+				if i := slices.Index(options, value); err == nil && warnings != nil && i >= 0 {
+					warn(warnings[i])
+				}
 			}
 		}
 		if err != nil {
@@ -543,6 +646,8 @@ func (c *Configurator) Run(p Prompter) (*Result, error) {
 		}
 		return nil, confErrorf("missing value(s): %s", strings.Join(names, ", "))
 	}
+	// The warnings that no answer gave: given values, text answers.
+	warn(sol.Warnings)
 	return &Result{Inputs: inputs, Solution: sol, Steps: steps}, nil
 }
 

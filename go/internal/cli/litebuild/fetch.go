@@ -3,6 +3,7 @@ package litebuild
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -73,23 +74,46 @@ func FetchFile(ctx context.Context, url, ref, path string) ([]byte, error) {
 	return data, err
 }
 
-// HasMasterConf tells whether commit, a full commit hash of the wendy-lite
-// repository at url, has the master configuration MasterConfFile. The
-// Wendy Lite versions without it are older than the configurator: the CLI
-// cannot build them. It fetches the list of the files of the commit, not
-// their content (see fetchTree).
-func HasMasterConf(ctx context.Context, url, commit string) (bool, error) {
-	var found bool
-	err := fetchTree(ctx, url, commit, func(dir string) error {
+// LookupMasterConf returns the master configuration MasterConfFile of
+// commit, a full commit hash of the wendy-lite repository at url, and
+// whether commit has it. The Wendy Lite versions without it are older than
+// the configurator: the CLI cannot build them. It fetches the list of the
+// files of the commit and the content of that one file (see fetchTree).
+func LookupMasterConf(ctx context.Context, url, commit string) (data []byte, found bool, err error) {
+	err = fetchTree(ctx, url, commit, func(dir string) error {
 		out, err := Git(ctx, dir, "ls-tree", "--name-only", "FETCH_HEAD", MasterConfFile)
 		if err != nil {
 			return fmt.Errorf("reading the files of wendy-lite %s: %w", ShortVersion(commit), err)
 		}
-		found = strings.TrimSpace(out) != ""
+		if found = strings.TrimSpace(out) != ""; !found {
+			return nil
+		}
+		text, err := Git(ctx, dir, "show", "FETCH_HEAD:"+MasterConfFile)
+		if err != nil {
+			return fmt.Errorf("reading %s of wendy-lite %s: %w", MasterConfFile, ShortVersion(commit), err)
+		}
+		data = []byte(text)
 		return nil
 	})
-	return found, err
+	return data, found, err
 }
+
+// FormatError is the error of a Wendy Lite version whose master
+// configuration has a format that this code does not read (see
+// FormatVersionError).
+type FormatError struct {
+	Version string // the Wendy Lite version, for the message
+	Err     *FormatVersionError
+}
+
+func (e *FormatError) Error() string {
+	if e.Err.Newer {
+		return fmt.Sprintf("Wendy Lite %s needs a newer version of the CLI. Update the CLI", e.Version)
+	}
+	return fmt.Sprintf("Wendy Lite %s is not compatible with this version of the CLI", e.Version)
+}
+
+func (e *FormatError) Unwrap() error { return e.Err }
 
 // fetchTree fetches ref (see FetchFile) of the wendy-lite repository at url,
 // without history and without the content of the files, into a temporary
@@ -140,6 +164,10 @@ func FetchMasterConf(ctx context.Context, url, ref string, logf func(format stri
 		return nil, err
 	}
 	m, err := Load(data, fmt.Sprintf("wendy-lite %s:%s", ShortVersion(ref), MasterConfFile))
+	var formatErr *FormatVersionError
+	if errors.As(err, &formatErr) {
+		return nil, &FormatError{Version: ShortVersion(ref), Err: formatErr}
+	}
 	if err != nil {
 		return nil, err
 	}

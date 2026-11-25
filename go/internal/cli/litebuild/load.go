@@ -3,6 +3,7 @@ package litebuild
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,8 +36,19 @@ type Rule struct {
 	Condition Node
 	Sets      []Assignment
 	Sdkconfig []string
-	Forbidden bool // valid: false: the condition is not allowed
+	Forbidden bool     // valid: false: the condition is not allowed
+	Warning   *Warning // warn: the condition gives this warning
 }
+
+// Warning is the warn map of a rule: when its condition is true for the
+// final values, the configuration has the warning. A warning does not stop
+// the configuration.
+type Warning struct {
+	ID      string
+	Message string
+}
+
+var warnKeys = []string{"id", "message"}
 
 func ruleName(index int, keyword, text string) string {
 	name := fmt.Sprintf("rules[%d]", index)
@@ -112,20 +124,14 @@ func load(doc *yaml.Node) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkKeys(data, "format_version", "attributes", "rules", DisplaySection); err != nil {
+	// The format version first: a newer format can have keys that this
+	// code does not know.
+	m := &Model{}
+	if m.FormatVersion, err = checkFormatVersion(data.get("format_version")); err != nil {
 		return nil, err
 	}
-	m := &Model{}
-	if raw := data.get("format_version"); raw != nil {
-		m.FormatVersion = formatVersionText(raw)
-		if !slices.Contains(FormatVersions, m.FormatVersion) {
-			supported := make([]string, len(FormatVersions))
-			for i, v := range FormatVersions {
-				supported[i] = `"` + v + `"`
-			}
-			return nil, confErrorf("format_version %s is not supported (supported: %s)",
-				pyRepr(scalarValue(raw)), strings.Join(supported, ", "))
-		}
+	if err := checkKeys(data, "format_version", "attributes", "rules", DisplaySection); err != nil {
+		return nil, err
 	}
 	attrsNode := data.get("attributes")
 	if attrsNode == nil {
@@ -219,7 +225,7 @@ func (m *Model) parseAttributes(node *yaml.Node) error {
 // if/else-if chain, or nil when no chain is open. It returns the rule and
 // the chain after it.
 func (m *Model) parseRule(index int, node *yaml.Node, chain []Node) (*Rule, []Node, error) {
-	data, err := mapping(node, fmt.Sprintf("rules[%d]: expected a map with if, else-if or else, set, %s or valid", index, Sdkconfig))
+	data, err := mapping(node, fmt.Sprintf("rules[%d]: expected a map with if, else-if or else, set, %s, valid or warn", index, Sdkconfig))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -245,7 +251,7 @@ func (m *Model) parseRule(index int, node *yaml.Node, chain []Node) (*Rule, []No
 	}
 
 	rule, newChain, err := func() (*Rule, []Node, error) {
-		if err := checkKeys(data, KeywordIf, KeywordElseIf, KeywordElse, "set", Sdkconfig, "valid"); err != nil {
+		if err := checkKeys(data, KeywordIf, KeywordElseIf, KeywordElse, "set", Sdkconfig, "valid", "warn"); err != nil {
 			return nil, nil, err
 		}
 		if len(found) > 1 {
@@ -285,6 +291,20 @@ func (m *Model) parseRule(index int, node *yaml.Node, chain []Node) (*Rule, []No
 				operands = append(operands, &Not{Operand: c})
 			}
 			condition = all(operands)
+		}
+
+		if warn := data.get("warn"); warn != nil {
+			if condition == nil {
+				return nil, nil, confErrorf("warn needs an if, else-if or else")
+			}
+			if data.get("set") != nil || data.get(Sdkconfig) != nil || data.get("valid") != nil {
+				return nil, nil, confErrorf("warn cannot have set, %s or valid", Sdkconfig)
+			}
+			warning, err := parseWarning(warn)
+			if err != nil {
+				return nil, nil, err
+			}
+			return &Rule{Index: index, Keyword: keyword, IfText: ifText, Condition: condition, Warning: warning}, newChain, nil
 		}
 
 		if valid := data.get("valid"); valid != nil {
@@ -343,6 +363,34 @@ func (m *Model) parseRule(index int, node *yaml.Node, chain []Node) (*Rule, []No
 		return nil, nil, where(name, err)
 	}
 	return rule, newChain, nil
+}
+
+// parseWarning reads the warn map of a rule, as _parse_warning in
+// conf_model.py.
+func parseWarning(node *yaml.Node) (*Warning, error) {
+	entries, err := mapping(node, "warn must be a map with id and message")
+	if err != nil {
+		return nil, err
+	}
+	var unknown []string
+	for _, e := range entries {
+		if !slices.Contains(warnKeys, e.key.Value) {
+			unknown = append(unknown, e.key.Value)
+		}
+	}
+	if len(unknown) > 0 {
+		slices.Sort(unknown)
+		return nil, confErrorf("warn: unknown key(s): %s", strings.Join(unknown, ", "))
+	}
+	texts := make(map[string]string, len(warnKeys))
+	for _, key := range warnKeys {
+		n := entries.get(key)
+		if n == nil || n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" || strings.TrimSpace(n.Value) == "" {
+			return nil, confErrorf("warn: %s must be a text", key)
+		}
+		texts[key] = strings.TrimSpace(n.Value)
+	}
+	return &Warning{ID: texts["id"], Message: texts["message"]}, nil
 }
 
 func all(operands []Node) Node {
@@ -564,6 +612,72 @@ func scalarValue(n *yaml.Node) any {
 		}
 	}
 	return n.Value
+}
+
+// FormatVersionError is a format_version that this code does not read.
+type FormatVersionError struct {
+	// Version is the format_version text ("2.0").
+	Version string
+	// Newer is true for a format newer than this code: a "MAJOR.MINOR"
+	// with a major above FormatMajor. A newer CLI may read it.
+	Newer bool
+	msg   string
+}
+
+func (e *FormatVersionError) Error() string { return e.msg }
+
+var formatVersionRe = regexp.MustCompile(`^(\d+)\.(\d+)$`)
+
+// checkFormatVersion checks the format_version node (nil: no
+// format_version, accepted as in conf_model.py). It returns the version
+// text, or a *FormatVersionError.
+func checkFormatVersion(raw *yaml.Node) (string, error) {
+	if raw == nil {
+		return "", nil
+	}
+	version := formatVersionText(raw)
+	newer := false
+	if match := formatVersionRe.FindStringSubmatch(version); match != nil {
+		major, err := strconv.Atoi(match[1])
+		switch {
+		case err != nil: // too large for an int
+			newer = true
+		case major == FormatMajor:
+			return version, nil
+		case major > FormatMajor:
+			newer = true
+		}
+	}
+	shown := pyRepr(scalarValue(raw))
+	if version == "" {
+		version = shown
+	}
+	return "", &FormatVersionError{
+		Version: version,
+		Newer:   newer,
+		msg:     fmt.Sprintf("format_version %s is not supported (supported: %d.x)", shown, FormatMajor),
+	}
+}
+
+// CheckFormatVersion checks only the format_version of a master
+// configuration: a newer format may not load. It returns nil when the text
+// is not a YAML map; Load then reports the problem.
+func CheckFormatVersion(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	root := documentRoot(&doc)
+	if root == nil || root.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if key := resolve(root.Content[i]); key.Kind == yaml.ScalarNode && key.Value == "format_version" {
+			_, err := checkFormatVersion(resolve(root.Content[i+1]))
+			return err
+		}
+	}
+	return nil
 }
 
 // formatVersionText returns format_version as str() does in Python: a

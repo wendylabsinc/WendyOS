@@ -94,9 +94,9 @@ func TestShortVersion(t *testing.T) {
 	}
 }
 
-// HasMasterConf reads the file list of a commit, also of a commit that is
-// not the tip of a branch.
-func TestHasMasterConf(t *testing.T) {
+// LookupMasterConf reads the master configuration of a commit, also of a
+// commit that is not the tip of a branch.
+func TestLookupMasterConf(t *testing.T) {
 	ctx := context.Background()
 	r := newTestRepo(t)
 	without := r.commit("no master configuration")
@@ -109,11 +109,39 @@ func TestHasMasterConf(t *testing.T) {
 	r.commit("later")
 
 	for commit, want := range map[string]bool{without: false, with: true} {
-		if got, err := HasMasterConf(ctx, r.url, commit); err != nil || got != want {
-			t.Errorf("HasMasterConf(%s) = %v, %v; want %v", ShortVersion(commit), got, err, want)
+		data, found, err := LookupMasterConf(ctx, r.url, commit)
+		if err != nil || found != want {
+			t.Errorf("LookupMasterConf(%s) found %v, %v; want %v", ShortVersion(commit), found, err, want)
+		}
+		if want && string(data) != appModel {
+			t.Errorf("LookupMasterConf(%s) = %q, want the file", ShortVersion(commit), data)
 		}
 	}
-	if _, err := HasMasterConf(ctx, r.url, strings.Repeat("f", 40)); err == nil || !strings.Contains(err.Error(), "check the version") {
+	if _, _, err := LookupMasterConf(ctx, r.url, strings.Repeat("f", 40)); err == nil || !strings.Contains(err.Error(), "check the version") {
 		t.Errorf("unknown commit: %v, want an error", err)
+	}
+}
+
+// FetchMasterConf of a newer format asks to update the CLI.
+func TestFetchMasterConfFormat(t *testing.T) {
+	origLook, origFetch := lookPath, fetchFile
+	t.Cleanup(func() { lookPath, fetchFile = origLook, origFetch })
+	lookPath = func(string) (string, error) { return "/usr/bin/git", nil }
+	for version, want := range map[string]string{
+		"2.0": "Wendy Lite v9.0.0 needs a newer version of the CLI. Update the CLI",
+		"0.1": "Wendy Lite v9.0.1 is not compatible with this version of the CLI",
+	} {
+		ref := "v9.0.0"
+		if version == "0.1" {
+			ref = "v9.0.1"
+		}
+		fetchFile = func(context.Context, string, string, string) ([]byte, error) {
+			return []byte("format_version: \"" + version + "\"\nnew_key: 1\n"), nil
+		}
+		_, err := FetchMasterConf(context.Background(), "https://example.test/wendy-lite.git", ref, nil)
+		var formatErr *FormatVersionError
+		if err == nil || err.Error() != want || !errors.As(err, &formatErr) {
+			t.Errorf("format %s: %v, want %q", version, err, want)
+		}
 	}
 }

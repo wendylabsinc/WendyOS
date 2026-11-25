@@ -2,6 +2,7 @@ package litebuild
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +20,11 @@ type scripted struct {
 	infos    map[string]string   // attribute -> reason of Info
 	rejected map[string][]string // Text answers that validate refused
 	defaults map[string]any
+	// warnings maps the attribute of each question to the warning IDs of
+	// each option key, for the options with a warning.
+	warnings map[string]map[string][]string
+	warned   []string // the messages of Warn
+	events   []string // "ask <attribute>" and "warn <id>", in order
 }
 
 func newScripted(t *testing.T, answers map[string]string) *scripted {
@@ -28,13 +34,27 @@ func newScripted(t *testing.T, answers map[string]string) *scripted {
 		infos:    map[string]string{},
 		rejected: map[string][]string{},
 		defaults: map[string]any{},
+		warnings: map[string]map[string][]string{},
 	}
 }
 
 func (s *scripted) answer(q Question) string {
 	s.t.Helper()
 	s.asked = append(s.asked, q.Attr.Name)
+	s.events = append(s.events, "ask "+q.Attr.Name)
 	s.defaults[q.Attr.Name] = q.Default
+	if len(q.Warnings) != 0 && len(q.Warnings) != len(q.Options) {
+		s.t.Fatalf("%s: %d warning lists for %d options", q.Attr.Name, len(q.Warnings), len(q.Options))
+	}
+	for i, warnings := range q.Warnings {
+		for _, w := range warnings {
+			if s.warnings[q.Attr.Name] == nil {
+				s.warnings[q.Attr.Name] = map[string][]string{}
+			}
+			key := q.Attr.Key(q.Options[i])
+			s.warnings[q.Attr.Name][key] = append(s.warnings[q.Attr.Name][key], w.ID)
+		}
+	}
 	keys := make([]string, len(q.Options))
 	for i, v := range q.Options {
 		keys[i] = q.Attr.Key(v)
@@ -79,6 +99,11 @@ func (s *scripted) Text(q Question, validate func(string) error) (string, error)
 }
 
 func (s *scripted) Info(attr *Attribute, _ any, reason string) { s.infos[attr.Name] = reason }
+
+func (s *scripted) Warn(w Warning) {
+	s.warned = append(s.warned, w.Message)
+	s.events = append(s.events, "warn "+w.ID)
+}
 
 func newTestConfigurator(t *testing.T, conf string) *Configurator {
 	t.Helper()
@@ -561,5 +586,133 @@ func TestParseValue(t *testing.T) {
 	}
 	if _, err := m.ParseValue("board", "d"); err == nil || err.Error() != "board: d is not one of: a, b, c" {
 		t.Errorf("board=d: %v", err)
+	}
+}
+
+// warnConf is shaped like rule w1 of wendy-lite: psram_size is internal and
+// has no priority, so it comes after chain_algorithm in the question order.
+// A rule sets it from the board: the chain_algorithm answer decides w1.
+const warnConf = `
+attributes:
+  board: {type: string, enum: [custom, xiao]}
+  psram_size: {type: size}
+  chain_algorithm: {type: string, enum: [ecdsa_p256, ml_dsa]}
+  net: {type: boolean}
+display:
+  board: {priority: 1}
+  chain_algorithm: {priority: 2}
+  net: {priority: 3}
+rules:
+  - if: board == "custom"
+    set: {psram_size: 0}
+  - if: board == "xiao"
+    set: {psram_size: 8MiB}
+  - if: psram_size > 0
+    sdkconfig: CONFIG_SPIRAM=y
+  - if: chain_algorithm == "ml_dsa"
+    sdkconfig: CONFIG_MLDSA=y
+  - if: net
+    sdkconfig: CONFIG_NET=y
+  - if: chain_algorithm == "ml_dsa" && psram_size == 0
+    warn: {id: w1, message: Not enough RAM for ML-DSA.}
+  - if: net && board == "custom"
+    warn: {id: w2, message: Wendy Net is slow on a custom board.}
+`
+
+func TestRunWarnings(t *testing.T) {
+	tests := []struct {
+		name     string
+		given    map[string]string
+		answers  map[string]string
+		warnings map[string]map[string][]string // see scripted.warnings
+		events   []string
+	}{
+		{
+			name:    "the answers give the warnings",
+			answers: map[string]string{"board": "custom", "chain_algorithm": "ml_dsa", "net": "true"},
+			warnings: map[string]map[string][]string{
+				"chain_algorithm": {"ml_dsa": {"w1"}},
+				"net":             {"true": {"w2"}},
+			},
+			events: []string{"ask board", "ask chain_algorithm", "warn w1", "ask net", "warn w2"},
+		},
+		{
+			name:    "a warning is shown on its answer, also when another answer is chosen",
+			answers: map[string]string{"board": "custom", "chain_algorithm": "ecdsa_p256", "net": "false"},
+			warnings: map[string]map[string][]string{
+				"chain_algorithm": {"ml_dsa": {"w1"}},
+				"net":             {"true": {"w2"}},
+			},
+			events: []string{"ask board", "ask chain_algorithm", "ask net"},
+		},
+		{
+			name:     "a board with PSRAM gives no warning",
+			answers:  map[string]string{"board": "xiao", "chain_algorithm": "ml_dsa", "net": "true"},
+			warnings: map[string]map[string][]string{},
+			events:   []string{"ask board", "ask chain_algorithm", "ask net"},
+		},
+		{
+			name:    "a given value and the answer give the warning",
+			given:   map[string]string{"chain_algorithm": "ml_dsa"},
+			answers: map[string]string{"board": "custom", "net": "false"},
+			warnings: map[string]map[string][]string{
+				"board": {"custom": {"w1"}},
+				"net":   {"true": {"w2"}},
+			},
+			events: []string{"ask board", "warn w1", "ask net"},
+		},
+		{
+			name:     "the given values give the warning: shown at the end",
+			given:    map[string]string{"board": "custom", "chain_algorithm": "ml_dsa"},
+			answers:  map[string]string{"net": "true"},
+			warnings: map[string]map[string][]string{"net": {"true": {"w2"}}},
+			events:   []string{"ask net", "warn w2", "warn w1"},
+		},
+		{
+			name:     "no question",
+			given:    map[string]string{"board": "custom", "chain_algorithm": "ml_dsa", "net": "true"},
+			warnings: map[string]map[string][]string{},
+			events:   []string{"warn w1", "warn w2"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestConfigurator(t, warnConf)
+			if got, want := orderNames(c), []string{"board", "chain_algorithm", "net", "psram_size"}; !slices.Equal(got, want) {
+				t.Fatalf("order %v, want %v", got, want)
+			}
+			c.Given = map[string]any{}
+			for name, text := range tc.given {
+				v, err := c.solver.Model.ParseValue(name, text)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.Given[name] = v
+			}
+			p := newScripted(t, tc.answers)
+			res, err := c.Run(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(p.warnings, tc.warnings) {
+				t.Errorf("question warnings = %v, want %v", p.warnings, tc.warnings)
+			}
+			if !slices.Equal(p.events, tc.events) {
+				t.Errorf("events = %v, want %v", p.events, tc.events)
+			}
+			var ids []string
+			for _, rule := range res.Solution.Warnings {
+				ids = append(ids, rule.Warning.ID)
+			}
+			var warned []string
+			for _, e := range p.events {
+				if id, ok := strings.CutPrefix(e, "warn "); ok {
+					warned = append(warned, id)
+				}
+			}
+			if !slices.Equal(slices.Sorted(slices.Values(warned)), ids) {
+				t.Errorf("warned %v, want the solution warnings %v", warned, ids)
+			}
+		})
 	}
 }

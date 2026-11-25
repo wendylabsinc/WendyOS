@@ -238,6 +238,26 @@ func TestLiteBuildVersionHint(t *testing.T) {
 	if want := "Wendy Lite 0.15.0 is not compatible with this version of the CLI. " + liteRunBuildVersionHint; err.Error() != want {
 		t.Errorf("run: %q, want %q", err, want)
 	}
+
+	// A newer master configuration format: update the CLI, or the hint.
+	var formatErr *litebuild.FormatVersionError
+	if !errors.As(litebuild.CheckFormatVersion([]byte(`format_version: "2.0"`)), &formatErr) {
+		t.Fatal("format 2.0 is accepted")
+	}
+	newer := &liteBuildIncompatibleError{src: src, format: formatErr}
+	for _, tc := range []struct{ hint, want string }{
+		{"", "Wendy Lite 0.15.0 needs a newer version of the CLI. Update the CLI or specify a Wendy Lite version with --version"},
+		{liteRunBuildVersionHint, "Wendy Lite 0.15.0 needs a newer version of the CLI. Update the CLI or install a Wendy Lite version with 'wendy install --device-type esp32 --version <version>'"},
+		{liteSimulatorVersionHint("sim", "wendy-lite-native"), "Wendy Lite 0.15.0 needs a newer version of the CLI. Update the CLI or specify a Wendy Lite version: wendy vm create sim --profile wendy-lite-native --version <version>"},
+	} {
+		err := liteBuildOptions{versionHint: tc.hint}.withVersionHint(newer)
+		if err.Error() != tc.want {
+			t.Errorf("hint %q: %q, want %q", tc.hint, err, tc.want)
+		}
+		if !errors.As(err, &formatErr) {
+			t.Errorf("hint %q: the error does not wrap the format error", tc.hint)
+		}
+	}
 }
 
 func TestNoTerminalQuestion(t *testing.T) {

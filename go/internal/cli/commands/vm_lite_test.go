@@ -97,6 +97,7 @@ func TestLiteSimulatorBuildsFirmware(t *testing.T) {
 			want := map[string]string{
 				"board": "custom", "chip": "esp32c6", "flash_size": "8MiB",
 				"app_type": tc.appType, "sensor_link_av": "false", "cloud_tunnel": "false",
+				"chain_algorithm": "ecdsa_p256",
 			}
 			if !maps.Equal(o.attrs, want) || o.simulator != tc.profile || o.version != "feature/x" || o.nightly {
 				t.Fatalf("build options: attrs %v, simulator %q, version %q, nightly %v", o.attrs, o.simulator, o.version, o.nightly)
@@ -179,6 +180,7 @@ attributes:
   sensor_link_av: {type: boolean}
   wendy_net: {type: boolean}
   cloud_tunnel: {type: boolean}
+  chain_algorithm: {type: string, enum: [ecdsa_p256, ml_dsa]}
 rules:
   - if: board == "custom"
     set: {wendy_net: false}
@@ -198,6 +200,10 @@ rules:
     sdkconfig: CONFIG_NET=y
   - if: cloud_tunnel
     sdkconfig: CONFIG_TUNNEL=y
+  - if: chain_algorithm == "ml_dsa"
+    sdkconfig: CONFIG_MLDSA=y
+  - if: chain_algorithm == "ml_dsa" && chip == "esp32c6"
+    warn: {id: w1, message: The ESP32-C6 has no PSRAM for ML-DSA.}
 display:
   board: {priority: 1}
   chip: {priority: 2}
@@ -206,6 +212,7 @@ display:
   app_type: {priority: 5}
   wendy_net: {priority: 6}
   cloud_tunnel: {priority: 7}
+  chain_algorithm: {priority: 8}
 `
 
 func TestLiteSimulatorBuildValues(t *testing.T) {
@@ -239,6 +246,9 @@ func TestLiteSimulatorBuildValues(t *testing.T) {
 	}
 	if !slices.Contains(b.configure, "app_type=native") || !slices.Contains(b.configure, "board=custom") {
 		t.Fatalf("configure.py arguments: %v", b.configure)
+	}
+	if len(res.Solution.Warnings) != 0 {
+		t.Errorf("the profile gives warning %s", res.Solution.Warnings[0].Warning.ID)
 	}
 
 	// A question that the profile does not answer.
