@@ -8,6 +8,9 @@ advertises a service using normal mDNS/DNS-SD, the discovery protocol used by
 Bonjour and Avahi. Wendy Net carries admitted service information between devices;
 apps browse it through their own network interface.
 
+To connect by hostname without browsing, see
+[Connect to a known device](#connect-to-a-known-device).
+
 Start by [connecting the devices](/docs/guides/wendy-net) and checking their peers.
 Use current Linux WendyOS images with full Wendy Net support.
 
@@ -140,13 +143,16 @@ check: verify an actual request to the discovered server.
 
 An app can also connect to a specific enrolled device without browsing or
 publishing a DNS-SD service. Enroll both devices in the same Wendy Cloud
-organization. The client agent needs short DNS support. For offline friendly
-names learned through mesh, the destination agent also needs to publish its
-friendly name in the signed directory. Check each installed agent with
-`wendy device info` and compare its version with the
-[WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases)
-for those capabilities. Keep the client in network mode `mesh` and publish the
-server's incoming ports as above. Use either name with the **published** port:
+organization. The client agent must support short device DNS. Run the
+[UUID lookup below](#verify-short-dns-from-the-client-app) to check the installed
+client directly. For offline friendly names learned through mesh, the destination
+agent also needs support for publishing its Cloud-registered name to the signed
+directory. See the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases)
+for availability. Keep the client in network mode `mesh` and
+[publish the server's incoming ports](#1-give-the-publishing-app-wendy-net-access).
+Use the destination's certificate UUID for `<device-uuid>`. The
+[verification steps below](#verify-short-dns-from-the-client-app) show how to
+retrieve it. Use either name with the **published** port:
 
 ```text
 jetson.wendy.internal:18080
@@ -156,49 +162,89 @@ device-<device-uuid>.wendy.internal:18080
 The friendly name is scoped to the client's enrolled organization. Current
 device names are lowercase DNS labels; hyphens are preserved, so `jetson-a` and
 `jetson--a` name different devices. The `device-<uuid>` form is reserved for
-identity-based lookup and uses the device UUID in its certificate, rather than
-an older numeric Cloud asset ID.
+identity-based lookup.
 
 The agent checks the signed Wendy Net directory and the organization's
-authenticated Cloud roster for short friendly names. An updated agent publishes
-its Cloud-registered name in the signed directory and the LAN discovery
-`name` record once it has synced its own Cloud roster entry. It keeps the last
-confirmed name for offline use, including after reboot. The operating system's
-hostname stays separate.
+authenticated Cloud roster for short friendly names. Older agents publish a
+local name in the signed directory. Agents with Cloud name support publish their
+Cloud-registered name in that same field and in the LAN discovery `name` TXT
+record after their first roster sync. They retain the last confirmed name
+for offline use, including after reboot. This update leaves the `.local`
+hostname and existing CLI pins for that hostname in place.
 
-A binding from either trusted source can supply the address when the available
-bindings agree. Older agents can still publish a local name in the signed
-directory. If older peers' local names conflict with Cloud bindings, use the
-device UUID. A resolved name still needs a reachable Wendy Net application route.
+One unambiguous binding from either source is enough. If both sources bind the
+name, they must identify the same device. A resolved name still needs a
+reachable Wendy Net application route.
 
-These names resolve to addresses in the calling host's own `10.99.0.0/16`
-mapping table. A DNS answer is not proof of reachability: the connection must
-still authenticate the exact tenant/device principal and pass the destination's
-running-app port authorization. Keep the hostname in configuration; do not copy
-a resolved virtual IP between devices.
+The calling host allocates virtual IPs from the app's `serviceCIDR`, the
+`10.99.0.0/16` range configured in [step 1](#1-give-the-publishing-app-wendy-net-access).
+The connection still needs a route, must authenticate the exact tenant/device
+principal, and must pass the destination's running-app port authorization.
+Keep the hostname in configuration because the virtual IP belongs to the
+calling host.
 
-`device-<uuid>.mesh.wendy.internal` and `device-<uuid>.cloud.wendy.dev` resolve
-to the same VIP as `device-<uuid>.wendy.internal` on an updated client.
-Existing apps can keep using either older spelling. The older org-qualified
-friendly aliases remain supported, and the short friendly name uses only the
-device label and the enrolled organization.
+`device-<uuid>.mesh.wendy.internal` and `device-<uuid>.cloud.wendy.dev` are
+existing UUID aliases. Short DNS support adds `device-<uuid>.wendy.internal`.
+When the client's resolver supports all three spellings, they share one VIP
+allocation. Existing apps can keep using the two older spellings or the older
+org-qualified friendly aliases.
 
 An unenrolled client receives NXDOMAIN for short names. A friendly name also
 returns NXDOMAIN when two devices share it in the signed directory, the Cloud
 roster, or across both sources. Use `device-<uuid>.wendy.internal` to select one
 device explicitly.
 
-For an HTTP app, run these checks inside a client container with `getent` and
-`curl` installed:
+### Verify short DNS from the client app
+
+From a terminal signed in to the destination's Wendy Cloud organization, list
+its enrolled devices, including offline devices:
+
+```sh
+wendy cloud discover --all --json
+```
+
+Find the destination by its `name` and copy the UUID in `pkiDeviceName`.
+For example, a device entry can contain
+`"pkiDeviceName": "00000000-0000-4000-8000-000000000001"`.
+If the field is missing, choose a destination with UUID-based enrollment.
+
+Confirm the enrolled client's `wendy.json` uses network mode `mesh` and
+`serviceCIDR` set to `10.99.0.0/16`. Inside its app container, set
+`DEVICE_UUID` to the copied UUID and run the lookup.
+
+```sh
+getent ahostsv4 "device-${DEVICE_UUID}.wendy.internal"
+```
+
+Expect an address in `10.99.0.0/16`. If the command returns no address, check
+that the client is enrolled, the app uses network mode `mesh`, and the UUID
+is correct. Check the client agent's version for short DNS support in the
+[WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
+
+For an offline friendly-name check, verify the destination agent's support
+for Cloud-registered name publication before running the next command. Run
+`wendy device info` against the destination and check its Agent Version in
+the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
+
+Once the UUID lookup works, check the destination's friendly name. Replace
+`jetson` in the examples with the target's enrolled DNS label.
 
 ```sh
 getent ahostsv4 jetson.wendy.internal
+```
+
+If the friendly name returns no address, check whether the signed directory or
+Cloud roster has learned that name. Conflicting bindings also prevent a
+friendly-name answer. Use the UUID hostname to select the device in that case.
+
+For an HTTP app, verify the connection on the published TCP port.
+
+```sh
 curl --fail http://jetson.wendy.internal:18080/
 ```
 
-Expect a `10.99.x.x` address and the app's HTTP response. If the request fails,
-check [Wendy Net status](/docs/guides/wendy-net) on both devices and confirm that
-the destination app is running and publishes the requested port.
+If DNS returns an address and the request fails, check the route and the
+destination's published port in [Troubleshoot discovery](#troubleshoot-discovery).
 
 ## Try the complete Python example
 
