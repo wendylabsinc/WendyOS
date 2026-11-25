@@ -1,0 +1,100 @@
+---
+title: Why Wendy?
+description: Compare Wendy with Docker, Ubuntu, balena, and OTA tools, and choose the parts you need.
+---
+
+Wendy reduces the work between editing an app and seeing it run on a robot or
+edge device. It builds for the target, transfers the result, starts the app,
+and brings logs back to your computer. Hardware permissions, ROS 2 inspection,
+and coding-agent access use the same device connection.
+
+<Figure src="/images/get-started/go2-live-feed.webp" alt="A Unitree Go2 robot walking across an office floor next to a laptop that shows the robot's live camera feed" caption="A Go2 driven from a laptop by an app deployed with Wendy. The browser shows the robot's live camera feed." />
+
+## What work does Wendy take over?
+
+For a camera app on a Jetson, packaging Python dependencies is only the beginning.
+You still need to build for the target architecture, get the image onto the board,
+configure camera and GPU access, start the right services, and collect logs after
+each change.
+
+| Task | With Wendy | Try it |
+| --- | --- | --- |
+| Deploy an edit | `wendy run` builds, transfers, starts, and attaches logs; `--watch` repeats after source changes. | [Deploy your first app](/docs/getting-started/app) |
+| Configure hardware access | Declare camera, GPU, and other permissions in the app configuration. The host still needs compatible hardware and drivers. | [App configuration](/docs/reference/app-configuration) |
+| Run multiple services | Use a supported Compose project and inspect each service's output. | [Compose support](/docs/advanced/apps/compose) |
+| Inspect a robot | Inspect ROS 2 nodes and topics and connect a Foxglove bridge. | [ROS 2](/docs/integrations/ros2) |
+| Work through a coding agent | MCP tools expose deployment and device inspection to your coding assistant. | [Coding-agent setup](/docs/guides/llm-integration) |
+| Try the workflow without a board | Run a local simulated robot. Validate physical peripherals separately on hardware. | [Program a simulated robot](/docs/getting-started/robot) |
+
+A successful transfer or a running container does not prove that your app works.
+Check its logs and actual output, such as an HTTP response, camera frame, or ROS 2 topic.
+
+## Docker and Compose
+
+Docker provides container builds and execution. It also supports
+[remote contexts](https://docs.docker.com/engine/manage-resources/contexts/).
+You can build a device workflow with Docker, scripts, and your own hardware configuration.
+
+Choose Wendy when you want that device workflow provided together: target selection,
+builds, transfer, app lifecycle, logs, hardware declarations, and robotics inspection.
+Wendy uses containers on Linux and accepts Dockerfiles and supported Compose projects.
+Review the [Compose support documentation](/docs/advanced/apps/compose) when migrating;
+not every Docker or Compose option has an identical Wendy equivalent.
+
+Both approaches can work on a local network. Wendy's local deployment path does not
+require a Wendy Cloud account or a cloud registry round trip. Download dependencies,
+base images, and toolchains before expecting to build without internet access.
+
+Keep a direct Docker workflow when you already have deployment automation that meets
+your needs and do not need Wendy's device tools.
+
+## Ubuntu and NVIDIA JetPack
+
+Ubuntu and JetPack provide a familiar host environment for development and hardware
+integration. Wendy offers two adoption paths:
+
+- Install [Wendy Agent on Linux](/docs/installation/linux) to keep the host OS and add
+  Wendy's build, deployment, and inspection workflow. You continue managing host
+  packages, drivers, and OS updates.
+- Install [WendyOS on a supported board](/docs/installation) to use a supplied board
+  image with the Agent included and the board's WendyOS OS update path. A/B layouts
+  keep separate root filesystem slots for OS updates. Check your board's support
+  and update instructions before planning a rollout.
+
+Installing the Agent does not convert Ubuntu into WendyOS or add its A/B updates.
+OS rollback also does not undo application database migrations or external state.
+
+Keep Ubuntu or the vendor OS when you need host customization, vendor-specific tools,
+or hardware that a WendyOS image does not support. You can still use Wendy Agent.
+
+[Ubuntu Core](https://ubuntu.com/core) is a separate embedded OS with its own OTA and
+confinement model. Evaluate it separately from Ubuntu Desktop or Server; reliable
+updates are not unique to WendyOS.
+
+## balena
+
+[balena](https://docs.balena.io/) also provides container deployment and fleet management.
+It is an alternative to evaluate when managing connected Linux devices is your main need.
+
+Evaluate Wendy when your daily work includes camera and GPU apps, ROS 2 inspection,
+a local robot simulator, and device tools for coding assistants. Test a representative
+app on your exact board with both products. Compare the setup and debugging work your
+team still has to maintain, as well as deployment and fleet requirements.
+
+## Mender and RAUC
+
+[Mender](https://mender.io/) provides update infrastructure for OS and application
+software, with fleet management. [RAUC](https://rauc.io/) provides an update framework
+you can integrate into your own embedded Linux image.
+
+Choose those tools when you want to own your OS integration and need an update solution.
+Evaluate WendyOS when you also want a supplied board image and the Wendy application
+workflow. Compare board support and recovery behavior directly; A/B updates alone do
+not distinguish WendyOS from these tools.
+
+## Start with your existing app
+
+Install the Agent on an existing Linux device, or set up a supported WendyOS board.
+Then follow [Deploy your first app](/docs/getting-started/app) and try your own Dockerfile
+or supported Compose project. Make one change, redeploy, and inspect the result.
+That gives you a concrete comparison with the workflow you use today.

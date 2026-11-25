@@ -259,6 +259,8 @@ The test requires Playwright and its Chromium browser. If Playwright is installe
 outside this project, set `PLAYWRIGHT_MODULE` to its local `index.mjs` path.
 When the verified `assets/visuals` directory is available, add
 `GO2_VISUAL_DETAIL=balanced` to test the managed image's lighter visual model.
+`visuals.lock.json` pins that model separately for Linux ARM64 and Linux x86-64
+builds; an intentional generator change regenerates the lock on both.
 The check exercises orbit, pan, zoom, reset framing, follow controls, lidar,
 state updates, reconnects and the real front camera preview. It requires
 `GO2_RENDER=1`. For manual state-only development, `GO2_RENDER=0` leaves the 3D

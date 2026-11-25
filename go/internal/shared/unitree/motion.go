@@ -17,6 +17,14 @@ const MotionForwardLimit = 0.8
 const MotionLateralLimit = 0.5
 const MotionYawLimit = 1.0
 const sportTopic = "rt/api/sport/request"
+const avoidanceTopic = "rt/api/obstacles_avoid/request"
+
+// SetObstacleAvoidance uses Unitree's ObstaclesAvoidClient.SwitchSet API.
+// This changes only avoidance, not speed, gait, posture or locomotion mode.
+func (c *Connection) SetObstacleAvoidance(ctx context.Context, enabled bool) error {
+	parameter, _ := json.Marshal(map[string]bool{"enable": enabled})
+	return c.apiRequest(ctx, avoidanceTopic, 1001, string(parameter))
+}
 
 func ValidMotion(forward, lateral, yaw float64) bool {
 	within := func(v, limit float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && math.Abs(v) <= limit }
@@ -24,7 +32,9 @@ func ValidMotion(forward, lateral, yaw float64) bool {
 }
 
 // Move accepts only bounded planar velocity, never posture or mode changes.
-// Zero velocity uses StopMove. An acknowledgement is not physical acceptance.
+// Like Unitree's SportClient.Move, velocity updates use policy.noreply. Success
+// means the update was sent, not that the robot accepted or executed it.
+// Zero velocity still uses acknowledged StopMove.
 func (c *Connection) Move(ctx context.Context, forward, lateral, yaw float64) error {
 	if !ValidMotion(forward, lateral, yaw) {
 		return errors.New("Go2 velocity outside limits")
@@ -32,8 +42,24 @@ func (c *Connection) Move(ctx context.Context, forward, lateral, yaw float64) er
 	if forward == 0 && lateral == 0 && yaw == 0 {
 		return c.Stop(ctx)
 	}
+	ctx, cancel := context.WithTimeout(ctx, motionAckTimeout)
+	defer cancel()
 	parameter, _ := json.Marshal(map[string]float64{"x": forward, "y": lateral, "z": yaw})
-	return c.sportRequest(ctx, 1008, string(parameter))
+	for {
+		_, _, err := c.sendSportRequest(ctx, 1008, string(parameter))
+		if !errors.Is(err, errCommandBacklog) {
+			return err
+		}
+		// Let a previous data-channel message drain before sending the newest
+		// velocity. Do not hold motionMu here: Stop must be able to pass us.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.done:
+			return errors.New("Go2 disconnected")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 func (c *Connection) Stop(ctx context.Context) error { return c.sportRequest(ctx, 1003, "") }
 
@@ -43,6 +69,13 @@ func (c *Connection) LieDown(ctx context.Context) error { return c.sportRequest(
 func (c *Connection) Hello(ctx context.Context) error   { return c.sportRequest(ctx, 1016, "") }
 
 const motionAckTimeout = 200 * time.Millisecond
+
+var errCommandBacklog = errors.New("Go2 command channel is backlogged")
+
+// BufferedAmount includes data already sent but not yet SCTP-acknowledged.
+// Requiring zero serializes Move on delayed transport ACKs. Allow a small
+// pipeline, including the next message, without accumulating old velocities.
+const maxMotionBufferedBytes = 512
 
 // PostureAckTimeout allows the robot to finish a stand, lie-down or wave before
 // acknowledging it; Move and StopMove retain the shorter motionAckTimeout.
@@ -64,9 +97,13 @@ type pendingSportRequest struct {
 // are sent one at a time, but the wait happens outside motionMu, so a stop is
 // not held up behind a posture change waiting for its slow acknowledgement.
 func (c *Connection) sportRequest(ctx context.Context, api uint64, parameter string) error {
+	return c.apiRequest(ctx, sportTopic, api, parameter)
+}
+
+func (c *Connection) apiRequest(ctx context.Context, topic string, api uint64, parameter string) error {
 	ctx, cancel := context.WithTimeout(ctx, sportAckTimeout(api))
 	defer cancel()
-	id, response, err := c.sendSportRequest(ctx, api, parameter)
+	id, response, err := c.sendAPIRequest(ctx, topic, api, parameter)
 	if err != nil {
 		return err
 	}
@@ -85,23 +122,31 @@ func (c *Connection) sportRequest(ctx context.Context, api uint64, parameter str
 }
 
 func (c *Connection) sendSportRequest(ctx context.Context, api uint64, parameter string) (uint64, chan int, error) {
+	return c.sendAPIRequest(ctx, sportTopic, api, parameter)
+}
+
+func (c *Connection) sendAPIRequest(ctx context.Context, topic string, api uint64, parameter string) (uint64, chan int, error) {
 	c.motionMu.Lock()
 	defer c.motionMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return 0, nil, err
 	}
-	if !c.Connected() || c.channel == nil || (api == 1008 && c.channel.BufferedAmount() != 0) {
-		return 0, nil, errors.New("Go2 command channel unavailable or backlogged")
+	if !c.Connected() || c.channel == nil {
+		return 0, nil, errors.New("Go2 command channel unavailable")
 	}
+	noReply := topic == sportTopic && api == 1008
 	// Keep numeric identifiers exactly representable by browser/robot JSON parsers.
 	id := c.requestID.Add(1) % 2147483648
-	response := make(chan int, 1)
-	c.responseMu.Lock()
-	if c.pending == nil {
-		c.pending = make(map[uint64]pendingSportRequest)
+	var response chan int
+	if !noReply {
+		response = make(chan int, 1)
+		c.responseMu.Lock()
+		if c.pending == nil {
+			c.pending = make(map[uint64]pendingSportRequest)
+		}
+		c.pending[id] = pendingSportRequest{api: api, response: response}
+		c.responseMu.Unlock()
 	}
-	c.pending[id] = pendingSportRequest{api: api, response: response}
-	c.responseMu.Unlock()
 	payload := struct {
 		Type  string `json:"type"`
 		Topic string `json:"topic"`
@@ -111,13 +156,35 @@ func (c *Connection) sendSportRequest(ctx context.Context, api uint64, parameter
 					ID  uint64 `json:"id"`
 					API uint64 `json:"api_id"`
 				} `json:"identity"`
+				Policy *struct {
+					Priority int  `json:"priority"`
+					NoReply  bool `json:"noreply"`
+				} `json:"policy,omitempty"`
 			} `json:"header"`
 			Parameter string `json:"parameter"`
+			Binary    *[]int `json:"binary,omitempty"`
 		} `json:"data"`
-	}{Type: "req", Topic: sportTopic}
+	}{Type: "req", Topic: topic}
 	payload.Data.Header.Identity.ID, payload.Data.Header.Identity.API = id, api
+	if noReply {
+		// The WebRTC bridge distinguishes a DDS publication (msg) from a
+		// request awaiting a response (req). SportClient's no-reply Move is
+		// a publication; setting noreply on a req does not select that path.
+		payload.Type = "msg"
+		payload.Data.Binary = &[]int{}
+		payload.Data.Header.Policy = &struct {
+			Priority int  `json:"priority"`
+			NoReply  bool `json:"noreply"`
+		}{NoReply: true}
+	}
 	payload.Data.Parameter = parameter
 	raw, _ := json.Marshal(payload)
+	if noReply {
+		buffered := c.channel.BufferedAmount()
+		if buffered > maxMotionBufferedBytes || uint64(len(raw)) > maxMotionBufferedBytes-buffered {
+			return 0, nil, errCommandBacklog
+		}
+	}
 	if err := c.channel.SendText(string(raw)); err != nil {
 		c.responseMu.Lock()
 		delete(c.pending, id)

@@ -36,10 +36,11 @@ const dragonwingProgrammer = "prog_firehose_ddr.elf"
 // dragonwingBoard is one EDL-flashed Qualcomm board. msmID is the only way to
 // tell them apart: they share the generic 05c6:9008 EDL id.
 type dragonwingBoard struct {
-	deviceType string
-	msmID      uint32
-	storage    string          // the Firehose MemoryName of its flash
-	guide      func() edlGuide // how the flow words its storage and EDL entry
+	deviceType     string
+	msmID          uint32
+	storage        string          // the Firehose MemoryName of its flash
+	guide          func() edlGuide // how the flow words its storage and EDL entry
+	postFlashHints []string        // optional board-specific connection guidance
 	// extractedFactor estimates its extracted bundle from the compressed one.
 	extractedFactor float64
 }
@@ -51,9 +52,13 @@ const dragonwingDeviceTypePrefix = "dragonwing-"
 
 // Boards kept in their own file append themselves here from an init().
 var dragonwingBoards = []dragonwingBoard{
-	{deviceType: "dragonwing-iq-8275", msmID: 0x002e70e1, storage: qdl.StorageUFS, guide: dipSwitch3Guide,
+	{deviceType: "dragonwing-iq-8275", msmID: 0x002e70e1, storage: qdl.StorageUFS, guide: iq8275SwitchGuide,
+		postFlashHints: []string{
+			"  After WendyOS boots, connect the computer to USB2 (micro-USB) for normal USB networking.",
+			"  USB0 (USB-C) remains the EDL/recovery port.",
+		},
 		extractedFactor: dragonwingExtractedFactor},
-	{deviceType: "dragonwing-iq-9075", msmID: 0x002eb0e1, storage: qdl.StorageUFS, guide: dipSwitch3Guide,
+	{deviceType: "dragonwing-iq-9075", msmID: 0x002eb0e1, storage: qdl.StorageUFS, guide: iq9075SwitchGuide,
 		extractedFactor: dragonwingExtractedFactor},
 }
 
@@ -352,7 +357,10 @@ func downloadAndExtractDragonwingBundle(plan dragonwingPlan, detail func(string)
 
 // installDragonwing flashes a Dragonwing board over EDL.
 func installDragonwing(ctx context.Context, board dragonwingBoard, version string, nightly, force bool, prNumber int,
-	wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
+	wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, agent *localInstallAgent) error {
+	if err := agent.checkArchitecture("arm64"); err != nil {
+		return err
+	}
 	if !qdl.Supported() {
 		return fmt.Errorf("flashing %s over EDL is not supported on this platform",
 			withArticle(humanReadableDeviceType(board.deviceType)))
@@ -374,9 +382,30 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 		return err
 	}
 
+	if err := checkInstallConfirmable("flashing the "+humanReadableDeviceType(board.deviceType), force); err != nil {
+		return err
+	}
+	// Find the board before asking for Wi-Fi, name or enrollment: USB access
+	// is only known once it is attached, and a refusal must not come last.
+	if err := confirmDragonwingReady(board, plan.version, force); err != nil {
+		return err
+	}
+
+	dev, err := pickDragonwingEDLDevice(board)
+	if err != nil {
+		if isEDLAccessErr(err) {
+			if runtime.GOOS == "windows" {
+				fmt.Println("\n" + dragonwingUSBAccessHint())
+			} else {
+				fmt.Println("\n" + usbAccessDeniedLine("board"))
+			}
+		}
+		return err
+	}
+
 	// Resolve what the flash will write up front, as Thor does: the prompts
 	// must run before the flash UI takes over the terminal, and a bad flag
-	// should abort before the board is touched.
+	// should abort before the board is written.
 	creds, err := resolveWiFiCredentialsList(wifi)
 	if err != nil {
 		return err
@@ -389,35 +418,18 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	if err != nil {
 		return err
 	}
+	enrolled := provJSON != nil
 
-	if err := confirmDragonwingReady(board, plan.version, force); err != nil {
+	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+		target: dragonwingTargetLabel(dev),
+		warning: []string{
+			tui.WarningMessage("This rewrites " + board.guide().rewrites + ": both OS slots, the config partition, and /data. Device identity, enrollment, saved Wi-Fi and app data are discarded — the board comes back as a new device."),
+			tui.Dim("  Every board in EDL reports the generic id 05c6:9008, so wendy confirms"),
+			tui.Dim("  the model from its chip id during the flash, not here."),
+		},
+		question: fmt.Sprintf("Write the %s bundle to %s?", humanReadableDeviceType(board.deviceType), dragonwingTargetLabel(dev)),
+	}, name, creds, enrolled, force); err != nil {
 		return err
-	}
-
-	dev, err := pickDragonwingEDLDevice(board)
-	if err != nil {
-		if isEDLAccessErr(err) {
-			fmt.Println("\n" + dragonwingUSBAccessHint())
-		}
-		return err
-	}
-
-	fmt.Printf("\n%s %s\n", tui.Dim("Target:"), tui.Device(dragonwingTargetLabel(dev)))
-
-	if !force {
-		fmt.Println()
-		fmt.Println(tui.WarningMessage(
-			"This rewrites " + board.guide().rewrites + ": both OS slots, the config partition, and /data. Device identity, enrollment, saved Wi-Fi and app data are discarded — the board comes back as a new device."))
-		fmt.Println(tui.Dim("  Every board in EDL reports the generic id 05c6:9008, so wendy confirms"))
-		fmt.Println(tui.Dim("  the model from its chip id during the flash, not here."))
-		ok, err := tui.ConfirmNoDefaultDanger(
-			fmt.Sprintf("Write the %s bundle to %s?", humanReadableDeviceType(board.deviceType), dragonwingTargetLabel(dev)))
-		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
-			return ErrUserCancelled
-		}
-		if err != nil {
-			return err
-		}
 	}
 
 	// On Windows this rebinds the board's driver for good, and the flash needs
@@ -431,6 +443,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 
 	logW, closeFlashLog := openDragonwingFlashLog(board, plan.version)
 	defer closeFlashLog()
+	logProvisioningSummary(logW, name, creds, &enrolled)
 
 	// The image holds the Wi-Fi PSK and any enrollment key in the clear, so it
 	// lives only for the flash rather than in the bundle cache.
@@ -448,7 +461,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	run := &dragonwingFlashRun{
 		plan: plan, dev: dev, board: board,
 		seedDir: seedDir, zerosPath: zerosPath,
-		creds: creds, name: name, provJSON: provJSON,
+		creds: creds, name: name, provJSON: provJSON, agent: agent, nightly: nightly,
 	}
 	failedID, err := runFlashSteps(fmt.Sprintf("Flashing WendyOS %s", plan.version),
 		run.steps(flashCtx), cancelFlash, logW)
@@ -467,6 +480,8 @@ type dragonwingFlashRun struct {
 	creds     []wendyconf.WifiCredential
 	name      string
 	provJSON  []byte
+	agent     *localInstallAgent
+	nightly   bool
 
 	bundleDir string
 	flash     *qdl.FlashPlan
@@ -508,7 +523,7 @@ func (r *dragonwingFlashRun) steps(ctx context.Context) []flashStep {
 			// first write command: a failure discovered mid-flash leaves the
 			// board half-written with the GPT still unpatched.
 			flash, err := planDragonwingFlash(r.seedDir, r.bundleDir, r.zerosPath,
-				r.creds, r.name, r.provJSON, out, detail, r.warn)
+				r.creds, r.name, r.provJSON, out, detail, r.warn, agentSeed{local: r.agent, nightly: r.nightly, arch: "arm64"})
 			if err != nil {
 				return false, errors.Join(err, errDragonwingNothingWritten)
 			}
@@ -542,6 +557,9 @@ func finishDragonwingFlash(w io.Writer, board dragonwingBoard, warnings []string
 	for _, line := range board.guide().done {
 		fmt.Fprintln(w, line)
 	}
+	for _, line := range board.postFlashHints {
+		fmt.Fprintln(w, line)
+	}
 	return nil
 }
 
@@ -569,13 +587,16 @@ func openDragonwingFlashLog(board dragonwingBoard, version string) (io.Writer, f
 // config image, and the zeros that blank /data. Non-fatal problems go to warn,
 // which the caller surfaces once the steps UI has released the terminal.
 func planDragonwingFlash(seedDir, bundleDir, zerosPath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte,
-	out io.Writer, detail func(string), warn func(string)) (*qdl.FlashPlan, error) {
+	out io.Writer, detail func(string), warn func(string), seed agentSeed) (*qdl.FlashPlan, error) {
+	if err := seed.local.checkArchitecture("arm64"); err != nil {
+		return nil, err
+	}
 	plan, err := qdl.LoadFlashPlan(bundleDir)
 	if err != nil {
 		return nil, err
 	}
 
-	agent, agentWarning := resolveSeedAgent(out, detail)
+	agent, agentWarning := resolveSeedAgent(out, detail, seed)
 	if agentWarning != "" {
 		warn(agentWarning)
 	}
@@ -587,7 +608,7 @@ func planDragonwingFlash(seedDir, bundleDir, zerosPath string, creds []wendyconf
 	// factory reset, and a surviving provisioning.json would re-enrol the fresh
 	// install as the previous device.
 	if err != nil {
-		if provisioningRequired(creds, deviceName, provJSON) {
+		if seed.local != nil || provisioningRequired(creds, deviceName, provJSON) {
 			return nil, err
 		}
 		// Worded for both outcomes: the warning is printed whether or not the
@@ -652,12 +673,15 @@ func flashDragonwing(ctx context.Context, flash *qdl.FlashPlan, dev qdl.DeviceIn
 	if err := session.Configure(board.storage); err != nil {
 		return errors.Join(err, errDragonwingNothingWritten)
 	}
+	return programDragonwingPartitions(ctx, flash, session, out, detail)
+}
 
+func programDragonwingPartitions(ctx context.Context, flash *qdl.FlashPlan, session *qdl.Session, out io.Writer, detail func(string)) error {
 	for _, e := range flash.Programs {
 		label := e.Label
 		err := session.Program(ctx, flash.Dir, e, throttledDetail(detail,
 			func(done, total int64) string {
-				return fmt.Sprintf("%q · %d%%", label, percent(done, total))
+				return fmt.Sprintf("%q · %d%% of partition", label, percent(done, total))
 			}))
 		if err != nil {
 			return err
@@ -805,13 +829,6 @@ func dragonwingTargetLabel(dev qdl.DeviceInfo) string {
 	return dev.String()
 }
 
-// edlUdevRule grants access to a Qualcomm SoC in EDL mode. The vendor-wide
-// match mirrors the Jetson rule: 05c6 devices expose this interface only while
-// in EDL, so the grant is bounded.
-const edlUdevRule = `SUBSYSTEM=="usb", ATTRS{idVendor}=="05c6", MODE="0660", GROUP="plugdev", TAG+="uaccess"`
-
-const edlUdevRulePath = "/etc/udev/rules.d/70-wendy-qualcomm.rules"
-
 // isEDLAccessErr reports whether the OS refused access to the device rather
 // than there being none attached.
 func isEDLAccessErr(err error) bool {
@@ -821,27 +838,25 @@ func isEDLAccessErr(err error) bool {
 // dragonwingUSBAccessHint explains how to grant access, which otherwise
 // surfaces only as a raw libusb error code.
 func dragonwingUSBAccessHint() string {
+	return renderDragonwingUSBAccessHint(runtime.GOOS, wendyPackagedRule("70-wendy-qualcomm.rules"))
+}
+
+func renderDragonwingUSBAccessHint(goos string, packaged bool) string {
 	lines := []string{
 		briefTitle.Render("\u26a0  USB access denied"),
 		"",
 		"The board is in EDL mode, but the OS refused wendy access to its USB device.",
 	}
-	if runtime.GOOS == "linux" {
-		lines = append(lines,
-			"Grant access with a udev rule (one-time):",
-			"",
-			briefDim.Render("  echo '"+edlUdevRule+"' \\"),
-			briefDim.Render("    | sudo tee "+edlUdevRulePath),
-			briefDim.Render("  sudo udevadm control --reload-rules && sudo udevadm trigger"),
-			"",
-			"Add your user to the "+briefKey.Render("plugdev")+" group, replug the cable and retry,",
-			"or re-run the flash with sudo.",
-		)
-	} else if runtime.GOOS == "windows" {
+	var commands string
+	if goos == "linux" {
+		step, below := linuxUSBAccessHint("board", packaged)
+		lines = []string{lines[0], "", step}
+		commands = "\n\n" + below
+	} else if goos == "windows" {
 		lines = append(lines, "Run the install command again to install or repair the Qualcomm EDL WinUSB binding.",
 			"Accept the administrator prompt, and close other flashing tools that may have the board open.")
 	} else {
 		lines = append(lines, "Re-run the flash with sudo so wendy can claim the device.")
 	}
-	return briefBorder.Render(strings.Join(lines, "\n"))
+	return briefBorder.Render(strings.Join(lines, "\n")) + commands
 }

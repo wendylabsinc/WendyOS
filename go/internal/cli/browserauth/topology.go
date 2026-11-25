@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
-	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/litetopology"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -23,6 +24,7 @@ type TopologyObservation struct {
 	Topology   json.RawMessage `json:"topology,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	ObservedAt time.Time       `json:"observedAt"`
+	Platform   string          `json:"platform,omitempty"`
 }
 
 // TopologyFailure classifies a failed observation without inferring device health.
@@ -36,7 +38,11 @@ func TopologyFailure(err error) TopologyObservation {
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
 		state = "unavailable"
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		state = "unavailable"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 		state = "unavailable"
 	}
 	return TopologyObservation{Status: state, Error: err.Error(), ObservedAt: time.Now().UTC()}
@@ -44,15 +50,85 @@ func TopologyFailure(err error) TopologyObservation {
 
 // MeshTopology uses a separate, bounded connection. It never replaces a live
 // dashboard connection, starts a device, changes its clock, or changes mesh policy.
+var browserTopologyTimeout = 12 * time.Second
+var browserLiteSetupBudget = litetopology.SetupBudget
+var browserLiteHandshakeBudget = litetopology.HandshakeBudget
+var browserLiteReadBudget = litetopology.AggregateBudget
+var browserTopologyTotalBudget = 150 * time.Second
+
+type topologyFlight struct {
+	done   chan struct{}
+	result TopologyObservation
+}
+
 func (s *Session) MeshTopology(ctx context.Context, asset string, dial func(context.Context, string) (net.Conn, error), client *http.Client) TopologyObservation {
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, browserTopologyTotalBudget)
 	defer cancel()
-	conn, err := s.ConnectDevice(ctx, asset, dial, client)
+	s.topologyMu.Lock()
+	if s.topologyFlights == nil {
+		s.topologyFlights = make(map[string]*topologyFlight)
+	}
+	if pending := s.topologyFlights[asset]; pending != nil {
+		s.topologyMu.Unlock()
+		select {
+		case <-pending.done:
+			return pending.result
+		case <-ctx.Done():
+			return TopologyFailure(ctx.Err())
+		}
+	}
+	if s.topologyGate == nil {
+		s.topologyGate = make(chan struct{}, 3)
+	}
+	gate := s.topologyGate
+	pending := &topologyFlight{done: make(chan struct{})}
+	s.topologyFlights[asset] = pending
+	s.topologyMu.Unlock()
+	var result TopologyObservation
+	defer func() {
+		s.topologyMu.Lock()
+		pending.result = result
+		delete(s.topologyFlights, asset)
+		close(pending.done)
+		s.topologyMu.Unlock()
+	}()
+	select {
+	case gate <- struct{}{}:
+		defer func() { <-gate }()
+	case <-ctx.Done():
+		result = TopologyFailure(ctx.Err())
+		return result
+	}
+	result = s.meshTopology(ctx, asset, dial, client)
+	return result
+}
+
+func (s *Session) meshTopology(ctx context.Context, asset string, dial func(context.Context, string) (net.Conn, error), client *http.Client) TopologyObservation {
+	ctx, cancel := context.WithTimeout(ctx, browserTopologyTotalBudget)
+	defer cancel()
+	conn, lite, readContext, err := s.connectReporter(ctx, asset, dial, client, true)
 	if err != nil {
 		return TopologyFailure(err)
 	}
+	if lite != nil {
+		defer lite.Close()
+		readCtx, stopRead := context.WithTimeout(ctx, browserLiteReadBudget)
+		defer stopRead()
+		snapshot, err := litetopology.Read(readCtx, lite.Read)
+		if err != nil {
+			return TopologyFailure(err)
+		}
+		if err := ValidateTopologyReporter(snapshot, lite.Peer); err != nil {
+			return TopologyFailure(err)
+		}
+		data, err := protojson.Marshal(snapshot)
+		if err != nil {
+			return TopologyFailure(err)
+		}
+		return TopologyObservation{Status: "ok", Topology: data, ObservedAt: time.Now().UTC(), Platform: "wendy-lite"}
+	}
 	defer conn.Close()
-	snapshot, err := pb.NewWendyLocalMeshAdminServiceClient(conn.Conn).GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{})
+	snapshot, err := pb.NewWendyLocalMeshAdminServiceClient(conn.Conn).GetLocalMeshTopology(readContext, &pb.GetLocalMeshTopologyRequest{})
 	if err != nil {
 		return TopologyFailure(err)
 	}
@@ -67,21 +143,18 @@ func (s *Session) MeshTopology(ctx context.Context, asset string, dial func(cont
 	if err != nil {
 		return TopologyFailure(err)
 	}
-	return TopologyObservation{Status: "ok", Topology: data, ObservedAt: time.Now().UTC()}
+	return TopologyObservation{Status: "ok", Topology: data, ObservedAt: time.Now().UTC(), Platform: "wendyos"}
+}
+
+// LocalCLIUnavailable is the browser boundary for private native broker IPC.
+// Cloud reporters remain supported; a browser cannot join the local CLI owner.
+func LocalCLIUnavailable() TopologyObservation {
+	result := TopologyFailure(status.Error(codes.Unavailable, "The local CLI router is available in the desktop client; this browser cannot access private local IPC."))
+	result.Platform = "wendy-cli"
+	return result
 }
 
 // ValidateTopologyReporter binds the claimed local observation to the TLS peer.
 func ValidateTopologyReporter(snapshot *pb.LocalMeshTopology, peer certs.WendyIdentity) error {
-	if snapshot == nil {
-		return status.Error(codes.DataLoss, "agent returned no topology snapshot")
-	}
-	id, err := certs.ParsePrincipal(snapshot.GetSelfPrincipal())
-	device, meshErr := meshid.DeviceFromPrincipal(snapshot.GetSelfPrincipal())
-	if err != nil || meshErr != nil || !id.SameEntity(peer) || snapshot.GetSelfTenantId() != device.Tenant().UUID().String() || snapshot.GetSelfDeviceId() != device.UUID().String() || snapshot.GetSelfMeshAddress() != device.MeshAddress().String() {
-		return status.Error(codes.PermissionDenied, "topology reporter does not match the authenticated device")
-	}
-	if len(snapshot.GetPeers()) > 1024 || len(snapshot.GetRoutes()) > 1024 || len(snapshot.GetAnnouncements()) > 1024 {
-		return status.Error(codes.ResourceExhausted, "agent topology exceeds the supported observation limit")
-	}
-	return nil
+	return litetopology.ValidateReporter(snapshot, peer)
 }

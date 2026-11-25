@@ -1,4 +1,4 @@
-//go:build !darwin && !linux
+//go:build (!darwin && !linux) || ios || android
 
 package rcm
 

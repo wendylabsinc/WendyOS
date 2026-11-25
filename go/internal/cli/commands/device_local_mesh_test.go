@@ -2,12 +2,10 @@ package commands
 
 import (
 	"testing"
-
-	"github.com/spf13/cobra"
 )
 
 func TestLocalMeshFlagsPreservePresenceAndIndependentCarriers(t *testing.T) {
-	root := newDeviceLocalMeshCmd()
+	root := newNetCmd()
 	cmd, _, err := root.Find([]string{"configure"})
 	if err != nil {
 		t.Fatal(err)
@@ -27,12 +25,32 @@ func TestLocalMeshFlagsPreservePresenceAndIndependentCarriers(t *testing.T) {
 		req.InfrastructureWifi == nil || !*req.InfrastructureWifi || req.Roam != nil {
 		t.Fatalf("partial settings lost or carriers coupled: %+v", req)
 	}
-	device := &cobra.Command{Use: "device"}
-	device.AddCommand(root)
-	for _, name := range []string{"wendy-net", "local-mesh", "nan-mesh"} {
-		resolved, _, err := device.Find([]string{name, "configure"})
-		if err != nil || resolved != cmd || resolved.CommandPath() != "device wendy-net configure" {
-			t.Fatalf("command or compatibility alias %q failed: %v %v", name, resolved, err)
+	if cmd.CommandPath() != "net configure" {
+		t.Fatalf("command path = %q", cmd.CommandPath())
+	}
+}
+
+func TestNetCommandRegistration(t *testing.T) {
+	root := NewRootCmd()
+	net, _, err := root.Find([]string{"net"})
+	if err != nil || net.Name() != "net" || net.Hidden || net.GroupID != "manage" {
+		t.Fatalf("net command is not visible in Manage: %v, %v", net, err)
+	}
+	for _, name := range []string{"configure", "status", "topology"} {
+		cmd, remaining, err := root.Find([]string{"net", name})
+		if err != nil || len(remaining) != 0 || cmd.CommandPath() != "wendy net "+name || cmd.RunE == nil {
+			t.Fatalf("net %s failed to resolve: %v, %v, %v", name, cmd, remaining, err)
+		}
+		for _, flag := range []string{"device", "json"} {
+			if cmd.InheritedFlags().Lookup(flag) == nil {
+				t.Fatalf("net %s lost --%s", name, flag)
+			}
+		}
+		for _, alias := range []string{"wendy-net", "local-mesh", "nan-mesh"} {
+			legacy, remaining, err := root.Find([]string{"device", alias, name})
+			if err != nil || len(remaining) != 0 || legacy.Name() != name || !legacy.Parent().Hidden {
+				t.Fatalf("hidden compatibility path device %s %s failed: %v, %v", alias, name, legacy, err)
+			}
 		}
 	}
 }

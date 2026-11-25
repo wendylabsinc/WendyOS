@@ -1,0 +1,10 @@
+{
+  "argv_prefix": [
+    "device",
+    "apps",
+    "start"
+  ],
+  "stdout": "{\"app\": \"sensor-dashboard\", \"action\": \"start\", \"status\": \"started\", \"restartPolicy\": \"unless-stopped\"}",
+  "stderr": "Connecting to simulator {{vm_name}}...\n",
+  "exit_code": 0
+}

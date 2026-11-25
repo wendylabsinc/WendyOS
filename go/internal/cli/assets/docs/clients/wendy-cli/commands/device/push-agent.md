@@ -17,13 +17,13 @@ wendy device push-agent <path-to-agent-binary>
 
 ## When to use this
 
-Use `push-agent` when you need a patched or development agent running on a device to capture verbose engine diagnostics (e.g. raw EFI variables via `wendy os update-status --json`) without SSH access. For routine agent updates, use [`wendy device update`](update.md).
+Use `push-agent` when you need a patched or development agent running on a device to capture verbose engine diagnostics (e.g. raw EFI variables via `wendy os update-status --json`) without SSH access. For routine agent updates, use [`wendy device update`](./update.md).
 
 ## Difference from `wendy device update --binary`
 
 `wendy device update --binary` performs an OS-update check after uploading the binary and re-uploads the binary if an OS update is applied. `push-agent` performs no OS update check — it uploads the binary and waits for the agent restart only.
 
-Both commands hash-verify the running binary after the restart (see [`device update` verification](update.md#verification)), but `push-agent` reconnects by address only rather than through the full reconnect path `device update` uses, so it does not follow a device that comes back at a different address.
+Both commands hash-verify the running binary after the restart (see [`device update` verification](./update.md#verification)), but `push-agent` reconnects by address only rather than through the full reconnect path `device update` uses, so it does not follow a device that comes back at a different address.
 
 ## Arguments
 

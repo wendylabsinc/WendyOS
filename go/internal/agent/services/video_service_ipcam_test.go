@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -44,13 +46,35 @@ type fakeLoopback struct {
 	removed            []uint32
 	shutdownCalled     bool
 
-	// Auxiliary-node state backs the two-plane camera data path. auxNext is the
-	// number the next allocation hands out; auxErr forces the band-exhausted
-	// path; auxCreated and auxRemoved record the calls.
-	auxNext    int
+	// Auxiliary-node state backs the two-plane camera data path and camera
+	// share nodes. aux holds the nodes that exist, by number, with their label:
+	// allocation hands out the highest free number in 200-255, as the real
+	// module does, so a removed number is reused. auxErr forces the
+	// band-exhausted path; shareErr fails EnsureShareNode. auxCreated,
+	// shareMade, auxRemoved and allocated record the calls; onRemove, when set,
+	// runs inside RemoveAuxNode.
+	aux        map[int]string
 	auxErr     error
+	shareErr   error
 	auxCreated []int
+	shareMade  []auxCall
 	auxRemoved []int
+	allocated  []int
+	onRemove   func(nr int)
+	// refuseRemove makes RemoveAuxNode leave the node, as the driver does
+	// (EBUSY) when something opened it.
+	refuseRemove bool
+	// noEntry holds the nodes in aux (the kernel's) whose /dev entry is gone,
+	// and staleEntry the numbers with a /dev entry but no node (one the agent
+	// made again with mknod, which the kernel does not remove with its node).
+	// NodePath and the allocator stat /dev, as the real ones do.
+	noEntry, staleEntry map[int]bool
+}
+
+// auxCall is one node creation: its number and label.
+type auxCall struct {
+	nr    int
+	label string
 }
 
 func newFakeLoopback() *fakeLoopback {
@@ -58,27 +82,64 @@ func newFakeLoopback() *fakeLoopback {
 		nodePaths:    make(map[uint32]string),
 		acquireCount: make(map[uint32]int),
 		releaseCount: make(map[uint32]int),
+		aux:          make(map[int]string),
 	}
 }
 
 func (f *fakeLoopback) AllocateAuxNodeNumber() (int, error) {
+	return f.AllocateAuxNodeNumberSkipping(nil)
+}
+
+func (f *fakeLoopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error) {
+	// skip runs without the lock, as the real allocator's does: a caller's
+	// skip may look at this fake's nodes (the share manager's sysfs check).
+	skipped := map[int]bool{}
+	if skip != nil {
+		for nr := ipcam.IDBandEnd; nr >= ipcam.IDBandStart; nr-- {
+			skipped[nr] = skip(nr)
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.auxErr != nil {
 		return 0, f.auxErr
 	}
-	if f.auxNext == 0 {
-		f.auxNext = 255
+	for nr := ipcam.IDBandEnd; nr >= ipcam.IDBandStart; nr-- {
+		if skipped[nr] {
+			continue
+		}
+		if f.hasEntryLocked(nr) {
+			continue
+		}
+		if _, ok := f.nodePaths[uint32(nr)]; ok {
+			continue
+		}
+		f.allocated = append(f.allocated, nr)
+		return nr, nil
 	}
-	nr := f.auxNext
-	f.auxNext--
-	return nr, nil
+	return 0, ipcam.ErrBandExhausted
 }
 
-func (f *fakeLoopback) EnsureAuxNode(_ context.Context, nr int, _ string) error {
+func (f *fakeLoopback) EnsureAuxNode(_ context.Context, nr int, label string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auxCreated = append(f.auxCreated, nr)
+	if _, ok := f.aux[nr]; !ok {
+		f.aux[nr] = label
+	}
+	return nil
+}
+
+func (f *fakeLoopback) EnsureShareNode(_ context.Context, nr int, label string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shareMade = append(f.shareMade, auxCall{nr, label})
+	if f.shareErr != nil {
+		return f.shareErr
+	}
+	if _, ok := f.aux[nr]; !ok {
+		f.aux[nr] = label
+	}
 	return nil
 }
 
@@ -86,6 +147,57 @@ func (f *fakeLoopback) RemoveAuxNode(nr int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.auxRemoved = append(f.auxRemoved, nr)
+	if !f.refuseRemove {
+		delete(f.aux, nr)
+		delete(f.noEntry, nr)
+	}
+	if f.onRemove != nil {
+		f.onRemove(nr)
+	}
+}
+
+// addLiveAux puts a node in place, as one left by an earlier agent.
+func (f *fakeLoopback) addLiveAux(nr int, label string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.aux[nr] = label
+}
+
+// liveAux lists the auxiliary and share nodes that exist, in order.
+func (f *fakeLoopback) liveAux() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]int, 0, len(f.aux))
+	for nr := range f.aux {
+		out = append(out, nr)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func (f *fakeLoopback) auxLabel(nr int) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	label, ok := f.aux[nr]
+	return label, ok
+}
+
+func (f *fakeLoopback) shareCalls() []auxCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]auxCall(nil), f.shareMade...)
+}
+
+func (f *fakeLoopback) removedAux() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.auxRemoved...)
+}
+
+func (f *fakeLoopback) allocations() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.allocated...)
 }
 
 func (f *fakeLoopback) Available() error {
@@ -113,8 +225,62 @@ func (f *fakeLoopback) EnsureNode(_ context.Context, id uint32, _ string) error 
 func (f *fakeLoopback) NodePath(camID uint32) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	path, ok := f.nodePaths[camID]
-	return path, ok
+	if path, ok := f.nodePaths[camID]; ok {
+		return path, true
+	}
+	if f.hasEntryLocked(int(camID)) {
+		return fmt.Sprintf("/dev/video%d", camID), true
+	}
+	return "", false
+}
+
+// setEntry makes /dev/video<nr> (present true) or takes it away. An entry
+// made for a number with no node is stale.
+func (f *fakeLoopback) setEntry(nr int, present bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.noEntry == nil {
+		f.noEntry, f.staleEntry = make(map[int]bool), make(map[int]bool)
+	}
+	_, node := f.aux[nr]
+	switch {
+	case present && node:
+		delete(f.noEntry, nr)
+	case present:
+		f.staleEntry[nr] = true
+	default:
+		delete(f.staleEntry, nr)
+		if node {
+			f.noEntry[nr] = true
+		}
+	}
+}
+
+// vanishKeepingEntry takes node nr away and leaves its /dev entry behind, as
+// happens to an entry the agent made again with mknod.
+func (f *fakeLoopback) vanishKeepingEntry(nr int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.noEntry == nil {
+		f.noEntry, f.staleEntry = make(map[int]bool), make(map[int]bool)
+	}
+	if _, node := f.aux[nr]; node && !f.noEntry[nr] {
+		f.staleEntry[nr] = true
+	}
+	delete(f.aux, nr)
+	delete(f.noEntry, nr)
+}
+
+// hasEntry reports whether /dev/video<nr> exists.
+func (f *fakeLoopback) hasEntry(nr int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hasEntryLocked(nr)
+}
+
+func (f *fakeLoopback) hasEntryLocked(nr int) bool {
+	_, node := f.aux[nr]
+	return (node && !f.noEntry[nr]) || f.staleEntry[nr]
 }
 
 func (f *fakeLoopback) AcquireView(camID uint32) func() {
@@ -226,13 +392,120 @@ func registerTestCamera(t *testing.T, s *VideoService) ipcam.Camera {
 	return cam
 }
 
-// A registered camera appears in the listing with the IP transport and its
-// address, and reports that it has no credentials yet.
+// pairTestCamera stores a login for cam, which is what pairs a network camera.
+func pairTestCamera(t *testing.T, s *VideoService, cam ipcam.Camera) {
+	t.Helper()
+	if err := s.credentials.Set(cam.MAC, ipcam.Credential{Username: "admin", Password: "p"}); err != nil {
+		t.Fatalf("store login: %v", err)
+	}
+}
+
+// A network camera nobody has stored a login for may be a neighbour's camera on
+// a shared network (a Tapo C200 on a home LAN was the report). It is left out of
+// every listing an app, the Companion app, MCP or the data and two-plane camera
+// paths see. Only a pairing flow sees it: ListVideoDevices with include_unpaired,
+// or RefreshCameras (TestRefreshCamerasListsUnpairedCamerasForPairing).
+func TestListHidesUnpairedIPCameras(t *testing.T) {
+	s := newIPTestService(t)
+	stranger, err := s.registry.Upsert(ipcam.Camera{MAC: "3c:52:a1:11:22:33", Address: "192.168.0.42", Model: "Tapo C200"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	paired := registerTestCamera(t, s)
+	pairTestCamera(t, s, paired)
+
+	ids := func(devices []*agentpb.VideoDevice) []uint32 {
+		var out []uint32
+		for _, d := range devices {
+			out = append(out, d.GetId())
+		}
+		return out
+	}
+	list, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+	if err != nil {
+		t.Fatalf("ListVideoDevices: %v", err)
+	}
+	if got := ids(list.GetDevices()); !reflect.DeepEqual(got, []uint32{paired.ID}) {
+		t.Fatalf("default listing = %v, want only the paired camera %d", got, paired.ID)
+	}
+	internal, err := s.listCameras(context.Background())
+	if err != nil {
+		t.Fatalf("listCameras: %v", err)
+	}
+	if got := ids(internal); !reflect.DeepEqual(got, []uint32{paired.ID}) {
+		t.Fatalf("listCameras = %v, want only the paired camera %d", got, paired.ID)
+	}
+
+	want := []uint32{stranger.ID, paired.ID}
+	list, err = s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
+	if err != nil {
+		t.Fatalf("ListVideoDevices: %v", err)
+	}
+	if got := ids(list.GetDevices()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("listing with unpaired = %v, want %v", got, want)
+	}
+}
+
+// RefreshCameras is the pairing scan: `wendy device pair` calls it to find
+// cameras to store a login for. A CLI from before include_unpaired existed sends
+// an empty request, and falls back to ListVideoDevices only when RefreshCameras
+// is unimplemented. So an empty request must still return unpaired cameras, or
+// an older CLI pairing against this agent finds nothing to pair.
+func TestRefreshCamerasListsUnpairedCamerasForPairing(t *testing.T) {
+	s := newIPTestService(t)
+	s.discoverer = nil // RefreshCameras would otherwise probe the real network.
+	stranger, err := s.registry.Upsert(ipcam.Camera{MAC: "3c:52:a1:11:22:33", Address: "192.168.0.42", Model: "Tapo C200"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	paired := registerTestCamera(t, s)
+	pairTestCamera(t, s, paired)
+
+	refreshed, err := s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{})
+	if err != nil {
+		t.Fatalf("RefreshCameras: %v", err)
+	}
+	var got []uint32
+	for _, d := range refreshed.GetDevices() {
+		got = append(got, d.GetId())
+	}
+	if want := []uint32{stranger.ID, paired.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("refresh from an older CLI = %v, want unpaired and paired cameras %v", got, want)
+	}
+}
+
+// Storing a login asks the camera for its stream paths straight away, with the
+// login already stored, so a stream started right after `camera login` (or the
+// login prompt in `camera view`) does not fall back to guessing paths until the
+// next discovery round.
+func TestSetCameraCredentialsLearnsStreamPaths(t *testing.T) {
+	s := newIPTestService(t)
+	cam := registerTestCamera(t, s)
+	var learned []ipcam.Camera
+	s.learnStreamPaths = func(_ context.Context, c ipcam.Camera) ipcam.Camera {
+		if !s.credentials.Has(c.MAC) {
+			t.Fatal("stream paths requested before the login was stored")
+		}
+		learned = append(learned, c)
+		return c
+	}
+	if _, err := s.SetCameraCredentials(context.Background(), &agentpb.SetCameraCredentialsRequest{
+		DeviceId: cam.ID, Username: "admin", Password: "hunter2",
+	}); err != nil {
+		t.Fatalf("SetCameraCredentials: %v", err)
+	}
+	if len(learned) != 1 || learned[0].MAC != cam.MAC {
+		t.Fatalf("learned stream paths for %+v, want camera %d once", learned, cam.ID)
+	}
+}
+
+// A registered camera appears in a listing that asks for unpaired cameras, with
+// the IP transport and its address, and reports that it has no credentials yet.
 func TestListIncludesIPCameras(t *testing.T) {
 	s := newIPTestService(t)
 	cam := registerTestCamera(t, s)
 
-	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 	if err != nil {
 		t.Fatalf("ListVideoDevices: %v", err)
 	}
@@ -268,7 +541,7 @@ func TestListIPCameraWithoutModel(t *testing.T) {
 	if _, err := s.registry.Upsert(ipcam.Camera{MAC: "aa:bb:cc:dd:ee:ff", Address: "10.98.0.7"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -654,6 +927,7 @@ func TestStreamVideoStreamsOfflineButReachableCamera(t *testing.T) {
 func TestListCameras_SkipsGlobNodesInIPCameraBand(t *testing.T) {
 	s := newIPTestService(t)
 	cam := registerTestCamera(t, s)
+	pairTestCamera(t, s, cam)
 	nodePath := fmt.Sprintf("/dev/video%d", cam.ID)
 	s.globDevices = func() ([]string, error) { return []string{nodePath}, nil }
 	// The loopback node itself opens and reports VIDEO_CAPTURE like any other
@@ -701,6 +975,7 @@ func TestListCameras_ListsGlobNodesInMCUBand(t *testing.T) {
 func TestListIPCameras_PathFilledWhenLoopbackNodeExists(t *testing.T) {
 	s := newIPTestService(t)
 	cam := registerTestCamera(t, s)
+	pairTestCamera(t, s, cam)
 	fake := s.loopback.(*fakeLoopback)
 	wantPath := fmt.Sprintf("/dev/video%d", cam.ID)
 	fake.nodePaths[cam.ID] = wantPath
@@ -718,7 +993,7 @@ func TestListIPCameras_PathFilledWhenLoopbackNodeExists(t *testing.T) {
 // node that does not exist yet.
 func TestListIPCameras_PathEmptyWithoutNode(t *testing.T) {
 	s := newIPTestService(t)
-	registerTestCamera(t, s)
+	pairTestCamera(t, s, registerTestCamera(t, s))
 	// s.loopback is the harness's default fakeLoopback, with no node recorded.
 
 	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
@@ -984,9 +1259,12 @@ func TestLoadNetworkCamerasCleanup(t *testing.T) {
 			}
 			core, logs := observer.New(zap.InfoLevel)
 			s := &VideoService{logger: zap.New(core), registry: ipcam.NewRegistry(registryPath), credentials: ipcam.NewCredentialStore(credentialPath)}
-			s.loadNetworkCameras()
+			pruned := s.loadNetworkCameras()
 			wantKept := credentialFile != "missing"
-			cleanupLogs := logs.FilterMessage("removed unconfirmed DHCP camera observations").All()
+			if wantPruned := !wantKept; wantPruned != reflect.DeepEqual(pruned, []uint32{cam.ID}) || (wantKept && len(pruned) != 0) {
+				t.Fatalf("pruned IDs = %v, want camera %d pruned: %v", pruned, cam.ID, !wantKept)
+			}
+			cleanupLogs := logs.FilterMessage("removed unconfirmed network camera records").All()
 			if wantKept && len(cleanupLogs) != 0 {
 				t.Fatalf("logged removals despite keeping the camera: %+v", cleanupLogs)
 			}

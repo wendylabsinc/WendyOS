@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "telemetry-stream"
+  ],
+  "stdout": "",
+  "stderr": "Connecting to simulator {{vm_name}}...\n",
+  "exit_code": 0
+}

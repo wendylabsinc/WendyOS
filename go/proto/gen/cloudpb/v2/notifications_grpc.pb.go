@@ -59,8 +59,9 @@ type NotificationServiceClient interface {
 	// Stable, canonical-ID-relative traversal for durable inbox clients.
 	ListNotificationsV2(ctx context.Context, in *ListNotificationsV2Request, opts ...grpc.CallOption) (*ListNotificationsV2Response, error)
 	GetNotification(ctx context.Context, in *GetNotificationRequest, opts ...grpc.CallOption) (*Notification, error)
-	// Resolves one stored Wendy-managed attachment for the authenticated recipient. The
-	// caller supplies no organization, tenant, clip identifier, or destination URL.
+	// Resolves one stored attachment after current recipient, organization, and source
+	// policy checks. The caller supplies only canonical notification and attachment IDs,
+	// never an organization, tenant, clip identifier, or destination URL.
 	ResolveNotificationAttachment(ctx context.Context, in *ResolveNotificationAttachmentRequest, opts ...grpc.CallOption) (*ResolveNotificationAttachmentResponse, error)
 	// Performs one stored custom control for the authenticated recipient. Cloud loads the
 	// canonical control and derives publisher routing; the caller supplies no payload.
@@ -272,8 +273,9 @@ type NotificationServiceServer interface {
 	// Stable, canonical-ID-relative traversal for durable inbox clients.
 	ListNotificationsV2(context.Context, *ListNotificationsV2Request) (*ListNotificationsV2Response, error)
 	GetNotification(context.Context, *GetNotificationRequest) (*Notification, error)
-	// Resolves one stored Wendy-managed attachment for the authenticated recipient. The
-	// caller supplies no organization, tenant, clip identifier, or destination URL.
+	// Resolves one stored attachment after current recipient, organization, and source
+	// policy checks. The caller supplies only canonical notification and attachment IDs,
+	// never an organization, tenant, clip identifier, or destination URL.
 	ResolveNotificationAttachment(context.Context, *ResolveNotificationAttachmentRequest) (*ResolveNotificationAttachmentResponse, error)
 	// Performs one stored custom control for the authenticated recipient. Cloud loads the
 	// canonical control and derives publisher routing; the caller supplies no payload.

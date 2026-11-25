@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "vm",
+    "create"
+  ],
+  "stdout": "VM disk: 16.0 GiB virtual capacity at /tmp/wendy-state/vms/dog-lab/disk.img; 14.8 GiB free on its volume.\nAllow space for the decompressed image, any download, and later VM disk growth. Sparse files allocate space as data is written.\nCreated VM \"dog-lab\". Start it with 'wendy vm start dog-lab'.\n",
+  "stderr": "Unitree Go2 profile created. Run 'wendy vm robot start dog-lab' or connect to vm:dog-lab to build and start its robot runtime.\n",
+  "exit_code": 0
+}

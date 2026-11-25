@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 type memoryPending struct {
@@ -94,6 +96,38 @@ func TestRedirectFreshSessionSameKeyAndReplay(t *testing.T) {
 	}
 	if len(store.records) != 0 {
 		t.Fatal("transaction survived completion")
+	}
+}
+
+func TestRedirectReplacesLiteIdentityOnlyOnSuccess(t *testing.T) {
+	for _, outcome := range []string{"failure", "success"} {
+		t.Run(outcome, func(t *testing.T) {
+			success := outcome == "success"
+			s, _, callback, _ := redirectSetup(t)
+			previous := config.CertificateInfo{PemCertificate: "ephemeral leaf", PemPrivateKey: "ephemeral key"}
+			s.liteCertificate = previous
+			if _, err := s.BeginRedirect(context.Background(), "", "", callback.Redirect); err != nil {
+				t.Fatal(err)
+			}
+			if s.liteCertificate != previous {
+				t.Fatal("begin replaced the current Lite identity")
+			}
+			if !success {
+				callback.Error = "access_denied"
+				callback.Code = ""
+			}
+			_, err := s.CompleteRedirect(context.Background(), callback)
+			if success {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if s.liteCertificate != (config.CertificateInfo{}) {
+					t.Fatal("new sign-in retained the previous Lite identity")
+				}
+			} else if err == nil || s.liteCertificate != previous {
+				t.Fatal("failed sign-in did not preserve the current Lite identity")
+			}
+		})
 	}
 }
 

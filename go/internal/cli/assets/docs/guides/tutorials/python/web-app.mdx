@@ -1,10 +1,10 @@
 ---
-title: Full-Stack Web App
-description: Build a full-stack device dashboard with a React/Vite frontend and FastAPI backend on WendyOS
+title: Full-stack web app
+description: Build a full-stack device dashboard with a React/Vite frontend and FastAPI backend
 language: python
 ---
 
-## Building a Full-Stack Device Dashboard
+## Building a full-stack device dashboard
 
 <Callout type="info">
   **Source Code**: The complete source code for this example is available at [github.com/wendylabsinc/samples/python/web-app](https://github.com/wendylabsinc/samples/tree/main/python/web-app)
@@ -28,34 +28,11 @@ This demonstrates how to:
 - A WendyOS device plugged in over USB or connectable over Wi-Fi
 - (Optional, for local frontend dev) Node.js 22+ and npm
 
-## Project Structure
-
-The template generates a top-level layout like this (the frontend's shadcn/ui components are omitted for brevity):
-
-```
-web-app/
-├── Dockerfile
-├── wendy.json
-├── requirements.txt
-├── app/                 # FastAPI backend
-│   ├── __init__.py      # builds the FastAPI app, mounts routers, serves the SPA
-│   ├── lib/             # db.py (SQLite), devices.py (ALSA/V4L2), gst_sink.py (GStreamer)
-│   └── routes/          # data.py, camera.py, audio.py, gpu.py, system.py
-└── frontend/            # Vite + React 19 + Tailwind v4 + shadcn/ui
-    ├── package.json
-    ├── vite.config.ts
-    └── src/
-        ├── App.tsx      # sidebar layout + react-router routes
-        ├── main.tsx
-        ├── components/  # app-sidebar, shadcn/ui, etc.
-        └── pages/       # camera, audio, persistence, gpu, system
-```
-
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy full-stack Python template:
 
@@ -82,11 +59,85 @@ web-app/
   </Step>
 </Steps>
 
-## Code Breakdown
+## What you should see
+
+You'll see output as the CLI builds both the frontend and backend, then deploys the container:
+
+```
+wendy run
+✔︎ Searching for WendyOS devices [5.0s]
+✔︎ Which device do you want to run this app on?: True Probe [USB, Ethernet, LAN]
+✔︎ Builder ready [0.1s]
+✔︎ Container built and uploaded successfully!
+✔ Success
+  Started app
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+```
+
+## Test your web app
+
+Your browser will open automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
+
+```
+http://wendyos-true-probe.local:8000
+```
+
+<Callout type="warning">
+  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
+</Callout>
+
+You should see the dashboard with a sidebar. The default page is **Camera**; the sidebar also links to **Audio**, **Persistence**, **GPU**, and **System**. On the Persistence page you can add, edit, and delete cars — and they'll still be there after you redeploy, thanks to the persistent volume.
+
+## Test the API directly
+
+You can also hit the API endpoints directly. For example, fetch system info:
+
+```bash
+curl http://wendyos-true-probe.local:8000/api/system
+```
+
+Or list the persisted cars:
+
+```bash
+curl http://wendyos-true-probe.local:8000/api/cars
+```
+
+Add a car:
+
+```bash
+curl -X POST http://wendyos-true-probe.local:8000/api/cars \
+  -H "Content-Type: application/json" \
+  -d '{"make": "Tesla", "model": "Model 3", "color": "#cc0000", "year": 2024}'
+```
+
+## Project structure
+
+The template generates a top-level layout like this (the frontend's shadcn/ui components are omitted for brevity):
+
+```
+web-app/
+├── Dockerfile
+├── wendy.json
+├── requirements.txt
+├── app/                 # FastAPI backend
+│   ├── __init__.py      # builds the FastAPI app, mounts routers, serves the SPA
+│   ├── lib/             # db.py (SQLite), devices.py (ALSA/V4L2), gst_sink.py (GStreamer)
+│   └── routes/          # data.py, camera.py, audio.py, gpu.py, system.py
+└── frontend/            # Vite + React 19 + Tailwind v4 + shadcn/ui
+    ├── package.json
+    ├── vite.config.ts
+    └── src/
+        ├── App.tsx      # sidebar layout + react-router routes
+        ├── main.tsx
+        ├── components/  # app-sidebar, shadcn/ui, etc.
+        └── pages/       # camera, audio, persistence, gpu, system
+```
+
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Generated Frontend
+    ### Generated frontend
 
     The frontend is a Vite + React 19 + Tailwind v4 app using shadcn/ui. It's a sidebar dashboard wired up with `react-router-dom` v7. The default route redirects to `/camera`:
 
@@ -150,7 +201,7 @@ web-app/
   </Step>
 
   <Step>
-    ### Generated FastAPI Backend
+    ### Generated FastAPI backend
 
     The backend lives under `app/`. The `requirements.txt` is minimal — GStreamer comes from system packages installed in the Dockerfile:
 
@@ -347,84 +398,18 @@ web-app/
     </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Deploy your full-stack web application to your WendyOS device:
-
-```bash
-wendy run
-```
-
-You'll see output as the CLI builds both the frontend and backend, then deploys the container:
-
-```
-wendy run
-✔︎ Searching for WendyOS devices [5.0s]
-✔︎ Which device do you want to run this app on?: True Probe [USB, Ethernet, LAN]
-✔︎ Builder ready [0.1s]
-✔︎ Container built and uploaded successfully!
-✔ Success
-  Started app
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-```
-
-## Test Your Web App
-
-Your browser will open automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
-
-```
-http://wendyos-true-probe.local:8000
-```
-
-<Callout type="warning">
-  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
-</Callout>
-
-You should see the dashboard with a sidebar. The default page is **Camera**; the sidebar also links to **Audio**, **Persistence**, **GPU**, and **System**. On the Persistence page you can add, edit, and delete cars — and they'll still be there after you redeploy, thanks to the persistent volume.
-
-## Test the API Directly
-
-You can also hit the API endpoints directly. For example, fetch system info:
-
-```bash
-curl http://wendyos-true-probe.local:8000/api/system
-```
-
-Or list the persisted cars:
-
-```bash
-curl http://wendyos-true-probe.local:8000/api/cars
-```
-
-Add a car:
-
-```bash
-curl -X POST http://wendyos-true-probe.local:8000/api/cars \
-  -H "Content-Type: application/json" \
-  -d '{"make": "Tesla", "model": "Model 3", "color": "#cc0000", "year": 2024}'
-```
-
-## Learn More
+## Learn more
 
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
 - [Vite Documentation](https://vitejs.dev/)
 - [shadcn/ui Components](https://ui.shadcn.com/)
 - [React Router](https://reactrouter.com/)
 
-## Next Steps
-
-Now that you have a full-stack device dashboard running:
-
-- Add a new page and matching `/api` router for another device capability
-- Extend the SQLite schema and CRUD for your own data model
-- Stream additional sensor data to the UI over WebSockets
-- Add authentication to protect your API
-
 <Accordions>
   <Accordion title="Testing locally without a WendyOS device">
     You can test the application locally using Docker:
 
-    ### Build and Run with Docker
+    **Build and run with Docker**
 
     ```bash
     docker build -t web-app .
@@ -433,7 +418,7 @@ Now that you have a full-stack device dashboard running:
 
     Then open `http://localhost:8000` in your browser. Note that camera, audio, and GPU pages depend on hardware/devices that may not be available on your laptop; the System and Persistence pages work anywhere.
 
-    ### Run the Frontend in Dev Mode
+    **Run the frontend in dev mode**
 
     For faster UI iteration, run the Vite dev server (you'll still need the backend running for `/api` calls):
 
@@ -444,3 +429,14 @@ Now that you have a full-stack device dashboard running:
     ```
   </Accordion>
 </Accordions>
+
+## Next steps
+
+Continue with [Webcam streaming](/docs/guides/tutorials/python/webcam-streaming) to stream a USB webcam from your device to the browser.
+
+Now that you have a full-stack device dashboard running:
+
+- Add a new page and matching `/api` router for another device capability
+- Extend the SQLite schema and CRUD for your own data model
+- Stream additional sensor data to the UI over WebSockets
+- Add authentication to protect your API

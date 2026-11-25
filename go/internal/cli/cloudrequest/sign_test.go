@@ -348,7 +348,7 @@ func TestKIDIsLeafThumbprint(t *testing.T) {
 func TestSignedMethodsAgreeWithProtoOption(t *testing.T) {
 	signedType := (&cloudpbv2.SignedRequest{}).ProtoReflect().Descriptor().FullName()
 	marked := map[string]bool{}
-	protoregistry.GlobalFiles.RangeFilesByPackage("wendycloud.v2", func(fd protoreflect.FileDescriptor) bool {
+	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
 		for i := 0; i < fd.Services().Len(); i++ {
 			svc := fd.Services().Get(i)
 			for j := 0; j < svc.Methods().Len(); j++ {

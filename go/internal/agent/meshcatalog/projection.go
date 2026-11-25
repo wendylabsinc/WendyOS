@@ -24,7 +24,7 @@ type BrowsePolicy func(requesterAppID string, record Record) bool
 // ProjectDNS renders a complete DNS-SD set for one isolated app bridge. It
 // never copies a source container IP: SRV points to the origin's Wendy VIP,
 // whose port must already be authorized by the destination agent. Every DNS
-// TTL is bounded by the remaining signed lease. A projected record is never
+// TTL is bounded by the receiver's remaining admitted lease. A projected record is never
 // converted into a new local publication.
 func ProjectDNS(records []Record, requesterAppID string, policy BrowsePolicy, vips *mesh.VIPTable, now time.Time) ([]dns.RR, error) {
 	if appconfig.ValidateAppID(requesterAppID) != nil || policy == nil || vips == nil {
@@ -37,11 +37,14 @@ func ProjectDNS(records []Record, requesterAppID string, policy BrowsePolicy, vi
 			continue
 		}
 		if err := r.Validate(now); err != nil {
+			if errors.Is(err, ErrExpired) {
+				continue
+			}
 			return nil, err
 		}
 		// Use the caller's clock, not wall clock, so a clock-snapshot test and
 		// expiry check agree. A subsecond lease cannot support a positive TTL.
-		remaining := time.UnixMilli(r.Expires).Sub(now)
+		remaining := r.LeaseRemaining(now)
 		if remaining < time.Second {
 			continue
 		}

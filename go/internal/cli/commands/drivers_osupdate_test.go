@@ -250,6 +250,7 @@ func TestWarnDriverAddons_UnpinnedDriverNeedsNoKernelProof(t *testing.T) {
 type fakeInstallStream struct {
 	grpc.ClientStream
 	specs []*agentpbv2.DriverSpec
+	data  []byte
 	fail  string
 	done  bool
 }
@@ -257,6 +258,9 @@ type fakeInstallStream struct {
 func (f *fakeInstallStream) Send(req *agentpbv2.InstallDriverRequest) error {
 	if spec := req.GetSpec(); spec != nil {
 		f.specs = append(f.specs, spec)
+	}
+	if chunk := req.GetChunk(); chunk != nil {
+		f.data = append(f.data, chunk.GetData()...)
 	}
 	return nil
 }

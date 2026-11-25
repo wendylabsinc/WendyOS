@@ -1,6 +1,10 @@
 package grpcclient
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"net/url"
 	"sync/atomic"
 	"testing"
 
@@ -94,5 +98,35 @@ func TestVerifiedIdentitySinkAcceptsCompleteUUIDPrincipalOnly(t *testing.T) {
 				t.Fatalf("observed (%+v, %v), want accepted=%v", got, ok, tc.want)
 			}
 		})
+	}
+}
+
+// A device that refuses this CLI's certificate has still presented its own, and
+// the tenant it names is what separates an expired login from a wrong clock. It
+// is recorded before verification runs, so a failed handshake keeps it.
+func TestObserveServerTenantRecordsBeforeVerification(t *testing.T) {
+	const tenant = "5c9e14bb-49c0-4178-9cc5-493a151f9885"
+	principal, err := url.Parse("spiffe://wendy.sh/tenant/" + tenant + "/device/mesh-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := errors.New("remote error: tls: bad certificate")
+	c := &AgentConnection{observedServerTenant: new(atomic.Pointer[string])}
+	verify := observeServerTenant(c.observedServerTenant, func(tls.ConnectionState) error { return refused })
+	if err := verify(tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{principal}}}}); !errors.Is(err, refused) {
+		t.Fatalf("verification result lost: %v", err)
+	}
+	if got, ok := c.ObservedServerTenant(); !ok || got != tenant {
+		t.Fatalf("ObservedServerTenant() = (%q, %v), want %q", got, ok, tenant)
+	}
+
+	// A legacy certificate names no tenant, and nothing is recorded.
+	legacy := &AgentConnection{observedServerTenant: new(atomic.Pointer[string])}
+	_ = observeServerTenant(legacy.observedServerTenant, nil)(tls.ConnectionState{PeerCertificates: []*x509.Certificate{{}}})
+	if got, ok := legacy.ObservedServerTenant(); ok {
+		t.Fatalf("ObservedServerTenant() = %q for a certificate without a tenant", got)
+	}
+	if got, ok := (&AgentConnection{}).ObservedServerTenant(); ok {
+		t.Fatalf("ObservedServerTenant() = %q without a sink", got)
 	}
 }

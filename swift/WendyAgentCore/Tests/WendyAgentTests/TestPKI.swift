@@ -10,7 +10,7 @@ import X509
 /// ClientCertAuthorizer suite's cert-only helpers, TLS handshakes need the
 /// keys too).
 enum TestPKI {
-    struct CA {
+    struct CA: Sendable {
         var certificate: Certificate
         var privateKey: Certificate.PrivateKey
         var pem: String
@@ -18,7 +18,7 @@ enum TestPKI {
 
     /// A leaf identity with its key material in the shapes the registry TLS
     /// plumbing consumes.
-    struct Identity {
+    struct Identity: Sendable {
         var certificate: Certificate
         var certPEM: String
         var keyPEM: String
@@ -166,7 +166,7 @@ enum TestPKI {
         }
     }
 
-    static func makeIdentity(commonName: String, ca: CA) throws -> Identity {
+    static func makeIdentity(commonName: String, ca: CA, uris: [String] = []) throws -> Identity {
         let key = P256.Signing.PrivateKey()
         let subject = try DistinguishedName { CommonName(commonName) }
         let cert = try Certificate(
@@ -182,6 +182,9 @@ enum TestPKI {
                 Critical(BasicConstraints.notCertificateAuthority)
                 Critical(KeyUsage(digitalSignature: true))
                 try ExtendedKeyUsage([.clientAuth, .serverAuth])
+                if !uris.isEmpty {
+                    SubjectAlternativeNames(uris.map { .uniformResourceIdentifier($0) })
+                }
             },
             issuerPrivateKey: ca.privateKey
         )

@@ -8,6 +8,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
@@ -31,10 +32,10 @@ func AdvanceTo(t time.Time, logger *zap.Logger) error {
 	}
 
 	if err := setRTC(t); err != nil && logger != nil {
-		logger.Warn("timesync: could not set hardware RTC", zap.Error(err))
+		asyncdiag.Log(logger, zap.WarnLevel, "timesync: could not set hardware RTC", zap.Error(err))
 	}
 	if logger != nil {
-		logger.Info("timesync: clock advanced",
+		asyncdiag.Log(logger, zap.InfoLevel, "timesync: clock advanced",
 			zap.Time("from", now),
 			zap.Time("to", t),
 			zap.Duration("offset", offset))

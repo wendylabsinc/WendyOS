@@ -24,6 +24,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/flashengine"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/flashpack"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
 )
@@ -49,7 +50,10 @@ type thorDevice struct {
 // the device, then run download → stage-1 RCM boot → stage-2 partition flash as a
 // BuildKit-style step list. Stage-2 is the shared Go engine (flashengine) on all
 // platforms.
-func installThor(ctx context.Context, version string, nightly, force bool, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int) error {
+func installThor(ctx context.Context, version string, nightly, force bool, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int, agent *localInstallAgent) error {
+	if err := agent.checkArchitecture("arm64"); err != nil {
+		return err
+	}
 	// Thor's USB recovery access is an in-process libusb handle, so the whole
 	// process must be root on macOS/Linux — caching the sudo timestamp is not
 	// enough. Elevate up front, before the briefing, so a missing-permission
@@ -81,20 +85,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		return err
 	}
 
-	// Resolve provisioning up front: interactive prompts and pre-enrollment run
-	// before the flash UI takes over the terminal, and a bad flag or failed
-	// enrollment aborts before we touch USB. Written to the config image in
-	// stepProvision, then flashed like a disk install's config partition.
-	creds, err := resolveWiFiCredentialsList(wifi)
-	if err != nil {
-		return err
-	}
-	name, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
-	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
-	if err != nil {
+	if err := checkInstallConfirmable("flashing the Jetson AGX Thor", force); err != nil {
 		return err
 	}
 
@@ -110,22 +101,36 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		return err
 	}
 
+	// Find the board before asking for Wi-Fi, name or enrollment: USB access
+	// is only known once it is attached, and a refusal must not come last.
 	dev, err := pickThorRecoveryDevice()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("\n%s %s\n", tui.Dim("Target:"), tui.Device(dev.Label))
 
-	if !force {
-		fmt.Println()
-		fmt.Println(tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone."))
-		ok, err := tui.ConfirmNoDefaultDanger(fmt.Sprintf("Flash %s?", dev.Label))
-		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
-			return ErrUserCancelled
-		}
-		if err != nil {
-			return err
-		}
+	// Resolve provisioning before the flash UI takes over the terminal, so a
+	// bad flag or failed enrollment aborts before anything is written. Written
+	// to the config image in stepProvision, then flashed like a disk install's
+	// config partition.
+	creds, err := resolveWiFiCredentialsList(wifi)
+	if err != nil {
+		return err
+	}
+	name, err := resolveDeviceName(deviceName)
+	if err != nil {
+		return err
+	}
+	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
+	if err != nil {
+		return err
+	}
+	enrolled := provJSON != nil
+	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+		target:   dev.Label,
+		warning:  []string{tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone.")},
+		question: fmt.Sprintf("Flash %s?", dev.Label),
+	}, name, creds, enrolled, force); err != nil {
+		return err
 	}
 
 	// flashCtx aborts in-flight step work (the stage-2 engine) when the user
@@ -143,6 +148,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		if lf, lerr := os.Create(logPath); lerr == nil {
 			defer lf.Close()
 			fmt.Fprintf(lf, "wendy os install — Jetson AGX Thor — WendyOS %s\n\n", plan.version)
+			logProvisioningSummary(lf, name, creds, &enrolled)
 			logW = lf
 			defer func() { fmt.Println(tui.Dim("Full flash log: " + logPath)) }()
 		} else {
@@ -173,7 +179,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 			if err != nil {
 				return false, err
 			}
-			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail)
+			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail, agentSeed{local: agent, nightly: nightly, arch: "arm64"})
 		}},
 		{id: stepStage1, label: "Stage 1  RCM boot", run: func(out io.Writer, _ func(string)) (bool, error) {
 			return false, thorStageOne(fp, dev, out)
@@ -245,8 +251,10 @@ func (w fatWriter) WriteFile(name string, data []byte, _ os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	_, err = f.Write(data)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
 	return err
 }
 
@@ -255,24 +263,23 @@ func (w fatWriter) WriteFile(name string, data []byte, _ os.FileMode) error {
 // wendy.conf, provisioning.json, clock_floor — so first boot applies them via the
 // identical on-device path. Runs before stage-2, so a failure aborts with nothing
 // written to the Thor.
-func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string)) error {
-	// Freshen the agent like a disk install, but best-effort: resolveAgentArtifact
-	// is the only network step here, so an offline re-flash of a cached flashpack
-	// still provisions wifi/enrollment, falling back to the agent baked into the
-	// image.
-	detail("downloading agent")
-	agentBinary, agentVer, _, err := resolveAgentArtifact("linux", "arm64", false)
-	if err != nil {
-		fmt.Fprintf(out, "warning: could not download wendy-agent (%v); using the agent baked into the image\n", err)
-	} else {
-		detail("agent " + agentVer)
+func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), seed agentSeed) (err error) {
+	// A local agent is required provisioning. Release downloads remain
+	// best-effort so an offline flash can still provision WiFi and enrollment.
+	if err := seed.local.checkArchitecture("arm64"); err != nil {
+		return err
 	}
+	agentBinary, _ := resolveSeedAgent(out, detail, seed)
 
 	d, err := diskfs.Open(img)
 	if err != nil {
 		return fmt.Errorf("opening config image: %w", err)
 	}
-	defer d.Close()
+	defer func() {
+		if closeErr := d.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("finishing config image: %w", closeErr)
+		}
+	}()
 	fs, err := d.GetFilesystem(0) // bare FAT32, no partition table
 	if err != nil {
 		return fmt.Errorf("reading config filesystem: %w", err)
@@ -464,14 +471,14 @@ func printThorBadStateHint(w io.Writer) {
 		"Plug the Thor into a monitor and power-cycle it.",
 		"If the screen shows " + thorHintEmph.Render("UEFI") + ", the Thor is in a bad state.",
 		"",
-		"Attach a USB keyboard and type these two commands exactly:",
-		"",
-		thorHintCmd.Render("  " + cmdA),
-		thorHintCmd.Render("  " + cmdB),
+		"Attach a USB keyboard and type the two commands below exactly.",
 		"",
 		"Then power-cycle again, re-enter recovery mode, and re-run the flash.",
 	}, "\n")
 	fmt.Fprintln(w, "\n"+thorHintBorder.Render(body))
+	fmt.Fprintln(w, "\nIn the UEFI shell:")
+	fmt.Fprintln(w, cmdA)
+	fmt.Fprintln(w, cmdB)
 }
 
 // printThorGadgetUnreachableHint is a calm note for a flash that never wrote data.
@@ -481,39 +488,63 @@ func printThorGadgetUnreachableHint(w io.Writer) {
 	fmt.Fprintln(w, tui.Dim("  Unplug/replug the USB-C cable (the port next to HDMI), re-enter recovery mode, and flash again."))
 }
 
-const (
-	usbUdevRulePath = "/etc/udev/rules.d/70-wendy-jetson.rules"
-	usbUdevRule     = `SUBSYSTEM=="usb", ATTRS{idVendor}=="0955", MODE="0660", GROUP="plugdev", TAG+="uaccess"`
-)
+// wendyPackagedRuleDirs are where the deb, rpm and AUR packages install the
+// wendy udev rules; a hand-made copy goes to /etc instead.
+var wendyPackagedRuleDirs = []string{"/usr/lib/udev/rules.d", "/lib/udev/rules.d"}
+
+// wendyPackagedRule reports whether a wendy package installed the udev rule
+// file name. The packages also create the plugdev group the rule names.
+func wendyPackagedRule(name string) bool {
+	for _, dir := range wendyPackagedRuleDirs {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// linuxUSBAccessHint keeps the remedy's command separate from the boxed prose.
+func linuxUSBAccessHint(device string, packaged bool) (string, string) {
+	if packaged {
+		return "Your user can't open the " + device + " over USB from this login.\nAdd your user to plugdev with the command below and log in again.\nOr run the same command with sudo.",
+			"Add your user to plugdev:\nsudo usermod -aG plugdev $USER"
+	}
+	return "This wendy was installed without its package.\nIt can't open the " + device + " over USB from this login.\nInstall the package with the command below.\nOr run the same command with sudo.",
+		"Install the Wendy CLI package:\n" + cliupdate.InstallCommand("linux")
+}
 
 // usbAccessHintBox explains how to regain USB access to the Jetson when the OS
-// refuses to open it: on Linux, udev permissions; on macOS, its own kernel driver
+// refuses to open it: on Linux, the packaged rules or plugdev; on macOS, its own kernel driver
 // bound to the recovery device (root needed to seize it).
 func usbAccessHintBox() string {
-	return thorHintBorder.Render(strings.Join(usbAccessHintLines(runtime.GOOS), "\n"))
+	return renderUSBAccessHint(runtime.GOOS, wendyPackagedRule("70-wendy-jetson.rules"))
+}
+
+func renderUSBAccessHint(goos string, packaged bool) string {
+	hint := thorHintBorder.Render(strings.Join(usbAccessHintLines(goos, packaged), "\n"))
+	if goos == "linux" {
+		_, commands := linuxUSBAccessHint("Jetson", packaged)
+		hint += "\n\n" + commands
+	}
+	return hint
 }
 
 // usbAccessHintLines builds the body of the USB-access-denied hint for the given
 // GOOS. Split out from usbAccessHintBox so both OS branches are testable without
 // depending on the runner's platform.
-func usbAccessHintLines(goos string) []string {
+func usbAccessHintLines(goos string, packaged bool) []string {
 	lines := []string{
 		thorHintTitle.Render("⚠  USB access denied"),
 		"",
 		"A Jetson is in recovery mode, but the OS refused wendy access to its USB device.",
 	}
 	if goos == "linux" {
-		return append(lines,
-			"Grant access with a udev rule (one-time; the wendy deb/rpm packages install it):",
+		step, _ := linuxUSBAccessHint("Jetson", packaged)
+		return []string{
+			thorHintTitle.Render("⚠  USB access denied"),
 			"",
-			thorHintCmd.Render("  echo '"+usbUdevRule+"' \\"),
-			thorHintCmd.Render("    | sudo tee "+usbUdevRulePath),
-			thorHintCmd.Render("  sudo udevadm control --reload-rules && sudo udevadm trigger"),
-			"",
-			"Add your user to the "+thorHintEmph.Render("plugdev")+" group — if your distro has none, create it",
-			"("+thorHintCmd.Render("sudo groupadd plugdev && sudo usermod -aG plugdev $USER")+", then log in",
-			"again) — replug the USB-C cable and rescan. Or re-run the flash with sudo.",
-		)
+			step,
+		}
 	}
 	// macOS: the device enumerated but couldn't be claimed. macOS binds its own
 	// driver to the recovery device (often re-matched after a failed RCM boot), so

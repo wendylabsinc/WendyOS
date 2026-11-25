@@ -59,6 +59,46 @@ func TestParseProbeMatchHardwareFallback(t *testing.T) {
 	}
 }
 
+// Scope values are URIs, so a camera whose name has a space sends it as %20. A
+// TP-Link Tapo C200 was listed verbatim as "Tapo%20C200".
+func TestParseProbeMatchDecodesPercentEncodedName(t *testing.T) {
+	payload := strings.Replace(reolinkProbeMatch,
+		"onvif://www.onvif.org/name/RLC-520A", "onvif://www.onvif.org/name/Tapo%20C200", 1)
+	got, err := ParseProbeMatch([]byte(payload))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got.Model != "Tapo C200" {
+		t.Fatalf("Model = %q, want %q", got.Model, "Tapo C200")
+	}
+
+	payload = strings.Replace(reolinkProbeMatch, "onvif://www.onvif.org/name/RLC-520A ", "", 1)
+	payload = strings.Replace(payload,
+		"onvif://www.onvif.org/hardware/IPC_MS4NA45MPS44E1W011000000010", "onvif://www.onvif.org/hardware/C200%20V2", 1)
+	if got, err = ParseProbeMatch([]byte(payload)); err != nil || got.Model != "C200 V2" {
+		t.Fatalf("hardware fallback: Model = %q, error = %v, want %q", got.Model, err, "C200 V2")
+	}
+}
+
+// Decoding must not hand a terminal control sequence to `camera list`, which
+// prints the name as is. A name that would decode to a control character, or
+// that is not valid percent-encoding, is shown as it was sent.
+func TestParseProbeMatchKeepsUnsafeNamesEncoded(t *testing.T) {
+	for _, name := range []string{"%1B%5B2Jcam", "cam%0Aline", "cam%00", "100%", "bad%ZZ", "%FF%FE"} {
+		t.Run(name, func(t *testing.T) {
+			payload := strings.Replace(reolinkProbeMatch,
+				"onvif://www.onvif.org/name/RLC-520A", "onvif://www.onvif.org/name/"+name, 1)
+			got, err := ParseProbeMatch([]byte(payload))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got.Model != name {
+				t.Fatalf("Model = %q, want the raw %q", got.Model, name)
+			}
+		})
+	}
+}
+
 // Multiple XAddrs occur when a camera is multi-homed; all are kept, in order.
 func TestParseProbeMatchMultipleXAddrs(t *testing.T) {
 	payload := strings.Replace(reolinkProbeMatch,
@@ -149,6 +189,37 @@ func TestParseProbeMatchTypes(t *testing.T) {
 	}
 }
 
+// WS-Discovery lets a reply omit Types, so an untyped reply is accepted, but
+// only from a device that also carries ONVIF scopes. Every ONVIF device
+// publishes them; a printer or computer that answers every probe without types
+// does not.
+func TestParseProbeMatchUntypedNeedsONVIFScope(t *testing.T) {
+	untyped := strings.Replace(reolinkProbeMatch, "<d:Types>dn:NetworkVideoTransmitter tds:Device</d:Types>", "", 1)
+	for name, scopes := range map[string]string{
+		"no scopes":         "",
+		"non-ONVIF scopes":  "ldap:///ou=printers http://www.example.com/room/42",
+		"ONVIF-like prefix": "onvif://www.onvif.org.evil/name/cam",
+		"scheme only":       "onvif://",
+		"unrelated scope":   "wsdp:Computer",
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := strings.Replace(untyped,
+				"onvif://www.onvif.org/type/video_encoder onvif://www.onvif.org/name/RLC-520A onvif://www.onvif.org/hardware/IPC_MS4NA45MPS44E1W011000000010",
+				scopes, 1)
+			if _, err := ParseProbeMatch([]byte(payload)); !errors.Is(err, ErrProbeMatchTypeMismatch) {
+				t.Fatalf("error = %v, want ErrProbeMatchTypeMismatch", err)
+			}
+		})
+	}
+	// An explicit NetworkVideoTransmitter type needs no scope corroboration.
+	typedNoScopes := strings.Replace(reolinkProbeMatch,
+		"onvif://www.onvif.org/type/video_encoder onvif://www.onvif.org/name/RLC-520A onvif://www.onvif.org/hardware/IPC_MS4NA45MPS44E1W011000000010",
+		"", 1)
+	if _, err := ParseProbeMatch([]byte(typedNoScopes)); err != nil {
+		t.Fatalf("typed reply without scopes: %v", err)
+	}
+}
+
 func TestParseProbeMatchSkipsNonCameraMatch(t *testing.T) {
 	printer := `<d:ProbeMatch><d:Types>wprt:PrintDeviceType</d:Types><d:XAddrs>http://printer/</d:XAddrs></d:ProbeMatch>`
 	payload := strings.Replace(reolinkProbeMatch, "<d:ProbeMatches>", "<d:ProbeMatches>"+printer, 1)
@@ -168,7 +239,8 @@ func TestParseProbeMatchErrorKinds(t *testing.T) {
 		want    error
 	}{
 		{"no matches", "<Envelope/>", ErrNoProbeMatch},
-		{"no address", "<Envelope><Body><ProbeMatches><ProbeMatch/></ProbeMatches></Body></Envelope>", ErrNoProbeMatch},
+		{"no address", "<Envelope><Body><ProbeMatches><ProbeMatch><Types>dn:NetworkVideoTransmitter</Types></ProbeMatch></ProbeMatches></Body></Envelope>", ErrNoProbeMatch},
+		{"untyped without ONVIF scope", "<Envelope><Body><ProbeMatches><ProbeMatch/></ProbeMatches></Body></Envelope>", ErrProbeMatchTypeMismatch},
 		{"wrong type", strings.Replace(reolinkProbeMatch, "dn:NetworkVideoTransmitter tds:Device", "tds:Device", 1), ErrProbeMatchTypeMismatch},
 		{"compatible type without address", strings.Replace(reolinkProbeMatch,
 			"<d:XAddrs>http://10.98.0.50/onvif/device_service</d:XAddrs>", "", 1), ErrNoProbeMatch},

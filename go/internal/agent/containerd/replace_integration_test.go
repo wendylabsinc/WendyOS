@@ -3,12 +3,17 @@
 package containerd
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +21,8 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	digest "github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -23,19 +30,65 @@ import (
 
 // WDY-3850: a redeploy that fails must leave the app it was replacing
 // running. These tests run the old app's task from a real image, so besides
-// root and the containerd socket they need to pull busybox. Like the unpack
+// root and the containerd socket they need busybox-static installed. Like the unpack
 // tests, each uses a fresh namespace and leaves its images and snapshots
 // behind, so point the variable at a disposable containerd:
 //
 //	WENDY_CONTAINERD_INTEGRATION=/run/containerd/containerd.sock go test -run Integration ./internal/agent/containerd
 
-const replaceTestImage = "docker.io/library/busybox:1.36"
+const replaceTestImage = "wendy-test/busybox:local"
 
-func pullReplaceTestImage(t *testing.T, c *Client, ctx context.Context) containerd.Image {
+// Build the runnable fixture locally so the regression suite also works without
+// registry access. The CI runner installs busybox-static for this purpose.
+func createReplaceTestImage(t *testing.T, c *Client, ctx context.Context) containerd.Image {
 	t.Helper()
-	img, err := c.client.Pull(ctx, replaceTestImage, containerd.WithPullUnpack, containerd.WithPullSnapshotter(c.snapshotter))
+	path, err := exec.LookPath("busybox")
 	if err != nil {
-		t.Fatalf("pulling %s: %v", replaceTestImage, err)
+		t.Fatalf("install busybox-static for the containerd tests: %v", err)
+	}
+	binary, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	headers := []*tar.Header{
+		{Name: "bin/", Typeflag: tar.TypeDir, Mode: 0755},
+		{Name: "bin/busybox", Mode: 0755, Size: int64(len(binary))},
+		{Name: "bin/sleep", Typeflag: tar.TypeSymlink, Linkname: "busybox", Mode: 0755},
+		{Name: "bin/sh", Typeflag: tar.TypeSymlink, Linkname: "busybox", Mode: 0755},
+	}
+	for _, h := range headers {
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Name == "bin/busybox" {
+			if _, err := tw.Write(binary); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	blob := buf.Bytes()
+	dgst := digest.FromBytes(blob)
+	if err := c.WriteLayer(ctx, dgst.String(), bytes.NewReader(blob), int64(len(blob))); err != nil {
+		t.Fatal(err)
+	}
+	config, err := json.Marshal(ocispec.Image{
+		Platform: ocispec.Platform{OS: "linux", Architecture: runtime.GOARCH},
+		Config:   ocispec.ImageConfig{Env: []string{"PATH=/bin"}, Cmd: []string{"sleep", "300"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := assembleIntegrationImage(t, c, ctx, integrationImage{
+		name: replaceTestImage, config: config,
+		headers: []*agentpb.RunContainerLayerHeader{{Digest: dgst.String(), DiffId: dgst.String(), Size: int64(len(blob)), Compression: agentpb.RunContainerLayerHeader_COMPRESSION_NONE}},
+	})
+	if err := c.UnpackImage(ctx, img, nil); err != nil {
+		t.Fatal(err)
 	}
 	return img
 }
@@ -204,7 +257,7 @@ func TestIntegrationFailedRedeployKeepsRunningApp(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, ctx := newIntegrationClient(t)
-			startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", nil)
+			startOldApp(t, c, ctx, createReplaceTestImage(t, c, ctx), "replaced-app", nil)
 
 			cfg := tc.cfg
 			cfg.AppID = "replaced-app"
@@ -223,7 +276,7 @@ func TestIntegrationFailedRedeployKeepsRunningApp(t *testing.T) {
 // replacing the running app either way.
 func TestIntegrationValidateContainerLeavesRunningAppAlone(t *testing.T) {
 	c, ctx := newIntegrationClient(t)
-	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", nil)
+	startOldApp(t, c, ctx, createReplaceTestImage(t, c, ctx), "replaced-app", nil)
 	cfg := &appconfig.AppConfig{AppID: "replaced-app", Version: "2"}
 
 	valid := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: replaceTestImage}
@@ -242,7 +295,7 @@ func TestIntegrationValidateContainerLeavesRunningAppAlone(t *testing.T) {
 // Validating a first deploy creates nothing.
 func TestIntegrationValidateContainerCreatesNothing(t *testing.T) {
 	c, ctx := newIntegrationClient(t)
-	pullReplaceTestImage(t, c, ctx)
+	createReplaceTestImage(t, c, ctx)
 
 	req := &agentpb.CreateContainerRequest{AppName: "new-app", ImageName: replaceTestImage}
 	if err := c.ValidateContainer(ctx, req, &appconfig.AppConfig{AppID: "new-app"}); err != nil {
@@ -259,7 +312,7 @@ func TestIntegrationValidateContainerCreatesNothing(t *testing.T) {
 func TestIntegrationFailedRedeployKeepsNetworkSandbox(t *testing.T) {
 	c, ctx := newIntegrationClient(t)
 	bridge := []appconfig.Entitlement{{Type: appconfig.EntitlementNetwork, Mode: "bridge"}}
-	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", bridge)
+	startOldApp(t, c, ctx, createReplaceTestImage(t, c, ctx), "replaced-app", bridge)
 	closed := false
 	c.networkSandboxes = map[string]*networkSandbox{}
 	c.registerNetworkSandbox(&networkSandbox{
@@ -291,7 +344,7 @@ func TestIntegrationRedeployPausesRestartsWhilePreparing(t *testing.T) {
 	c, ctx := newIntegrationClient(t)
 	monitor := &fakeRestartSuppressor{}
 	c.SetRestartSuppressor(monitor)
-	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", nil)
+	startOldApp(t, c, ctx, createReplaceTestImage(t, c, ctx), "replaced-app", nil)
 
 	req := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: "127.0.0.1:5000/wdy3850/missing:1"}
 	cfg := &appconfig.AppConfig{AppID: "replaced-app", Version: "2"}
@@ -315,7 +368,7 @@ func TestIntegrationFailedRedeployLeavesOldHostSocketsAlone(t *testing.T) {
 	c.proxyManager = proxy
 	c.systemAPISocketProvider = &orderedSystemAPIProvider{t: t, log: log, dir: shortTempDir(t)}
 	c.dataSocketProvider = &orderedDataProvider{t: t, log: log, dir: shortTempDir(t)}
-	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", hostSocketEntitlements)
+	startOldApp(t, c, ctx, createReplaceTestImage(t, c, ctx), "replaced-app", hostSocketEntitlements)
 
 	req := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: replaceTestImage, Env: []string{"LD_PRELOAD=/x.so"}}
 	cfg := &appconfig.AppConfig{AppID: "replaced-app", Version: "2", Entitlements: hostSocketEntitlements}
@@ -345,7 +398,7 @@ func TestIntegrationRedeployHandsHostSocketsToNewContainer(t *testing.T) {
 	c.proxyManager = proxy
 	c.systemAPISocketProvider = &orderedSystemAPIProvider{t: t, log: log, dir: systemAPIDir}
 	c.dataSocketProvider = &orderedDataProvider{t: t, log: log, dir: dataDir}
-	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", hostSocketEntitlements)
+	startOldApp(t, c, ctx, createReplaceTestImage(t, c, ctx), "replaced-app", hostSocketEntitlements)
 
 	req := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: replaceTestImage}
 	cfg := &appconfig.AppConfig{AppID: "replaced-app", Version: "2", Entitlements: hostSocketEntitlements}
@@ -393,7 +446,7 @@ func TestIntegrationRedeployHandsHostSocketsToNewContainer(t *testing.T) {
 // primary.
 func TestIntegrationRedeployedPrimaryDoesNotJoinItsOldTask(t *testing.T) {
 	c, ctx := newIntegrationClient(t)
-	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", nil)
+	startOldApp(t, c, ctx, createReplaceTestImage(t, c, ctx), "replaced-app", nil)
 	ctr, err := c.client.LoadContainer(ctx, "replaced-app")
 	if err != nil {
 		t.Fatal(err)
@@ -429,7 +482,7 @@ func TestIntegrationRedeployedPrimaryDoesNotJoinItsOldTask(t *testing.T) {
 
 func TestIntegrationRedeployReplacesRunningApp(t *testing.T) {
 	c, ctx := newIntegrationClient(t)
-	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", nil)
+	startOldApp(t, c, ctx, createReplaceTestImage(t, c, ctx), "replaced-app", nil)
 
 	req := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: replaceTestImage}
 	cfg := &appconfig.AppConfig{AppID: "replaced-app", Version: "2"}
@@ -458,7 +511,7 @@ func TestIntegrationRedeployReplacesRunningApp(t *testing.T) {
 func TestIntegrationRedeployErrorAfterSwapSaysAppStopped(t *testing.T) {
 	c, ctx := newIntegrationClient(t)
 	c.proxyManager = &recordingProxyManager{err: errors.New("xdg-dbus-proxy exited")}
-	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", nil)
+	startOldApp(t, c, ctx, createReplaceTestImage(t, c, ctx), "replaced-app", nil)
 
 	req := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: replaceTestImage}
 	cfg := &appconfig.AppConfig{AppID: "replaced-app", Version: "2", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementBluetooth}}}

@@ -21,6 +21,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
@@ -78,7 +79,7 @@ func run(ctx context.Context) ([]string, error) {
 	})
 	connect := func(cert config.CertificateInfo, opts ...grpc.DialOption) (*grpcclient.AgentConnection, error) {
 		// Bypass DNS: only the WebSocket relay needs an actual network address.
-		return grpcclient.ConnectWithTLSExpecting(ctx, "passthrough:///wasm-agent.test:443", &cert, nil, nil, append([]grpc.DialOption{dial}, opts...)...)
+		return grpcclient.ConnectWithTLSExpecting(ctx, "passthrough:///wasm-agent.test:443", &cert, nil, &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, append([]grpc.DialOption{dial}, opts...)...)
 	}
 	conn, err := connect(f.Certificate)
 	if err != nil {

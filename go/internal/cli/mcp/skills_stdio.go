@@ -43,11 +43,13 @@ func (r *skillStdioReader) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	for len(r.pending) == 0 {
-		if err := r.ctx.Err(); err != nil {
-			return 0, err
-		}
+		// EOF cancels the serving context inside Read. Preserve that input
+		// result (and real read failures) instead of replacing it with cancellation.
 		if r.err != nil {
 			return 0, r.err
+		}
+		if err := r.ctx.Err(); err != nil {
+			return 0, err
 		}
 		line, err := r.in.ReadBytes('\n')
 		r.err = err

@@ -27,7 +27,7 @@ wendy device list | cat
 wendy device list --json=false | cat
 ```
 
-In JSON mode stdout carries only JSON. Notices that change what a result means are written to stderr as single plain lines instead of being dropped: the device a command picked for you (`Using default device wendyos-abc.local.`) and certificate warnings. Onboarding hints such as "Next: run `wendy run` …" are not shown in JSON mode.
+In JSON mode stdout carries only JSON. Notices that change what a result means are written to stderr as single plain lines instead of being dropped: the device a command picked for you (`Using wendyos-abc, the only device currently online in this organisation.`) and certificate warnings. Onboarding hints such as "Next: run `wendy run` …" are not shown in JSON mode.
 
 > **Note:** For live, full-screen TUI commands such as [`wendy device top`](./commands/device/top.md), `--json` does not stream the interface — it switches the command to a one-shot **snapshot** mode that prints a single JSON object and exits, instead of rendering the interactive dashboard.
 
@@ -58,14 +58,19 @@ Earlier stderr lines can hold progress output and notices, so read the last line
 | 0 | Success | |
 | 1 | Any failure not listed below | every other code, including `error` |
 | 2 | The command line is wrong: unknown command or flag, wrong number of arguments, a missing required flag, an invalid or conflicting flag value, or a confirmation that needs `--force` because there is no terminal | `cli_usage` |
-| 3 | Credentials are missing, expired or ambiguous | `auth_required`, `auth_session_ambiguous`, `auth_certificate_failed`, `device_auth_required`, `registry_auth`, `grpc_unauthenticated` |
+| 3 | Credentials are missing, expired or ambiguous | `auth_required`, `auth_session_ambiguous`, `auth_certificate_failed`, `auth_login_expired`, `device_auth_required`, `registry_auth`, `grpc_unauthenticated` |
 | 4 | No usable target device: none given, several match, or the device cannot run this project | `no_device`, `device_ambiguous`, `project_target_mismatch` |
-| 5 | The device could not be reached: it refused or did not answer the connection, its host name did not resolve, or it rejected the TLS handshake | `device_unreachable`, `device_offline`, `device_not_resolved`, `device_tls_rejected`, `simulator_unavailable` |
+| 5 | The device could not be reached: it refused or did not answer the connection, its host name did not resolve, it rejected the TLS handshake, or an unrecovered Cloud v2 connection loss interrupted an upload or app startup | `device_unreachable`, `device_offline`, `device_not_resolved`, `device_tls_rejected`, `simulator_unavailable` |
 | 6 | The build failed, or a build tool is missing | `build_failed`, `builder_unavailable`, `tool_not_found` |
 | 7 | The app was deployed but did not start or stay up | `container_start_failed` |
 | 8 | The app started but did not become ready in time | `readiness_timeout` |
 | 10 | A trust decision only a person can make: the device's identity or organization changed | `device_identity_mismatch`, `device_org_mismatch` |
 | 70 | An internal error: a bug in `wendy` itself. The stack trace is printed on stderr (in JSON mode before the envelope line, otherwise after the message); include it when you report the bug. Only a panic in the command's own goroutine is caught: one in a background goroutine still crashes with Go's own output and exit status | `internal_error` |
+
+Cloud v2 upload reconnect deadlines can also be `device_unreachable` (exit 5).
+Old Agents missing chunk RPCs in `auto` retain the existing authorized registry
+fallback and its exit outcomes. Scripts should read the final JSON error record,
+not the whole stderr stream or message wording.
 
 `device_not_resolved` means DNS reported that the host name does not exist. That can also happen while this machine is offline, so check the network before the name. A device name resolved over mDNS (a `.local` name, or a bare name such as `wendyos-abc`) that does not resolve is `device_unreachable` instead, since it resolves only while the device is on the network.
 
@@ -80,7 +85,7 @@ wendy --device 192.168.1.42 device apps list
 wendy --device my-mac.local:50051 device info --json
 ```
 
-When `--device` is not given, the CLI uses the `WENDY_DEVICE` environment variable if it is set, and only then the saved default device. Set `WENDY_DEVICE` per terminal, or in an AI tool's MCP server `env` block, to give each session its own target without changing the default all sessions share:
+When `--device` is not given, the CLI uses the `WENDY_DEVICE` environment variable if it is set. Set it per terminal, or in an AI tool's MCP server `env` block, to give each session its own target:
 
 ```sh
 export WENDY_DEVICE=my-pi.local
@@ -98,7 +103,8 @@ is cached for 24 hours; a failed or cancelled check can retry after one hour.
 After a successful command in an interactive terminal, a popup offers
 **Download now** or **Ask again later...**. Asking later snoozes all update
 prompts for 24 hours. Non-interactive and `--json` invocations print notices to
-stderr without prompting.
+stderr without prompting, once per release. In a terminal where the popup cannot
+open, the notice repeats once a day until you update.
 
 Accepted updates use the installation's owning package manager. For Homebrew
 stable, the commands are `brew update` and `brew upgrade wendylabsinc/tap/wendy`.
@@ -131,7 +137,7 @@ Its state is persisted in `~/.wendy/config.json`:
 | `WENDY_BUILD_PROGRESS` | Override the progress format requested from `docker buildx` during image builds. Accepts `plain` or `rawjson` (case-insensitive); any other value is ignored. When unset, the CLI probes the installed buildx version once per run and picks `rawjson` for buildx 0.13 or newer, `plain` otherwise. `rawjson` is what supplies per-step byte counters and download rates, so forcing `plain` reduces build output to step names only. |
 | `WENDY_BUILDKIT_HOST` | Override the BuildKit endpoint used by `--builder buildkit`, for example `unix:///path/to/buildkitd.sock`. It takes precedence over `BUILDKIT_HOST`, Wendy's discovered `<Wendy cache>/runtime/buildkitd.sock`, and buildctl's normal local default. The daemon must use a containerd worker for `wendy build` image-store output. |
 | `WENDY_CLOUD_INSECURE` | Set to `true` (or `1`) to dial Wendy Cloud over plaintext gRPC instead of TLS. Only for a local development cloud that serves plaintext; every cloud dial is TLS otherwise, whatever the port. The CLI prints a warning naming the address on every plaintext dial, because session tokens and enrollment credentials then travel unencrypted. The agent honors the same variable for its own enrollment dial. |
-| `WENDY_DEVICE` | Target device for commands run without `--device`; takes precedence over the saved default device. Accepts the same values as `--device`. A blank value is ignored. |
+| `WENDY_DEVICE` | Target device for commands run without `--device`. Accepts the same values as `--device`. A blank value is ignored. |
 | `WENDY_STAGEFILE_BACKEND` | Select the Stagefile compiler backend when `--stagefile-backend` is not passed. Accepts `dockerfile` (default) or experimental direct `llb`; the command-line flag takes precedence. |
 | `WENDY_AGENT_SIGNATURE_PATH` | Path to a detached ML-DSA65 signature file for the agent update binary. When set, `wendy device update` includes the signature in the `UpdateAgent` RPC. Has no effect until a verification key is embedded in the agent. |
 | `WENDY_IMAGE_SIGNATURE_PATH` | Path to a detached ML-DSA65 signature file for the OCI image config. When set, `wendy run` includes the signature in `RunContainer` calls. Has no effect until a per-org publisher key is provisioned on the agent. |

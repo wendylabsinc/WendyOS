@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,6 +157,53 @@ func TestNewToolsRequestsEveryMCPToolGroup(t *testing.T) {
 		}
 	}
 	t.Fatalf("MCP child args = %q; want --tool-groups all", args)
+}
+
+func TestMCPCommandOverrideLaunchesNamedServer(t *testing.T) {
+	t.Setenv("WENDY_CHAT_TEST_MCP", "1")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WENDY_CHAT_MCP_COMMAND", self)
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// sh cannot serve MCP, so success proves the override was launched instead.
+	tools, err := NewTools(ctx, shPath, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tools.Close()
+	if _, err := tools.ListTools(ctx); err != nil {
+		t.Fatal(err)
+	}
+	output, err := tools.Execute(ctx, ToolCall{Name: "test_args", Arguments: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	if err := json.Unmarshal([]byte(output), &args); err != nil {
+		t.Fatalf("MCP child args %q: %v", output, err)
+	}
+	if len(args) < 2 || args[0] != "mcp" || args[1] != "serve" {
+		t.Fatalf("MCP child args = %q; want to start with mcp serve", args)
+	}
+}
+
+func TestMCPCommandOverrideMustBeAbsolute(t *testing.T) {
+	t.Setenv("WENDY_CHAT_MCP_COMMAND", "relative-wendy")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewTools(context.Background(), executable, t.TempDir(), "")
+	if err == nil || !strings.Contains(err.Error(), "must be an absolute path") {
+		t.Fatalf("err = %v; want must be an absolute path", err)
+	}
 }
 
 func TestNewToolsRejectsMissingExecutableAndWorkspace(t *testing.T) {

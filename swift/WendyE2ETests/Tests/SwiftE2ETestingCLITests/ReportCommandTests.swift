@@ -188,6 +188,58 @@ struct `report command` {
     }
 }
 
+// setenv is process-wide, so these cases must not overlap. The other report tests
+// do not assert on review.md's wording, so the variable cannot disturb them.
+@Suite(.serialized)
+struct `report review outcome` {
+    @Test(
+        arguments: [
+            ("failure", true),
+            ("skipped", true),
+            ("success", false),
+            (nil, false),
+        ] as [(String?, Bool)]
+    )
+    func `comes from the environment`(outcome: String?, incomplete: Bool) throws {
+        let rootURL = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let packageURL = rootURL.appendingPathComponent("Package", isDirectory: true)
+        let supportURL = packageURL.appendingPathComponent("Support", isDirectory: true)
+        let runURL = rootURL.appendingPathComponent("Run", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: packageURL.appendingPathComponent("Tests", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: runURL, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: productionReportTemplateURL(),
+            to: supportURL.appendingPathComponent("e2e-report.template.html")
+        )
+
+        if let outcome {
+            setenv("WENDY_E2E_REVIEW_OUTCOME", outcome, 1)
+        } else {
+            unsetenv("WENDY_E2E_REVIEW_OUTCOME")
+        }
+        defer { unsetenv("WENDY_E2E_REVIEW_OUTCOME") }
+
+        var command = try ReportCommand.parse([
+            "--package-dir", packageURL.path,
+            "--run-dir", runURL.path,
+        ])
+        try command.run()
+
+        let review = try String(
+            contentsOf: runURL.appendingPathComponent("review.md"),
+            encoding: .utf8
+        )
+        #expect(review.contains("AI review did not complete") == incomplete)
+        #expect(review.contains("No Swift E2E review issues were generated") == !incomplete)
+    }
+}
+
 private func productionReportTemplateURL() -> URL {
     URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()

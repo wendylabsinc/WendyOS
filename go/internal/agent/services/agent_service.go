@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,10 +25,14 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
+	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/powermode"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -75,6 +80,12 @@ type AgentService struct {
 	// process was started from; see binarySHA256.
 	binaryHashOnce sync.Once
 	binaryHash     string
+
+	// Settable within-package so tests need neither a WendyOS image nor its disks.
+	deviceTypePath string
+	rootMedium     func() (medium, disk string, err error)
+	rootMediumOnce sync.Once
+	rootMediumName string
 }
 
 func NewAgentService(
@@ -114,11 +125,14 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 		CpuArchitecture: runtime.GOARCH,
 		Featureset:      detectFeatureset(),
 		BinarySha256:    s.binarySHA256(),
+		// The CLI refuses a project that uses any other type before it deploys.
+		EntitlementTypes: advertisedEntitlementTypes(),
 	}
 
 	if hn, err := os.Hostname(); err == nil {
 		resp.Hostname = hn
 	}
+	resp.Supervision = supervisionStatus()
 
 	if v, ok := wendyOSVersion(); ok {
 		resp.OsVersion = &v
@@ -126,12 +140,12 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 		resp.OsVersion = &distroVer
 	}
 
-	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
-		deviceType, storageMedium := parseDeviceType(string(data))
+	if data, err := os.ReadFile(s.deviceTypeFile()); err == nil {
+		deviceType, imageMedium := parseDeviceType(string(data))
 		if deviceType != "" {
 			resp.DeviceType = &deviceType
 		}
-		if storageMedium != "" {
+		if storageMedium := pickStorageMedium(s.bootMedium(), imageMedium); storageMedium != "" {
 			resp.StorageMedium = &storageMedium
 		}
 	}
@@ -190,6 +204,7 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 	}
 
 	resp.NetworkInterfaces = listNetworkInterfaces()
+	addUplinkInfo(ctx, resp.NetworkInterfaces)
 
 	// sysfs when the host has its own pack, else a registered fallback (a
 	// robot's BMS read over DDS). nil on the mains-powered devices that make up
@@ -572,8 +587,17 @@ func detectNvidiaGPUArch() string {
 	return board.Detect().NvidiaGPUArch()
 }
 
+// advertisedEntitlementTypes lists the types this agent knows and this device can honour.
+func advertisedEntitlementTypes() []string {
+	types := slices.Clone(appconfig.ValidEntitlementTypes)
+	if !oci.ArduinoBridgeAvailable() {
+		types = slices.DeleteFunc(types, func(t string) bool { return t == appconfig.EntitlementArduinoBridge })
+	}
+	return types
+}
+
 func detectFeatureset() []string {
-	var features []string
+	features := []string{"data-inference-classification"}
 
 	if _, err := os.Stat("/dev/nvidia0"); err == nil {
 		features = append(features, "gpu")
@@ -615,6 +639,9 @@ func detectFeatureset() []string {
 		// the outcome). See oshealth.Gate.
 		features = append(features, "os-healthcheck")
 	}
+
+	features = append(features, mcuFeatureEntries(loadMCULayouts())...)
+	features = append(features, mcuOwnerFeature()...)
 
 	return features
 }
@@ -688,12 +715,17 @@ func (s *AgentService) RunContainer(stream grpc.BidiStreamingServer[agentpb.RunC
 }
 
 func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.UpdateAgentRequest, agentpb.UpdateAgentResponse]) error {
+	if err := refuseUpdates(); err != nil {
+		return err
+	}
 	if !s.installer.TryLock() {
 		return status.Error(codes.FailedPrecondition, "an update is already in progress")
 	}
+	// A wake now would restart this agent and cut the upload off.
+	defer holdSupervisorWake()()
 	// committed is declared before the defer so the closure captures it.
 	// On success the lock is intentionally NOT released: the process exits
-	// within 500 ms and holding the lock prevents a concurrent update from
+	// soon after and holding the lock prevents a concurrent update from
 	// racing on the just-installed binary during that shutdown window.
 	committed := false
 	defer func() {
@@ -709,7 +741,7 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 		return err
 	}
 
-	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(execPath)
+	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(updateTempTarget(execPath))
 	if err != nil {
 		return err
 	}
@@ -770,7 +802,11 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 					}
 				}
 
-				if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, originalPerm, s.logger); err != nil {
+				if inbox, ok := supervisor.InboxFromEnv(); ok {
+					if err := stageForSupervisor(stream.Context(), tmpFile, tmpPath, inbox, computedHash, expectedHash, interceptor.RemoteVia(stream.Context())); err != nil {
+						return err
+					}
+				} else if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, originalPerm, s.logger); err != nil {
 					if errors.Is(err, ErrDirFsync) {
 						// Binary is installed; only directory-entry durability is at risk.
 						s.logger.Warn("Update dir fsync failed; binary installed but rename may not survive power loss", zap.Error(err))
@@ -809,15 +845,6 @@ func finishCommittedUpdate(logger *zap.Logger, sendAck func() error, scheduleExi
 			zap.Error(err))
 	}
 	return nil
-}
-
-// scheduleAgentRestartExit exits the process after a short grace period so
-// systemd restarts the agent on the just-committed binary.
-func scheduleAgentRestartExit() {
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
-	}()
 }
 
 func (s *AgentService) ListWiFiNetworks(ctx context.Context, _ *agentpb.ListWiFiNetworksRequest) (*agentpb.ListWiFiNetworksResponse, error) {
@@ -1004,6 +1031,10 @@ func inhibitAutoUpdater(logger *zap.Logger) func() {
 	if _, err := sysctl("cat", updaterTimerUnit); err != nil {
 		return func() {}
 	}
+	// A masked updater (local agent builds) can never run.
+	if out, _ := sysctl("is-enabled", updaterTimerUnit); strings.TrimSpace(string(out)) == "masked" {
+		return func() {}
+	}
 	run("stop", updaterTimerUnit, updaterServiceUnit)
 	// Restore only the timer: it re-triggers the oneshot service itself, and a
 	// stopped timer re-arms on the next boot regardless.
@@ -1049,11 +1080,21 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 	s.logger.Info("UpdateOS started",
 		zap.String("artifact_url", req.GetArtifactUrl()), zap.String("updater", req.GetUpdaterBackend()))
 
+	verifying := func() {
+		_ = stream.Send(&agentpb.UpdateOSResponse{ResponseType: &agentpb.UpdateOSResponse_Progress_{
+			Progress: &agentpb.UpdateOSResponse_Progress{Phase: "Verifying the agent update"},
+		}})
+	}
+	if msg := osUpdateTrialGate(stream.Context(), verifying); msg != "" {
+		return sendOSUpdateFailure(stream, msg)
+	}
+
 	if !s.installer.TryLock() {
 		s.logger.Warn("UpdateOS rejected: another update is already in progress")
 		return sendOSUpdateFailure(stream, updateInProgressMessage)
 	}
 	defer s.installer.Unlock()
+	defer holdSupervisorWake()()
 
 	if !s.isWendyOSHost() {
 		s.logger.Warn("UpdateOS rejected: host is not a WendyOS OTA target", zap.String("artifact_url", req.GetArtifactUrl()))

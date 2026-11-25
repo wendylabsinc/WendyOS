@@ -27,7 +27,8 @@ import (
 //     out-of-range download offset, malformed or escaping file path).
 //   - NotFound: the episode, manifest, or requested file is genuinely absent.
 //   - FailedPrecondition: the episode exists but is not currently serviceable
-//     (no active episode, or a manifest entry that is not a regular file).
+//     (no active episode, a manifest entry that is not a regular file, or a
+//     deletion of an episode still in progress or being read).
 //   - Internal: everything else, which is an I/O, decode, or seal failure.
 //
 // Messages are the underlying error text, which is generated agent-side and
@@ -46,7 +47,9 @@ func dataStatusError(err error) error {
 	case errors.Is(err, os.ErrNotExist):
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, data.ErrNoActiveEpisode),
-		errors.Is(err, data.ErrEpisodeEntryNotRegular):
+		errors.Is(err, data.ErrEpisodeEntryNotRegular),
+		errors.Is(err, data.ErrEpisodeInProgress),
+		errors.Is(err, data.ErrEpisodeBeingRead):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
@@ -90,6 +93,9 @@ type DataService struct {
 	// Start RPC, which carry no campaign to declare one. Campaign episodes take
 	// their own value from the plan.
 	adHocDrain time.Duration
+	// telemetry receives campaign inference metrics. It is set once, before
+	// StartCampaignInference; without it nothing is published.
+	telemetry TelemetryPublisher
 }
 
 type dataCaptureAdapter interface {
@@ -155,6 +161,13 @@ func (s *DataService) SetAudioService(audioSvc *AudioService) {
 	s.addAdapter(newAudioDataAdapter(audioSvc))
 }
 
+// SetTelemetryPublisher publishes what each campaign's model achieves against
+// its rate as OpenTelemetry metrics (inferenceMetrics). Call it before
+// StartCampaignInference.
+func (s *DataService) SetTelemetryPublisher(publisher TelemetryPublisher) {
+	s.telemetry = publisher
+}
+
 // SetROS2Service enables one managed rosbag2 recorder per live RMW graph.
 func (s *DataService) SetROS2Service(ros2 *ROS2Service) {
 	if ros2 != nil {
@@ -209,12 +222,26 @@ func (s *DataService) armCampaign(campaign data.Campaign) {
 	if arming == nil || campaign.State != "armed" || campaign.BufferDuration() <= 0 {
 		return
 	}
-	cameras := s.cameraSourcesFor(campaign)
+	// The caller's copy can be stale: an inference worker keeps the plan it
+	// started with, and deploy arms off the request path. Arm what is stored
+	// now, and only while it is still armed, so a disarm or remove that landed
+	// in between is not undone.
+	current, err := s.manager.Campaign(campaign.Name)
+	if err != nil || current.State != data.CampaignStateArmed || current.BufferDuration() <= 0 {
+		return
+	}
+	cameras := s.cameraSourcesFor(current)
 	if len(cameras) == 0 {
 		return
 	}
-	arming.Disarm(campaign.Name)
-	arming.Arm(campaign.Name, campaign.BufferDuration(), cameras)
+	arming.Disarm(current.Name)
+	arming.Arm(current.Name, current.BufferDuration(), cameras)
+	// A disarm can still land while the rings start. It stores its state
+	// before it releases the rings, so either it released these, or reading
+	// the state again here finds it and releases them.
+	if after, err := s.manager.Campaign(current.Name); err != nil || after.State != data.CampaignStateArmed {
+		arming.Disarm(current.Name)
+	}
 }
 
 // rearmByName re-arms the campaign with the given name after its episode has
@@ -309,6 +336,14 @@ func (s *DataService) startCapture(ctx context.Context, opts data.StartOptions) 
 	lock := s.keyLock(key)
 	lock.Lock()
 	defer lock.Unlock()
+	// Read under the key's lock, which disarm and remove also take, so a
+	// trigger already on its way when one of them returned cannot open an
+	// episode after it.
+	if key != data.AdHocEpisodeKey {
+		if err := s.requireArmed(key); err != nil {
+			return nil, err
+		}
+	}
 	m, err := s.manager.Start(opts)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
@@ -534,6 +569,9 @@ func (s *DataService) CampaignTrigger(ctx context.Context, req *agentpbv2.DataCa
 	if err != nil {
 		return nil, dataStatusError(err)
 	}
+	if campaign.State == data.CampaignStateDisarmed {
+		return nil, campaignDisarmedError(campaign.Name)
+	}
 	reason := strings.TrimSpace(req.GetReason())
 	if reason == "" {
 		reason = "manual"
@@ -601,12 +639,26 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 	if err != nil {
 		return nil, err
 	}
+	s.scheduleAutoStop(campaign.Name, episode.GetId(), campaign.AfterTriggerDuration())
+	return episode, nil
+}
+
+// A trigger can be delayed after startCapture releases the campaign lock. Do
+// not let that stale trigger replace the timer belonging to a newer episode.
+func (s *DataService) scheduleAutoStop(key, episodeID string, after time.Duration) {
+	lock := s.keyLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+	session, ok := s.manager.ActiveSession(key)
+	if !ok || session.ID != episodeID {
+		return
+	}
 	timerContext, cancel := context.WithCancel(context.Background())
 	s.captureMu.Lock()
-	if previous := s.autoStopCancel[campaign.Name]; previous != nil {
+	if previous := s.autoStopCancel[key]; previous != nil {
 		previous()
 	}
-	s.autoStopCancel[campaign.Name] = cancel
+	s.autoStopCancel[key] = cancel
 	s.captureMu.Unlock()
 	go func(episodeID string, after time.Duration) {
 		timer := time.NewTimer(after)
@@ -615,10 +667,9 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 		case <-timerContext.Done():
 			return
 		case <-timer.C:
-			s.stopCaptureIfCurrent(context.Background(), campaign.Name, episodeID)
+			s.stopCaptureIfCurrent(context.Background(), key, episodeID)
 		}
-	}(episode.GetId(), campaign.AfterTriggerDuration())
-	return episode, nil
+	}(episodeID, after)
 }
 
 func (s *DataService) observeApplicationRecord(_ string, record data.ApplicationRecord) {
@@ -679,7 +730,7 @@ func (s *DataService) Status(context.Context, *agentpbv2.DataStatusRequest) (*ag
 	return r, nil
 }
 
-func (s *DataService) Episodes(context.Context, *agentpbv2.DataEpisodesRequest) (*agentpbv2.DataEpisodesResponse, error) {
+func (s *DataService) Episodes(_ context.Context, req *agentpbv2.DataEpisodesRequest) (*agentpbv2.DataEpisodesResponse, error) {
 	// In-progress episodes are read before the store. An episode that finishes
 	// its seal in between is then in both lists, and is dropped from the
 	// in-progress one below; read the other way round, it would be in neither.
@@ -691,7 +742,7 @@ func (s *DataService) Episodes(context.Context, *agentpbv2.DataEpisodesRequest) 
 	r := &agentpbv2.DataEpisodesResponse{ReportsInProgress: true}
 	finalized := make(map[string]bool, len(list))
 	for _, e := range list {
-		r.Episodes = append(r.Episodes, infoEpisode(e))
+		r.Episodes = append(r.Episodes, infoEpisode(e, req.GetIncludeMedia()))
 		finalized[e.ID] = true
 	}
 	for _, e := range open {
@@ -712,6 +763,20 @@ func (s *DataService) Inspect(_ context.Context, req *agentpbv2.DataInspectReque
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &agentpbv2.DataInspectResponse{ManifestJson: append(b, '\n'), VerificationErrors: failures}, nil
+}
+
+// DeleteEpisode permanently removes one finalized episode; see
+// data.Manager.DeleteEpisode for what it refuses and why.
+func (s *DataService) DeleteEpisode(_ context.Context, req *agentpbv2.DataDeleteEpisodeRequest) (*agentpbv2.DataDeleteEpisodeResponse, error) {
+	m, err := s.manager.DeleteEpisode(req.GetEpisode())
+	if err != nil {
+		return nil, dataStatusError(err)
+	}
+	episode := manifestEpisode(m)
+	for _, f := range m.Files {
+		episode.SizeBytes += f.Size
+	}
+	return &agentpbv2.DataDeleteEpisodeResponse{Episode: episode, UploadState: m.Upload.State}, nil
 }
 
 func (s *DataService) Download(req *agentpbv2.DataDownloadRequest, stream agentpbv2.DataService_DownloadServer) error {
@@ -744,8 +809,15 @@ func (s *DataService) Download(req *agentpbv2.DataDownloadRequest, stream agentp
 func manifestEpisode(m data.Manifest) *agentpbv2.DataEpisode {
 	return &agentpbv2.DataEpisode{Id: m.ID, Name: m.Name, State: m.State, StartedUnixNanos: m.StartedUnixNanos, BootId: m.BootID}
 }
-func infoEpisode(e data.EpisodeInfo) *agentpbv2.DataEpisode {
-	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID}
+func infoEpisode(e data.EpisodeInfo, includeMedia bool) *agentpbv2.DataEpisode {
+	var media *agentpbv2.DataEpisodeMedia
+	if includeMedia {
+		media = &agentpbv2.DataEpisodeMedia{}
+		for _, f := range e.MediaFiles {
+			media.Files = append(media.Files, &agentpbv2.DataEpisodeFileMedia{Path: f.Path, MediaType: f.MediaType})
+		}
+	}
+	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID, Media: media}
 }
 func inProgressEpisode(e data.InProgressEpisode) *agentpbv2.DataEpisode {
 	return &agentpbv2.DataEpisode{Id: e.ID, Name: e.Name, State: e.State, StartedUnixNanos: e.StartedUnixNanos, SizeBytes: e.SizeBytes, BootId: e.BootID,

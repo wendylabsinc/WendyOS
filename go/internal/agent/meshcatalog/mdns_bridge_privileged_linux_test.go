@@ -4,7 +4,6 @@ package meshcatalog
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -136,8 +135,8 @@ func TestAppMDNSMulticastLifetimesWithAvahi(t *testing.T) {
 	}
 	f := newFixture(t)
 	catalog, _ := f.newCatalog(t, p533, "default", nil, nil)
-	emitted := make(chan SignedRecord, 64)
-	bridge, err := NewMDNSBridge(AppScope{AppID: "com.wendy.test", AppIP: net.ParseIP("192.168.42.2"), BridgeIndex: iface.Index, Ports: map[uint16]uint16{8080: 18080}}, catalog, testVIPs(t), func(string, Record) bool { return true }, func(w SignedRecord) { emitted <- w }, emptyBridgeRouteView)
+	emitted := make(chan Record, 64)
+	bridge, err := NewMDNSBridge(AppScope{AppID: "com.wendy.test", AppIP: net.ParseIP("192.168.42.2"), BridgeIndex: iface.Index, Ports: map[uint16]uint16{8080: 18080}}, catalog, testVIPs(t), func(string, Record) bool { return true }, func(w Record) { emitted <- w }, emptyBridgeRouteView)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,11 +158,7 @@ func TestAppMDNSMulticastLifetimesWithAvahi(t *testing.T) {
 		t.Helper()
 		select {
 		case w := <-emitted:
-			var r Record
-			if err := json.Unmarshal(w.Body, &r); err != nil {
-				t.Fatal(err)
-			}
-			return r
+			return w
 		case err := <-done:
 			t.Fatalf("bridge exited: %v", err)
 		case <-time.After(timeout):
@@ -179,7 +174,7 @@ func TestAppMDNSMulticastLifetimesWithAvahi(t *testing.T) {
 	// At least two more query cycles must not cause five-second generations.
 	select {
 	case w := <-emitted:
-		t.Fatalf("unchanged service renewed within12s: %s", w.Body)
+		t.Fatalf("unchanged service renewed within 12s: %+v", w)
 	case <-time.After(12 * time.Second):
 	}
 	call("UpdateServiceTxt", int32(-1), int32(0), uint32(0), "Stable Service", "_http._tcp", "local", [][]byte{[]byte("path=/changed")})

@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package wendycloud.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "wendy/options.proto";
+import "wendycloud/v2/signed_request.proto";
+
+// OrganizationInviteService is Cloud-owned and intentionally separate from the hackathon's
+// InviteLinkService. It is defined in this repo (cloud-proto/, not the shared service-protos
+// submodule) so the two never share code and can split into separate repositories later.
+service OrganizationInviteService {
+  // Create an invite link for an organization. Caller must be owner/admin; role is limited
+  // to admin/member/viewer. Returns the link metadata and the raw token (shown once).
+  // Signed; payload_type "wendycloud.v1.CreateOrganizationInviteRequest" (WDY-3419: an invite is a
+  // deferred AddMember).
+  rpc CreateOrganizationInvite(wendycloud.v2.SignedRequest) returns (CreateOrganizationInviteResponse) {
+    option (wendy.signed_request) = true;
+  }
+  // List an organization's invite links (owner, admin, member, viewer). Carries no token.
+  rpc ListOrganizationInvites(ListOrganizationInvitesRequest) returns (stream OrganizationInvite);
+  // Revoke an invite link (owner/admin).
+  rpc RevokeOrganizationInvite(RevokeOrganizationInviteRequest) returns (google.protobuf.Empty);
+  // Redeem an invite. The caller authenticates first (a freshly created Firebase user), so the
+  // org membership is tied to their real Cloud identity. Validates the token, ensures a Cloud
+  // users row exists, and joins the org with the link's role.
+  rpc AcceptOrganizationInvite(AcceptOrganizationInviteRequest) returns (AcceptOrganizationInviteResponse);
+}
+
+message OrganizationInvite {
+  string id = 1;
+  string organization_id = 2;
+  // Empty: the organization default at accept.
+  string role = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  bool revoked = 5;
+  string created_by_user_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message CreateOrganizationInviteRequest {
+  string organization_id = 1;
+  // Empty: the member gets the organization's default role at accept (WDY-3877).
+  string role = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message CreateOrganizationInviteResponse {
+  OrganizationInvite invite = 1;
+  string token = 2;
+}
+
+message ListOrganizationInvitesRequest {
+  string organization_id = 1;
+}
+
+message RevokeOrganizationInviteRequest {
+  string id = 1;
+  string organization_id = 2;
+}
+
+message AcceptOrganizationInviteRequest {
+  string token = 1;
+  string email = 2;
+  string name = 3;
+}
+
+message AcceptOrganizationInviteResponse {
+  string organization_id = 1;
+  string role = 2;
+}

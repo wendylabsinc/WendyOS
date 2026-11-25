@@ -272,6 +272,9 @@ type AuthContext struct {
 	// Required by the engine when device_cert is a non-device (operator/service)
 	// leaf.
 	PossessionProof []byte `protobuf:"bytes,9,opt,name=possession_proof,json=possessionProof,proto3" json:"possession_proof,omitempty"`
+	// ACME's EAB-bound device enrollment generation. Zero is the legacy initial
+	// generation; a device-principal revocation invalidates earlier generations.
+	EnrollmentEpoch int64 `protobuf:"varint,10,opt,name=enrollment_epoch,json=enrollmentEpoch,proto3" json:"enrollment_epoch,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -353,6 +356,13 @@ func (x *AuthContext) GetPossessionProof() []byte {
 		return x.PossessionProof
 	}
 	return nil
+}
+
+func (x *AuthContext) GetEnrollmentEpoch() int64 {
+	if x != nil {
+		return x.EnrollmentEpoch
+	}
+	return 0
 }
 
 // Every field is filled by the pki-core engine from its audit_log row; the
@@ -497,7 +507,7 @@ const file_pkicore_v1_types_proto_rawDesc = "" +
 	"\tExtension\x12\x10\n" +
 	"\x03oid\x18\x01 \x01(\tR\x03oid\x12\x1a\n" +
 	"\bcritical\x18\x02 \x01(\bR\bcritical\x12\x14\n" +
-	"\x05value\x18\x03 \x01(\fR\x05value\"\x9a\x02\n" +
+	"\x05value\x18\x03 \x01(\fR\x05value\"\xc5\x02\n" +
 	"\vAuthContext\x12(\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x14.pkicore.v1.AuthModeR\x04mode\x12#\n" +
 	"\roperator_cert\x18\x02 \x01(\fR\foperatorCert\x12\x1b\n" +
@@ -507,7 +517,9 @@ const file_pkicore_v1_types_proto_rawDesc = "" +
 	"\x05token\x18\x05 \x01(\tR\x05token\x12\x1f\n" +
 	"\vdevice_cert\x18\x06 \x01(\fR\n" +
 	"deviceCert\x12)\n" +
-	"\x10possession_proof\x18\t \x01(\fR\x0fpossessionProofJ\x04\b\a\x10\bJ\x04\b\b\x10\tR\x04oidcR\fplatform_svc\"\xc4\x02\n" +
+	"\x10possession_proof\x18\t \x01(\fR\x0fpossessionProof\x12)\n" +
+	"\x10enrollment_epoch\x18\n" +
+	" \x01(\x03R\x0fenrollmentEpochJ\x04\b\a\x10\bJ\x04\b\b\x10\tR\x04oidcR\fplatform_svc\"\xc4\x02\n" +
 	"\rAuditLogEntry\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\tR\ttimestamp\x12\x14\n" +

@@ -1,0 +1,29 @@
+{
+  "tool": "run",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"output\": \"Connecting to simulator {{vm_name}}...\\nCreating container for service web (sensor-dashboard_web)...\\nPulling image on device...\\nCreating container...\\nContainer sensor-dashboard_web created.\\nService web started.\\nAll services running in detached mode.\\nRun 'wendy device logs' to stream logs (filter a service with --app sensor-dashboard-compose-<service>).\\n{\\n  \\\"status\\\": \\\"started\\\",\\n  \\\"app\\\": \\\"sensor-dashboard\\\",\\n  \\\"device\\\": \\\"{{device}}\\\",\\n  \\\"readiness\\\": \\\"not_checked\\\",\\n  \\\"url\\\": \\\"http://127.0.0.1:8080\\\",\\n  \\\"endpoints\\\": [\\n    {\\n      \\\"app\\\": \\\"sensor-dashboard\\\",\\n      \\\"url\\\": \\\"http://127.0.0.1:8080\\\"\\n    }\\n  ]\\n}\", \"readiness\": \"not_checked\", \"status\": \"started\", \"suggested_next_step\": \"Connect to the returned target, check container_list and telemetry_logs, then test the app's health endpoint or ROS interface. Deployment alone does not verify behavior.\", \"target\": {\"device\": \"{{device}}\", \"transport\": \"direct\"}, \"truncated\": false}"
+        }
+      ],
+      "structuredContent": {
+        "output": "Connecting to simulator {{vm_name}}...\nCreating container for service web (sensor-dashboard_web)...\nPulling image on device...\nCreating container...\nContainer sensor-dashboard_web created.\nService web started.\nAll services running in detached mode.\nRun 'wendy device logs' to stream logs (filter a service with --app sensor-dashboard-compose-<service>).\n{\n  \"status\": \"started\",\n  \"app\": \"sensor-dashboard\",\n  \"device\": \"{{device}}\",\n  \"readiness\": \"not_checked\",\n  \"url\": \"http://127.0.0.1:8080\",\n  \"endpoints\": [\n    {\n      \"app\": \"sensor-dashboard\",\n      \"url\": \"http://127.0.0.1:8080\"\n    }\n  ]\n}",
+        "readiness": "not_checked",
+        "status": "started",
+        "suggested_next_step": "Connect to the returned target, check container_list and telemetry_logs, then test the app's health endpoint or ROS interface. Deployment alone does not verify behavior.",
+        "target": {
+          "device": "{{device}}",
+          "transport": "direct"
+        },
+        "truncated": false
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  }
+}

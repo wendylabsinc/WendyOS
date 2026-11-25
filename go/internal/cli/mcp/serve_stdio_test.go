@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -16,7 +17,8 @@ import (
 // instead of building and deploying for a client that is gone. The server
 // returns once the run has stopped, and a disconnect is a clean exit.
 func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
-	for _, trigger := range []string{"client disconnect", "server stop"} {
+	inputFailure := errors.New("stdin read failed")
+	for _, trigger := range []string{"client disconnect", "server stop", "input failure"} {
 		t.Run(trigger, func(t *testing.T) {
 			s := New(&config.Config{}, nil)
 			started, stopped := make(chan struct{}), make(chan struct{})
@@ -29,6 +31,8 @@ func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
 			srv := server.NewMCPServer("wendy", "test", server.WithToolCapabilities(true))
 			srv.AddTool(mcpgo.NewTool("run"), s.handleRun)
 			in, client := io.Pipe()
+			defer in.Close()
+			defer client.Close()
 			ctx, stop := context.WithCancel(context.Background())
 			defer stop()
 			served := make(chan error, 1)
@@ -47,9 +51,15 @@ func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("run did not start")
 			}
-			if trigger == "client disconnect" {
+			var wantErr error
+			switch trigger {
+			case "client disconnect":
 				_ = client.Close()
-			} else {
+			case "input failure":
+				wantErr = inputFailure
+				_ = client.CloseWithError(inputFailure)
+			case "server stop":
+				wantErr = context.Canceled
 				stop()
 			}
 			select {
@@ -59,8 +69,8 @@ func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
 			}
 			select {
 			case err := <-served:
-				if trigger == "client disconnect" && err != nil {
-					t.Fatalf("disconnect is a clean shutdown, got %v", err)
+				if !errors.Is(err, wantErr) {
+					t.Fatalf("shutdown returned %v, want %v", err, wantErr)
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("server did not return after the run stopped")

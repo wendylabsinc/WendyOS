@@ -8,6 +8,7 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 import { TypeTable } from 'fumadocs-ui/components/type-table';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import type { MDXComponents } from 'mdx/types';
+import { Asciicast } from './docs/asciicast';
 import {
   JetsonBuyersTable,
   Pi5BuyersTable,
@@ -15,8 +16,11 @@ import {
 } from './docs/buyers-tables';
 import { CliClip, CliShot } from './docs/cli-shot';
 import { CliToAgentRelationshipDiagram } from './docs/cli-to-agent-relationship-diagram';
+import { Figure, Frame, Frames } from './docs/figure';
+import { Flow, FlowArrow, FlowNode, FlowPart } from './docs/flow';
+import { HardwareCard, HardwareShowcase } from './docs/hardware-showcase';
 import { TrackedCodeBlock } from './docs/install-copy-tracking';
-import { SetDefaultDeviceSection } from './docs/set-default-device-section';
+import { Path, Paths } from './docs/paths';
 import { YouTubeVideo } from './docs/youtube-video';
 
 export function getMDXComponents(components?: MDXComponents) {
@@ -29,13 +33,25 @@ export function getMDXComponents(components?: MDXComponents) {
     ),
     Accordion,
     Accordions,
+    Asciicast,
     Callout,
     Card,
     Cards,
+    Figure,
     File,
     Files,
+    Flow,
+    FlowArrow,
+    FlowNode,
+    FlowPart,
     Folder,
+    Frame,
+    Frames,
+    HardwareCard,
+    HardwareShowcase,
     JetsonBuyersTable,
+    Path,
+    Paths,
     Pi5BuyersTable,
     PiZero2WBuyersTable,
     Step,
@@ -46,7 +62,6 @@ export function getMDXComponents(components?: MDXComponents) {
     CliClip,
     CliShot,
     CliToAgentRelationshipDiagram,
-    SetDefaultDeviceSection,
     YouTubeVideo,
     ...components,
   } satisfies MDXComponents;

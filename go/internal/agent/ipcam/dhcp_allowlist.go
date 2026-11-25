@@ -135,6 +135,16 @@ func writeDHCPAllowlist(path string, allowed map[string]bool) error {
 }
 
 func writeDHCPAllowlistWithSync(path string, allowed map[string]bool, syncDir func(string) error) error {
+	return writeDHCPAllowlistFile(path, allowed, syncDir, os.Rename)
+}
+
+// createDHCPAllowlist installs the complete, synced file only if the path is
+// still absent. An operator setting created during migration must win.
+func createDHCPAllowlist(path string, allowed map[string]bool) error {
+	return writeDHCPAllowlistFile(path, allowed, syncDHCPDirectory, os.Link)
+}
+
+func writeDHCPAllowlistFile(path string, allowed map[string]bool, syncDir func(string) error, install func(string, string) error) error {
 	if err := makeDHCPDirectory(filepath.Dir(path), syncDir); err != nil {
 		return err
 	}
@@ -181,7 +191,7 @@ func writeDHCPAllowlistWithSync(path string, allowed map[string]bool, syncDir fu
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(f.Name(), path); err != nil {
+	if err := install(f.Name(), path); err != nil {
 		return err
 	}
 	return syncDir(filepath.Dir(path))

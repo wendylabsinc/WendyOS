@@ -175,3 +175,17 @@ func p256DiscoveryRoots(body []byte, header http.Header) ([]byte, error) {
 	}
 	return roots, nil
 }
+
+// DiscoverLiteDeviceCAChainWithClient uses the caller's verified HTTPS transport.
+// Returned certificates remain intermediates, never new trust anchors.
+func DiscoverLiteDeviceCAChainWithClient(ctx context.Context, client *http.Client, pkiEndpoint, tenantID string) (string, error) {
+	id, err := uuid.Parse(tenantID)
+	if err != nil || id.String() != tenantID || id == uuid.Nil {
+		return "", fmt.Errorf("invalid Lite tenant")
+	}
+	host := cloudenroll.PKISiblingHost(pkiEndpoint, "est")
+	if host == "" {
+		return "", fmt.Errorf("missing Lite discovery authority")
+	}
+	return discoverLiteDeviceCAChain(ctx, client, "https://"+host+"/.well-known/est/"+tenantID+"/cacerts?chain_algorithm="+cloudrequest.EnrollmentChainP256+"&full_chain=true")
+}

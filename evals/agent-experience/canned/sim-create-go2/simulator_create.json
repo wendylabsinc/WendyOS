@@ -1,0 +1,32 @@
+{
+  "tool": "simulator_create",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"device\": \"vm:{{args.name}}\", \"next_step\": \"device_connect\", \"readiness\": \"not_checked\", \"simulator\": {\"name\": \"{{args.name}}\", \"device\": \"vm:{{args.name}}\", \"state\": \"stopped\", \"profile\": \"{{args.profile}}\", \"version\": \"0.19.5\", \"source\": \"release\", \"disk_bytes\": 17179869184}}"
+        }
+      ],
+      "structuredContent": {
+        "device": "vm:{{args.name}}",
+        "next_step": "device_connect",
+        "readiness": "not_checked",
+        "simulator": {
+          "name": "{{args.name}}",
+          "device": "vm:{{args.name}}",
+          "state": "stopped",
+          "profile": "{{args.profile}}",
+          "version": "0.19.5",
+          "source": "release",
+          "disk_bytes": 17179869184
+        }
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  }
+}

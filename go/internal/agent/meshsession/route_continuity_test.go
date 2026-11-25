@@ -45,7 +45,8 @@ func TestActiveTCPRecoversAfterSignedRouteInterruption(t *testing.T) {
 	client.dial = func(ctx context.Context, _ netip.AddrPort, cfg *tls.Config, qc *quic.Config) (*quic.Conn, error) {
 		return transport.Dial(ctx, net.UDPAddrFromAddrPort(endpoint), cfg, qc)
 	}
-	snapshot := localmesh.NodeSnapshot{Routes: []babel.Route{{Prefix: netip.PrefixFrom(b.Device.MeshAddress(), 128)}}}
+	snapshot := localmesh.NodeSnapshot{Routes: []babel.Route{{Prefix: netip.PrefixFrom(b.Device.MeshAddress(), 128)}},
+		Devices: []localmesh.Manifest{{Device: b.Device.UUID(), Expires: time.Now().Add(time.Minute).UnixMilli(), AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: Port}}}}}
 	logical, err := Resolve(snapshot, b.Device)
 	if err != nil {
 		t.Fatal(err)
@@ -55,8 +56,8 @@ func TestActiveTCPRecoversAfterSignedRouteInterruption(t *testing.T) {
 	client.peers[b.Device].born = time.Now().Add(-2 * clientAgeLimit)
 	client.mu.Unlock()
 	active := lifecycleDial(t, client, b.Device, logical, port)
-	if old.conn == active.conn {
-		t.Fatal("expected one already retired connection and one current connection")
+	if old.conn != active.conn {
+		t.Fatal("age replaced a healthy active session")
 	}
 	lifecycleExchange(t, old)
 	lifecycleExchange(t, active)
@@ -70,8 +71,8 @@ func TestActiveTCPRecoversAfterSignedRouteInterruption(t *testing.T) {
 	client.mu.Lock()
 	cached := client.peers[b.Device]
 	client.mu.Unlock()
-	if cached != nil {
-		t.Fatal("withdrawn route retained a transport for new streams")
+	if cached == nil || cached.conn != old.conn {
+		t.Fatal("temporary route loss discarded the authenticated transport")
 	}
 	if _, err := Resolve(snapshot, b.Device); !errors.Is(err, ErrNoRoute) {
 		t.Fatalf("new flow without a signed route: %v", err)
@@ -98,8 +99,8 @@ func TestActiveTCPRecoversAfterSignedRouteInterruption(t *testing.T) {
 	lifecycleExchange(t, old)
 	lifecycleExchange(t, active)
 	fresh := lifecycleDial(t, client, b.Device, logical, port)
-	if fresh.conn == old.conn || fresh.conn == active.conn {
-		t.Fatal("new flow reused a retired transport after the heal")
+	if fresh.conn != old.conn {
+		t.Fatal("new flow repeated the handshake after route recovery")
 	}
 	lifecycleExchange(t, fresh)
 	// Identity teardown is deliberately stronger than temporary route loss.

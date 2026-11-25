@@ -89,6 +89,11 @@ Use Cloud user IDs, not names or email addresses. User and organization role
 selectors have union semantics: a user matching more than one selector receives
 one Notification. Cloud v2 forwarding uses only these selectors.
 
+These examples use `wendy.system.v1.NotificationAudience`. The separate Cloud v2
+message adds `role_ids` and deprecates its enum `roles` field, but the local
+app-facing API does not expose or forward `role_ids`. The WendyKit and gRPC
+examples here continue to use the supported local selectors.
+
 See the
 [wendy-app-sdk README](https://github.com/wendylabsinc/wendy-app-sdk#send-a-notification)
 for WendyKit package details.
@@ -135,6 +140,10 @@ errors and rate limit.
 - Device-app sources may create 10 accepted Notifications per minute. The agent
   also smooths bursts locally. Repeated Cloud rate-limit violations can
   quarantine that app/device source for 15 minutes.
+- The title is 1 to 120 UTF-8 bytes and the body is 1 to 2,000. Each is one
+  line: a line break, tab or other control character is refused with
+  `INVALID_ARGUMENT`, and so is leading or trailing whitespace. Join the lines
+  of a multi-line message before sending it.
 - Generate a new UUID v4 for each Notification. Reusing an accepted ID returns
   `ALREADY_EXISTS`; a request rejected locally does not claim the UUID.
 - Device-originated deep links are restricted to the source device. Use

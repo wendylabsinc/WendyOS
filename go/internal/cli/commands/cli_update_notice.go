@@ -4,12 +4,14 @@ package commands
 import (
 	"context"
 	"errors"
+	"os"
 	"runtime"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -87,16 +89,31 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 		return false, nil
 	}
 
-	interactive := allowPrompt && !jsonOutput && isInteractiveTerminal()
-	if interactive && timestampWithin(cfg.CLIUpdatePromptedAt, cliUpdateCheckInterval, time.Now()) {
+	// wendy update recognizes no updater for a CLI the Wendy plugin's
+	// launcher installed, so that CLI gets advice and no update popup (see
+	// cliupdate.PluginAdvice).
+	managed := pluginManagedCLI()
+	now := time.Now()
+	// A person is reading this terminal, whether or not the popup can open.
+	atTerminal := !jsonOutput && isInteractiveTerminal()
+	interactive := allowPrompt && atTerminal && !managed
+	// "Ask again later" snoozes the plain notice in that terminal too.
+	if atTerminal && timestampWithin(cfg.CLIUpdatePromptedAt, cliUpdateCheckInterval, now) {
 		return false, nil
 	}
-	if !interactive && cfg.CLIUpdateNoticeShown == latest {
+	if !interactive && !cliUpdateNoticeDue(cfg, latest, atTerminal, now) {
 		return false, nil
 	}
 	method := "unknown"
 	if interactive {
-		detectCtx, cancelDetect := context.WithTimeout(cmd.Context(), time.Second)
+		// The long wait once a day: after the plain notice has told this
+		// person, a package manager that is still slow must not hold up
+		// every later command.
+		wait := cliUpdateDetectWait
+		if !cliUpdateNoticeDue(cfg, latest, atTerminal, now) {
+			wait = cliUpdateExitWait
+		}
+		detectCtx, cancelDetect := context.WithTimeout(cmd.Context(), wait)
 		plan, detectErr := detectCLIUpdate(detectCtx)
 		cancelDetect()
 		if detectErr != nil {
@@ -113,14 +130,19 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 			interactive = false
 		}
 	}
-	if !interactive && cfg.CLIUpdateNoticeShown == latest {
+	if !interactive && !cliUpdateNoticeDue(cfg, latest, atTerminal, now) {
 		return false, nil
 	}
-	cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\nUpdate with: %s\n", latest, version.Version, cliupdate.Command(runtime.GOOS))
+	advice := "Update with: " + cliupdate.Command(runtime.GOOS)
+	if managed {
+		advice = cliupdate.PluginAdvice(runtime.GOOS)
+	}
+	cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\n%s\n", latest, version.Version, advice)
 	trackCLIUpdate(cmd, "cli_update_offered", "completed", "", method)
 	if !interactive {
 		_ = updateCLIState(cmd.Context(), func(current *config.Config) {
 			current.CLIUpdateNoticeShown = latest
+			current.CLIUpdateNoticeShownAt = now.UTC().Format(time.RFC3339)
 		})
 		return true, nil
 	}
@@ -147,6 +169,17 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 		return true, nil
 	}
 	return true, applyCLIUpdate(cmd, latest)
+}
+
+// cliUpdateNoticeDue reports whether the plain notice about latest is due.
+// Scripts, agents and --json runs get it once per release. A person at a
+// terminal gets it again each day until they update: one line per release is
+// easy to miss, and nothing else tells them when the popup cannot open.
+func cliUpdateNoticeDue(cfg *config.Config, latest string, atTerminal bool, now time.Time) bool {
+	if cfg.CLIUpdateNoticeShown != latest {
+		return true
+	}
+	return atTerminal && !timestampWithin(cfg.CLIUpdateNoticeShownAt, cliUpdateCheckInterval, now)
 }
 
 // promptDismissed reports a user who closed or interrupted the update dialog,
@@ -210,4 +243,19 @@ func trackCLIUpdate(cmd *cobra.Command, event, outcome, errorClass, method strin
 	analytics.TrackStage(cmd.Context(), event, "wendy update", outcome, errorClass, map[string]string{
 		"stage": "cli_update", "install_method": method,
 	})
+}
+
+// cliExecutable is os.Executable; a variable so tests can pose as a
+// plugin-managed install.
+var cliExecutable = os.Executable
+
+// pluginManagedCLI reports whether this binary is one the Wendy plugin's
+// launcher installed under the wendy config directory.
+func pluginManagedCLI() bool {
+	exe, err := cliExecutable()
+	if err != nil {
+		return false
+	}
+	dir, err := config.ConfigDir()
+	return err == nil && pluginmode.ManagedInstall(exe, dir)
 }

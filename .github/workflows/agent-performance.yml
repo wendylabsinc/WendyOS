@@ -1,0 +1,68 @@
+name: Agent performance comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Baseline commit or branch
+        required: true
+        default: main
+      candidate_ref:
+        description: Candidate commit or branch
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    # Hosted-runner results are informational. Stable hardware baselines can
+    # use benchmark.py compare --fail-on-regression after calibrating thresholds.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check out baseline
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: .performance-baseline
+      - name: Check out candidate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          path: .performance-candidate
+      - name: Set up Go
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: agent-performance
+      - name: Build both revisions with the same toolchain
+        env:
+          CGO_ENABLED: '0'
+          GOTOOLCHAIN: local
+        run: |
+          (cd .performance-baseline && go build -trimpath -o /tmp/agent-baseline ./go/cmd/wendy-agent)
+          (cd .performance-candidate && go build -trimpath -o /tmp/agent-candidate ./go/cmd/wendy-agent)
+      - name: Compare alternating runs
+        run: |
+          python3 go/benchmarks/agent/pair.py \
+            --baseline /tmp/agent-baseline \
+            --candidate /tmp/agent-candidate \
+            --baseline-revision "$(git -C .performance-baseline rev-parse HEAD)" \
+            --candidate-revision "$(git -C .performance-candidate rev-parse HEAD)" \
+            --output /dev/shm/agent-performance
+      - name: Publish comparison in job summary
+        if: always()
+        run: |
+          if [ -f /dev/shm/agent-performance/comparison.md ]; then
+            echo 'Unenrolled agent, no containerd, isolated Docker. Hosted-runner measurements are informational.' >> "$GITHUB_STEP_SUMMARY"
+            cat /dev/shm/agent-performance/comparison.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload samples, charts and comparison
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: agent-performance
+          path: /dev/shm/agent-performance
+          retention-days: 30

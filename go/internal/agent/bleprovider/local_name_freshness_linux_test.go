@@ -125,17 +125,18 @@ func TestLocalNameRejectsWrongIdentityAndMalformedBinaryFallback(t *testing.T) {
 	binary, _ := a.MarshalBinary()
 	wrong, _ := NewAdvertisement(lowDevice, "elsewhere", DefaultPSM)
 	wrongName, _ := wrong.MarshalLocalName()
+	wrongBinary, _ := wrong.MarshalBinary()
 	versioned := bytes.Clone(binary)
-	versioned[0] = 1
+	versioned[0] = 2
 	unknownName, _ := encodeLocalName(versioned)
 	cases := map[string][]byte{
-		"wrong tenant":                      append(adField(7, wireUUID(otherTenant.UUID())), n...),
-		"wrong mesh":                        append(bytes.Clone(u), adField(9, []byte(wrongName))...),
-		"shortened name":                    append(bytes.Clone(u), adField(8, n[2:])...),
-		"truncated name":                    append(bytes.Clone(u), adField(9, n[2:len(n)-1])...),
-		"unknown version":                   append(bytes.Clone(u), adField(9, []byte(unknownName))...),
-		"malformed service with valid name": append(append(bytes.Clone(u), n...), adField(0x21, append(wireUUID(testTenant.UUID()), 0))...),
-		"legacy service with valid name":    append(append(bytes.Clone(u), n...), adField(0x21, append(wireUUID(testTenant.UUID()), make([]byte, 10)...))...),
+		"wrong tenant":                       append(adField(7, wireUUID(otherTenant.UUID())), n...),
+		"wrong mesh":                         append(bytes.Clone(u), adField(9, []byte(wrongName))...),
+		"shortened name":                     append(bytes.Clone(u), adField(8, n[2:])...),
+		"truncated name":                     append(bytes.Clone(u), adField(9, n[2:len(n)-1])...),
+		"unknown version":                    append(bytes.Clone(u), adField(9, []byte(unknownName))...),
+		"malformed service with valid name":  append(append(bytes.Clone(u), n...), adField(0x21, append(wireUUID(testTenant.UUID()), AdvertisementVersion))...),
+		"wrong mesh service with valid name": append(append(bytes.Clone(u), n...), adField(0x21, append(wireUUID(testTenant.UUID()), wrongBinary...))...),
 	}
 	for label, data := range cases {
 		t.Run(label, func(t *testing.T) {
@@ -200,7 +201,7 @@ func TestLocalNameBinaryPrecedenceAndWithdrawal(t *testing.T) {
 	if got, _ := f.candidates(objects, at.Add(2*time.Second)); len(got) != 1 {
 		t.Fatal("report recovery removed D-Bus-compatible binary observation")
 	}
-	f.observeReport("AA:BB:CC:DD:EE:01", "public", adField(0x21, append(wireUUID(testTenant.UUID()), 0)), at.Add(3*time.Second))
+	f.observeReport("AA:BB:CC:DD:EE:01", "public", adField(0x21, append(wireUUID(testTenant.UUID()), AdvertisementVersion)), at.Add(3*time.Second))
 	if got, _ := f.candidates(objects, at.Add(3*time.Second)); len(got) != 0 {
 		t.Fatal("malformed same-service payload retained old advert")
 	}

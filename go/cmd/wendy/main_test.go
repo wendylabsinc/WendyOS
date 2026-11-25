@@ -68,7 +68,6 @@ func TestReportFailureForTourCancellation(t *testing.T) {
 		{"failure", errors.New("failed"), true, 1},
 		{"tour auth failure", config.ErrNotLoggedIn, true, 3},
 		{"interactive auth failure", config.ErrNotLoggedIn, false, 3},
-		{"default cleared", commands.ErrDefaultCleared, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entrypoint := ""
@@ -393,7 +392,6 @@ func TestErrorClass_Mapping(t *testing.T) {
 	}{
 		{"nil", nil, ""},
 		{"user_cancelled", commands.ErrUserCancelled, "user_cancelled"},
-		{"default_cleared", commands.ErrDefaultCleared, "user_cancelled"},
 		{"user_cancelled_wrapped", fmt.Errorf("aborted: %w", commands.ErrUserCancelled), "user_cancelled"},
 		{"swift_picker_cancelled", fmt.Errorf("product: %w", swifttoolchain.ErrUserCancelled), "user_cancelled"},
 		{"tui_cancelled", tui.ErrCancelled, "user_cancelled"},
@@ -526,23 +524,9 @@ func TestFormatError_EnrollmentTokenUnavailableIsCloudError(t *testing.T) {
 	}
 }
 
-func TestFormatError_LocalPKICoreUnavailable(t *testing.T) {
-	err := fmt.Errorf("creating enrollment token from pki-core services.orb.local:50051: %w", status.Error(codes.Unavailable, "connection refused"))
-
-	got := formatError(err).Error()
-	want := "creating enrollment token from pki-core services.orb.local:50051: Could not connect to local pki-core. Check that the gRPC endpoint is reachable from this machine."
-	if got != want {
-		t.Fatalf("formatError() = %q, want %q", got, want)
-	}
-	if strings.Contains(got, "Wendy Cloud") || strings.Contains(got, "device") {
-		t.Fatalf("formatError() should describe local pki-core, got %q", got)
-	}
-}
-
 func TestFormatError_CloudUnavailablePreservesDetails(t *testing.T) {
 	for _, prefix := range []string{
 		"creating enrollment token: ",
-		"creating enrollment token from pki-core services.orb.local:50051: ",
 	} {
 		for _, detail := range []string{
 			"upstream connect error or disconnect/reset before headers. reset reason: connection termination",
@@ -553,6 +537,15 @@ func TestFormatError_CloudUnavailablePreservesDetails(t *testing.T) {
 				t.Errorf("formatError() = %q, want %q", got, want)
 			}
 		}
+	}
+}
+
+func TestFormatError_PreservesRemoteBuildUpgradeHint(t *testing.T) {
+	const message = "missing operator build delivery authorization. Update the wendy CLI and retry"
+	err := fmt.Errorf("build on spark-office failed or did not complete: %w", status.Error(codes.PermissionDenied, message))
+	want := "build on spark-office failed or did not complete: " + message
+	if got := formatError(err).Error(); got != want {
+		t.Fatalf("formatted error = %q, want %q", got, want)
 	}
 }
 
@@ -773,11 +766,11 @@ var refusedDial = status.Error(codes.Unavailable,
 // A hint appended after the gRPC error (fmt.Errorf("...: %w\n  hint")) used to
 // vanish when formatError replaced the transport text with fixed prose.
 func TestFormatError_KeepsHintAppendedAfterGRPCError(t *testing.T) {
-	err := fmt.Errorf("default device %q is set but could not be reached: %w\n  Confirm it with 'wendy device get-default'.",
+	err := fmt.Errorf("device %q could not be reached: %w\n  Check that it is powered on.",
 		"127.0.0.1:1", refusedDial)
-	want := `default device "127.0.0.1:1" is set but could not be reached: ` +
+	want := `device "127.0.0.1:1" could not be reached: ` +
 		"Could not connect to device. Is it powered on and connected to the network?\n" +
-		"  Confirm it with 'wendy device get-default'."
+		"  Check that it is powered on."
 	if got := formatError(err).Error(); got != want {
 		t.Errorf("formatError() = %q, want %q", got, want)
 	}
@@ -862,7 +855,7 @@ func TestErrorClass_DeviceDialFailures(t *testing.T) {
 		want string
 	}{
 		{dialedError{"10.255.255.1:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded while waiting for connections to become ready")}, "device_unreachable"},
-		{fmt.Errorf("default device: %w", dialedError{"x.local:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded")}), "device_unreachable"},
+		{fmt.Errorf("connecting: %w", dialedError{"x.local:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded")}), "device_unreachable"},
 		{dialedError{"127.0.0.1:1", refusedDial}, "device_unreachable"},
 		{dialedError{"nosuchhost.invalid:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")}, "device_not_resolved"},
 		{dialedError{"wendyos-zzz:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")}, "device_unreachable"},
@@ -901,5 +894,14 @@ func TestFormatError_UnresolvedDeviceNamesTheHost(t *testing.T) {
 		if got := formatError(tc.err).Error(); got != tc.want {
 			t.Errorf("formatError(%v) = %q, want %q", tc.err, got, tc.want)
 		}
+	}
+}
+
+func TestFormatError_LeavesADeviceVerdictAlone(t *testing.T) {
+	// The device's reason can quote a gRPC error about the new agent's socket;
+	// it says nothing about the user's own connection.
+	err := errors.New(commands.AgentVerdictPrefix + `did not pass its checks within 3m0s: agent does not answer on its local socket: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial unix /x: connect: connection refused"; the device went back to agent 2026.12.04-100000 from /data`)
+	if got := formatError(err).Error(); got != err.Error() {
+		t.Fatalf("a device verdict was rewritten:\n%s", got)
 	}
 }

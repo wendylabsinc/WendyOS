@@ -31,6 +31,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -82,6 +83,10 @@ type Session struct {
 	privatePEM, state, verifier, redirect string
 	started                               time.Time
 	certificate                           config.CertificateInfo
+	liteCertificate                       config.CertificateInfo
+	topologyGate                          chan struct{}
+	topologyFlights                       map[string]*topologyFlight
+	topologyMu                            sync.Mutex
 	tokens                                token
 	profile                               Profile
 }
@@ -153,6 +158,7 @@ func (s *Session) Begin(ctx context.Context, email, issuer, redirect string) (st
 	s.tokens = token{}
 	s.profile = Profile{}
 	s.certificate = config.CertificateInfo{}
+	s.liteCertificate = config.CertificateInfo{}
 	return authorize, nil
 }
 
@@ -254,7 +260,11 @@ func (s *Session) exchange(ctx context.Context, form url.Values) (token, error) 
 				nonce = r.Header.Get("DPoP-Nonce")
 				continue
 			}
-			return token{}, fmt.Errorf("Token exchange failed (%d): %s", r.StatusCode, problem.Error)
+			cause := fmt.Errorf("Token exchange failed (%d): %s", r.StatusCode, problem.Error)
+			if problem.Error == "invalid_grant" || problem.Error == "invalid_token" {
+				cause = failure.Wrap(cause, failure.AuthenticationRequired, failure.SignIn)
+			}
+			return token{}, cause
 		}
 		var t token
 		if e = json.Unmarshal(b, &t); e != nil {
@@ -544,7 +554,11 @@ func requestPKIIdentityCertificate(
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("parsing pki-core certificate chain: %w", err)
 	}
-	wantPublicKey, err := x509.MarshalPKIXPublicKey(key.Public())
+	csrKey, err := certs.ParseSigningPrivateKeyPEM([]byte(privateKeyPEM))
+	if err != nil {
+		return config.CertificateInfo{}, err
+	}
+	wantPublicKey, err := x509.MarshalPKIXPublicKey(csrKey.Public())
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("encoding generated operator public key: %w", err)
 	}

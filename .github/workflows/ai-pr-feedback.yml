@@ -75,8 +75,6 @@ on:
       - Build products and release
       - Go Tests
       - Swift Tests
-      - Docs Review
-      - Integration Test Review
     types: [completed]
 
 # CONCURRENCY: cancel-in-progress: true ensures at most one run is active per PR
@@ -729,7 +727,7 @@ jobs:
           failing  = sanitize(failing)
           ALLOWED_CHECKS_RE = re.compile(
               r'^(Build products and release|Go Tests|Swift Tests|Docs Review'
-              r'|Integration Test Review|Format Check|Vet|Test|Lint Swift Sources'
+              r'|Integration Test Review|Vet|Test|Lint Swift Sources'
               r'|Run WendyAgentCore Tests|Build WendyAgentMac app'
               r'|Analyze \([a-z0-9\-]+\)|Review docs coverage'
               r'|Review integration test coverage|Integration Tests \(macOS\)( / .+)?'

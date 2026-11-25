@@ -32,7 +32,7 @@ See `conf/template/boards/jetson-agx-thor/` in the `meta-wendyos` repo for the b
 
 ## Secure boot policy
 
-> The notes below describe the **current internal policy**, not a shipped, user-facing secure-boot flow. End-user secure-boot enablement is still planned work; see [WDY-1237](https://linear.app/wendylabsinc/issue/WDY-1237) and [WDY-1238](https://linear.app/wendylabsinc/issue/WDY-1238) for the surrounding security tickets.
+> The notes below describe the **current internal policy**, not a shipped, user-facing secure-boot flow. End-user secure-boot enablement is in progress; e-fuse burning remains planned; see [WDY-1237](https://linear.app/wendylabsinc/issue/WDY-1237) and [WDY-1238](https://linear.app/wendylabsinc/issue/WDY-1238) for the surrounding security tickets.
 
 Burning device fuses to enforce secure boot is an irreversible hardware change. WendyOS will **not** burn fuses on user devices as part of normal flashing. Fuse burning is reserved for sensitive, real-world production deployments where the customer explicitly opts in.
 

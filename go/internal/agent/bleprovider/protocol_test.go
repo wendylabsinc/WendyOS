@@ -66,7 +66,7 @@ func TestAdvertisementRoundTripAndMeshIsolation(t *testing.T) {
 		t.Fatal("accepted truncation")
 	}
 	bad := bytes.Clone(raw)
-	bad[1], bad[2] = 0, 1
+	bad[2], bad[3] = 0, 1
 	if _, err := ParseAdvertisement(bad, "production.mesh"); err == nil {
 		t.Fatal("accepted non-LE PSM")
 	}

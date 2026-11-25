@@ -39,6 +39,7 @@ and most recent rounds in `roughtime_observations` and counts the rounds in
 | `wendy data episodes` | List finalized Episodes, with any still in progress at the top. |
 | `wendy data inspect [episode]` | Print the manifest and verify every sealed payload checksum. |
 | `wendy data download [episode]` | Resume a per-file download, verify it, and publish the local directory atomically. |
+| `wendy data delete [episode...]` | Permanently delete finalized Episodes from the device. `--all` deletes every finalized Episode; `--force` skips the confirmation. Alias `rm`. |
 
 Use repeatable `--source` flags to narrow recording or `--exclude-source` to
 remove a default source. `record` also accepts `--name`, repeatable
@@ -110,16 +111,16 @@ The status says what the agent actually checked, which differs by kind:
 | Status | Source | What was checked |
 |---|---|---|
 | `connected` | Local camera (USB, CSI, or a ROS 2 image topic's loopback) | The camera answered a capture query when it was listed. Nothing tests that it delivers a picture. |
-| `online` | Network camera | It answered the last discovery probe and has a stored login. The login itself is not tried. |
+| `online` | Network camera | It answered the agent's last check. Only network cameras with a stored login are sources; pair one with `wendy device pair` or `wendy device camera login <id>`, and see unpaired ones with `wendy device camera list --all`. The login itself is not tried. |
 | `detected` | Microphone | PipeWire, or ALSA where no PipeWire session runs, lists it as a capture device. Nothing tests that it hears anything. |
 | `reachable` | ROS 2 domain | `ros2 topic list` answered on the domain. Recording the domain records all of its topics. |
 | `listed` | ROS 2 topic | `ros2 topic list` lists the topic. |
 | `built in` | Application records, telemetry | Nothing; they need no hardware. |
 
-A source that is not usable shows why instead, for example `no login stored`
-or `camera offline` for a network camera, `silent audio-hub channel` for an
-NVIDIA Jetson audio-DMA endpoint that records digital silence, or
-`topic listing failed` for a ROS 2 domain. It has no `*`: `record` leaves it out
+A source that is not usable shows why instead, for example `camera offline`
+for a network camera, `silent audio-hub channel` for an NVIDIA Jetson
+audio-DMA endpoint that records digital silence, or `topic listing failed` for
+a ROS 2 domain. It has no `*`: `record` leaves it out
 unless `--source` names it. In `--json`, `healthy` is the same verdict and
 `unusable_reason` carries the reason. An agent that predates these fields is
 shown by its raw description, with `healthy` or `unhealthy` as its status.
@@ -171,8 +172,8 @@ names a microphone is refused with a pointer to `wendy data sources --kind audio
 Every `data` subcommand whose payload is a protocol buffer message prints it as
 canonical protobuf JSON on one compact line, with protocol buffer field names
 exactly as the `.proto` declares them, and unpopulated fields omitted. That
-covers `sources`, `episodes`, `record`, `stop`, `status`, `campaign list`
-and `campaign trigger`.
+covers `sources`, `episodes`, `record`, `stop`, `status`, `campaign list`,
+`campaign trigger`, `campaign arm`, `campaign disarm` and `campaign remove`.
 
 Some payloads are already a JSON document the device produced, and those bytes
 are written through untouched so they stay checkable against the device:
@@ -247,9 +248,85 @@ note.
 | `wendy data campaign list` | List deployed campaigns and revisions. |
 | `wendy data campaign inspect <name>` | Print the canonical deployed plan and state. |
 | `wendy data campaign trigger <name>` | Trigger a campaign manually; `--reason` is stored in the Episode. |
+| `wendy data campaign disarm <name>` | Switch a campaign off without removing it. |
+| `wendy data campaign arm <name>` | Switch a disarmed campaign back on. |
+| `wendy data campaign remove <name>` | Stop a campaign and delete its plan, keeping its Episodes. `--force` stops and seals a recording in progress first. Alias `rm`. |
 
 Event and model-uncertainty triggers are armed immediately after deployment.
 A complete plan is in `Examples/WendyDataCampaign` in the WendyOS repository.
+
+### Switching a campaign off, and removing it
+
+`wendy data campaign disarm <name>` switches a campaign off on the connected
+device. Its triggers stop firing, its agent inference stops, and its camera
+pre-roll is released, so the camera is no longer held for it. The plan, its
+revision and every Episode it recorded are kept, and `campaign list` and
+`campaign inspect` show it as `disarmed`; a campaign with `inference` or event
+notifications reports `inference_status.state: disarmed`. A manual
+`campaign trigger` of a disarmed campaign is refused.
+
+The command returns once the inference has stopped. Two waits come before
+that. If an Episode of the campaign is ending when you run it, the command
+first waits for that Episode to be sealed, which includes its `capture.drain`.
+It then waits up to 10 seconds for the inference to stop. If the inference is
+still stopping after that, the command succeeds anyway, because the campaign is
+already disarmed, and prints a warning. `campaign inspect` reports
+`inference_status.state: stopping` until the inference has stopped and
+released the camera.
+
+The disarmed state is stored with the plan, so it survives agent restarts and
+reboots. Redeploying a disarmed campaign stores the new plan but keeps the
+campaign disarmed, and the deploy output says so: switching a campaign off is
+an operator's decision on that device, and an edited plan, a teammate's
+deployment or a fleet sending the plan again must not quietly switch recording
+back on. `wendy data campaign arm <name>` reverses it: triggers fire again,
+inference restarts and camera pre-roll is re-armed. Both commands are
+idempotent.
+
+Disarming does not cut short a recording in progress. It finishes its
+`after_trigger` window and is sealed normally; the command names it.
+
+```console
+$ wendy data campaign disarm c920-yolo-live
+Campaign c920-yolo-live: disarmed (revision 1a2b3c4d5e6f)
+Its triggers and inference are stopped and its camera pre-roll is released. The plan and its episodes are kept.
+Arm it again with: wendy data campaign arm c920-yolo-live
+
+$ wendy data campaign list
+CAMPAIGN	STATE	REVISION	FLEET
+c920-yolo-live	disarmed	1a2b3c4d5e6f
+```
+
+`wendy data campaign remove <name>` stops the campaign the same way, then
+deletes its stored plan, so it is no longer listed, triggered or restored at
+boot. Every Episode it recorded is kept: they stay inspectable and
+downloadable, and Episodes still waiting to upload follow the removed plan's
+`upload.when` and `upload.max_rate`, which the device keeps for that purpose.
+The Cloud app registration is also left in place for those uploads. A
+campaign that is recording is refused, naming the Episode; `--force` stops and
+seals that recording first, including its `capture.drain`, then removes the
+campaign. Remove waits for the inference as disarm does. If the inference is
+still stopping after 10 seconds, the removal has already happened, so the
+command succeeds and prints a warning. Deploying the same name again starts a
+new, armed campaign.
+
+```console
+$ wendy data campaign remove c920-yolo-live
+Error: campaign c920-yolo-live is recording episode 20261027T101500Z-6c1f; wait for it to be sealed, or remove the campaign with --force to stop and seal that recording first
+$ wendy data campaign remove c920-yolo-live --force
+Stopped and sealed its recording first: episode 20261027T101500Z-6c1f (complete).
+Removed campaign c920-yolo-live (revision 1a2b3c4d5e6f).
+Its episodes are kept; list them with: wendy data episodes
+```
+
+A campaign whose plan names a `fleet` is still switched off or removed on the
+connected device only. Disarming is the durable choice for one device in a
+fleet, because a disarmed campaign stays disarmed when the plan is deployed
+again; a removed one comes back armed. Both commands print a warning for a
+fleet campaign.
+
+An agent that predates these commands is reported as needing
+`wendy device update`.
 
 ### Deployment and Cloud registration
 
@@ -276,7 +353,7 @@ and are ignored when `notify.on` is `episode_committed`. The immediate modes
 |---|---|---|
 | `version` | yes | Campaign schema version the author wrote the file against. This release supports version `1`; higher versions are a deploy-time error. |
 | `name` | yes | Unique device-local name using letters, numbers, `.`, `-`, or `_`; maximum 128 characters. |
-| `fleet` | no | Fleet selector retained with the plan. A direct device deployment applies to the connected device. |
+| `fleet` | no | Fleet selector retained with the plan. A direct device deployment applies to the connected device, and so do `campaign disarm` and `campaign remove`. |
 | `sources` | yes | One or more source entries. |
 | `capture` | yes | Buffer, post-trigger duration, and triggers. |
 | `upload` | yes | Upload condition, optional logical destination, and optional rate cap. |
@@ -437,7 +514,7 @@ disabled.
 | `revision` | yes | Lowercase, 40-character Hugging Face commit SHA. Branch names are rejected. |
 | `labels` | yes | 1–32 unique, nonempty model labels, each at most 128 bytes. |
 | `threshold` | yes | Detection confidence in `(0, 1]`. |
-| `rate` | yes | Frames per second per camera in `(0, 30]`. |
+| `rate` | yes | Frames per second per camera in `(0, 30]`. An upper bound: a model slower than this scores as fast as it can; see `inference_status.throughput` below. |
 | `event` | yes | Event emitted on detection; 1–128 letters, numbers, `.`, `-`, or `_`. |
 | `clear_after` | yes | Continuous absence needed to clear presence; positive duration, at most 24h. |
 | `cooldown` | yes | Minimum interval between detection events; positive duration, at most 24h. |
@@ -449,6 +526,41 @@ Inference requires a camera source and a trigger matching its event in
 `inference_status`, including runtime state, per-camera state and notification
 errors. Temporary camera loss retains presence/cooldown state so reconnecting
 does not produce a duplicate detection.
+
+`rate` is the most the model scores, not a promise: one model scores the
+campaign's cameras in turn, and a model that needs longer for a frame than the
+rate allows scores as fast as it can. `inference_status.throughput` compares
+the two, for either backend: `requested_fps` (the rate, for every camera being
+scored), `achieved_fps`, and a `summary` such as
+`model scores 0.11 frames/s of the 1 requested (about 9.1 s per frame on cpu)`.
+Once the model has missed the rate for 30 seconds, `model_too_slow` is `true`
+and the agent logs a warning. Once it has kept up for 30 seconds the flag is
+gone, and the agent logs that too. Cameras that deliver fewer frames than the
+rate are not reported as a slow model, and neither is the CPU while a TensorRT
+engine is on its way.
+
+Each report from the model process is also published as OpenTelemetry metrics
+of the agent (`service.name` `wendy-agent`, scope `wendy.data.inference`). Reports
+are sent between frames, at most one every 10 seconds, so a slow model reports
+less often.
+
+| Metric | Type | Value |
+|---|---|---|
+| `inference.rate.requested` | gauge, `{frame}/s` | `throughput.requested_fps` |
+| `inference.rate.achieved` | gauge, `{frame}/s` | `stats.fps` |
+| `inference.model.too_slow` | gauge, `0` or `1` | `throughput.model_too_slow` |
+| `inference.frame.duration_ms` | gauge, `ms` | `stats.infer_ms_p50` and `stats.infer_ms_p95`, told apart by `inference.quantile` (`p50`, `p95`) |
+| `inference.frames.scored` | cumulative sum, `{frame}` | `stats.frames_scored`; it starts again when the model process restarts |
+
+Every point carries `inference.campaign` and `inference.model`, and the gauges
+`inference.engine` (`cpu` or `tensorrt`). The requested rate and
+`inference.model.too_slow` are published only while the status has a
+`throughput`, and nothing more is published once a campaign's inference has
+stopped, though a metrics stream opened later still begins with the last
+values the agent published. Read them with the `telemetry_metrics` MCP tool
+(`metric_name_prefix: inference.`), or with
+`wendy device telemetry-stream --metrics`, which prints one JSON line per
+metric: for a metric with several points, such as the frame duration, its last.
 
 Each scored frame produces a `prediction` record, which an Episode that
 records applications keeps in its `events.jsonl`. A frame that raises the
@@ -541,11 +653,11 @@ with `waiting_since` and `build_by`, `queued`, `building` with `started_at`,
 `verifying`, `ready` or `failed` with an `error`) and any `warnings` TensorRT
 printed while loading it. A build or a wait also reports `elapsed_seconds`,
 and a build that stopped waiting for idle CPUs reports `low_priority: true`.
-`inference_status.stats` reports `fps`, inference latency (`infer_ms_p50`,
-`infer_ms_p95`) and `frames_scored`, the frames the model process has scored
-since it started. Each `prediction` record carries `accelerator`, `precision`,
-`infer_ms` and `model_sha256`, because FP16 TensorRT scores differ slightly
-from FP32 CPU scores.
+`inference_status.stats` reports, for either backend, `fps`, inference latency
+(`infer_ms_p50`, `infer_ms_p95`) and `frames_scored`, the frames the model
+process has scored since it started. Each `prediction` record carries
+`accelerator`, `precision`, `infer_ms` and `model_sha256`, because FP16
+TensorRT scores differ slightly from FP32 CPU scores.
 
 The agent keeps what TensorRT needs in its inference directory: `accel/` holds
 the bindings, `engines/` the built engines (about 9 MB each for `yolo11n`),
@@ -762,6 +874,48 @@ When the device storage quota is exceeded, the oldest Episodes that are
 already uploaded or were recorded without an upload policy are evicted first.
 Episodes still awaiting upload are evicted only as a last resort, with a
 warning in the agent log naming the Episode and campaign.
+
+### Deleting Episodes
+
+`wendy data delete <episode-id>...` removes finalized Episodes from the device
+for good: the manifest and every file each one recorded. It cannot be undone,
+and an Episode that has not been uploaded is lost, so the command lists what it
+is about to delete and asks first. `--force` skips the question, and is
+required in non-interactive and `--json` mode. `--all` deletes every finalized
+Episode. With neither IDs nor `--all`, an interactive terminal picks one, as
+`inspect` does.
+
+```console
+$ wendy data delete 20261027T101500Z-6c1f
+EPISODE                NAME            SIZE    STARTED
+20261027T101500Z-6c1f  c920-yolo-live  9.3 MB  2026-10-27 10:15:00
+Delete episode 20261027T101500Z-6c1f? This cannot be undone, and an episode that has not been uploaded is lost for good. [y/N] y
+Deleted episode 20261027T101500Z-6c1f (c920-yolo-live, 9.3 MB).
+
+$ wendy data delete --all --force
+Deleted episode 20261027T104210Z-91ad (c920-yolo-live, 10.0 MB).
+Deleted episode 20261027T103002Z-3e70 (c920-yolo-live, 9.8 MB).
+Deleted 2 episodes, 19.8 MB in all.
+```
+
+- Every ID is checked against the device's list before anything is deleted,
+  so one mistyped ID deletes none of them.
+- A recording still in progress (recording, draining or sealing) is never
+  deleted. Stop it with `wendy data stop`, or wait for it to be sealed. `--all`
+  leaves recordings in progress alone and says how many it left.
+- An Episode that a `download` or the upload worker is reading at that moment
+  is refused; delete it when that has finished. With `--all`, the others are
+  still deleted and the command exits non-zero, naming the ones it could not.
+- The Episode leaves the store in one atomic step and its files are removed
+  after that. A delete interrupted by a crash or power cut is finished when the
+  agent next starts; it is never left half done.
+- Removing a campaign with `wendy data campaign remove` keeps its Episodes.
+  Delete them separately.
+- With `--json`, each deleted Episode is one line of protobuf JSON: the Episode
+  as it was listed, and its `upload_state` (`uploaded` means a copy exists at
+  its upload destination).
+- An agent that predates `delete` answers with
+  `this device's agent does not support \`wendy data delete\`; update it with \`wendy device update\``.
 
 The device-wide quota is the smaller of a fifth of the episode store's
 filesystem and `WENDY_DATA_MAX_BYTES` (default 50 GiB), and eviction preserves

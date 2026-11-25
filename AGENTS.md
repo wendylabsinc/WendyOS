@@ -3,6 +3,94 @@
 Wendy is a CLI and agent platform for developing and deploying applications on
 WendyOS edge devices (Raspberry Pi, NVIDIA Jetson, x86 SBCs, and more).
 
+## Image files
+
+AI assistants and LLMs must not add or modify image files in Git commits. This
+applies to all images, including screenshots, GIFs, generated artwork, and SVGs,
+whether intended for review, documentation, or the product itself.
+
+Keep generated review assets outside the repository. Upload screenshots, GIFs,
+and videos as GitHub attachments and embed them in the PR description. If an
+attachment cannot be uploaded, report that limitation instead of committing the
+asset to satisfy the PR demonstration requirement.
+
+## Pull request descriptions
+
+Every PR description opens with one short paragraph for people, then uses only
+the applicable sections below, in this order. When an issue exists, link it on
+the first line, then the opening paragraph:
+
+```markdown
+- **Closes:** [WDY-1234 Problem title](https://linear.app/wendylabsinc/issue/WDY-1234/problem-title)
+
+> **In plain terms:** One short paragraph on what this PR changes for the people
+> using it, and why. Do not repeat the linked issue.
+```
+
+Use **Closes** only when the PR fully resolves the issue, **Advances** for a
+partial delivery, **Related** for context without claimed progress. The issue
+stays the problem statement; the PR is the record of the change.
+
+Then the sections, in this order. Keep each section concise and describe only what changed. Omit
+sections that do not apply instead of writing `None` or describing unchanged
+behavior. Always include the Risk section. Do not add a summary, test plan,
+checklist, or other sections. These limits apply to the PR description, not to
+performing tests or other required checks.
+
+1. **Affected build products**
+   - WendyOS
+   - Wendy Lite
+   - Wendy Agent
+   - CLI
+   - iOS/Android/macOS app, specifying the affected platforms
+   - WASM
+2. **Affected components**
+   - Networking, specifying mesh networking when affected
+   - Container Runtime
+   - Cloud Connectivity
+   - TLS/Cryptography or Security
+   - Name other affected components explicitly instead of writing `Etc.`
+3. **Type of change(s)**
+   - Identify the applicable types, including UI/UX, wire protocol, bugfix,
+     feature, refactor, or documentation.
+   - UI/UX includes iOS, Android, macOS, and CLI developer experience.
+   - For CLI or app UI/UX changes, include a GIF, screenshots, or video in this
+     section demonstrating the changed behavior.
+   - Upload PR review assets as GitHub attachments and embed them in the PR
+     description. Do not commit review screenshots, GIFs, videos, or other
+     review-only assets to the repository.
+4. **Significant items of note**
+   - Explicitly identify wire protocol breaking changes and added API surface.
+   - Identify other breaking changes and any action existing users must take.
+5. **Risk**
+   - The PR author must state `low`, `medium`, or `high` and apply exactly one
+     matching PR label:
+     `risk: low`, `risk: medium`, or `risk: high`.
+   - Risk means the chance of breaking existing users' workflows, including
+     crashes, vulnerabilities, and compatibility regressions. Assess the actual
+     behavior affected, not the size of the diff or whether it is called a bugfix.
+   - Include a brief reason for the rating in this section.
+6. **Architectural changes**
+   - Explicitly describe any broad architectural change, such as adding a major
+     ecosystem component or changing responsibilities between components.
+   - Include this section only when the PR changes the architecture.
+
+## Optional AI reviews
+
+AI reviews run only when requested. Apply the corresponding PR labels:
+
+- `review: security` for the security review. Dependabot PRs still run the
+  dependency policy check without a label.
+- `review: api` for API and compatibility review, including a risk recommendation.
+- `review: docs` for documentation coverage suggestions.
+- `review: integration-tests` for integration-test coverage suggestions.
+
+Each label starts its review and enables reruns on subsequent pushes until removed.
+Explicitly requested reviews can run on drafts. API review recommends a risk rating
+in its comment but does not change the author's risk label. Its `api-review` finding
+label is separate from the `review: api` opt-in label. Existing manual API validation
+remains available without publishing results. Builds and tests run as before.
+
 ## Setup
 
 Install the CLI:
@@ -27,9 +115,9 @@ Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Codex.
    device, call `auth_login` and show the user the returned link. Local simulators
    and LAN devices that are not Cloud-enrolled need no sign-in.
 2. Call `device_list` (optionally `scan: true`) to find available devices.
-   - On Linux, a USB-C tethered device can't be reached until the host's USB-C link
-     is configured; `device_list` then returns a `usb` warning. Ask the user to run
-     `wendy discover` in a terminal and accept its USB-C setup prompt (it needs sudo).
+   - On Linux, a USB-tethered device can't be reached until the host's USB link is
+     configured; `device_list` then returns a `usb` warning. Ask the user to run
+     `wendy discover` in a terminal and accept its USB setup prompt (it needs sudo).
    - It also lists local simulators (`vm:name`). Without hardware, connect to one
      rather than skipping on-device checks; ask the user before creating a new one.
 3. Call `device_connect` with a selector from `device_list`: host:port for LAN,
@@ -39,7 +127,9 @@ Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Codex.
 
 For a new board without WendyOS/Agent, enable the `setup` group with
 `wendy_tools(groups=["setup"])`, then use `os_install_plan` and `os_list_drives`
-before connecting. For supported image installs, use `os_install_start`, show the
+before connecting. For supported image installs, ask for the device name and
+WiFi, pass them to `os_install_start` as `device_name` and `wifi` (or
+`no_wifi=true`; omitted means no WiFi and an auto-generated name), show the
 physical instructions, then `os_install_resume` to probe the target. Obtain explicit
 erase authorization for the returned fingerprint before starting the write. Poll
 `os_install_status`; resume with an explicit address to verify first boot, or use

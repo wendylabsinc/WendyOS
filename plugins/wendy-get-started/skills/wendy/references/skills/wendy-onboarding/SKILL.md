@@ -144,7 +144,9 @@ For a supported image install through MCP:
 
 1. Call `os_install_plan`. For raw media, call `os_list_drives` and match the
    intended SD card or SSD by path, model, and capacity. Re-plan with that drive.
-2. Call `os_install_start` and retain its `job_id`. Show its physical instructions
+2. Ask for a device name and Wi-Fi, then call `os_install_start` with
+   `device_name` and `wifi` (or `no_wifi=true`; omitted means no Wi-Fi and an
+   auto-generated name). Retain its `job_id`. Show its physical instructions
    for cables, recovery mode, media, and power before continuing.
 3. After the user completes those steps, call `os_install_resume` to probe the
    target. Show the returned fingerprint and erase scope. Only after explicit
@@ -163,7 +165,7 @@ device is not yet listed. Explain the remaining connection or enrollment step.
 
 Installation tools require a local stdio session. The hosted relay cannot flash
 the user's laptop media. If the tools are absent, follow the installation
-skill's terminal path on the appropriate host. On Linux, a USB-C discovery warning means the user must run `wendy discover`
+skill's terminal path on the appropriate host. On Linux, a USB discovery warning means the user must run `wendy discover`
 in a terminal and accept the host USB setup prompt before tethered access works.
 
 ## Start without hardware
@@ -185,12 +187,10 @@ Creation returns a stopped VM. Start it through the tools the server exposes:
   `wendy vm create <name> --profile generic`, then connect with a device inspection
   such as `wendy --json device info --device vm:<name>`.
 
-Refresh the simulator state and inspect the agent to verify the connection. For
-a robot profile, call `simulator_viewer` when available; only describe its viewer
-as ready when the result reports both `ready` and `healthy`. If the VM's agent
-lacks robot support, `simulator_update_agent` can finish setup when available;
-then start and verify again. Do not replace or delete the VM to recover an
-uncertain operation.
+Refresh the simulator state and inspect the agent to verify the connection. If
+the VM's agent lacks robot support, update it with
+`wendy --device vm:<name> device update`, then start and verify again. Do not
+replace or delete the VM to recover an uncertain operation.
 
 Simulator operations require a local connection. When unavailable, explain
 that requirement or use the installed CLI on the user's development host. Do

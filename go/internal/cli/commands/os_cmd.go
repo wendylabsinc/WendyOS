@@ -360,7 +360,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 					}
 					fmt.Println("Please select the correct device type to continue.")
 					fmt.Println()
-					picked, pickErr := pickDeviceTypeAndGetLatestOTA(nightly)
+					picked, pickErr := pickDeviceTypeAndGetLatestOTA(storageMedium, nightly)
 					if pickErr != nil {
 						return pickErr
 					}
@@ -520,7 +520,7 @@ func spinOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
 		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -587,7 +587,8 @@ func artifactURLPath(filePath string) string {
 // pickDeviceTypeAndGetLatestOTA shows a device-type picker and returns the OTA
 // artifact URL for the latest stable release (or latest nightly when nightly is
 // true). No version picker is shown — the version is chosen automatically.
-func pickDeviceTypeAndGetLatestOTA(nightly bool) (string, error) {
+// storageMedium is the device's reported medium, which picks the NVMe variant.
+func pickDeviceTypeAndGetLatestOTA(storageMedium string, nightly bool) (string, error) {
 	fmt.Println("Fetching available devices...")
 
 	devices, err := getAvailableDevices()
@@ -630,7 +631,7 @@ func pickDeviceTypeAndGetLatestOTA(nightly bool) (string, error) {
 		return "", err
 	}
 
-	otaURL, latestVer, err := getLatestOTAInfoForDeviceType(key, "", nightly)
+	otaURL, latestVer, err := getLatestOTAInfoForDeviceType(key, storageMedium, nightly)
 	if err != nil {
 		return "", fmt.Errorf("resolving OTA artifact for %q: %w", key, err)
 	}
@@ -659,7 +660,8 @@ func dialOSUpdateAgent(ctx context.Context, prior *grpcclient.AgentConnection) (
 	if addr == "" {
 		addr = hostPort(prior.Host, defaultAgentPort)
 	}
-	return connectWithAutoTLS(ctx, addr)
+	conn, _, err := connectWithAutoTLSDiagnosticsKeyed(ctx, addr, prior.DevicePinKey)
+	return conn, err
 }
 
 // pollDeviceOnline blocks until the same device responds to GetAgentVersion or
@@ -722,7 +724,7 @@ func waitForDeviceOnline(ctx context.Context, prior *grpcclient.AgentConnection)
 			p.Send(tui.SpinnerDoneMsg{})
 		}
 	}()
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -1570,7 +1572,7 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 
 	fmt.Printf("Agent version: %s — checking for updates...\n", agentVer)
 
-	latestVer, _, err := resolveAgentVersion(nightly)
+	latestVer, _, err := resolveAgentVersionFn(nightly)
 	if err != nil {
 		fmt.Printf("Could not check for agent updates: %v\n", err)
 		return conn, nil
@@ -1587,19 +1589,34 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 
 	fmt.Printf("Updating agent: %s → %s\n", agentVer, latestVer)
-	if err := performAgentUpdate(ctx, conn, osName, arch, nightly); err != nil {
+	sha, err := performAgentUpdateFn(ctx, conn, osName, arch, nightly)
+	if err != nil {
+		var refused *agentCheckRefusedError
+		var paused *agentUpdatesPausedError
+		if errors.As(err, &refused) || errors.As(err, &paused) {
+			// Nothing restarted, so the OS update goes on with the agent it has.
+			fmt.Printf("%v; the device kept agent %s. Continuing with the OS update.\n", err, agentVer)
+			return conn, nil
+		}
 		return nil, fmt.Errorf("agent update failed: %w", err)
 	}
 	conn.Close()
 
-	fmt.Print("Waiting for agent to restart...")
-	newConn, err := reconnectAgentAfterRestart(ctx, conn)
-	if err != nil {
-		return nil, fmt.Errorf("agent did not come back after update: %w", err)
+	fmt.Println("Waiting for agent to restart...")
+	reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		return reconnectAgentAfterRestart(ctx, conn)
 	}
-	fmt.Println(" done.")
-	return newConn, nil
+	// The OS update must not start while the new agent is on trial.
+	return confirmAgentAfterRestart(ctx, versionResp.GetSupervision() != nil, reconnect, sha, os.Stdout)
 }
+
+// Seams over the release lookup and download, the upload and the OS step for tests.
+var (
+	resolveAgentVersionFn  = resolveAgentVersion
+	resolveAgentArtifactFn = resolveAgentArtifact
+	performAgentUpdateFn   = performAgentUpdate
+	maybeCheckOSUpdateFn   = maybeCheckOSUpdate
+)
 
 // Seams over linklocal for tests.
 var (
@@ -1647,18 +1664,13 @@ func serveLocalArtifact(localPath, localIP string) (string, func(), error) {
 
 // downloadArtifactToTemp downloads a remote artifact URL to a temporary file,
 // showing a progress bar only on an interactive terminal outside JSON mode.
-// The caller is responsible for removing the file.
+// The caller is responsible for removing the file. Like OS images, the
+// multi-gigabyte artifact has no whole-transfer deadline and resumes after a
+// dropped or stalled connection (see downloadToFile).
 func downloadArtifactToTemp(artifactURL string) (string, error) {
-	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Get(artifactURL) //nolint:noctx
-	if err != nil {
-		return "", fmt.Errorf("downloading: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	img := &imageInfo{DownloadURL: artifactURL}
 
 	cacheDir, err := osCacheDir()
 	if err != nil {
@@ -1676,7 +1688,7 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 	// transfer errors are returned directly and no background writer outlives
 	// cleanup of a failed download.
 	if jsonOutput || !isInteractiveTerminal() {
-		if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		if err := downloadToFile(ctx, img, tmpFile, func(int64, int64) {}); err != nil {
 			tmpFile.Close()
 			os.Remove(tmpFile.Name())
 			return "", fmt.Errorf("downloading: %w", err)
@@ -1688,41 +1700,15 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 		return tmpFile.Name(), nil
 	}
 
-	total := resp.ContentLength
 	prog := tui.NewProgress("Downloading artifact...")
 	p := tui.NewProgressProgram(prog)
+	sendProgress := throttledProgress(p, 33*time.Millisecond)
 
 	go func() {
-		var downloaded int64
-		buf := make([]byte, 64*1024)
-		for {
-			n, readErr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-					p.Send(tui.ProgressDoneMsg{Err: writeErr})
-					return
-				}
-				downloaded += int64(n)
-				if total > 0 {
-					p.Send(tui.ProgressUpdateMsg{
-						Percent: float64(downloaded) / float64(total),
-						Written: downloaded,
-						Total:   total,
-					})
-				}
-			}
-			if readErr == io.EOF {
-				p.Send(tui.ProgressDoneMsg{})
-				return
-			}
-			if readErr != nil {
-				p.Send(tui.ProgressDoneMsg{Err: readErr})
-				return
-			}
-		}
+		p.Send(tui.ProgressDoneMsg{Err: downloadToFile(ctx, img, tmpFile, sendProgress)})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		tmpFile.Close()
 		os.Remove(tmpFile.Name())

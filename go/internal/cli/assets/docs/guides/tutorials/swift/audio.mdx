@@ -1,10 +1,10 @@
 ---
-title: Audio Playback & Streaming
-description: Learn how to play sounds and stream microphone audio using Swift and GStreamer on WendyOS
+title: Audio playback and streaming
+description: play sounds and stream microphone audio using Swift and GStreamer
 language: swift
 ---
 
-## Audio Playback & Streaming
+## Audio playback and streaming
 
 <Callout type="info">
   **Source Code**: The complete source code for this example is available at [github.com/wendylabsinc/samples/swift/audio](https://github.com/wendylabsinc/samples/tree/main/swift/audio)
@@ -26,11 +26,11 @@ This demonstrates how to use **GStreamer** with Swift to handle complex multimed
   **Recommended Hardware**: For the best experience, we recommend using a USB speakerphone like the Anker PowerConf plugged into your NVIDIA Jetson via USB. It provides high-quality audio capture and playback in a single device.
 </Callout>
 
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     ```bash
     wendy init audio --target wendyos --language swift --template audio --var APP_ID=audio --var PORT=6004 --var SWIFT_VERSION=6.3 --assistant skip --git-init no
@@ -55,9 +55,15 @@ This demonstrates how to use **GStreamer** with Swift to handle complex multimed
   </Step>
 </Steps>
 
-## Code Breakdown
+## What you should see
 
-## Project Structure
+Your browser opens automatically once the app is ready. If it doesn't, navigate to `http://<device-hostname>.local:6004`.
+
+You should be able to click buttons to play sounds on the device and toggle the microphone to see the waveform of the audio captured by the device.
+
+## Code breakdown
+
+## Project structure
 
 The template ships a single Swift backend that also serves a static browser UI (`index.html`), plus a folder of sample `.wav` files in `assets/`:
 
@@ -80,11 +86,11 @@ audio/
         └── StaticFileMiddleware.swift
 ```
 
-## Setting Up the Backend
+## Setting up the backend
 
 The backend uses [Hummingbird](https://hummingbird.codes) for the HTTP/WebSocket server and a Swift wrapper around GStreamer for audio processing.
 
-### 1. Package Dependencies
+### 1. Package dependencies
 
 The generated `Package.swift` declares a minimum `swift-tools-version` of 6.2 (the project still builds with the Swift 6.3 toolchain in the Dockerfile) and includes the GStreamer Swift wrapper alongside Hummingbird and its WebSocket support:
 
@@ -133,7 +139,7 @@ let package = Package(
 - `WS /stream` — streams live microphone PCM to the browser; send `{"switch_microphone": "<deviceID>"}` to change the source
 - `GET /` and `GET {path+}` — serve the bundled `index.html` UI
 
-### 3. Audio Playback Pipeline
+### 3. Audio playback pipeline
 
 To play a sound, the app builds a GStreamer pipeline that reads a file, parses the WAV format, converts/resamples it, and sends it to the chosen sink (a specific ALSA speaker, or `autoaudiosink`):
 
@@ -154,7 +160,7 @@ func playSound(filename: String, speaker: String?, playback: PlaybackManager) as
 }
 ```
 
-### 4. Microphone Streaming Pipeline
+### 4. Microphone streaming pipeline
 
 To stream audio, an `AudioCapture` actor builds a microphone source (16 kHz, mono, S16LE) and broadcasts the raw PCM buffers to every connected WebSocket client:
 
@@ -190,11 +196,11 @@ wsRouter.ws("/stream") { inbound, outbound, _ in
 }
 ```
 
-## Frontend Implementation
+## Frontend implementation
 
 The frontend is the bundled `index.html` page. It connects to the `/stream` WebSocket to receive binary PCM frames, plays them back with the Web Audio API, and renders a live waveform on a canvas. It also calls `GET /sounds` to populate the play buttons and `POST /play/{filename}` when you click one.
 
-## Docker Configuration
+## Docker configuration
 
 Working with audio requires system-level dependencies. The generated `Dockerfile` is a multi-stage build: GStreamer dev packages in the builder, and runtime GStreamer + ALSA libraries in the slim final image. It also copies the `index.html` UI and the `assets/` sounds:
 
@@ -265,20 +271,8 @@ To access the microphone and speaker, the generated `wendy.json` already request
 ```
 
 The `readiness` probe waits for port `6004` to accept connections. The `postStart` hook automatically opens the web interface in your browser.
-## Run Again on WendyOS
 
-1.  Connect your WendyOS device.
-2.  Run the application:
-
-```bash
-wendy run
-```
-
-3.  Your browser will open automatically once the app is ready. If it doesn't, navigate to `http://<device-hostname>.local:6004`.
-
-You should be able to click buttons to play sounds on the device and toggle the microphone to see the waveform of the audio captured by the device.
-
-## Troubleshooting Audio
+## Troubleshooting audio
 
 If audio isn't working:
 
@@ -292,7 +286,11 @@ If audio isn't working:
 
 3.  **ALSA Devices**: The app attempts to auto-detect ALSA devices. You can override this by setting the `AUDIO_DEVICE` environment variable (e.g., `hw:1,0`).
 
-## Learn More
+## Learn more
 
 - [GStreamer Documentation](https://gstreamer.freedesktop.org/documentation/)
 - [Hummingbird WebSocket](https://docs.hummingbird.codes/2.0/documentation/hummingbirdwebsocket/)
+
+## Next steps
+
+Continue with [Wrapping a C library in Swift](/docs/guides/tutorials/swift/wrapping-c-library) to use an existing C library from a Swift app.

@@ -101,7 +101,11 @@ func (h *meshCarrierHealth) status(sharing services.LocalMeshRuntimeStatus) serv
 		} else if value.Detail != "" {
 			state += " (" + compactCarrierDetail(value.Detail) + ")"
 		}
-		details = append(details, name+": "+state)
+		displayName := name
+		if name == "BLE" {
+			displayName = "Bluetooth"
+		}
+		details = append(details, displayName+": "+state)
 	}
 	out := sharing // Preserve authenticated peers and signed gateway identity.
 	out.Available = true
@@ -110,12 +114,12 @@ func (h *meshCarrierHealth) status(sharing services.LocalMeshRuntimeStatus) serv
 		out.State = "failed"
 	case failed || sharing.State == "error":
 		out.State = "degraded"
-	case ready < len(names):
+	case ready == 0:
 		out.State = "initializing"
 	default:
 		out.State = "mesh-active"
 	}
-	out.Detail = "Carriers: " + strings.Join(details, "; ") + "."
+	out.Detail = "Connections: " + strings.Join(details, "; ") + "."
 	if sharing.State != "" || sharing.Detail != "" {
 		out.Detail += " Internet sharing: " + sharing.State
 		if sharing.Detail != "" {
@@ -155,7 +159,7 @@ func runMeshCarrier(ctx context.Context, retry time.Duration, report func(localm
 		active = false
 		if ctx.Err() == nil {
 			if err == nil {
-				err = errors.New("carrier exited unexpectedly")
+				err = errors.New("mesh connection stopped unexpectedly")
 			}
 			report(localmesh.CarrierStatus{Err: err})
 		}

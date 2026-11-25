@@ -13,6 +13,11 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
 
+// CampaignAppPrefix is shared by runtime recordings, Cloud registration and notifications.
+const CampaignAppPrefix = "sh.wendy.campaign."
+
+func CampaignAppID(name string) string { return CampaignAppPrefix + name }
+
 // NotificationDetection summarizes one detection for a notification: its label
 // and score, never a box or an image.
 type NotificationDetection struct {
@@ -145,7 +150,7 @@ func (m *Manager) Notifications(appID, event, cursor string, replay bool) ([]Cam
 		gap = true
 	}
 	for _, notification := range journal.Notifications {
-		if notification.Sequence > after && (appID == "" || appID == "sh.wendy.campaign."+notification.Campaign) && (event == "" || event == notification.Event) {
+		if notification.Sequence > after && (appID == "" || appID == CampaignAppID(notification.Campaign)) && (event == "" || event == notification.Event) {
 			out = append(out, notification)
 		}
 	}

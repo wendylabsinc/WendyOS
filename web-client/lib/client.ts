@@ -139,7 +139,7 @@ export class WendyClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error("The device did not respond in time."));
-      }, 40000);
+      }, method === "mesh-topology" ? 160000 : 40000);
       this.pending.set(id, { resolve: (v) => resolve(v as T), reject, timer });
       this.worker.postMessage({ id, method, params });
     });

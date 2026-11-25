@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build (darwin || linux) && !ios && !android
 
 // Package adb drives NVIDIA's T264 initrd-flash ADB gadget over the gousb bulk
 // endpoints on macOS/Linux. Device discovery, interface claiming, and the USB
@@ -136,7 +136,7 @@ func openOnce(wantPath string, strict bool) (*Device, error) {
 		// own PID (0955:7100), so a host whose udev rules cover only the recovery
 		// PIDs hits this even after a clean stage 1.
 		if errors.Is(err, gousb.ErrorAccess) {
-			return nil, fmt.Errorf("%w: %v (install a udev rule covering USB vendor 0955, or run with sudo)", ErrUSBAccess, err)
+			return nil, fmt.Errorf("%w: %v", ErrUSBAccess, err)
 		}
 		return nil, fmt.Errorf("no USB device with an ADB interface (ff/42/01) found: %v", err)
 	}

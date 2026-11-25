@@ -83,7 +83,7 @@ func parseOwner(path string, contents []byte) (meshid.Device, socketIdentity, er
 	if len(fields) != 6 || fields[0] != "v2" {
 		return meshid.Device{}, socketIdentity{}, fmt.Errorf("invalid NAN ownership marker %s", path)
 	}
-	id, err := meshid.DeviceFromPrincipal(fields[1])
+	id, err := meshid.PeerFromPrincipal(fields[1])
 	if err != nil {
 		return meshid.Device{}, socketIdentity{}, fmt.Errorf("invalid NAN ownership marker %s", path)
 	}

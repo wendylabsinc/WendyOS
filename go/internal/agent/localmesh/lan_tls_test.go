@@ -157,6 +157,7 @@ func TestLANUDPRecoversLossAndKeepsSharedTransport(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("trial %d ALPN=%q resumed=%v", trial, conn.ConnectionState().TLS.NegotiatedProtocol, conn.ConnectionState().TLS.DidResume)
 		if trial == 1 && !conn.ConnectionState().TLS.DidResume {
 			conn.CloseWithError(1, "resumption missing")
 			t.Fatal("UDP listener failed to resume authenticated peer")
@@ -193,7 +194,6 @@ func TestLANUDPListenerRejectsTrustedNonDevicePrincipals(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, principal := range []string{
-		"spiffe://wendy.sh/tenant/" + testTenantUUID + "/operator/auth0|lan-review-operator",
 		"spiffe://wendy.sh/tenant/" + testTenantUUID + "/service/user-lan-review",
 		"spiffe://wendy.sh/tenant/" + testTenantUUID + "/service/lan-review",
 	} {

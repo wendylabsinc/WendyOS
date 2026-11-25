@@ -141,7 +141,7 @@ func signedGateways(self meshid.Device, view localmesh.NodeSnapshot, offers []me
 		if err != nil || device == self || device.Tenant() != self.Tenant() {
 			continue
 		}
-		expires := time.UnixMilli(offer.Expires)
+		expires := offer.LeaseDeadline()
 		if !expires.After(now) {
 			continue
 		}
@@ -150,8 +150,8 @@ func signedGateways(self meshid.Device, view localmesh.NodeSnapshot, offers []me
 			if manifest.Device != device.UUID() || manifest.Withdraw {
 				continue
 			}
-			issued, lease := time.UnixMilli(manifest.Issued), time.UnixMilli(manifest.Expires)
-			if issued.After(now.Add(5*time.Second)) || !lease.After(now) {
+			lease := manifest.LeaseDeadline()
+			if !lease.After(now) {
 				continue
 			}
 			if lease.After(manifestExpiry) {
@@ -165,6 +165,16 @@ func signedGateways(self meshid.Device, view localmesh.NodeSnapshot, offers []me
 		var link babel.LinkID
 		for _, route := range view.Routes {
 			if route.Prefix == ula && !route.Local && !route.Unreachable && route.Link != 0 {
+				if view.RouteProofs != nil {
+					origin := localmesh.RouteOrigin{Prefix: route.Prefix, RouterID: route.RouterID, Seqno: route.Seqno}
+					proof, ok := view.RouteProofs[origin]
+					if !ok || proof.Principal != device.Principal() || !view.RouteAuthorizations[origin] || !proof.Deadline.After(now) {
+						continue
+					}
+					if proof.Deadline.Before(expires) {
+						expires = proof.Deadline
+					}
+				}
 				link = route.Link
 				break
 			}

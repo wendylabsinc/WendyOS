@@ -26,9 +26,10 @@ import (
 // redeliveryRelay is a Cloud and broker that behave as production does across a
 // presence reconnect. Cloud keeps the route for the same agent keys, mints a new
 // lease jti on every issuance, and binds a session grant to the newest lease it
-// issued. The first presence stream is reset before its offer reaches the
-// agent, and the broker redelivers the unacknowledged offer on the next proven
-// stream for the route.
+// issued. The first presence stream explicitly refuses its lease before its
+// offer reaches the agent, forcing replacement; transport Unavailable would
+// correctly retain that lease. The broker redelivers the unacknowledged offer
+// on the next proven stream for the route.
 type redeliveryRelay struct {
 	pb.UnimplementedTunnelAuthorizationServiceServer
 	pb.UnimplementedTunnelBrokerV2ServiceServer
@@ -98,13 +99,13 @@ func (r *redeliveryRelay) RegisterPresence(s grpc.BidiStreamingServer[pb.Registe
 		return err
 	}
 	if first && r.resetBeforeAcceptance {
-		return status.Error(codes.Unavailable, "presence stream reset")
+		return status.Error(codes.FailedPrecondition, "fixture requires a replacement presence lease")
 	}
 	if err = s.Send(&pb.RegisterPresenceResponse{Message: &pb.RegisterPresenceResponse_Accepted{Accepted: &pb.PresenceAccepted{LeaseExpiresAt: timestamppb.New(time.Unix(c.Exp, 0))}}}); err != nil {
 		return err
 	}
 	if first {
-		return status.Error(codes.Unavailable, "presence stream reset")
+		return status.Error(codes.FailedPrecondition, "fixture requires a replacement presence lease")
 	}
 	if err = s.Send(&pb.RegisterPresenceResponse{Message: &pb.RegisterPresenceResponse_SessionOffer{SessionOffer: offer}}); err != nil {
 		return err
@@ -119,7 +120,7 @@ func (r *redeliveryRelay) RegisterPresence(s grpc.BidiStreamingServer[pb.Registe
 
 // Cloud records a lease's jti as the device's presence when it issues the
 // lease, and binds every session grant to the newest one. When the presence
-// stream drops, the agent reconnects under a new lease, and the broker
+// stream refuses its lease, the agent reconnects under a new lease, and the broker
 // redelivers each unacknowledged offer, still bound to the replaced lease, on
 // the new stream. The agent has to accept it: refusing it ends the stream,
 // the next reconnect mints another jti, and every offer queued meanwhile is

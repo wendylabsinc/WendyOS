@@ -27,6 +27,10 @@ type manifestDevice struct {
 	LatestNightly string `json:"latest_nightly"`
 	ManifestPath  string `json:"manifest_path"`
 	Stability     string `json:"stability"`
+	// An alias stays listed for units that still report it; it stands for
+	// AliasStorage of AliasOf, so pickers offer only AliasOf.
+	AliasOf      string `json:"alias_of,omitempty"`
+	AliasStorage string `json:"alias_storage,omitempty"`
 }
 
 // deviceManifest contains version info for a specific device.
@@ -113,6 +117,9 @@ type deviceVersion struct {
 	// (name, kernel). Written by the publisher's --extension-file; the CLI resolves
 	// install-by-name against these. Mirrors the publisher's ExtensionMetadata.
 	Extensions []extensionEntry `json:"extensions,omitempty"`
+	Devkit     *struct {
+		KernelVersion string `json:"kernel_version"`
+	} `json:"devkit,omitempty"`
 }
 
 // extensionEntry is one driver add-on in a version's extensions[]. The fields
@@ -291,7 +298,8 @@ const deviceManifestFetchLimit = 8
 func fetchDeviceInfos(main *mainManifest, latest func(manifestDevice) string, fetch func(path string) (*deviceManifest, error)) []deviceInfo {
 	var keys []string
 	for key, dev := range main.Devices {
-		if dev.ManifestPath != "" {
+		// Every caller lists devices to pick from; an alias would duplicate its device.
+		if dev.ManifestPath != "" && dev.AliasOf == "" {
 			keys = append(keys, key)
 		}
 	}
@@ -516,7 +524,11 @@ func getOTAUpdateURL(dm *deviceManifest, ver string, storageMedium string) (stri
 // selects the variant-specific artifact when the manifest provides one. nightly
 // selects the latest prerelease version instead of the latest stable version.
 func getLatestOTAInfoForDeviceType(deviceType string, storageMedium string, nightly bool) (artifactURL, latestVersion string, err error) {
-	main, err := fetchMainManifest()
+	return getLatestOTAInfoForDeviceTypeContext(context.Background(), deviceType, storageMedium, nightly)
+}
+
+func getLatestOTAInfoForDeviceTypeContext(ctx context.Context, deviceType string, storageMedium string, nightly bool) (artifactURL, latestVersion string, err error) {
+	main, err := fetchMainManifestContext(ctx)
 	if err != nil {
 		return "", "", fmt.Errorf("fetching manifest: %w", err)
 	}
@@ -529,7 +541,7 @@ func getLatestOTAInfoForDeviceType(deviceType string, storageMedium string, nigh
 		return "", "", fmt.Errorf("no manifest path for device type %q", deviceType)
 	}
 
-	dm, err := fetchDeviceManifest(dev.ManifestPath)
+	dm, err := fetchDeviceManifestContext(ctx, dev.ManifestPath)
 	if err != nil {
 		return "", "", fmt.Errorf("fetching device manifest: %w", err)
 	}
@@ -589,6 +601,45 @@ const orinNanoDeviceType = "jetson-orin-nano"
 
 func isT234RecoveryDevice(deviceType string) bool {
 	return deviceType == orinDeviceType || deviceType == orinNanoDeviceType
+}
+
+// fetchInstallMainManifest is the master manifest that install aliases are
+// read from; tests replace it so commands that never reach a manifest stay offline.
+var fetchInstallMainManifest = func(ctx context.Context, pr int) (*mainManifest, error) {
+	if pr > 0 {
+		return fetchPRMainManifestContext(ctx, pr)
+	}
+	return fetchMainManifestContext(ctx)
+}
+
+// resolveInstallDeviceType maps a device type that the manifest marks as an
+// alias to the device and storage it stands for.
+func resolveInstallDeviceType(ctx context.Context, deviceType, storage string, pr int) (string, string, error) {
+	if deviceType == "" {
+		return deviceType, storage, nil
+	}
+	main, err := fetchInstallMainManifest(ctx, pr)
+	if err != nil {
+		// No alias is known without the manifest; the steps that need it report the failure.
+		return deviceType, storage, nil
+	}
+	return applyDeviceTypeAlias(main, deviceType, storage)
+}
+
+func applyDeviceTypeAlias(main *mainManifest, deviceType, storage string) (string, string, error) {
+	dev := main.Devices[deviceType]
+	if dev.AliasOf == "" {
+		return deviceType, storage, nil
+	}
+	if dev.AliasStorage == "" {
+		return dev.AliasOf, storage, nil
+	}
+	// The hint omits the requested storage: it may be invalid for the device.
+	if storage != "" && storage != dev.AliasStorage {
+		return "", "", fmt.Errorf("%s always installs to %s; to choose the storage, use --device-type %s with --storage",
+			deviceType, dev.AliasStorage, dev.AliasOf)
+	}
+	return dev.AliasOf, dev.AliasStorage, nil
 }
 
 type recoveryFlashpackInfo struct {

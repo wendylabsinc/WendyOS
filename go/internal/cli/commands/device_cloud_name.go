@@ -19,6 +19,71 @@ type cloudNameResolutionError struct{ error }
 
 func (e *cloudNameResolutionError) Unwrap() error { return e.error }
 
+// A Cloud-authenticated name binding already identifies an agent. Resolve it
+// with its pinned session before probing unrelated external providers or DNS.
+// Addresses, provider selectors, and names learned only from LAN keep their
+// existing resolution order.
+//
+// matched reports a connection or a final failure. Any other failed lookup is
+// returned unmatched, and the caller continues with the local path, which
+// enforces the same pin: a laptop that is offline or signed out, or a device
+// that Cloud lists as offline because its LAN has no internet, can still
+// answer on the LAN.
+func connectKnownCloudName(ctx context.Context, device string, options resolveConfig) (*SelectedDevice, bool, error) {
+	if device == "" || strings.ContainsAny(device, ".:/[]") || cloudFallbackDisabled("") || options.enrollmentTrustRecovery {
+		return nil, false, nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, false, nil
+	}
+	pin, _, pinned := lookupPin(cfg, pinKeyForAddr(device))
+	expected := expectedIdentityForPin(pin)
+	if !pinned || pin.Source != config.PinSourceCloud || pin.CloudGRPC == "" || expected == nil || expected.EntityType != certs.EntityAsset || expected.EntityID == "" {
+		return nil, false, nil
+	}
+	conn, err := connectToPinnedCloudName(ctx, cfg, device)
+	if err != nil {
+		if ctx.Err() != nil || cloudNameRefusal(err) {
+			return nil, true, &cloudNameResolutionError{err}
+		}
+		return nil, false, err
+	}
+	if !options.suppressUpdateCheck && !options.readOnlyMonitoring {
+		// The device answered. An update outcome is final.
+		if conn, err = checkAndOfferUpdateFn(ctx, conn); err != nil {
+			return nil, true, &cloudNameResolutionError{err}
+		}
+	}
+	return &SelectedDevice{Agent: conn}, true, nil
+}
+
+// knownCloudLookup carries a failed lookup from connectKnownCloudName to
+// resolveTarget. When the local path also finds nothing, resolveTarget
+// reports Cloud's answer instead of asking Cloud a second time.
+type knownCloudLookup struct{ err error }
+
+func recordKnownCloudLookup(lookup *knownCloudLookup) resolveOption {
+	return func(c *resolveConfig) { c.knownCloudLookup = lookup }
+}
+
+// A refusal stands over any other evidence; another route must not bypass it.
+func cloudNameRefusal(err error) bool {
+	return stopConnectionRecovery(err) || errors.Is(err, errProvisionedAgentUnauthorized) || errors.Is(err, errTLSHandshakeRejected)
+}
+
+// localMissDefersToCloud reports whether a failed local connection to device
+// leaves its name to Cloud: the name did not resolve, or the pin expects an
+// identity that no local device presented. Addresses, typed selectors and
+// refusals keep the local result.
+func localMissDefersToCloud(ctx context.Context, device string, cause error) bool {
+	missingExpected := errors.Is(cause, certs.ErrExpectedDeviceIdentity)
+	return device != "" && !strings.ContainsAny(device, ".:/[]") && net.ParseIP(device) == nil &&
+		cause != nil && ctx.Err() == nil && !cloudFallbackDisabled("") &&
+		(!stopConnectionRecovery(cause) || missingExpected) && !errors.Is(cause, errProvisionedAgentUnauthorized) &&
+		!errors.Is(cause, errTLSHandshakeRejected) && (isResolverMiss(cause) || missingExpected)
+}
+
 // An explicit Cloud display name or UUID need not exist in local DNS. After
 // local name resolution fails, look up that same selection in Cloud. Addresses
 // and typed transport selectors keep their original connection semantics.
@@ -28,10 +93,8 @@ func connectUnresolvedCloudName(ctx context.Context, device string, cause error,
 			err = &cloudNameResolutionError{err}
 		}
 	}()
-	if device == "" || strings.ContainsAny(device, ".:/[]") || net.ParseIP(device) != nil ||
-		cause == nil || ctx.Err() != nil || cloudFallbackDisabled("") ||
-		stopConnectionRecovery(cause) || errors.Is(cause, errProvisionedAgentUnauthorized) ||
-		errors.Is(cause, errTLSHandshakeRejected) || !isResolverMiss(cause) {
+	var resolved *cloudNameResolutionError
+	if errors.As(cause, &resolved) || !localMissDefersToCloud(ctx, device, cause) {
 		return nil, cause, false
 	}
 	if _, cloud := cloudDeviceConfigFromContext(ctx); cloud {
@@ -75,7 +138,7 @@ func connectToPinnedCloudName(ctx context.Context, cfg *config.Config, name stri
 	if err != nil {
 		return nil, err
 	}
-	return connectCloudLookupFn(ctx, auth, cloudDefaultSelector(name, expected), "", expected)
+	return connectCloudLookupFn(ctx, auth, cloudNameSelector(name, expected), "", expected)
 }
 
 // A device identity alone omits the Cloud endpoint and may be absent on older

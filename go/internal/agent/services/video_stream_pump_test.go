@@ -5,7 +5,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -18,6 +24,29 @@ import (
 type burstReader struct {
 	chunks [][]byte
 	i      int
+}
+
+// The hub can retain a payload after broadcast returns. Appending immediately
+// in the other pump tests hides reuse of the reader's backing buffer.
+func TestPumpEncodedStreamRetainedChunksOwnTheirBytes(t *testing.T) {
+	want := append(bytes.Repeat([]byte{0xA1}, 300*1024), bytes.Repeat([]byte{0xB2}, 300*1024)...)
+	want = append(want, 0xCC)
+	var retained [][]byte
+	err := pumpEncodedStream(context.Background(), bytes.NewReader(want),
+		agentpb.VideoCodec_VIDEO_CODEC_H264,
+		func(data []byte, _ frameTimestamp, codec agentpb.VideoCodec) bool {
+			if codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
+				t.Fatalf("codec changed to %v", codec)
+			}
+			retained = append(retained, data)
+			return true
+		}, func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bytes.Join(retained, nil); !bytes.Equal(got, want) {
+		t.Fatal("later reads overwrote retained encoded bytes")
+	}
 }
 
 func (r *burstReader) Read(p []byte) (int, error) {
@@ -92,9 +121,9 @@ func TestGstStreamEndClassifiesTheOtherOutcomes(t *testing.T) {
 		wantErr  error
 	}{
 		{name: "clean end", want: codes.OK},
-		// The timer can fire just as the first chunk lands; frames were delivered,
-		// so this is a normal end of stream and not a timeout.
-		{name: "timer raced the first chunk", timedOut: true, sawChunk: true, want: codes.OK},
+		{name: "stalled after first chunk", timedOut: true, sawChunk: true, want: codes.DeadlineExceeded},
+		{name: "cancelled during timeout", timedOut: true, sawChunk: true, ctxErr: cancelled, wantErr: cancelled},
+		{name: "cancelled with clean read", ctxErr: cancelled, wantErr: cancelled},
 		{name: "caller cancelled", readErr: cancelled, ctxErr: cancelled, wantErr: cancelled},
 		{name: "read failed", readErr: readFailed, want: codes.Internal},
 	} {
@@ -110,6 +139,81 @@ func TestGstStreamEndClassifiesTheOtherOutcomes(t *testing.T) {
 				t.Fatalf("got %v (code %s), want %s", err, status.Code(err), tc.want)
 			}
 		})
+	}
+}
+
+func TestCameraPipeReaderTimesOutWithoutOutput(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	reader := &cameraPipeReader{pipe: r, timeout: 30 * time.Millisecond, idleTimeout: time.Second}
+	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("read error = %v, want timeout", err)
+	}
+}
+
+func TestCameraPipeReaderRefreshesDeadlineAndDetectsLaterStall(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	reader := &cameraPipeReader{pipe: r, timeout: time.Second, idleTimeout: 100 * time.Millisecond}
+	// Keep sending beyond one idle timeout, then leave the writer open and
+	// silent, as gst does when the USB driver stops supplying capture buffers.
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 8; i++ {
+			if _, err := w.Write([]byte{byte(i)}); err != nil {
+				done <- err
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		done <- nil
+	}()
+	var got []byte
+	err = pumpEncodedStream(context.Background(), reader, agentpb.VideoCodec_VIDEO_CODEC_H264,
+		func(b []byte, _ frameTimestamp, _ agentpb.VideoCodec) bool {
+			got = append(got, b...)
+			return true
+		}, func() {})
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("read error = %v, want timeout after output stopped", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, []byte{0, 1, 2, 3, 4, 5, 6, 7}) {
+		t.Fatalf("stream stopped while frames were arriving: %v", got)
+	}
+}
+
+func TestCameraPipelineReleasesStalledProducerAfterFirstChunk(t *testing.T) {
+	program := filepath.Join(t.TempDir(), "gst-test")
+	if err := os.WriteFile(program, []byte("#!/bin/sh\nprintf encoded\nexec /bin/sleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cameraIdleTimeout+5*time.Second)
+	defer cancel()
+	svc := &VideoService{logger: zap.NewNop()}
+	var received bytes.Buffer
+	err := svc.runCameraPipeline(ctx, func(b []byte, _ frameTimestamp, _ agentpb.VideoCodec) bool {
+		received.Write(b)
+		return true
+	}, "/dev/video4", gstEncoderResult{element: "x264enc"}, gstPipelinePlan{args: []string{program}}, nil, nil, nil)
+	if ctx.Err() != nil {
+		t.Fatal("stalled producer survived until caller cancellation")
+	}
+	if status.Code(err) != codes.DeadlineExceeded || !strings.Contains(err.Error(), "stopped producing video") {
+		t.Fatalf("error = %v, want capture stall timeout", err)
+	}
+	if received.String() != "encoded" {
+		t.Fatalf("received %q, want initial video chunk", received.String())
 	}
 }
 

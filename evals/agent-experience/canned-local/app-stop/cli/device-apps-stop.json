@@ -1,0 +1,10 @@
+{
+  "argv_prefix": [
+    "device",
+    "apps",
+    "stop"
+  ],
+  "stdout": "{\"app\": \"sensor-dashboard\", \"action\": \"stop\", \"status\": \"stopped\"}",
+  "stderr": "",
+  "exit_code": 0
+}

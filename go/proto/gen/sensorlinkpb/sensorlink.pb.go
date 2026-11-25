@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v7.34.0
-// source: wendy/lite/sensorlink.proto
+// source: wendylite/v1/sensorlink.proto
 
 package sensorlinkpb
 
@@ -54,11 +54,11 @@ func (x VideoFormat_Codec) String() string {
 }
 
 func (VideoFormat_Codec) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendy_lite_sensorlink_proto_enumTypes[0].Descriptor()
+	return file_wendylite_v1_sensorlink_proto_enumTypes[0].Descriptor()
 }
 
 func (VideoFormat_Codec) Type() protoreflect.EnumType {
-	return &file_wendy_lite_sensorlink_proto_enumTypes[0]
+	return &file_wendylite_v1_sensorlink_proto_enumTypes[0]
 }
 
 func (x VideoFormat_Codec) Number() protoreflect.EnumNumber {
@@ -67,7 +67,7 @@ func (x VideoFormat_Codec) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use VideoFormat_Codec.Descriptor instead.
 func (VideoFormat_Codec) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{0, 0}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{0, 0}
 }
 
 type AudioFormat_Codec int32
@@ -103,11 +103,11 @@ func (x AudioFormat_Codec) String() string {
 }
 
 func (AudioFormat_Codec) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendy_lite_sensorlink_proto_enumTypes[1].Descriptor()
+	return file_wendylite_v1_sensorlink_proto_enumTypes[1].Descriptor()
 }
 
 func (AudioFormat_Codec) Type() protoreflect.EnumType {
-	return &file_wendy_lite_sensorlink_proto_enumTypes[1]
+	return &file_wendylite_v1_sensorlink_proto_enumTypes[1]
 }
 
 func (x AudioFormat_Codec) Number() protoreflect.EnumNumber {
@@ -116,12 +116,12 @@ func (x AudioFormat_Codec) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AudioFormat_Codec.Descriptor instead.
 func (AudioFormat_Codec) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{1, 0}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{1, 0}
 }
 
 type VideoFormat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Codec         VideoFormat_Codec      `protobuf:"varint,1,opt,name=codec,proto3,enum=wendy.lite.sensorlink.VideoFormat_Codec" json:"codec,omitempty"`
+	Codec         VideoFormat_Codec      `protobuf:"varint,1,opt,name=codec,proto3,enum=wendylite.v1.VideoFormat_Codec" json:"codec,omitempty"`
 	Width         uint32                 `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"`
 	Height        uint32                 `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`
 	Fps           uint32                 `protobuf:"varint,4,opt,name=fps,proto3" json:"fps,omitempty"`
@@ -131,7 +131,7 @@ type VideoFormat struct {
 
 func (x *VideoFormat) Reset() {
 	*x = VideoFormat{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[0]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -143,7 +143,7 @@ func (x *VideoFormat) String() string {
 func (*VideoFormat) ProtoMessage() {}
 
 func (x *VideoFormat) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[0]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -156,7 +156,7 @@ func (x *VideoFormat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VideoFormat.ProtoReflect.Descriptor instead.
 func (*VideoFormat) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{0}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *VideoFormat) GetCodec() VideoFormat_Codec {
@@ -189,7 +189,7 @@ func (x *VideoFormat) GetFps() uint32 {
 
 type AudioFormat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Codec         AudioFormat_Codec      `protobuf:"varint,1,opt,name=codec,proto3,enum=wendy.lite.sensorlink.AudioFormat_Codec" json:"codec,omitempty"`
+	Codec         AudioFormat_Codec      `protobuf:"varint,1,opt,name=codec,proto3,enum=wendylite.v1.AudioFormat_Codec" json:"codec,omitempty"`
 	SampleRate    uint32                 `protobuf:"varint,2,opt,name=sample_rate,json=sampleRate,proto3" json:"sample_rate,omitempty"`
 	Channels      uint32                 `protobuf:"varint,3,opt,name=channels,proto3" json:"channels,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -198,7 +198,7 @@ type AudioFormat struct {
 
 func (x *AudioFormat) Reset() {
 	*x = AudioFormat{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[1]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -210,7 +210,7 @@ func (x *AudioFormat) String() string {
 func (*AudioFormat) ProtoMessage() {}
 
 func (x *AudioFormat) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[1]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -223,7 +223,7 @@ func (x *AudioFormat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AudioFormat.ProtoReflect.Descriptor instead.
 func (*AudioFormat) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{1}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *AudioFormat) GetCodec() AudioFormat_Codec {
@@ -258,7 +258,7 @@ type SensorFormat struct {
 
 func (x *SensorFormat) Reset() {
 	*x = SensorFormat{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[2]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -270,7 +270,7 @@ func (x *SensorFormat) String() string {
 func (*SensorFormat) ProtoMessage() {}
 
 func (x *SensorFormat) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[2]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -283,7 +283,7 @@ func (x *SensorFormat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SensorFormat.ProtoReflect.Descriptor instead.
 func (*SensorFormat) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{2}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SensorFormat) GetSchema() string {
@@ -307,6 +307,72 @@ func (x *SensorFormat) GetSampleBytes() uint32 {
 	return 0
 }
 
+// Identity attached by a forwarding agent to a channel in its manifest.
+// Absent on directly advertised channels and manifests from older agents.
+// This describes the authenticated immediate upstream pairing, not an identity
+// assertion supplied by the sensor itself. Receivers must not use it as a grant.
+type SensorSource struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Stable pairing key: device SPIFFE principal, or "asset:<id>" for legacy
+	// numeric pairings. Display names and forwarded routing IDs are not identities.
+	PairingKey    string `protobuf:"bytes,1,opt,name=pairing_key,json=pairingKey,proto3" json:"pairing_key,omitempty"`
+	ChannelId     uint32 `protobuf:"varint,2,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"` // channel_id in the paired source's manifest; zero is valid
+	InputId       uint32 `protobuf:"varint,3,opt,name=input_id,json=inputId,proto3" json:"input_id,omitempty"`       // input_id in the paired source's manifest; zero is valid
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SensorSource) Reset() {
+	*x = SensorSource{}
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SensorSource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SensorSource) ProtoMessage() {}
+
+func (x *SensorSource) ProtoReflect() protoreflect.Message {
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SensorSource.ProtoReflect.Descriptor instead.
+func (*SensorSource) Descriptor() ([]byte, []int) {
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *SensorSource) GetPairingKey() string {
+	if x != nil {
+		return x.PairingKey
+	}
+	return ""
+}
+
+func (x *SensorSource) GetChannelId() uint32 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *SensorSource) GetInputId() uint32 {
+	if x != nil {
+		return x.InputId
+	}
+	return 0
+}
+
 type SensorDescriptor struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	ChannelId uint32                 `protobuf:"varint,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
@@ -317,14 +383,18 @@ type SensorDescriptor struct {
 	//	*SensorDescriptor_Video
 	//	*SensorDescriptor_Audio
 	//	*SensorDescriptor_Sensor
-	Format        isSensorDescriptor_Format `protobuf_oneof:"format"`
+	Format isSensorDescriptor_Format `protobuf_oneof:"format"`
+	// The forwarding agent remaps channel_id/input_id for local routing, preserves
+	// the display name and format, and sets source from the authenticated pairing.
+	// It must replace any upstream-provided source rather than trusting it.
+	Source        *SensorSource `protobuf:"bytes,7,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SensorDescriptor) Reset() {
 	*x = SensorDescriptor{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[3]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -336,7 +406,7 @@ func (x *SensorDescriptor) String() string {
 func (*SensorDescriptor) ProtoMessage() {}
 
 func (x *SensorDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[3]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -349,7 +419,7 @@ func (x *SensorDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SensorDescriptor.ProtoReflect.Descriptor instead.
 func (*SensorDescriptor) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{3}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SensorDescriptor) GetChannelId() uint32 {
@@ -407,6 +477,13 @@ func (x *SensorDescriptor) GetSensor() *SensorFormat {
 	return nil
 }
 
+func (x *SensorDescriptor) GetSource() *SensorSource {
+	if x != nil {
+		return x.Source
+	}
+	return nil
+}
+
 type isSensorDescriptor_Format interface {
 	isSensorDescriptor_Format()
 }
@@ -438,7 +515,7 @@ type SensorManifest struct {
 
 func (x *SensorManifest) Reset() {
 	*x = SensorManifest{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[4]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -450,7 +527,7 @@ func (x *SensorManifest) String() string {
 func (*SensorManifest) ProtoMessage() {}
 
 func (x *SensorManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[4]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -463,7 +540,7 @@ func (x *SensorManifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SensorManifest.ProtoReflect.Descriptor instead.
 func (*SensorManifest) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{4}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SensorManifest) GetSensors() []*SensorDescriptor {
@@ -481,7 +558,7 @@ type GetSensorManifest struct {
 
 func (x *GetSensorManifest) Reset() {
 	*x = GetSensorManifest{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[5]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -493,7 +570,7 @@ func (x *GetSensorManifest) String() string {
 func (*GetSensorManifest) ProtoMessage() {}
 
 func (x *GetSensorManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[5]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -506,7 +583,7 @@ func (x *GetSensorManifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSensorManifest.ProtoReflect.Descriptor instead.
 func (*GetSensorManifest) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{5}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{6}
 }
 
 type Subscribe struct {
@@ -518,7 +595,7 @@ type Subscribe struct {
 
 func (x *Subscribe) Reset() {
 	*x = Subscribe{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[6]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -530,7 +607,7 @@ func (x *Subscribe) String() string {
 func (*Subscribe) ProtoMessage() {}
 
 func (x *Subscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[6]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -543,7 +620,7 @@ func (x *Subscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subscribe.ProtoReflect.Descriptor instead.
 func (*Subscribe) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{6}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Subscribe) GetChannelId() []uint32 {
@@ -562,7 +639,7 @@ type Unsubscribe struct {
 
 func (x *Unsubscribe) Reset() {
 	*x = Unsubscribe{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[7]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -574,7 +651,7 @@ func (x *Unsubscribe) String() string {
 func (*Unsubscribe) ProtoMessage() {}
 
 func (x *Unsubscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[7]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -587,7 +664,7 @@ func (x *Unsubscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Unsubscribe.ProtoReflect.Descriptor instead.
 func (*Unsubscribe) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{7}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Unsubscribe) GetChannelId() []uint32 {
@@ -611,7 +688,7 @@ type SensorData struct {
 
 func (x *SensorData) Reset() {
 	*x = SensorData{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[8]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -623,7 +700,7 @@ func (x *SensorData) String() string {
 func (*SensorData) ProtoMessage() {}
 
 func (x *SensorData) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[8]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -636,7 +713,7 @@ func (x *SensorData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SensorData.ProtoReflect.Descriptor instead.
 func (*SensorData) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{8}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *SensorData) GetChannelId() uint32 {
@@ -690,7 +767,7 @@ type Ping struct {
 
 func (x *Ping) Reset() {
 	*x = Ping{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[9]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -702,7 +779,7 @@ func (x *Ping) String() string {
 func (*Ping) ProtoMessage() {}
 
 func (x *Ping) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[9]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -715,7 +792,7 @@ func (x *Ping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ping.ProtoReflect.Descriptor instead.
 func (*Ping) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{9}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Ping) GetTsUs() uint64 {
@@ -741,7 +818,7 @@ type Envelope struct {
 
 func (x *Envelope) Reset() {
 	*x = Envelope{}
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[10]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -753,7 +830,7 @@ func (x *Envelope) String() string {
 func (*Envelope) ProtoMessage() {}
 
 func (x *Envelope) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_sensorlink_proto_msgTypes[10]
+	mi := &file_wendylite_v1_sensorlink_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -766,7 +843,7 @@ func (x *Envelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
 func (*Envelope) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{10}
+	return file_wendylite_v1_sensorlink_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Envelope) GetMsg() isEnvelope_Msg {
@@ -840,22 +917,22 @@ func (*Envelope_Data) isEnvelope_Msg() {}
 
 func (*Envelope_Ping) isEnvelope_Msg() {}
 
-var File_wendy_lite_sensorlink_proto protoreflect.FileDescriptor
+var File_wendylite_v1_sensorlink_proto protoreflect.FileDescriptor
 
-const file_wendy_lite_sensorlink_proto_rawDesc = "" +
+const file_wendylite_v1_sensorlink_proto_rawDesc = "" +
 	"\n" +
-	"\x1bwendy/lite/sensorlink.proto\x12\x15wendy.lite.sensorlink\"\xc2\x01\n" +
-	"\vVideoFormat\x12>\n" +
-	"\x05codec\x18\x01 \x01(\x0e2(.wendy.lite.sensorlink.VideoFormat.CodecR\x05codec\x12\x14\n" +
+	"\x1dwendylite/v1/sensorlink.proto\x12\fwendylite.v1\"\xb9\x01\n" +
+	"\vVideoFormat\x125\n" +
+	"\x05codec\x18\x01 \x01(\x0e2\x1f.wendylite.v1.VideoFormat.CodecR\x05codec\x12\x14\n" +
 	"\x05width\x18\x02 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x03 \x01(\rR\x06height\x12\x10\n" +
 	"\x03fps\x18\x04 \x01(\rR\x03fps\"3\n" +
 	"\x05Codec\x12\x15\n" +
 	"\x11CODEC_UNSPECIFIED\x10\x00\x12\t\n" +
 	"\x05MJPEG\x10\x01\x12\b\n" +
-	"\x04H264\x10\x02\"\xc3\x01\n" +
-	"\vAudioFormat\x12>\n" +
-	"\x05codec\x18\x01 \x01(\x0e2(.wendy.lite.sensorlink.AudioFormat.CodecR\x05codec\x12\x1f\n" +
+	"\x04H264\x10\x02\"\xba\x01\n" +
+	"\vAudioFormat\x125\n" +
+	"\x05codec\x18\x01 \x01(\x0e2\x1f.wendylite.v1.AudioFormat.CodecR\x05codec\x12\x1f\n" +
 	"\vsample_rate\x18\x02 \x01(\rR\n" +
 	"sampleRate\x12\x1a\n" +
 	"\bchannels\x18\x03 \x01(\rR\bchannels\"7\n" +
@@ -866,18 +943,25 @@ const file_wendy_lite_sensorlink_proto_rawDesc = "" +
 	"\fSensorFormat\x12\x16\n" +
 	"\x06schema\x18\x01 \x01(\tR\x06schema\x12\x17\n" +
 	"\arate_hz\x18\x02 \x01(\rR\x06rateHz\x12!\n" +
-	"\fsample_bytes\x18\x03 \x01(\rR\vsampleBytes\"\xa1\x02\n" +
+	"\fsample_bytes\x18\x03 \x01(\rR\vsampleBytes\"i\n" +
+	"\fSensorSource\x12\x1f\n" +
+	"\vpairing_key\x18\x01 \x01(\tR\n" +
+	"pairingKey\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x02 \x01(\rR\tchannelId\x12\x19\n" +
+	"\binput_id\x18\x03 \x01(\rR\ainputId\"\xba\x02\n" +
 	"\x10SensorDescriptor\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\rR\tchannelId\x12\x19\n" +
 	"\binput_id\x18\x02 \x01(\rR\ainputId\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\x12:\n" +
-	"\x05video\x18\x04 \x01(\v2\".wendy.lite.sensorlink.VideoFormatH\x00R\x05video\x12:\n" +
-	"\x05audio\x18\x05 \x01(\v2\".wendy.lite.sensorlink.AudioFormatH\x00R\x05audio\x12=\n" +
-	"\x06sensor\x18\x06 \x01(\v2#.wendy.lite.sensorlink.SensorFormatH\x00R\x06sensorB\b\n" +
-	"\x06format\"S\n" +
-	"\x0eSensorManifest\x12A\n" +
-	"\asensors\x18\x01 \x03(\v2'.wendy.lite.sensorlink.SensorDescriptorR\asensors\"\x13\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x121\n" +
+	"\x05video\x18\x04 \x01(\v2\x19.wendylite.v1.VideoFormatH\x00R\x05video\x121\n" +
+	"\x05audio\x18\x05 \x01(\v2\x19.wendylite.v1.AudioFormatH\x00R\x05audio\x124\n" +
+	"\x06sensor\x18\x06 \x01(\v2\x1a.wendylite.v1.SensorFormatH\x00R\x06sensor\x122\n" +
+	"\x06source\x18\a \x01(\v2\x1a.wendylite.v1.SensorSourceR\x06sourceB\b\n" +
+	"\x06format\"J\n" +
+	"\x0eSensorManifest\x128\n" +
+	"\asensors\x18\x01 \x03(\v2\x1e.wendylite.v1.SensorDescriptorR\asensors\"\x13\n" +
 	"\x11GetSensorManifest\"*\n" +
 	"\tSubscribe\x12\x1d\n" +
 	"\n" +
@@ -895,72 +979,74 @@ const file_wendy_lite_sensorlink_proto_rawDesc = "" +
 	"\x05flags\x18\x05 \x01(\rR\x05flags\x12\x18\n" +
 	"\apayload\x18\x06 \x01(\fR\apayload\"\x1b\n" +
 	"\x04Ping\x12\x13\n" +
-	"\x05ts_us\x18\x01 \x01(\x04R\x04tsUs\"\x84\x02\n" +
-	"\bEnvelope\x12C\n" +
-	"\bmanifest\x18\x01 \x01(\v2%.wendy.lite.sensorlink.SensorManifestH\x00R\bmanifest\x12@\n" +
-	"\tsubscribe\x18\x02 \x01(\v2 .wendy.lite.sensorlink.SubscribeH\x00R\tsubscribe\x127\n" +
-	"\x04data\x18\x03 \x01(\v2!.wendy.lite.sensorlink.SensorDataH\x00R\x04data\x121\n" +
-	"\x04ping\x18\x04 \x01(\v2\x1b.wendy.lite.sensorlink.PingH\x00R\x04pingB\x05\n" +
+	"\x05ts_us\x18\x01 \x01(\x04R\x04tsUs\"\xe0\x01\n" +
+	"\bEnvelope\x12:\n" +
+	"\bmanifest\x18\x01 \x01(\v2\x1c.wendylite.v1.SensorManifestH\x00R\bmanifest\x127\n" +
+	"\tsubscribe\x18\x02 \x01(\v2\x17.wendylite.v1.SubscribeH\x00R\tsubscribe\x12.\n" +
+	"\x04data\x18\x03 \x01(\v2\x18.wendylite.v1.SensorDataH\x00R\x04data\x12(\n" +
+	"\x04ping\x18\x04 \x01(\v2\x12.wendylite.v1.PingH\x00R\x04pingB\x05\n" +
 	"\x03msgb\x06proto3"
 
 var (
-	file_wendy_lite_sensorlink_proto_rawDescOnce sync.Once
-	file_wendy_lite_sensorlink_proto_rawDescData []byte
+	file_wendylite_v1_sensorlink_proto_rawDescOnce sync.Once
+	file_wendylite_v1_sensorlink_proto_rawDescData []byte
 )
 
-func file_wendy_lite_sensorlink_proto_rawDescGZIP() []byte {
-	file_wendy_lite_sensorlink_proto_rawDescOnce.Do(func() {
-		file_wendy_lite_sensorlink_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_wendy_lite_sensorlink_proto_rawDesc), len(file_wendy_lite_sensorlink_proto_rawDesc)))
+func file_wendylite_v1_sensorlink_proto_rawDescGZIP() []byte {
+	file_wendylite_v1_sensorlink_proto_rawDescOnce.Do(func() {
+		file_wendylite_v1_sensorlink_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_wendylite_v1_sensorlink_proto_rawDesc), len(file_wendylite_v1_sensorlink_proto_rawDesc)))
 	})
-	return file_wendy_lite_sensorlink_proto_rawDescData
+	return file_wendylite_v1_sensorlink_proto_rawDescData
 }
 
-var file_wendy_lite_sensorlink_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_wendy_lite_sensorlink_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
-var file_wendy_lite_sensorlink_proto_goTypes = []any{
-	(VideoFormat_Codec)(0),    // 0: wendy.lite.sensorlink.VideoFormat.Codec
-	(AudioFormat_Codec)(0),    // 1: wendy.lite.sensorlink.AudioFormat.Codec
-	(*VideoFormat)(nil),       // 2: wendy.lite.sensorlink.VideoFormat
-	(*AudioFormat)(nil),       // 3: wendy.lite.sensorlink.AudioFormat
-	(*SensorFormat)(nil),      // 4: wendy.lite.sensorlink.SensorFormat
-	(*SensorDescriptor)(nil),  // 5: wendy.lite.sensorlink.SensorDescriptor
-	(*SensorManifest)(nil),    // 6: wendy.lite.sensorlink.SensorManifest
-	(*GetSensorManifest)(nil), // 7: wendy.lite.sensorlink.GetSensorManifest
-	(*Subscribe)(nil),         // 8: wendy.lite.sensorlink.Subscribe
-	(*Unsubscribe)(nil),       // 9: wendy.lite.sensorlink.Unsubscribe
-	(*SensorData)(nil),        // 10: wendy.lite.sensorlink.SensorData
-	(*Ping)(nil),              // 11: wendy.lite.sensorlink.Ping
-	(*Envelope)(nil),          // 12: wendy.lite.sensorlink.Envelope
+var file_wendylite_v1_sensorlink_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_wendylite_v1_sensorlink_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_wendylite_v1_sensorlink_proto_goTypes = []any{
+	(VideoFormat_Codec)(0),    // 0: wendylite.v1.VideoFormat.Codec
+	(AudioFormat_Codec)(0),    // 1: wendylite.v1.AudioFormat.Codec
+	(*VideoFormat)(nil),       // 2: wendylite.v1.VideoFormat
+	(*AudioFormat)(nil),       // 3: wendylite.v1.AudioFormat
+	(*SensorFormat)(nil),      // 4: wendylite.v1.SensorFormat
+	(*SensorSource)(nil),      // 5: wendylite.v1.SensorSource
+	(*SensorDescriptor)(nil),  // 6: wendylite.v1.SensorDescriptor
+	(*SensorManifest)(nil),    // 7: wendylite.v1.SensorManifest
+	(*GetSensorManifest)(nil), // 8: wendylite.v1.GetSensorManifest
+	(*Subscribe)(nil),         // 9: wendylite.v1.Subscribe
+	(*Unsubscribe)(nil),       // 10: wendylite.v1.Unsubscribe
+	(*SensorData)(nil),        // 11: wendylite.v1.SensorData
+	(*Ping)(nil),              // 12: wendylite.v1.Ping
+	(*Envelope)(nil),          // 13: wendylite.v1.Envelope
 }
-var file_wendy_lite_sensorlink_proto_depIdxs = []int32{
-	0,  // 0: wendy.lite.sensorlink.VideoFormat.codec:type_name -> wendy.lite.sensorlink.VideoFormat.Codec
-	1,  // 1: wendy.lite.sensorlink.AudioFormat.codec:type_name -> wendy.lite.sensorlink.AudioFormat.Codec
-	2,  // 2: wendy.lite.sensorlink.SensorDescriptor.video:type_name -> wendy.lite.sensorlink.VideoFormat
-	3,  // 3: wendy.lite.sensorlink.SensorDescriptor.audio:type_name -> wendy.lite.sensorlink.AudioFormat
-	4,  // 4: wendy.lite.sensorlink.SensorDescriptor.sensor:type_name -> wendy.lite.sensorlink.SensorFormat
-	5,  // 5: wendy.lite.sensorlink.SensorManifest.sensors:type_name -> wendy.lite.sensorlink.SensorDescriptor
-	6,  // 6: wendy.lite.sensorlink.Envelope.manifest:type_name -> wendy.lite.sensorlink.SensorManifest
-	8,  // 7: wendy.lite.sensorlink.Envelope.subscribe:type_name -> wendy.lite.sensorlink.Subscribe
-	10, // 8: wendy.lite.sensorlink.Envelope.data:type_name -> wendy.lite.sensorlink.SensorData
-	11, // 9: wendy.lite.sensorlink.Envelope.ping:type_name -> wendy.lite.sensorlink.Ping
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+var file_wendylite_v1_sensorlink_proto_depIdxs = []int32{
+	0,  // 0: wendylite.v1.VideoFormat.codec:type_name -> wendylite.v1.VideoFormat.Codec
+	1,  // 1: wendylite.v1.AudioFormat.codec:type_name -> wendylite.v1.AudioFormat.Codec
+	2,  // 2: wendylite.v1.SensorDescriptor.video:type_name -> wendylite.v1.VideoFormat
+	3,  // 3: wendylite.v1.SensorDescriptor.audio:type_name -> wendylite.v1.AudioFormat
+	4,  // 4: wendylite.v1.SensorDescriptor.sensor:type_name -> wendylite.v1.SensorFormat
+	5,  // 5: wendylite.v1.SensorDescriptor.source:type_name -> wendylite.v1.SensorSource
+	6,  // 6: wendylite.v1.SensorManifest.sensors:type_name -> wendylite.v1.SensorDescriptor
+	7,  // 7: wendylite.v1.Envelope.manifest:type_name -> wendylite.v1.SensorManifest
+	9,  // 8: wendylite.v1.Envelope.subscribe:type_name -> wendylite.v1.Subscribe
+	11, // 9: wendylite.v1.Envelope.data:type_name -> wendylite.v1.SensorData
+	12, // 10: wendylite.v1.Envelope.ping:type_name -> wendylite.v1.Ping
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
-func init() { file_wendy_lite_sensorlink_proto_init() }
-func file_wendy_lite_sensorlink_proto_init() {
-	if File_wendy_lite_sensorlink_proto != nil {
+func init() { file_wendylite_v1_sensorlink_proto_init() }
+func file_wendylite_v1_sensorlink_proto_init() {
+	if File_wendylite_v1_sensorlink_proto != nil {
 		return
 	}
-	file_wendy_lite_sensorlink_proto_msgTypes[3].OneofWrappers = []any{
+	file_wendylite_v1_sensorlink_proto_msgTypes[4].OneofWrappers = []any{
 		(*SensorDescriptor_Video)(nil),
 		(*SensorDescriptor_Audio)(nil),
 		(*SensorDescriptor_Sensor)(nil),
 	}
-	file_wendy_lite_sensorlink_proto_msgTypes[10].OneofWrappers = []any{
+	file_wendylite_v1_sensorlink_proto_msgTypes[11].OneofWrappers = []any{
 		(*Envelope_Manifest)(nil),
 		(*Envelope_Subscribe)(nil),
 		(*Envelope_Data)(nil),
@@ -970,18 +1056,18 @@ func file_wendy_lite_sensorlink_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_lite_sensorlink_proto_rawDesc), len(file_wendy_lite_sensorlink_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendylite_v1_sensorlink_proto_rawDesc), len(file_wendylite_v1_sensorlink_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_wendy_lite_sensorlink_proto_goTypes,
-		DependencyIndexes: file_wendy_lite_sensorlink_proto_depIdxs,
-		EnumInfos:         file_wendy_lite_sensorlink_proto_enumTypes,
-		MessageInfos:      file_wendy_lite_sensorlink_proto_msgTypes,
+		GoTypes:           file_wendylite_v1_sensorlink_proto_goTypes,
+		DependencyIndexes: file_wendylite_v1_sensorlink_proto_depIdxs,
+		EnumInfos:         file_wendylite_v1_sensorlink_proto_enumTypes,
+		MessageInfos:      file_wendylite_v1_sensorlink_proto_msgTypes,
 	}.Build()
-	File_wendy_lite_sensorlink_proto = out.File
-	file_wendy_lite_sensorlink_proto_goTypes = nil
-	file_wendy_lite_sensorlink_proto_depIdxs = nil
+	File_wendylite_v1_sensorlink_proto = out.File
+	file_wendylite_v1_sensorlink_proto_goTypes = nil
+	file_wendylite_v1_sensorlink_proto_depIdxs = nil
 }

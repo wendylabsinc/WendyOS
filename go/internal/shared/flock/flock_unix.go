@@ -16,6 +16,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Lock waits until an exclusive file lock is available.
+func Lock(f *os.File) error {
+	return unix.Flock(int(f.Fd()), unix.LOCK_EX)
+}
+
 // TryLock attempts a non-blocking exclusive (advisory) lock on f. It returns
 // (true, nil) when the lock was acquired, (false, nil) when another process
 // holds it, and a non-nil error for any other failure.

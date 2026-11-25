@@ -98,3 +98,245 @@ func webmVint(b []byte, id bool) (value uint64, width int, unknown, ok bool) {
 	unknown = !id && value == (uint64(1)<<(7*width))-1
 	return value, width, unknown, true
 }
+
+// WebM element identifiers the join walker steps into or inspects.
+const (
+	webmIDSegment     = 0x18538067
+	webmIDCluster     = 0x1f43b675
+	webmIDBlockGroup  = 0xa0
+	webmIDBlock       = 0xa1
+	webmIDSimpleBlock = 0xa3
+)
+
+// webmJoinPoint is where, within one VP8 frame, a viewer that joined after the
+// stream began can start: it is sent prefix, then data[offset:]. prefix is the
+// WebM initialization followed by any of that Cluster's opening bytes carried
+// over from earlier reads; carry counts those. The zero value passes the frame
+// through unchanged.
+type webmJoinPoint struct {
+	prefix []byte
+	carry  int
+	offset int
+}
+
+// webmJoinAsIs marks the stream's first frame, which carries its own
+// initialization, and every frame once the structure could not be followed.
+var webmJoinAsIs = &webmJoinPoint{}
+
+// join returns the bytes a late viewer is sent for the frame data carrying p.
+func (p *webmJoinPoint) join(data []byte) []byte {
+	if p.prefix == nil {
+		return data[p.offset:]
+	}
+	out := make([]byte, 0, len(p.prefix)+len(data)-p.offset)
+	return append(append(out, p.prefix...), data[p.offset:]...)
+}
+
+// webmViewer cuts one viewer's copy of a VP8 stream so that it stays a WebM
+// stream a demuxer can follow whatever the hub drops for that viewer.
+//
+// A viewer is only sent whole elements: the unfinished one at the end of a
+// read is held until a later read completes it. A demuxer takes whatever
+// follows an unfinished element as the rest of it, so a loss behind one stops
+// GStreamer's matroskademux for good ("reading large block of size ... not
+// supported"), whatever is sent next. With nothing unfinished outstanding, a
+// loss costs the held bytes and the wait for the next join point, where the
+// viewer resumes with that Cluster alone: it is sent the initialization once.
+// An unfinished element exceeding the buffer limit is discarded the same way
+// as a lost read. Sending part of it would make the next loss unrecoverable.
+type webmViewer struct {
+	last    uint64 // sample identity of the previous frame
+	joined  bool   // false until a join point, and again after a loss
+	started bool   // the initialization has been sent in full
+	held    []byte // the unfinished element at the end of what has been sent
+}
+
+// next returns what to send the viewer for one frame: nothing while it waits
+// for a join point, or when the frame completes no element.
+func (v *webmViewer) next(frame *videoFrame) []byte {
+	if sampleGap(v.last, frame.sampleID) {
+		v.joined, v.held = false, nil
+	}
+	v.last = frame.sampleID
+	var out []byte
+	data, whole := frame.data, frame.webmWhole
+	if !v.joined {
+		p := frame.webmJoin
+		if p == nil {
+			return nil
+		}
+		v.joined = true
+		cluster := len(p.prefix) - p.carry
+		if !v.started {
+			out = p.prefix[:cluster:cluster]
+		}
+		v.held, data, whole = p.prefix[cluster:], frame.data[p.offset:], whole-p.offset
+	}
+	// A viewer joined since before the first Cluster has by now been sent
+	// everything ahead of it, which is the initialization.
+	v.started = v.started || frame.decoderInit != nil
+	// held and data alias shared frames: appending must copy, never write.
+	if whole <= 0 && len(v.held)+len(data) <= maxWebMInitialization {
+		v.held = append(v.held[:len(v.held):len(v.held)], data...)
+		return out
+	}
+	if whole <= 0 {
+		v.joined, v.held = false, nil
+		return out
+	}
+	if len(out)+len(v.held) > 0 {
+		out = append(append(out, v.held...), data[:whole]...)
+	} else {
+		out = data[:whole]
+	}
+	v.held = data[whole:]
+	return out
+}
+
+// webmJoins follows a WebM stream element by element, across arbitrary pipe
+// reads, to find where a viewer joining mid-stream can start: each Cluster
+// whose first frame is a VP8 key frame. The stream is one container, not a
+// sequence of frames, so bytes cut from its middle can be neither demuxed (no
+// EBML header or Tracks) nor decoded (delta frames first). Segment, Cluster
+// and BlockGroup are stepped into, since streamable WebM leaves their sizes
+// unknown; every other element is skipped by its size, so payload bytes are
+// never read as identifiers. The hub mutex protects this state.
+//
+// The same walk reports how much of each read ends between two elements (see
+// webmViewer). A BlockGroup is one element there: its children are stepped
+// into, but a demuxer reads it whole.
+type webmJoins struct {
+	hdr     [12]byte // the element header being read; ID and size may span reads
+	hdrN    int
+	skip    uint64   // payload bytes of the current element still to pass over
+	group   uint64   // bytes of the open BlockGroup still to pass over
+	block   [12]byte // the opening bytes of the open Cluster's first block
+	blockN  int
+	peek    bool   // the element being skipped is that first block
+	open    bool   // a Cluster has begun and its first block is still unread
+	carry   []byte // the open Cluster's bytes from earlier reads
+	whole   int    // how many leading bytes of the last read end between two elements
+	started bool
+	failed  bool
+}
+
+// feed advances over one read of the stream and returns its join point, or nil
+// when a late viewer cannot start in it. init is the initialization
+// webmInitialization reported for the same read. A stream whose structure
+// cannot be followed passes every frame through as before, rather than holding
+// late viewers back for good.
+func (w *webmJoins) feed(data, init []byte) *webmJoinPoint {
+	if w.failed {
+		w.whole = len(data)
+		return webmJoinAsIs
+	}
+	var point *webmJoinPoint
+	if !w.started {
+		w.started = true
+		point = webmJoinAsIs
+	}
+	from := 0 // where the open Cluster's bytes begin in data
+	w.whole = 0
+	for i := 0; ; {
+		if w.hdrN == 0 && w.skip == 0 && w.group == 0 {
+			w.whole = i
+		}
+		if i == len(data) {
+			break
+		}
+		if w.skip > 0 || w.peek {
+			n := int(min(w.skip, uint64(len(data)-i)))
+			if w.peek {
+				w.blockN += copy(w.block[w.blockN:], data[i:i+n])
+			}
+			i += n
+			w.skip -= uint64(n)
+			w.group -= min(w.group, uint64(n))
+			if w.peek {
+				key, known := vp8BlockKeyframe(w.block[:w.blockN])
+				if !known && w.skip > 0 {
+					continue
+				}
+				if key && point == nil {
+					if init == nil {
+						return w.fail(data)
+					}
+					point = &webmJoinPoint{prefix: init, offset: from}
+					if len(w.carry) > 0 {
+						point.prefix = append(append([]byte(nil), init...), w.carry...)
+						point.carry = len(w.carry)
+					}
+				}
+				w.peek, w.open, w.carry = false, false, nil
+			}
+			continue
+		}
+		w.hdr[w.hdrN] = data[i]
+		w.hdrN++
+		i++
+		w.group -= min(w.group, 1)
+		id, idN, _, ok := webmVint(w.hdr[:w.hdrN], true)
+		if !ok {
+			if w.hdr[0] < 0x10 { // a zero byte, or an identifier wider than four bytes
+				return w.fail(data)
+			}
+			continue
+		}
+		size, _, unknown, ok := webmVint(w.hdr[idN:w.hdrN], false)
+		if !ok {
+			if w.hdrN > idN && w.hdr[idN] == 0 { // a size wider than eight bytes
+				return w.fail(data)
+			}
+			continue
+		}
+		start := i - w.hdrN // negative when the header began in an earlier read
+		switch id {
+		case webmIDCluster:
+			w.open, w.carry, from = true, nil, max(start, 0)
+			if start < 0 {
+				w.carry = append(w.carry, w.hdr[:-start]...)
+			}
+		case webmIDSegment:
+			// A master whose children are walked in place.
+		case webmIDBlockGroup:
+			// Walked in place too, and counted down: it is whole only at its end.
+			if !unknown {
+				w.group = size
+			}
+		default:
+			if unknown {
+				return w.fail(data)
+			}
+			w.skip = size
+			w.peek, w.blockN = w.open && (id == webmIDSimpleBlock || id == webmIDBlock), 0
+		}
+		w.hdrN = 0
+	}
+	if w.open {
+		w.carry = append(w.carry, data[from:]...)
+		if len(w.carry) > maxWebMInitialization {
+			w.peek, w.open, w.carry = false, false, nil
+		}
+	}
+	return point
+}
+
+func (w *webmJoins) fail(data []byte) *webmJoinPoint {
+	w.failed, w.carry, w.whole = true, nil, len(data)
+	return webmJoinAsIs
+}
+
+// vp8BlockKeyframe reads a block's opening bytes: track number, 16-bit timecode
+// and flags, then the VP8 frame tag, whose low bit is clear on a key frame
+// (RFC 6386 section 9.1). A laced block is not a clean start. known is false
+// while b is too short to tell.
+func vp8BlockKeyframe(b []byte) (key, known bool) {
+	if len(b) > 0 && b[0] == 0 {
+		return false, true
+	}
+	_, n, _, ok := webmVint(b, false)
+	if !ok || len(b) < n+4 {
+		return false, false
+	}
+	return b[n+2]&0x06 == 0 && b[n+3]&0x01 == 0, true
+}

@@ -2,13 +2,13 @@ package commands
 
 import "fmt"
 
-// usbSetupNeededNotice explains, to whoever can't answer the USB-C setup
+// usbSetupNeededNotice explains, to whoever can't answer the USB setup
 // prompt in `wendy discover` (an agent, a script, --json), why a tethered
 // device can't be reached and how a person fixes it. The setup itself stays
 // behind that prompt: it needs sudo and changes the host's network
 // configuration.
 func usbSetupNeededNotice(iface string) string {
-	return fmt.Sprintf("A Wendy device is connected over USB-C (%s), but this host's link to it isn't configured, so it can't be reached yet. Run `wendy discover` in a terminal and accept the USB-C setup prompt (it needs sudo).", iface)
+	return fmt.Sprintf("A Wendy device is connected over USB (%s), but this host's link to it isn't configured, so it can't be reached yet. Run `wendy discover` in a terminal and accept the USB setup prompt (it needs sudo).", iface)
 }
 
 // pendingUSBSetupNotice returns usbSetupNeededNotice for a tethered device

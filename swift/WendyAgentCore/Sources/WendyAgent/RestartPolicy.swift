@@ -1,7 +1,7 @@
 import WendyAgentGRPC
 
 /// The restart policy persisted alongside a `WendyApp`, independent of the
-/// wire representation (`RestartPolicy`/`RestartPolicyMode` from
+/// wire representation (`Wendy_Agent_Services_V1_RestartPolicy`/`Wendy_Agent_Services_V1_RestartPolicyMode` from
 /// `shared.proto`). Kept separate from the generated proto type so the
 /// on-disk shape doesn't change if the wire format does.
 struct PersistedRestartPolicy: Codable, Equatable, Sendable {
@@ -24,7 +24,7 @@ struct PersistedRestartPolicy: Codable, Equatable, Sendable {
     /// Maps from the generated proto type. `DEFAULT` (the field's zero value,
     /// meaning "the request didn't set one") and any future/unrecognized mode
     /// both fall back to unless-stopped, matching the agent's default.
-    init(from proto: RestartPolicy) {
+    init(from proto: Wendy_Agent_Services_V1_RestartPolicy) {
         switch proto.mode {
         case .default, .unlessStopped:
             self.mode = .unlessStopped

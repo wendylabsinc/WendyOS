@@ -61,7 +61,8 @@ struct `'wendy completion bash'` {
     /**
      The generated script completes visible top-level and nested commands,
      local flags, and inherited global flags using the syntax of the target
-     shell. Hidden compatibility commands are not offered as candidates.
+     shell. Bluetooth is a visible command; its short alias is not offered
+     as a separate candidate.
      */
     @Test
     func `includes visible commands and flags while hiding compatibility paths`() async throws {
@@ -79,7 +80,7 @@ struct `'wendy completion bash'` {
                 #expect(result.status.isSuccess)
                 #expect(result.stdout.contains("wifi"))
                 #expect(result.stdout.contains("pair\t"))
-                #expect(!result.stdout.contains("bluetooth\t"))
+                #expect(result.stdout.contains("bluetooth\t"))
                 #expect(!result.stdout.contains("bt\t"))
             }
 

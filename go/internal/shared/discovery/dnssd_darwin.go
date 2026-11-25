@@ -91,6 +91,9 @@ func dnssdError(code C.DNSServiceErrorType) error {
 	if code == C.kDNSServiceErr_NoError {
 		return nil
 	}
+	if code == C.kDNSServiceErr_PolicyDenied {
+		return fmt.Errorf("%w (dns-sd error %d)", ErrLocalNetworkDenied, int(code))
+	}
 	return fmt.Errorf("dns-sd error %d", int(code))
 }
 

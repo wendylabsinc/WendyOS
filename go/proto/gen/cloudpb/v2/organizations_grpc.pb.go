@@ -70,6 +70,12 @@ type OrganizationServiceClient interface {
 	// role, an invite created without one) and whether a group mapping replaces it (WDY-3877).
 	// Gate: `member:set-role`. The default never applies to the adopting owner or to service
 	// accounts. Read back through GetOrganization.
+	//
+	// The default is a pair (WDY-4052): an organization role (default_role_id) and a device role
+	// (default_device_role_id), both bound at organization scope. Every new member receives the
+	// device role, whatever organization role they join with, unless a group mapping replaced the
+	// default at join (skip_default_when_group_mapped); the adopting owner holds Device manager
+	// through ownership instead. Changing either half does not affect current members.
 	// Signed; payload_type "wendycloud.v2.SetMemberDefaultsRequest".
 	SetMemberDefaults(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Organization, error)
 }
@@ -257,6 +263,12 @@ type OrganizationServiceServer interface {
 	// role, an invite created without one) and whether a group mapping replaces it (WDY-3877).
 	// Gate: `member:set-role`. The default never applies to the adopting owner or to service
 	// accounts. Read back through GetOrganization.
+	//
+	// The default is a pair (WDY-4052): an organization role (default_role_id) and a device role
+	// (default_device_role_id), both bound at organization scope. Every new member receives the
+	// device role, whatever organization role they join with, unless a group mapping replaced the
+	// default at join (skip_default_when_group_mapped); the adopting owner holds Device manager
+	// through ownership instead. Changing either half does not affect current members.
 	// Signed; payload_type "wendycloud.v2.SetMemberDefaultsRequest".
 	SetMemberDefaults(context.Context, *SignedRequest) (*Organization, error)
 	mustEmbedUnimplementedOrganizationServiceServer()

@@ -1,10 +1,10 @@
 ---
-title: Full-Stack Web App
-description: Build a full-stack device dashboard with a Vite/React frontend and Express backend on WendyOS
+title: Full-stack web app
+description: Build a full-stack device dashboard with a Vite/React frontend and Express backend
 language: typescript
 ---
 
-## Building a Full-Stack Web App
+## Building a full-stack web app
 
 <Callout type="info">
   **Source Code**: The complete source code for this example is available at [github.com/wendylabsinc/samples/node-typescript/web-app](https://github.com/wendylabsinc/samples/tree/main/node-typescript/web-app)
@@ -28,34 +28,11 @@ This demonstrates how to:
 - Node.js 22+ and npm installed
 - A WendyOS device plugged in over USB or connectable over Wi-Fi
 
-## Project Structure
-
-The template ships the full frontend and backend — you don't scaffold them by hand. At the top level it looks like:
-
-```
-web-app/
-├── Dockerfile          # Multi-stage build: frontend -> backend -> runtime
-├── wendy.json          # Entitlements, readiness probe, postStart hook
-├── package.json        # Express backend (better-sqlite3, ws)
-├── tsconfig.json
-├── src/
-│   └── index.ts        # Express + WebSocket backend (/api/* routes)
-└── frontend/           # Vite + React 19 + Tailwind v4 + shadcn/ui
-    ├── package.json
-    ├── vite.config.ts
-    └── src/
-        ├── App.tsx     # Sidebar layout + react-router routes
-        ├── pages/      # camera, audio, persistence, gpu, system
-        └── components/ # shadcn/ui + dashboard components
-```
-
-The built frontend (`frontend/dist`) is copied into the backend image as `./static`.
-
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy full-stack TypeScript template:
 
@@ -82,11 +59,75 @@ The built frontend (`frontend/dist`) is copied into the backend image as `./stat
   </Step>
 </Steps>
 
-## Code Breakdown
+## Test your web app
+
+Your browser will open automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
+
+```
+http://wendyos-true-probe.local:8000
+```
+
+<Callout type="warning">
+  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
+</Callout>
+
+The dashboard opens on the **Camera** page by default. Use the sidebar to switch between the camera, audio, persistence, GPU, and system pages.
+
+## Test the API directly
+
+List the system info reported by the device:
+
+```bash
+curl http://wendyos-true-probe.local:8000/api/system
+```
+
+Add a car to the persistent store:
+
+```bash
+curl -X POST http://wendyos-true-probe.local:8000/api/cars \
+  -H "Content-Type: application/json" \
+  -d '{"make":"Toyota","model":"Camry","color":"Blue","year":2015}'
+```
+
+Response:
+```json
+{"id":1,"make":"Toyota","model":"Camry","color":"Blue","year":2015,"created_at":"2026-06-06 10:30:00","updated_at":null}
+```
+
+List all cars:
+
+```bash
+curl http://wendyos-true-probe.local:8000/api/cars
+```
+
+## Project structure
+
+The template ships the full frontend and backend — you don't scaffold them by hand. At the top level it looks like:
+
+```
+web-app/
+├── Dockerfile          # Multi-stage build: frontend -> backend -> runtime
+├── wendy.json          # Entitlements, readiness probe, postStart hook
+├── package.json        # Express backend (better-sqlite3, ws)
+├── tsconfig.json
+├── src/
+│   └── index.ts        # Express + WebSocket backend (/api/* routes)
+└── frontend/           # Vite + React 19 + Tailwind v4 + shadcn/ui
+    ├── package.json
+    ├── vite.config.ts
+    └── src/
+        ├── App.tsx     # Sidebar layout + react-router routes
+        ├── pages/      # camera, audio, persistence, gpu, system
+        └── components/ # shadcn/ui + dashboard components
+```
+
+The built frontend (`frontend/dist`) is copied into the backend image as `./static`.
+
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Generated Frontend
+    ### Generated frontend
 
     The `frontend/` directory is a complete Vite + React 19 app using Tailwind v4 and shadcn/ui. It uses `react-router-dom` v7 for a sidebar dashboard. The router lives in `frontend/src/App.tsx`:
 
@@ -132,7 +173,7 @@ The built frontend (`frontend/dist`) is copied into the backend image as `./stat
   </Step>
 
   <Step>
-    ### Generated Express Backend
+    ### Generated Express backend
 
     The backend lives at the project root. The generated `package.json` pulls in Express, `ws` (for camera/audio streaming), and `better-sqlite3` (for persistence):
 
@@ -356,74 +397,15 @@ The built frontend (`frontend/dist`) is copied into the backend image as `./stat
     </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Deploy your full-stack web application to your WendyOS device:
-
-```bash
-wendy run
-```
-
-## Test Your Web App
-
-Your browser will open automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
-
-```
-http://wendyos-true-probe.local:8000
-```
-
-<Callout type="warning">
-  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
-</Callout>
-
-The dashboard opens on the **Camera** page by default. Use the sidebar to switch between the camera, audio, persistence, GPU, and system pages.
-
-## Test the API Directly
-
-List the system info reported by the device:
-
-```bash
-curl http://wendyos-true-probe.local:8000/api/system
-```
-
-Add a car to the persistent store:
-
-```bash
-curl -X POST http://wendyos-true-probe.local:8000/api/cars \
-  -H "Content-Type: application/json" \
-  -d '{"make":"Toyota","model":"Camry","color":"Blue","year":2015}'
-```
-
-Response:
-```json
-{"id":1,"make":"Toyota","model":"Camry","color":"Blue","year":2015,"created_at":"2026-06-06 10:30:00","updated_at":null}
-```
-
-List all cars:
-
-```bash
-curl http://wendyos-true-probe.local:8000/api/cars
-```
-
-## Learn More
+## Learn more
 
 - [Express Documentation](https://expressjs.com/)
 - [Vite Documentation](https://vitejs.dev/)
 - [shadcn/ui Components](https://ui.shadcn.com/)
 
-## Next Steps
-
-Now that you have a full-stack web app running:
-
-- Add more API endpoints and dashboard pages
-- Stream the camera or microphone in your own UI via the WebSocket endpoints
-- Extend the SQLite schema for your own persistent data
-- Add authentication middleware
-- Connect to additional WendyOS device sensors and display data in the UI
-
 <Accordions>
   <Accordion title="Testing locally without a WendyOS device">
-    ### Build and Run with Docker
+    **Build and run with Docker**
 
     ```bash
     docker build -t web-app .
@@ -436,7 +418,7 @@ Now that you have a full-stack web app running:
       **Device features off-device**: Camera, audio, and GPU endpoints rely on hardware and tooling that aren't present on a typical laptop, so those pages will be empty when running locally. The system info and the cars CRUD (persistence) work anywhere.
     </Callout>
 
-    ### Run Locally
+    **Run locally**
 
     ```bash
     # Build the frontend first
@@ -448,3 +430,15 @@ Now that you have a full-stack web app running:
     ```
   </Accordion>
 </Accordions>
+
+## Next steps
+
+Continue with [Camera feed in TypeScript](/docs/guides/tutorials/typescript/camera) to stream a USB camera to the browser.
+
+Now that you have a full-stack web app running:
+
+- Add more API endpoints and dashboard pages
+- Stream the camera or microphone in your own UI via the WebSocket endpoints
+- Extend the SQLite schema for your own persistent data
+- Add authentication middleware
+- Connect to additional WendyOS device sensors and display data in the UI

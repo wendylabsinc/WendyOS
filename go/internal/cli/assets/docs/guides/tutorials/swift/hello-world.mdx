@@ -1,10 +1,10 @@
 ---
-title: Hello World in Swift
-description: Create your first WendyOS application using Swift
+title: Hello world in Swift
+description: Create your first application using Swift
 language: swift
 ---
 
-## Creating Your First Swift Application
+## Creating your first Swift application
 
 This guide will walk you through creating your first WendyOS application in Swift. This is a great way to prove that you can send an app to your device and verify your development environment is set up correctly.
 
@@ -16,11 +16,11 @@ The `simple-api` template generates a small, long-running HTTP server built on [
 - Swift 6.2 or later installed **via [swiftly](https://www.swift.org/install/)** (Xcode's Swift is not supported)
 - A WendyOS device plugged in over USB or connectable over Wi-Fi
 
-### Creating the Project
+### Creating the project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy Swift template:
 
@@ -31,7 +31,7 @@ The `simple-api` template generates a small, long-running HTTP server built on [
 
     <CliShot flow="init" step="wizard" alt="wendy init scaffolding the Swift hello-world project" />
 
-    This creates a ready-to-run Swift project with `Package.swift`, `Dockerfile`, and `wendy.json`. The next steps explain the generated files.
+    This creates a ready-to-run Swift project with `Package.swift`, `Dockerfile`, and `wendy.json`. The code breakdown below explains the generated files.
   </Step>
 
   <Step>
@@ -49,11 +49,77 @@ The `simple-api` template generates a small, long-running HTTP server built on [
   </Step>
 </Steps>
 
-## Code Breakdown
+## Running your application
+
+You have two options to run your Swift application:
+
+### Option 1: Run locally with Swift
+
+You can run the server on your development machine first to make sure everything builds:
+
+```bash
+swift run
+```
+
+The first build fetches the Hummingbird and OpenTelemetry dependencies, then starts the server. It will keep running and listening on `0.0.0.0:6001`. In another terminal you can test it:
+
+```bash
+curl http://localhost:6001
+# {"message":"hello-world"}
+```
+
+Press `Ctrl+C` to stop the local server.
+
+### Option 2: Deploy to a WendyOS device
+
+Use the Wendy CLI to cross-compile, push, and start your app on a connected device:
+
+```bash
+wendy run
+```
+
+Wendy cross-compiles the binary with Swift 6.3 for the target device, deploys it, and streams logs. Once the readiness probe passes, the `postStart` hook opens `http://${WENDY_HOSTNAME}:6001` in your browser, where you'll see:
+
+```json
+{"message":"hello-world"}
+```
+
+<Callout type="info">
+  **Local vs Device**: `swift run` compiles and runs your application locally on your development machine. `wendy run` cross-compiles with Swift 6.3 for the target device and deploys it automatically.
+</Callout>
+
+## Verifying deployment on your device
+
+After deploying, you can verify the app is running by listing the applications on your device:
+
+```bash
+wendy device apps list
+```
+
+<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running hello-world app" />
+
+You should see output similar to:
+
+```
+wendy device apps list
+✔︎ Searching for WendyOS devices [5.3s]
+✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
+╭───────────────┬─────────┬─────────┬──────────╮
+│ App           │ Version │ State   │ Failures │
+├───────────────┼─────────┼─────────┼──────────┤
+│ hello-world   │ 0.1.0   │ Running │ 0        │
+╰───────────────┴─────────┴─────────┴──────────╯
+```
+
+<Callout type="info">
+  **Expected State**: The app shows as "Running" because it is a long-running HTTP server that keeps listening for requests. The "Failures" column showing `0` confirms your application started successfully without errors. To stop it later, run `wendy device apps stop hello-world`.
+</Callout>
+
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Explore the Project Structure
+    ### Explore the project structure
 
     After initialization, you'll have the following structure:
 
@@ -105,7 +171,7 @@ The `simple-api` template generates a small, long-running HTTP server built on [
   </Step>
 
   <Step>
-    ### Generated Application Code
+    ### Generated application code
 
     The generated `Sources/hello-world/App.swift` starts a Hummingbird server that listens on port `6001` and serves a few routes:
 
@@ -227,76 +293,10 @@ The `simple-api` template generates a small, long-running HTTP server built on [
   </Step>
 </Steps>
 
-## Running Your Application
-
-You have two options to run your Swift application:
-
-### Option 1: Run Locally with Swift
-
-You can run the server on your development machine first to make sure everything builds:
-
-```bash
-swift run
-```
-
-The first build fetches the Hummingbird and OpenTelemetry dependencies, then starts the server. It will keep running and listening on `0.0.0.0:6001`. In another terminal you can test it:
-
-```bash
-curl http://localhost:6001
-# {"message":"hello-world"}
-```
-
-Press `Ctrl+C` to stop the local server.
-
-### Option 2: Deploy to a WendyOS Device
-
-Use the Wendy CLI to cross-compile, push, and start your app on a connected device:
-
-```bash
-wendy run
-```
-
-Wendy cross-compiles the binary with Swift 6.3 for the target device, deploys it, and streams logs. Once the readiness probe passes, the `postStart` hook opens `http://${WENDY_HOSTNAME}:6001` in your browser, where you'll see:
-
-```json
-{"message":"hello-world"}
-```
-
-## Verifying Deployment on Your Device
-
-After deploying, you can verify the app is running by listing the applications on your device:
-
-```bash
-wendy device apps list
-```
-
-<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running hello-world app" />
-
-You should see output similar to:
-
-```
-wendy device apps list
-✔︎ Searching for WendyOS devices [5.3s]
-✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
-╭───────────────┬─────────┬─────────┬──────────╮
-│ App           │ Version │ State   │ Failures │
-├───────────────┼─────────┼─────────┼──────────┤
-│ hello-world   │ 0.1.0   │ Running │ 0        │
-╰───────────────┴─────────┴─────────┴──────────╯
-```
-
-<Callout type="info">
-  **Expected State**: The app shows as "Running" because it is a long-running HTTP server that keeps listening for requests. The "Failures" column showing `0` confirms your application started successfully without errors. To stop it later, run `wendy device apps stop hello-world`.
-</Callout>
-
-## Next Steps
+## Next steps
 
 Now that you have a basic Swift server running:
 
-- Add more routes to handle different endpoints (see the [Simple Web Server](/docs/guides/tutorials/swift/simple-web-server) guide)
+- Add more routes to handle different endpoints (see the [Simple web server](/docs/guides/tutorials/swift/simple-web-server) guide)
 - Explore WendyOS frameworks for hardware access
 - Build more complex applications with user input and data processing
-
-<Callout type="info">
-  **Local vs Device**: `swift run` compiles and runs your application locally on your development machine. `wendy run` cross-compiles with Swift 6.3 for the target device and deploys it automatically.
-</Callout>

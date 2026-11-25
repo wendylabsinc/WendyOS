@@ -38,6 +38,8 @@ go/local-pki-test
 *.test
 *.out
 vendor/
+# Three.js modules bundled with the macOS app's offline 3D install guide.
+!go/macos/Resources/Install3D/vendor/
 
 # Local settings
 *.local.*
@@ -77,3 +79,6 @@ web-client/release/
 
 # Agent-generated design specs; keep out of git
 /specs/
+
+# On-device benchmark build inputs (stage-on-device.sh)
+evals/agent-experience/.stage/

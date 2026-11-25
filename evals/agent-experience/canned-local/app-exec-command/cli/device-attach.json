@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "attach"
+  ],
+  "stdout": "Python 3.12.16\n",
+  "stderr": "",
+  "exit_code": 0
+}
