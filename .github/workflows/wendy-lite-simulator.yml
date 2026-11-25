@@ -1,0 +1,96 @@
+name: Wendy Lite Simulator
+
+# Builds a Wendy Lite native simulator with the CLI, creates the blink-rgb-led
+# template and runs it on the simulator. See
+# .github/scripts/test-lite-simulator-blink.sh, which also runs locally.
+# Runs on pushes that change the Wendy Lite build, simulator or run code.
+on:
+  push:
+    paths:
+      - '.github/workflows/wendy-lite-simulator.yml'
+      - '.github/scripts/test-lite-simulator-blink.sh'
+      - 'go/internal/cli/litebuild/**'
+      - 'go/internal/cli/espidftoolchain/**'
+      - 'go/internal/cli/liteclient/**'
+      - 'go/internal/cli/providers/microwendy.go'
+      - 'go/internal/cli/vm/lite.go'
+      - 'go/internal/cli/commands/vm_lite.go'
+      - 'go/internal/cli/commands/vm_esp_emulator.go'
+      - 'go/internal/cli/commands/install_litebuild.go'
+      - 'go/internal/cli/commands/run_lite_setup.go'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wendy-lite-simulator-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  blink-native:
+    name: blink-rgb-led on wendy-lite-native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # libusb for the CLI's cgo build; the rest are ESP-IDF's Linux
+      # prerequisites, which eim checks but does not install.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y pkg-config libusb-1.0-0-dev \
+            git wget flex bison gperf python3 python3-pip python3-venv \
+            cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+
+      # The CLI runs `eim install` for the ESP-IDF version Wendy Lite needs.
+      - name: Install eim (ESP-IDF Installation Manager)
+        env:
+          EIM_URL: https://github.com/espressif/idf-im-ui/releases/download/v0.22.0/eim-cli-linux-x64-v0.22.0.zip
+          EIM_SHA256: 243a8a66c8ea74fcecb879f7e3a20c8f2e2382cfce6c326df478d98f4ae91d11
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/eim"
+          mkdir -p "$dir/bin"
+          curl -fsSL --retry 3 -o "$dir/eim.zip" "$EIM_URL"
+          echo "$EIM_SHA256  $dir/eim.zip" | sha256sum -c -
+          unzip -q "$dir/eim.zip" eim_v0.22.0 -d "$dir"
+          install -m 0755 "$dir/eim_v0.22.0" "$dir/bin/eim"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          "$dir/bin/eim" --version
+
+      - name: Build CLI
+        working-directory: go
+        run: make build-cli
+
+      - name: Run blink-rgb-led on the simulator
+        env:
+          # Wendy Lite version, branch or full commit to build the simulator from.
+          WENDY_LITE_VERSION: gab/configurator
+          TEMPLATES_BRANCH: main
+        run: |
+          .github/scripts/test-lite-simulator-blink.sh \
+            --wendy "$GITHUB_WORKSPACE/go/bin/wendy" \
+            --version "$WENDY_LITE_VERSION" \
+            --templates-branch "$TEMPLATES_BRANCH" \
+            --output "$RUNNER_TEMP/lite-simulator"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wendy-lite-simulator-logs
+          path: |
+            ${{ runner.temp }}/lite-simulator
+            !${{ runner.temp }}/lite-simulator/config
+            !${{ runner.temp }}/lite-simulator/work
+          if-no-files-found: ignore
+          retention-days: 7
