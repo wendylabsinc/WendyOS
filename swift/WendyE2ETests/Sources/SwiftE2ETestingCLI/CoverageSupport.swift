@@ -207,6 +207,11 @@ enum CoverageIO {
         )
         .sorted { $0.path < $1.path }
     }
+    static func directories(_ url: URL) throws -> [URL] {
+        try children(url).filter {
+            try $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
+        }
+    }
     static func files(_ url: URL, prefix: String = "") throws -> [URL] {
         try children(url).filter {
             try $0.lastPathComponent.hasPrefix(prefix)

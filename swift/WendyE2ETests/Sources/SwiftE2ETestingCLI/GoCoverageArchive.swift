@@ -22,8 +22,8 @@ extension GoCoverage {
 
     static func nativeFiles(run: URL) throws -> [URL] {
         var result: [URL] = []
-        for suite in try CoverageIO.children(run.appendingPathComponent("observations")) {
-            for test in try CoverageIO.children(suite) {
+        for suite in try CoverageIO.directories(run.appendingPathComponent("observations")) {
+            for test in try CoverageIO.directories(suite) {
                 result += try CoverageIO.files(test.appendingPathComponent("coverage/go"))
             }
         }
@@ -172,8 +172,8 @@ extension GoCoverage {
             }
             try CoverageIO.remove(bin)
         }
-        for suite in try CoverageIO.children(run.appendingPathComponent("observations")) {
-            for test in try CoverageIO.children(suite) {
+        for suite in try CoverageIO.directories(run.appendingPathComponent("observations")) {
+            for test in try CoverageIO.directories(suite) {
                 try CoverageIO.remove(test.appendingPathComponent("coverage/coverage.out"))
             }
         }
