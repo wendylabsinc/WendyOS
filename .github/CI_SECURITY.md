@@ -12,7 +12,7 @@ tools from the PR base commit. It materializes the actual tested `github.sha` (i
 merge) as validated raw Git blobs in an isolated read-only data repository.
 Private Git metadata disables hooks and working-tree conversions. No tested
 files enter the trusted package; aggregation/review receive `--repo` and report
-receives `--source-package-dir` for tested identities while templates stay trusted. Review harness startup remains in the tooling repository. A PR's script, Swift, or
+also receives `--repo` for tested identities while templates stay trusted. Review harness startup remains in the tooling repository. A PR's script, Swift, or
 dependency changes therefore never run beside the review credentials. This does
 not stop a same-repository PR that edits the workflow itself (see below). The
 base aggregator reads the PR's attempt artifacts, so a change to their format

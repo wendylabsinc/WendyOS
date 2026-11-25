@@ -934,7 +934,7 @@ jobs:
         run: |
           set -euo pipefail
           bash ./Scripts/E2EReport.sh \
-            --source-package-dir "$TESTED_SOURCE_REPO/swift/WendyE2ETests" \
+            --repo "$TESTED_SOURCE_REPO" \
             --run-dir "${{ steps.e2e-run.outputs.run_dir }}"
 
       - name: Upload Swift E2E Report

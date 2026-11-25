@@ -101,7 +101,7 @@ class WorkflowSecurityTests(unittest.TestCase):
         self.assertLess(analyze.index('Prepare tested source as read-only review data'),
                         analyze.index('Aggregate Swift E2E attempts'))
         self.assertIn('--repo "$TESTED_SOURCE_REPO"', analyze)
-        self.assertIn('--source-package-dir "$TESTED_SOURCE_REPO/swift/WendyE2ETests"', analyze)
+        self.assertIn('--repo "$TESTED_SOURCE_REPO"', analyze)
 
     def test_source_preparation_rejects_nonimmutable_revisions(self):
         # Real raw-blob materialization, hook/filter isolation and synthetic-merge

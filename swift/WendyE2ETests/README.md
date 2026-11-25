@@ -191,9 +191,8 @@ For split checkouts, `aggregate --repo TESTED_REPO` and `review --repo TESTED_RE
 validate source against recorded revisions. Run the tool from the trusted
 package (`--package-dir`); the tested repository is read-only investigation data,
 not a source of scripts or package/dependency execution. For split report rendering,
-`report --package-dir TRUSTED_PACKAGE --source-package-dir TESTED_PACKAGE` uses
-trusted templates with tested package-relative spec identities and saved source
-hash checks. `--tests-dir` can narrow the sources within that tested package.
+`report --package-dir TRUSTED_PACKAGE --repo TESTED_REPO` uses
+trusted templates with tested package-relative recording identities. `--tests-dir` can narrow the sources within `TESTED_REPO/swift/WendyE2ETests`.
 Review harness startup
 stays in the trusted tooling repository. The workflow materializes the actual tested SHA (including synthetic merges)
 from validated raw Git blobs before aggregation; no checkout conversion or
@@ -237,15 +236,12 @@ without failing otherwise valid aggregation or changing test outcomes. This
 intentional approximation replaces the old token-based metric; results need not
 equal that metric.
 
-The existing reference parser compares suite/test identities and bounded
-attribute/declaration content. Aggregate saves **Added**, **Changed**, and
-**Removed** spec entries. Spec extraction status/reason is saved separately from
-Go diff status, so a failed comparison does not discard the other result. Helper-only edits do not invent new specs. Report
-attaches Added/Changed labels to current declarations independently of outcomes;
-Removed specs appear as comparison entries, never executed/passing tests. The
-full suite remains visible. Optional AI review keeps its existing `--diff RANGE`
-behavior and can inspect the matching repository plus these recorded results;
-it is not required to collect, aggregate or display coverage.
+Aggregate retains spec-comparison entries and their independent extraction status
+in saved metadata. HTML displays the full current suite without Added/Changed/Removed
+highlights or a Removed-spec section; those report annotations are deferred.
+Optional AI review keeps its existing `--diff RANGE` behavior and can inspect the
+matching repository plus recorded results; it is not required to collect,
+aggregate or display coverage.
 
 The **Swift E2E Tests** workflow enables coverage on every active Ubuntu route
 and automatically aggregates/renders its artifact, including failed test runs.

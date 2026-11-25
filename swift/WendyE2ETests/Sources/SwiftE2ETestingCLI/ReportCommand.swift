@@ -22,9 +22,9 @@ struct ReportCommand: ParsableCommand {
 
     @Option(
         name: .long,
-        help: "Tested Swift package root for source identities; defaults to --package-dir."
+        help: "Tested repository for source identities; templates remain under --package-dir."
     )
-    var sourcePackageDir: String?
+    var repo: String?
 
     @Option(name: .long, help: "Directory containing Swift E2E test sources.")
     var testsDir: String?
@@ -37,7 +37,9 @@ struct ReportCommand: ParsableCommand {
 
     mutating func run() throws {
         let packageURL = URL(fileURLWithPath: packageDir)
-        let sourcePackageURL = sourcePackageDir.map { URL(fileURLWithPath: $0) } ?? packageURL
+        let sourcePackageURL =
+            repo.map { URL(fileURLWithPath: $0).appendingPathComponent("swift/WendyE2ETests") }
+            ?? packageURL
         let testsURL = URL(
             fileURLWithPath: testsDir ?? defaultTestsDir(packageURL: sourcePackageURL).path
         )
@@ -55,15 +57,15 @@ struct ReportCommand: ParsableCommand {
         let records = try loadRecords(in: runURL)
         let aiReviews = try loadRunAIReviews(in: runURL)
         let testResults = try loadRunTestResults(in: runURL)
-        let comparisonData = try E2ERunComparison.load(in: runURL)
+        // Validate saved Go comparison provenance; spec annotations are not rendered.
+        _ = try E2ERunComparison.load(in: runURL)
         let files = try parseTests(
             in: testsURL,
             packageURL: sourcePackageURL,
             runURL: runURL,
             records: records,
             aiReviews: aiReviews,
-            testResults: testResults,
-            comparison: comparisonData
+            testResults: testResults
         )
         try renderReport(
             templateURL: templateURL,
@@ -71,7 +73,6 @@ struct ReportCommand: ParsableCommand {
             files: files,
             aiReviews: aiReviews,
             reviewOutcome: ProcessInfo.processInfo.environment["WENDY_E2E_REVIEW_OUTCOME"],
-            comparison: comparisonData,
             outputURL: outputURL
         )
     }
@@ -372,7 +373,6 @@ private struct ReportTestCase {
     var recordName = ""
     var aiReviews: [E2EReview] = []
     var commands: [CommandRun] = []
-    var change: String?
 
     var aiReviewMarkdown: String {
         aiReviews.map { review in
@@ -924,21 +924,12 @@ private func parseTests(
     runURL: URL,
     records: [E2ETestIdentityKey: [CommandRun]],
     aiReviews: RunAIReviews,
-    testResults: [E2ETestIdentityKey: ReportRunTestResult],
-    comparison: E2ERunComparison? = nil
+    testResults: [E2ETestIdentityKey: ReportRunTestResult]
 ) throws -> [ReportTestFile] {
     let sourceURLs = try swiftTestFiles(in: testsURL)
     var files: [ReportTestFile] = []
 
     for sourceURL in sourceURLs {
-        if comparison?.status == "compared" {
-            let root = packageURL.standardizedFileURL.path + "/"
-            guard sourceURL.standardizedFileURL.path.hasPrefix(root) else {
-                throw ValidationError(
-                    "Compared test sources must be under --source-package-dir: " + sourceURL.path
-                )
-            }
-        }
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
         let lines = source.components(separatedBy: .newlines)
         var suite = sourceURL.deletingPathExtension().lastPathComponent
@@ -975,26 +966,6 @@ private func parseTests(
                     )
                 )
                 pendingTest = nil
-            }
-        }
-
-        if let comparison, comparison.status == "compared" {
-            let path = e2ePackageRelativePath(from: packageURL, to: sourceURL)
-            let entries = comparison.specs.filter { $0.path == path && $0.change != "Removed" }
-            if !entries.isEmpty {
-                let hash = try CoverageIO.sha256(Data(source.utf8))
-                guard
-                    entries.allSatisfy({
-                        $0.sourceSHA256 == hash && ["Added", "Changed"].contains($0.change)
-                    })
-                else {
-                    throw ValidationError(
-                        "Rendered source differs from saved spec comparison: " + path
-                    )
-                }
-                for i in tests.indices {
-                    tests[i].change = entries.first { $0.line == tests[i].funcLine }?.change
-                }
             }
         }
 
@@ -1182,7 +1153,6 @@ private func renderReport(
     files: [ReportTestFile],
     aiReviews: RunAIReviews,
     reviewOutcome: String?,
-    comparison: E2ERunComparison? = nil,
     outputURL: URL
 ) throws {
     let tests = files.flatMap(\.tests)
@@ -1242,7 +1212,7 @@ private func renderReport(
 
     template.replaceSubrange(
         start.lowerBound..<footerStart.lowerBound,
-        with: reviewHTML + testCards + renderRemovedSpecs(comparison) + "\n\n"
+        with: reviewHTML + testCards + "\n\n"
     )
 
     let replacements: [String: String] = [
@@ -1300,20 +1270,6 @@ private func renderReport(
     print(
         "tests=\(total) passed=\(passed) flaked=\(flaked) skipped=\(skipped) failed=\(failed) unknown=\(unknown) commands=\(commandCount)"
     )
-}
-
-private func renderRemovedSpecs(_ comparison: E2ERunComparison?) -> String {
-    guard let comparison, comparison.status == "compared" else { return "" }
-    let removed = comparison.specs.filter { $0.change == "Removed" }
-    guard !removed.isEmpty else { return "" }
-    let entries = removed.map {
-        "<li><span class=\"badge\" data-spec-change=\"Removed\">Removed</span> "
-            + escapeHTML($0.suite + " › " + $0.name)
-            + " <code>" + escapeHTML($0.path + ":" + String($0.line)) + "</code></li>"
-    }.joined(separator: "\n")
-    return
-        "<section class=\"card\" data-comparison-removed><h2>Removed specs</h2><p>Comparison entries from the base revision; not executed test outcomes.</p><ul>"
-        + entries + "</ul></section>"
 }
 
 private func runID(outputURL: URL) -> String {
@@ -1533,16 +1489,11 @@ private func renderCards(files: [ReportTestFile]) -> String {
             let hasAIReview = test.aiReviewMarkdown.isEmpty ? "false" : "true"
             let aiBadge = hasAIReview == "true" ? renderAIReviewBadge() : ""
             let pathText = "\(test.suite) › \(test.name)"
-            let changeBadge =
-                test.change.map {
-                    "<span class=\"badge\" data-spec-change=\"\(escapeHTML($0))\" title=\"Spec declaration change; independent of test outcome\">\(escapeHTML($0))</span>"
-                } ?? ""
-
             cards.append(
                 "<details class=\"test-details\" data-test-status=\"\(statusClass)\" data-test-statuses=\"\(escapeHTML(statusClasses))\" data-has-ai=\"\(hasAI)\" data-has-ai-review=\"\(hasAIReview)\">"
             )
             cards.append(
-                "<summary class=\"test-summary\"><span class=\"test-title\"><span class=\"test-path\">\(escapeHTML(pathText))</span>\(changeBadge)\(outcomeBadges)\(aiBadge)</span>\(runDurationBadge(test.durationRange))<span class=\"report-links\"></span></summary>"
+                "<summary class=\"test-summary\"><span class=\"test-title\"><span class=\"test-path\">\(escapeHTML(pathText))</span>\(outcomeBadges)\(aiBadge)</span>\(runDurationBadge(test.durationRange))<span class=\"report-links\"></span></summary>"
             )
             cards.append(renderObservations(test.observations, aiReviews: test.aiReviews))
             cards.append("</details>")
