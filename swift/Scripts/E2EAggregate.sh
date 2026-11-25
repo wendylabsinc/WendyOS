@@ -117,5 +117,5 @@ aggregate_args=()
   swift run swift-e2e-testing aggregate \
     --output-dir "$OUTPUT_DIR" \
     --package-dir "$PACKAGE_DIR" \
-    "${aggregate_args[@]}" "${ABSOLUTE_ATTEMPT_DIRS[@]}"
+    ${aggregate_args[@]+"${aggregate_args[@]}"} "${ABSOLUTE_ATTEMPT_DIRS[@]}"
 )

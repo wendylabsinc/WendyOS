@@ -1173,6 +1173,7 @@ write_attempt_info() {
     printf '  "attemptID": '; json_string "$RUN_ID"; echo ","
     printf '  "createdAt": '; json_string "$created_at"; echo ","
     printf '  "exitStatus": %s,\n' "$status"
+    printf '  "coverageRequested": '; json_bool "$COVERAGE"; echo ","
     echo '  "git": {'
     printf '    "commit": '; json_string_or_null "$git_commit"; echo ","
     printf '    "branch": '; json_string_or_null "$git_branch"; echo ","
@@ -1247,7 +1248,7 @@ finalize_attempt() {
   if [[ "$COVERAGE" == "true" && -f "$RUN_DIR/coverage/tests.json" ]]; then
     coverage_finish_args=()
     [[ -z "$COVERAGE_CONTROL" ]] || coverage_finish_args+=(--control "$COVERAGE_CONTROL")
-    "$COVERAGE_TOOL" _capture --phase finish --repo "$CLI_REPO_DIR" --run-dir "$RUN_DIR" "${coverage_finish_args[@]}"
+    "$COVERAGE_TOOL" _capture --phase finish --repo "$CLI_REPO_DIR" --run-dir "$RUN_DIR" ${coverage_finish_args[@]+"${coverage_finish_args[@]}"}
     coverage_status=$?
     if [[ "$status" == 0 && "$coverage_status" != 0 ]]; then
       status=$coverage_status
@@ -1294,7 +1295,7 @@ if [[ "$COVERAGE" == "true" ]]; then
   [[ "$MANAGED_AGENT" != "true" ]] || coverage_prepare_args+=(--managed-agent)
   swift build --package-path "$PACKAGE_DIR" --product swift-e2e-testing
   COVERAGE_TOOL="$(swift build --package-path "$PACKAGE_DIR" --show-bin-path)/swift-e2e-testing"
-  "$COVERAGE_TOOL" _capture --phase prepare --repo "$CLI_REPO_DIR" --run-dir "$RUN_DIR" "${coverage_prepare_args[@]}"
+  "$COVERAGE_TOOL" _capture --phase prepare --repo "$CLI_REPO_DIR" --run-dir "$RUN_DIR" ${coverage_prepare_args[@]+"${coverage_prepare_args[@]}"}
   # Setup, version checks and readiness polling are outside test intervals.
   export GOCOVERDIR="$RUN_DIR/coverage/bootstrap"
   mkdir -p "$GOCOVERDIR"

@@ -9,7 +9,7 @@ struct SwiftE2ETestingCLI: AsyncParsableCommand {
         abstract: "Utilities for Swift E2E behavioral specs.",
         subcommands: [
             ReferenceCommand.self,
-            CaptureCommand.self,
+            CaptureCommand.self, SourceCommand.self,
             AggregateCommand.self,
             ReportCommand.self,
             ReviewCommand.self,

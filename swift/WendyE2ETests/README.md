@@ -153,7 +153,11 @@ swift run swift-e2e-testing report --run-dir /path/to/runs/swift-e2e-tests.RUN
 source totals, and computes one consolidated native
 source union with standard Go covdata `-pcombine`; it never averages percentages.
 It verifies source identities, immutable revisions and linked file/package scopes
-before combining attempts. Capture records and execution exit status remain
+before combining attempts. Uncollected attempts/targets are explicitly listed as
+`not-collected` and do not invalidate a compatible collected union. A requested
+capture missing provenance/counters remains `incomplete` and fails aggregation;
+new runner metadata records `coverageRequested` even when preparation fails.
+Capture records and execution exit status remain
 unchanged by derivation, so restoring matching source/evidence permits a clean
 retry. Derived participant states are saved in summaries and test coverage
 metadata. Incompatible evidence is incomplete, not a smaller successful
@@ -182,6 +186,14 @@ tools can derive additional profiles or an optional source HTML view; HTML is no
 ```bash
 go tool cover -html=/path/to/run/coverage/coverage.out -o=/path/to/coverage.html
 ```
+
+For split checkouts, `aggregate --repo TESTED_REPO` and `review --repo TESTED_REPO`
+validate source against recorded revisions. Run the tool from the trusted
+package (`--package-dir`); the tested repository is read-only investigation data,
+not a source of scripts or package/dependency execution. Review harness startup
+stays in the trusted tooling repository. The workflow materializes the actual tested SHA (including synthetic merges)
+from validated raw Git blobs before aggregation; no checkout conversion or
+archive filters run, and tested files never enter the trusted package.
 
 `report` only displays the saved aggregation results. It requires no Git access
 to calculate coverage or spec changes. Existing noncoverage runs remain readable;
@@ -223,7 +235,8 @@ equal that metric.
 
 The existing reference parser compares suite/test identities and bounded
 attribute/declaration content. Aggregate saves **Added**, **Changed**, and
-**Removed** spec entries. Helper-only edits do not invent new specs. Report
+**Removed** spec entries. Spec extraction status/reason is saved separately from
+Go diff status, so a failed comparison does not discard the other result. Helper-only edits do not invent new specs. Report
 attaches Added/Changed labels to current declarations independently of outcomes;
 Removed specs appear as comparison entries, never executed/passing tests. The
 full suite remains visible. Optional AI review keeps its existing `--diff RANGE`
@@ -239,10 +252,18 @@ Mac, remote and Windows routes remain paused; never run the full suite on a
 shared Mac. Framework checks use real instrumented Go fixtures in the Swift
 `native Go coverage` and aggregate comparison suites, separate from product specs.
 
-Active Ubuntu CI captures the comparison before rendering its artifact. An
-explicit workflow `diff_base_ref` overrides the default PR base, push's previous
-revision, or main comparison. Comparison problems remain informational labels;
+Set workflow `diff_base_ref` explicitly to request comparison before rendering
+the artifact; an empty value leaves changed-source comparison uncollected.
+Likewise, local aggregation requires explicit `--diff RANGE`. The analyzer forwards the PR range already selected for its AI review; otherwise
+only explicit input requests a comparison. No push/main fallback is selected. Comparison problems remain informational labels;
 there are no coverage thresholds or gates.
+
+Coverage has a measured execution cost: the E2E step took 7.6 minutes on
+[main, Build run45633937865](https://github.com/wendylabsinc/WendyOS/actions/runs/45633937865)
+and 18.1 minutes in
+[coverage run45386626330, Swift E2E Tests](https://github.com/wendylabsinc/WendyOS/actions/runs/45386626330). These are
+observed runs, not a controlled benchmark. Coverage scheduling/defaults are
+unchanged pending Konstantin’s policy decision.
 
 ### Test against a remote device
 
