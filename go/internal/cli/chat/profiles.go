@@ -118,7 +118,7 @@ func toolGroup(name string) string {
 			return strings.TrimSuffix(prefix, "_")
 		}
 	}
-	for _, prefix := range []string{"camera_", "ros2_", "audio_"} {
+	for _, prefix := range []string{"camera_", "ros2_", "audio_", "robot_", "unitree_"} {
 		if strings.HasPrefix(name, prefix) {
 			return "sensors"
 		}

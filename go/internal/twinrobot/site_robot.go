@@ -19,6 +19,7 @@ var ErrObservationUnavailable = errors.New("robot observations are temporarily u
 const stopUnconfirmedMessage = "Stop was not acknowledged. Use the Go2 controller to verify it has stopped."
 
 type SiteRobotSnapshot struct {
+	Frame                                                string
 	Disconnected                                         bool
 	LookDirection                                        int
 	LookState                                            int // 0 idle, 1 turning, 2 completed, 3 aborted
@@ -52,6 +53,8 @@ type SiteRobot struct {
 	commandFaultSink                func(siteCommandFault)
 	pendingCommandFaults            []siteCommandFault
 	commandSequence                 uint64
+	intentGeneration                uint64
+	intentActive                    bool
 	mu                              sync.Mutex
 	ctx                             context.Context
 	cancel                          context.CancelFunc
@@ -592,6 +595,10 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 		return errors.New("This robot order was superseded.")
 	}
 	r.commandSequence = sequence
+	return r.destinationLocked(frame, x, z, move)
+}
+
+func (r *SiteRobot) destinationLocked(frame string, x, z float64, move bool) error {
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err
@@ -753,7 +760,7 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	if renew {
 		r.heartbeat = now
 	}
-	s := SiteRobotSnapshot{Message: r.message, Pose: sitenav.Fresh(r.observed.Pose.Received, now) && !r.closed, Aligned: r.frame != "", Moving: r.moving, FloorY: r.floorY}
+	s := SiteRobotSnapshot{Frame: r.frame, Message: r.message, Pose: sitenav.Fresh(r.observed.Pose.Received, now) && !r.closed, Aligned: r.frame != "", Moving: r.moving, FloorY: r.floorY}
 	s.ControlWarning = r.controlWarning
 	if r.stopUnconfirmed {
 		s.ControlWarning = "Go2 did not confirm Stop. Movement is blocked until Stop succeeds."

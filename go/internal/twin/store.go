@@ -45,7 +45,17 @@ type Room struct {
 	LegacyPoints []Point                      `json:"legacyPoints,omitempty"`
 	Removed      bool                         `json:"removed"`
 	Sources      map[string]uint64            `json:"sources,omitempty"`
+	// Operator-named destinations are separate from transient object sightings.
+	Waypoints map[string]Waypoint `json:"waypoints,omitempty"`
 }
+
+// Waypoint is an operator-named position in this map revision.
+type Waypoint struct {
+	X        float64 `json:"x"`
+	Z        float64 `json:"z"`
+	SeenUnix int64   `json:"seenUnix"`
+}
+
 type Store struct {
 	mu        sync.Mutex
 	directory string
@@ -260,6 +270,7 @@ func (s *Store) Put(r Room) (Room, error) {
 		r.HasModel = old.HasModel
 		r.HasVisualMap = old.HasVisualMap
 		r.References = old.References
+		r.Waypoints = old.Waypoints
 		r.Points = old.Points
 		r.PointLayers = old.PointLayers
 		r.LegacyPoints = old.LegacyPoints
@@ -284,6 +295,7 @@ func (s *Store) Put(r Room) (Room, error) {
 		r.PointLayers = nil
 		r.LegacyPoints = nil
 		r.References = nil
+		r.Waypoints = nil
 		r.Sources = nil
 	}
 	r.Revision++
@@ -488,4 +500,23 @@ func (s *Store) withFrame(frame string, commit func() error) error {
 		return errors.New("room frame changed")
 	}
 	return commit()
+}
+
+// SaveWaypoint stores a user-named map destination without evicting other places.
+func (s *Store) SaveWaypoint(frame, name string, waypoint Waypoint) error {
+	return s.withFrame(frame, func() error {
+		r, err := s.read(strings.Split(frame, "/")[0])
+		if err != nil {
+			return err
+		}
+		if r.Waypoints == nil {
+			r.Waypoints = map[string]Waypoint{}
+		}
+		if _, exists := r.Waypoints[name]; !exists && len(r.Waypoints) >= 64 {
+			return errors.New("this map already has 64 named destinations")
+		}
+		r.Waypoints[name] = waypoint
+		r.Revision++
+		return s.write(r)
+	})
 }

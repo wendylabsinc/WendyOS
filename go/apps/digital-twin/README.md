@@ -128,3 +128,32 @@ Also build both Xcode schemes, `WendyDesktop` and `WendyMobile`. Hardware accept
 must check a G1 cloud contribution, a Go2-created room, another client's live
 rendering, service restart persistence, a bounded Go2 destination, and Stop on
 operator or sensor loss. Local tests do not establish physical robot readiness.
+
+## Natural-language Go2 control
+
+Terminal `wendy chat` exposes `unitree_pairings`, `robot_status`, and
+`robot_command` through the robotics MCP group. The CLI and this Linux service
+both need the chat-control update. The CLI uses the authenticated container
+stream to reach `POST /v1/robot/command`; no new public port is needed.
+
+Try "connect to my Go2", "turn left 90 degrees", "turn around", or "stop".
+Connect starts observations using the same preparation as the robot map. Turning
+needs current robot measurements but does not require a map alignment. Turns
+are limited to 180 degrees and use the existing controller in steps of at most
+60 degrees, with an acknowledged stop between steps.
+
+For navigation, first localize Go2 in its map. Say "remember this spot as the
+kitchen", then "go to the kitchen" to return to that saved position. Named
+positions belong to the map revision and are stored separately from object
+sightings. Chat does not infer traversable coordinates from a room name or an
+image. The existing planner still checks the route and destination against live
+observations. Unknown names and missing localization return a concrete blocker.
+
+A motion call waits at most 30 seconds and reports completion, cancellation,
+failure, or replacement by a newer operator command. Interrupting the call stops
+its motion; a manual map command takes precedence. Request IDs prevent retried
+turns or navigation goals from executing twice during the observer session.
+Stop is always executed, even when the command history is full. Reopen the robot
+session after 256 retained non-stop command receipts. Restarting the service
+ends active goals and clears receipts; never replay an uncertain old motion
+across a service restart.
