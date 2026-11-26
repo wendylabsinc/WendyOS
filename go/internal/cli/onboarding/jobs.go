@@ -287,6 +287,11 @@ func targetInstructions(j *Job) []string {
 		button = "Power off the Go2 and disconnect the dock's BAT power. Hold its recessed recovery button near RJ45 with a SIM eject tool while reconnecting BAT. Hold it for about two seconds, then release it."
 		portCheck = "The Go2 installer pins the Orin NX chip ID and requires the flashing gadget at the same USB path."
 	}
+	if p.DeviceType == "unitree-g1-pc2" {
+		cable = "Disconnect other recovery-mode Jetsons. Use a USB 2.0 data cable at the G1 EDU PC2 flashing port underneath PWR and REC. Keep it attached until the write completes."
+		button = "Power the G1 on and wait for three steady PC2 lights. Hold PWR and REC together for two seconds. Let go of PWR first, wait for two lights, then release REC."
+		portCheck = "The G1 PC2 installer verifies the Orin NX chip ID and checks that the flash disks appear on the selected USB path."
+	}
 	steps := []string{cable, button, "Resume to probe the board. No flash occurs until the observed target is returned and explicitly authorized.", firstBootLine(j.Provisioning), portCheck}
 	if p.HostOS == "darwin" {
 		steps = append(steps, "If macOS says the attached disk is unreadable, choose Ignore. Do not initialize or eject the flashing disk.")

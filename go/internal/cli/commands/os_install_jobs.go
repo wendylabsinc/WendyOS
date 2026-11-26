@@ -218,7 +218,7 @@ func newOSInstallJobsCmd() *cobra.Command {
 		return json.NewEncoder(c.OutOrStdout()).Encode(j)
 	}}
 	startCmd.Flags().StringVar(&start.DeviceType, "device-type", "", "Exact board type")
-	startCmd.Flags().StringVar(&start.Carrier, "carrier", "", "Jetson carrier: developer-kit or go2-edu")
+	startCmd.Flags().StringVar(&start.Carrier, "carrier", "", "Jetson carrier: developer-kit, go2-edu, or g1-pc2")
 	startCmd.Flags().StringVar(&start.Version, "version", "", "Exact release, otherwise latest stable")
 	startCmd.Flags().StringVar(&start.Storage, "storage", "", "sd, nvme or emmc")
 	startCmd.Flags().StringVar(&start.Drive, "drive", "", "Exact host drive path")

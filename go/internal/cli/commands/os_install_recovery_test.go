@@ -21,6 +21,9 @@ func TestRecoveryFlagCombinationsFailBeforeManifestLookup(t *testing.T) {
 		{"--device-type", go2DeviceType, "--rootfs-only", "--no-wifi"},
 		{"--device-type", go2DeviceType, "--storage", "sd", "--no-wifi"},
 		{"--device-type", go2DeviceType, "--drive", "/dev/disk9", "--no-wifi"},
+		{"--device-type", g1PC2DeviceType, "--rootfs-only", "--no-wifi"},
+		{"--device-type", g1PC2DeviceType, "--storage", "emmc", "--no-wifi"},
+		{"--device-type", g1PC2DeviceType, "--drive", "/dev/disk9", "--no-wifi"},
 		{"--device-type", go2DeviceType, "--flashpack", "go2.tar.zst", "--version", "1", "--no-wifi"},
 		{"--device-type", orinNanoDeviceType, "--flashpack", "go2.tar.zst", "--no-wifi"},
 	}
@@ -126,6 +129,10 @@ func TestRecoverySelectorFiltersJetsonFamily(t *testing.T) {
 	if len(go2) != 1 || go2[0].Product != rcm.ProductOrinNX16 {
 		t.Fatalf("Go2 filter = %+v", go2)
 	}
+	g1 := filterRecoveryDevices(devs, orinRecoveryMatch(g1PC2DeviceType))
+	if len(g1) != 1 || g1[0].Product != rcm.ProductOrinNX16 {
+		t.Fatalf("G1 PC2 filter = %+v", g1)
+	}
 }
 
 func TestGo2RecoveryBriefingAndDetection(t *testing.T) {
@@ -149,6 +156,19 @@ func TestGo2RecoveryBriefingAndDetection(t *testing.T) {
 	}
 	if shouldPromptFlashMode(go2DeviceType, "recovery", false, "", true) {
 		t.Fatal("Go2 must go straight to USB recovery")
+	}
+}
+
+func TestG1PC2RecoveryBriefing(t *testing.T) {
+	opts := t234InstallOptions{DeviceType: g1PC2DeviceType, DeviceName: g1PC2InstallName, Storage: "nvme"}
+	box := orinRecoveryBriefingBox(opts, false)
+	for _, want := range []string{"USB 2.0 data cable", "PC2 flashing USB-C", "PWR and REC", "two PC2 lights"} {
+		if !strings.Contains(box, want) {
+			t.Errorf("G1 PC2 recovery briefing missing %q", want)
+		}
+	}
+	if shouldPromptFlashMode(g1PC2DeviceType, "recovery", false, "", true) {
+		t.Fatal("G1 PC2 must go straight to USB recovery")
 	}
 }
 

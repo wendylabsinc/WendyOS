@@ -86,9 +86,9 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	go2 := opts.DeviceType == go2DeviceType
-	if go2 && (dev.PathKey == "" || !rcm.ValidChipID(dev.ECID)) {
-		return fmt.Errorf("cannot verify the Go2 recovery module's USB port and chip ID; connect it directly and check USB permissions")
+	unitree := isUnitreeOrinRecovery(opts.DeviceType)
+	if unitree && (dev.PathKey == "" || !rcm.ValidChipID(dev.ECID)) {
+		return fmt.Errorf("cannot verify the recovery module's USB port and chip ID for %s; connect it directly and check USB permissions", opts.DeviceType)
 	}
 
 	creds, err := resolveFirstBootWiFi(opts.WiFi)
@@ -109,10 +109,11 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},
 		question: fmt.Sprintf("Flash %s?", dev.Describe()),
 	}
-	if go2 {
-		confirm.target = go2InstallName + " — " + dev.Describe()
-		confirm.warning = append(confirm.warning, go2CarrierCheck)
-		confirm.question = "Flash the connected Go2 EDU expansion dock?"
+	if unitree {
+		profile := unitreeRecovery(opts.DeviceType)
+		confirm.target = profile.name + " — " + dev.Describe()
+		confirm.warning = append(confirm.warning, profile.carrierCheck)
+		confirm.question = fmt.Sprintf("Flash the connected %s?", profile.name)
 	}
 	if err := confirmRecoveryFlash(confirm, name, creds, enrolled, opts.Force); err != nil {
 		return err
@@ -193,12 +194,12 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 				StatusPath: fp.Manifest.Layout.FlashPackageStatus, LogsPath: fp.Manifest.Layout.FlashPackageLogs,
 				ExpectedIdentity: t234.IdentityExpectation{ModuleID: target.ModuleID, ModuleSKU: target.ModuleSKU, CarrierID: target.CarrierID, CarrierSKU: target.CarrierSKU},
 				Out:              out, Detail: detail, RunHelper: runT234Helper, TempDir: handoffDir,
-				StrictPort: go2,
+				StrictPort: unitree,
 			}
 			return false, nil
 		}},
 		{id: orinStepRCMBoot, label: "Stage 1  RCM boot", run: func(out io.Writer, _ func(string)) (bool, error) {
-			if go2 {
+			if unitree {
 				return false, orinStageOneVerified(fp, dev, out, dev.ECID)
 			}
 			return false, orinStageOne(fp, dev, out)
@@ -491,7 +492,7 @@ func confirmOrinReady(opts t234InstallOptions) error {
 // sitting in recovery on the same host (or vice versa).
 func orinRecoveryMatch(deviceType string) func(rcm.RecoveryDevice) bool {
 	switch deviceType {
-	case go2DeviceType:
+	case go2DeviceType, g1PC2DeviceType:
 		return func(d rcm.RecoveryDevice) bool { return d.Product == rcm.ProductOrinNX16 }
 	case orinNanoDeviceType:
 		return func(d rcm.RecoveryDevice) bool { return d.IsOrinNano() }
@@ -507,8 +508,8 @@ func orinRecoveryMatch(deviceType string) func(rcm.RecoveryDevice) bool {
 // Orin devkit's recovery port is the USB-C next to the 40-pin header.
 func orinRecoveryPort(deviceType string) string {
 	switch deviceType {
-	case go2DeviceType:
-		return go2RecoveryPort
+	case go2DeviceType, g1PC2DeviceType:
+		return unitreeRecovery(deviceType).port
 	case orinNanoDeviceType:
 		return "the devkit's USB-C port"
 	default:
@@ -528,8 +529,8 @@ func orinRecoveryHints(opts t234InstallOptions) recoveryWaitHints {
 		buttonLine:  "the recovery sequence: power off, hold " + briefKey.Render("Force Recovery") + ", tap " + briefKey.Render("Reset/Power") + ", release Force Recovery",
 	}
 	switch opts.DeviceType {
-	case go2DeviceType:
-		hints.buttonLine = "the Go2 recovery sequence: " + go2RecoveryEntry
+	case go2DeviceType, g1PC2DeviceType:
+		hints.buttonLine = "the recovery sequence: " + unitreeRecovery(opts.DeviceType).entry
 	case orinNanoDeviceType:
 		hints.buttonLine = "the recovery jumper: " + briefKey.Render("FC REC") + " bridged to " + briefKey.Render("GND") + " (pins 9–10 on the button header under the module) when power is connected"
 	}
@@ -546,13 +547,13 @@ func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) str
 		"  QSPI and " + briefKey.Render(strings.ToUpper(opts.Storage)) + " are updated together; all partitions, including /data, are erased.",
 		"",
 	}
-	go2 := opts.DeviceType == go2DeviceType
-	if go2 {
-		lines = append(lines, "  "+go2CarrierCheck, "")
+	unitree := isUnitreeOrinRecovery(opts.DeviceType)
+	if unitree {
+		lines = append(lines, "  "+unitreeRecovery(opts.DeviceType).carrierCheck, "")
 	}
 	if recoveryDetected {
 		label := opts.DeviceName
-		if go2 {
+		if unitree {
 			label = "Jetson Orin NX 16 GB module"
 		}
 		lines = append(lines,
@@ -567,6 +568,13 @@ func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) str
 			briefMarker.Render("●")+" "+briefTitle.Render("Entering recovery mode"),
 		)
 		switch opts.DeviceType {
+		case g1PC2DeviceType:
+			lines = append(lines,
+				"    "+briefNum.Render("1.")+" Start the G1 and wait for all three PC2 lights to stay on.",
+				"    "+briefNum.Render("2.")+" Hold PWR and REC together for about two seconds.",
+				"    "+briefNum.Render("3.")+" Let go of PWR first. Release REC when only two PC2 lights remain.",
+				"    "+briefNum.Render("4.")+" Leave the PC2 USB-C cable attached until Wendy reports success.",
+			)
 		case go2DeviceType:
 			lines = append(lines,
 				"    "+briefNum.Render("1.")+" Power off the Go2 and connect the USB data cable.",

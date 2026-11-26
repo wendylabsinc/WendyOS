@@ -443,12 +443,14 @@ func validateManifest(m *Manifest) error {
 func validateT234Target(m *Manifest) error {
 	type targetSpec struct {
 		moduleID, moduleSKU, carrierID, carrierSKU, rootfsDevice string
+		machine, usbProduct                                      string
 	}
 	supported := map[string]targetSpec{
-		"jetson-orin-nano/nvme": {"3767", "0005", "3768", "0000", "nvme0n1"},
-		"jetson-agx-orin/nvme":  {"3701", "0005", "3737", "0000", "nvme0n1"},
-		"jetson-agx-orin/emmc":  {"3701", "0005", "3737", "0000", "mmcblk0"},
-		"unitree-go2/nvme":      {"3767", "0000", "3768", "0000", "nvme0n1"},
+		"jetson-orin-nano/nvme": {"3767", "0005", "3768", "0000", "nvme0n1", "", ""},
+		"jetson-agx-orin/nvme":  {"3701", "0005", "3737", "0000", "nvme0n1", "", ""},
+		"jetson-agx-orin/emmc":  {"3701", "0005", "3737", "0000", "mmcblk0", "", ""},
+		"unitree-go2/nvme":      {"3767", "0000", "3768", "0000", "nvme0n1", "unitree-go2-orin-nx", "0x7323"},
+		"unitree-g1-pc2/nvme":   {"3767", "0000", "3768", "0000", "nvme0n1", "unitree-g1-pc2-orin-nx", "0x7323"},
 	}
 	key := m.Target.Device + "/" + m.Target.Storage
 	want, ok := supported[key]
@@ -459,8 +461,8 @@ func validateT234Target(m *Manifest) error {
 	if got.ModuleID != want.moduleID || got.ModuleSKU != want.moduleSKU || got.CarrierID != want.carrierID || got.CarrierSKU != want.carrierSKU || m.RootfsDevice != want.rootfsDevice {
 		return fmt.Errorf("T234 flashpack target %s has unsupported identity/rootfs mapping", key)
 	}
-	if got.Device == "unitree-go2" && (m.Machine != "unitree-go2-orin-nx" || m.USBProductID != "0x7323") {
-		return fmt.Errorf("Unitree Go2 flashpack requires machine unitree-go2-orin-nx and USB product 0x7323")
+	if want.machine != "" && (m.Machine != want.machine || m.USBProductID != want.usbProduct) {
+		return fmt.Errorf("%s flashpack requires machine %s and USB product %s", key, want.machine, want.usbProduct)
 	}
 	return nil
 }

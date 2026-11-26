@@ -127,6 +127,23 @@ func TestT234SchemaV2HashesControlFilesSizeChecksImages(t *testing.T) {
 	}
 }
 
+func TestG1PC2ManifestUsesItsOwnCarrierBuild(t *testing.T) {
+	fp, err := open(writeT234ManifestFixture(t, T234Schema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := fp.Manifest
+	m.Target.Device, m.Target.ModuleSKU = "unitree-g1-pc2", "0000"
+	m.Machine, m.USBProductID = "unitree-g1-pc2-orin-nx", "0x7323"
+	if err := validateManifest(&m); err != nil {
+		t.Fatal(err)
+	}
+	m.Machine = "unitree-go2-orin-nx"
+	if err := validateManifest(&m); err == nil {
+		t.Fatal("accepted a G1 PC2 pack built for the Go2")
+	}
+}
+
 func TestOpenLocalGo2RecoveryArchive(t *testing.T) {
 	fp, err := open(writeT234ManifestFixture(t, T234Schema))
 	if err != nil {

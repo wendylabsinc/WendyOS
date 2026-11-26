@@ -67,11 +67,12 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 	}
 	p.DeviceType = o.DeviceType
 	jetson := isT234RecoveryDevice(o.DeviceType) || o.DeviceType == thorDeviceType
-	if o.DeviceType == go2DeviceType {
-		if o.Carrier != "" && o.Carrier != "go2-edu" {
-			return nil, fmt.Errorf("unitree-go2 requires the Go2 EDU expansion dock")
+	if isUnitreeOrinRecovery(o.DeviceType) {
+		profile := unitreeRecovery(o.DeviceType)
+		if o.Carrier != "" && o.Carrier != profile.carrier {
+			return nil, fmt.Errorf("%s requires carrier=%s for the %s", o.DeviceType, profile.carrier, profile.name)
 		}
-		if err := checkGo2RecoveryOptions(o.RootfsOnly, o.Storage); err != nil {
+		if err := checkUnitreeRecoveryOptions(o.DeviceType, o.RootfsOnly, o.Storage); err != nil {
 			return nil, err
 		}
 	} else if jetson && o.Carrier != "developer-kit" {
@@ -110,12 +111,16 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 	if jetson {
 		p.Documentation = "https://docs.wendy.dev/latest/installation/wendyos-nvidia-jetson-orin-nano"
 	}
-	if o.DeviceType == go2DeviceType {
-		p.Documentation = "https://docs.wendy.dev/latest/advanced/clients/wendy-cli/commands/os/install/#unitree-go2-edu"
-		p.Requirements = append(p.Requirements, go2CarrierCheck, "Connect the data cable to "+go2RecoveryPort+". "+go2RecoveryEntry)
+	if isUnitreeOrinRecovery(o.DeviceType) {
+		profile := unitreeRecovery(o.DeviceType)
+		p.Documentation = "https://docs.wendy.dev/latest/advanced/clients/wendy-cli/commands/os/install/#" + profile.docsAnchor
+		p.Requirements = append(p.Requirements, profile.carrierCheck, "Connect the data cable to "+profile.port+". "+profile.entry)
 	}
 	if o.DeviceType == thorDeviceType || (isT234RecoveryDevice(o.DeviceType) && !o.RootfsOnly) {
 		if o.Drive != "" {
+			if isUnitreeOrinRecovery(o.DeviceType) {
+				return nil, fmt.Errorf("USB recovery targets the connected Jetson; omit drive")
+			}
 			return nil, fmt.Errorf("USB recovery targets the connected Jetson, not a host drive; remove drive or explicitly choose rootfs_only")
 		}
 		p.Method, p.EraseScope = "usb-recovery", "Replaces boot firmware and OS storage on the selected Jetson; existing data is erased."
@@ -131,12 +136,12 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 			p.Documentation = "https://docs.wendy.dev/latest/installation/wendyos-nvidia-jetson-agx-thor"
 		} else {
 			if v.InstallMode != "recovery" {
-				if o.DeviceType == go2DeviceType {
-					return nil, fmt.Errorf("version %s has no Unitree Go2 USB recovery flashpack", ver)
+				if isUnitreeOrinRecovery(o.DeviceType) {
+					return nil, fmt.Errorf("version %s has no USB recovery flashpack for %s", ver, o.DeviceType)
 				}
 				return nil, fmt.Errorf("version %s has no full recovery installation; choose a recovery release or explicitly use rootfs_only with compatible boot firmware", ver)
 			}
-			if p.Storage == "" && (o.DeviceType == orinNanoDeviceType || o.DeviceType == go2DeviceType) {
+			if p.Storage == "" && (o.DeviceType == orinNanoDeviceType || isUnitreeOrinRecovery(o.DeviceType)) {
 				p.Storage = "nvme"
 			}
 			if p.Storage == "" {
@@ -225,8 +230,8 @@ func newOSInstallPlanCmd() *cobra.Command {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(p)
 		},
 	}
-	cmd.Flags().StringVar(&o.DeviceType, "device-type", "", "Board type, unitree-go2, unitree-g1, or linux-desktop")
-	cmd.Flags().StringVar(&o.Carrier, "carrier", "", "Jetson carrier: developer-kit or go2-edu")
+	cmd.Flags().StringVar(&o.DeviceType, "device-type", "", "Board type, unitree-go2, unitree-g1-pc2, unitree-g1, or linux-desktop")
+	cmd.Flags().StringVar(&o.Carrier, "carrier", "", "Jetson carrier: developer-kit, go2-edu, or g1-pc2")
 	cmd.Flags().StringVar(&o.Version, "version", "", "Exact WendyOS release (default latest stable)")
 	cmd.Flags().StringVar(&o.Storage, "storage", "", "Target storage: sd, nvme, or emmc")
 	cmd.Flags().StringVar(&o.Drive, "drive", "", "Exact host drive path from list-drives")

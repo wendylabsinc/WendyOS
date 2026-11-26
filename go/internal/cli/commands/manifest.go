@@ -678,9 +678,14 @@ const orinDeviceType = "jetson-agx-orin"
 const orinNanoDeviceType = "jetson-orin-nano"
 
 const go2DeviceType = "unitree-go2"
+const g1PC2DeviceType = "unitree-g1-pc2"
+
+func isUnitreeOrinRecovery(deviceType string) bool {
+	return deviceType == go2DeviceType || deviceType == g1PC2DeviceType
+}
 
 func isT234RecoveryDevice(deviceType string) bool {
-	return deviceType == orinDeviceType || deviceType == orinNanoDeviceType || deviceType == go2DeviceType
+	return deviceType == orinDeviceType || deviceType == orinNanoDeviceType || isUnitreeOrinRecovery(deviceType)
 }
 
 // fetchInstallMainManifest is the master manifest that install aliases are

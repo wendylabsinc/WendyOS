@@ -14,6 +14,9 @@ For the Go2 EDU expansion dock, select **Unitree Go2** in the Linux tab or use
 `--device-type unitree-go2`. The installer downloads the recovery flashpack and
 guides you through [Go2 USB recovery](./os/install.md#unitree-go2-edu).
 
+For the G1 EDU PC2 development computer, use `--device-type unitree-g1-pc2`
+and follow the [PC2 recovery steps](./os/install.md#unitree-g1-edu-pc2).
+
 ```sh
 # Interactive (recommended)
 wendy install
@@ -23,6 +26,9 @@ wendy install --nightly
 
 # Install on a Go2 EDU expansion dock over USB
 wendy install --device-type unitree-go2 --no-wifi
+
+# Install on a G1 EDU PC2 over USB
+wendy install --device-type unitree-g1-pc2 --no-wifi
 
 # Download a matching driver and push it after the flashed device boots
 wendy install --device-type dragonwing-iq-9075 --device-name iq9-mesh --nightly --driver intel-be202
