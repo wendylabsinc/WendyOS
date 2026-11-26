@@ -130,3 +130,22 @@ import Testing
     #expect(scene.write(to: url, options: nil, delegate: nil, progressHandler: nil))
     #expect(try SiteRobotGeometry.triangles(url, scale: 2) == geometry)
 }
+
+@Test func passivePositioningUsesFreshEvidence() {
+    let now = Date(timeIntervalSince1970: 1000)
+    var recovery = RobotPassiveLocalization()
+    recovery.start(after: 1, now: now)
+    #expect({ !recovery.takeAttempt(revision: 2, cameraSequence: nil, now: now) }())
+    for i in 1...20 {
+        let at = now.addingTimeInterval(Double(i * 2))
+        #expect({ recovery.takeAttempt(revision: UInt64(i + 1), cameraSequence: nil, now: at) }())
+        #expect({ !recovery.takeAttempt(revision: UInt64(i + 1), cameraSequence: nil, now: at.addingTimeInterval(1)) }())
+    }
+    #expect({ !recovery.takeAttempt(revision: 21, cameraSequence: nil, now: now.addingTimeInterval(50)) }())
+    // Camera evidence can disambiguate an unchanged accumulated cloud.
+    #expect({ recovery.takeAttempt(revision: 21, cameraSequence: 1, now: now.addingTimeInterval(51)) }())
+    #expect({ !recovery.takeAttempt(revision: 21, cameraSequence: 1, now: now.addingTimeInterval(55)) }())
+    #expect({ recovery.takeAttempt(revision: 21, cameraSequence: 2, now: now.addingTimeInterval(55)) }())
+    recovery.cancel()
+    #expect({ !recovery.takeAttempt(revision: 22, cameraSequence: 3, now: now.addingTimeInterval(100)) }())
+}
