@@ -158,7 +158,8 @@ extension AppsDeploymentFixture {
 
     func observerCommand(_ operation: String, arguments: String = "") -> String {
         "\(Self.quote(Self.observerPath)) --operation \(Self.quote(operation)) --cloud \(Self.quote(cloud)) "
-            + "--tenant \(Self.quote(tenant)) --app \(app) --name \(Self.quote(name)) --asset \(asset) \(arguments)"
+            + "--tenant \(Self.quote(tenant)) --app \(app) --name \(Self.quote(name)) "
+            + (asset.isEmpty ? "" : "--asset \(asset) ") + arguments
     }
 
     func catalog(_ cli: WendyE2ESession) async throws -> AppsCatalog {
@@ -333,6 +334,30 @@ extension AppsDeploymentFixture {
         } catch { primaryError = error }
         do { try await other.cleanUp(cli) } catch {
             Issue.record("Related catalog cleanup failed for \(other.app): \(error)")
+            primaryError = primaryError ?? error
+        }
+        if let primaryError { throw primaryError }
+    }
+
+    /// A separately owned catalog control with no device observation or
+    /// runtime-cleanup claim. Its actual catalog deletion is still verified.
+    func withRelatedCloudApp(
+        _ cli: WendyE2ESession,
+        _ body: @Sendable (Self) async throws -> Void
+    ) async throws {
+        let other = try Self(
+            deviceAddress: device.isEmpty ? nil : device,
+            assetID: asset,
+            appID: app + "-other",
+            requirement: requirement
+        )
+        var primaryError: (any Error)?
+        do {
+            try await other.create(cli)
+            try await body(other)
+        } catch { primaryError = error }
+        do { try await other.cleanUpCatalog(cli) } catch {
+            Issue.record("Related owned Cloud app cleanup outstanding: \(other.app)")
             primaryError = primaryError ?? error
         }
         if let primaryError { throw primaryError }

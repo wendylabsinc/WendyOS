@@ -26,6 +26,34 @@ former inputs or assertions was removed. These are source counts, not runtime
 passing results. The four Go top-level isolation cases remain counted once;
 the bad-data wrapper retains all six existing subcases.
 
+Eight existing declarations use Cloud-only acceptance fixtures. Their full
+device-response counterparts retain terminal and HTTP assertions.
+
+## Cloud-only fixture inputs
+
+`withCloudApp` with its default `verifyTarget: false` is a pure catalog fixture.
+It requires the normal saved account reference (`WENDY_E2E_APPS_ACCOUNT` plus
+`WENDY_E2E_SAVED_CONFIG_DIR`), the intended Dev tenant and explicit endpoint,
+local POSIX CLI, per-test isolation, `--no-parallel` and `--no-managed-agent`.
+Publishing also needs its declared OCI layout or ordinary builder inputs.
+**It requires no LAN address, asset UUID, device resource file or device pin.**
+No device inventory, port probe, HTTP request or runtime cleanup is performed.
+Native selection, certificate validity, tenant/endpoint and an actual public
+self-permission/profile read are still checked before creating owned resources.
+
+`withCloudApp(verifyTarget: true)` additionally requires the intended asset UUID.
+An authenticated public `GetAsset` verifies that exact asset, organization and
+compute-device binding before writes. This still requires no LAN address or
+LAN pin. The normal deploy/rotate CLI performs recipient-key verification; a
+catalog-reserved device name alone is not treated as enrollment proof. Cloud
+catalog cleanup is independently verified and makes no runtime-removal claim.
+
+`withApp` remains the runtime fixture: it requires an approved LAN address,
+asset, saved binding and actual signed identity, then checks inventory and
+independent HTTP responses. Runtime fixture operations reject Cloud-only
+instances before device I/O. The run-level audit must still reconcile every
+owned Cloud app and any actual owned runtime after a live batch.
+
 The earlier 69-declaration measured baseline remains separate. Two of its cases
 read Cloud rollback history and removal/release retention without waiting for a
 device result. Seven additional declarations now cover release/configuration

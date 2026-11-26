@@ -11,7 +11,7 @@ struct `'wendy app lifecycle'` {
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
     func `saves an app override and restores the organization default`() async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withCloudApp { cli, app in
             try await app.create(cli)
             let inherited = try await app.succeed(
                 cli,
@@ -43,7 +43,7 @@ struct `'wendy app lifecycle'` {
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
     func `refuses an invalid count without changing policy`() async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withCloudApp { cli, app in
             try await app.create(cli)
             let before = try await app.succeed(
                 cli,

@@ -167,7 +167,7 @@ struct `'wendy app deploy'` {
         try await AppsDeploymentFixture.withApp { cli, app in
             try await app.create(cli)
             let release = try await app.publish(cli)
-            let missing = app.deployCommand(release).replacingOccurrences(
+            let missing = try app.deployCommand(release).replacingOccurrences(
                 of: "--config E2E_ATTEMPT=\(app.attempt) ",
                 with: ""
             )
@@ -292,7 +292,7 @@ struct `'wendy app deploy'` {
             )
             var primaryError: (any Error)?
             do {
-                let command = app.deployCommand(release).replacingOccurrences(
+                let command = try app.deployCommand(release).replacingOccurrences(
                     of: "--device \(app.asset)",
                     with: "--device \(declared.id)"
                 )

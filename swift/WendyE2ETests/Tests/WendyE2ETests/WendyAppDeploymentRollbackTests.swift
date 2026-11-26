@@ -13,7 +13,7 @@ struct `'wendy app deployment rollback'` {
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
     func `records rollback history and restored settings in Cloud`() async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withCloudApp(verifyTarget: true) { cli, app in
             try await app.create(cli)
             let releaseA = try await app.publish(cli)
             _ = try await app.succeed(cli, app.deployCommand(releaseA))

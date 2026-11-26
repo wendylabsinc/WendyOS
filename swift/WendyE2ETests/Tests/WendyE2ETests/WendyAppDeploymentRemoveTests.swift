@@ -13,7 +13,7 @@ struct `'wendy app deployment remove'` {
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
     func `records removal while retaining the published release in Cloud`() async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withCloudApp(verifyTarget: true) { cli, app in
             try await app.create(cli)
             let release = try await app.publish(cli)
             let artifact = try await app.requireArtifact(cli, release: release)
@@ -73,7 +73,7 @@ struct `'wendy app deployment remove'` {
                 "wendy app deployment show \(app.deployment) \(app.cloudFlag)",
                 guidance: "no deployment"
             )
-            let command = app.deployCommand(release).replacingOccurrences(
+            let command = try app.deployCommand(release).replacingOccurrences(
                 of: "--name workshop",
                 with: "--name replacement"
             )

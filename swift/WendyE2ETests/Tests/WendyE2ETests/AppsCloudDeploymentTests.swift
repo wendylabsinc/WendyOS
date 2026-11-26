@@ -13,7 +13,7 @@ struct `'Cloud deployment intentions'` {
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
     func `records release and configuration changes before device acknowledgment`() async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withCloudApp(verifyTarget: true) { cli, app in
             try await app.create(cli)
             let a = try await app.publish(cli)
             try await cli.sh(
@@ -92,7 +92,7 @@ struct `'Cloud deployment intentions'` {
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
     func `resumes an unsigned pending revision without changing Cloud history`() async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withCloudApp(verifyTarget: true) { cli, app in
             try await app.create(cli)
             let a = try await app.publish(cli)
             _ = try await app.succeed(cli, app.deployCommand(a))
@@ -173,7 +173,7 @@ struct `'Cloud deployment intentions'` {
         )
     )
     func `rotates pending deployment key material without changing its revision`() async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withCloudApp(verifyTarget: true) { cli, app in
             try await app.create(cli)
             let a = try await app.publish(cli)
             _ = try await app.succeed(cli, app.deployCommand(a))
@@ -223,7 +223,10 @@ struct `'Cloud deployment intentions'` {
             let before = try await app.inventory(cli)
             let different =
                 "sha256:" + String(repeating: a.digest.last == "0" ? "1" : "0", count: 64)
-            let command = app.deployCommand(a).replacingOccurrences(of: a.digest, with: different)
+            let command = try app.deployCommand(a).replacingOccurrences(
+                of: a.digest,
+                with: different
+            )
             let refusal = try await app.command(cli, command)
             #expect(refusal.status.isFailure)
             #expect(

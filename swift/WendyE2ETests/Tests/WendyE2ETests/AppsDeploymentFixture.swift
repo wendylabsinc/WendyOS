@@ -11,6 +11,9 @@ let appsDeploymentLocalTestsEnabled =
 /// Real CLI, registry delivery and HTTP observations. No backing service is replaced.
 /// Uses the in-tree generated-client adapter and independent HTTP responses.
 struct AppsDeploymentFixture: Sendable {
+    enum Requirement: Sendable, Equatable { case runtime, cloudTarget, catalog }
+
+    let requirement: Requirement
     let app: String
     let attempt: String
     let name: String
@@ -55,8 +58,10 @@ struct AppsDeploymentFixture: Sendable {
         appID: String? = nil,
         attemptID: String? = nil,
         deploymentName: String = "workshop",
-        portNumber: Int? = nil
+        portNumber: Int? = nil,
+        requirement: Requirement = .runtime
     ) throws {
+        self.requirement = requirement
         app = appID ?? "sh.wendy.e2e.apps-" + UUID().uuidString.lowercased()
         attempt = attemptID ?? UUID().uuidString.lowercased()
         name = deploymentName
@@ -82,13 +87,24 @@ struct AppsDeploymentFixture: Sendable {
         }
         try #require(WendyE2EMachine.cli.isLocal, "Draft fixture requires a local POSIX CLI host")
         try #require(WendyE2EMachine.cli.os != .windows, "POSIX fixture commands required")
-        device = try HTTPAppFixture.requireLANDevice(
-            deviceAddress ?? WendyE2EEnvironment.deviceAddress
-        )
-        asset = try assetID ?? Self.setting("WENDY_E2E_APPS_ASSET_UUID")
+        if requirement == .runtime {
+            device = try HTTPAppFixture.requireLANDevice(
+                deviceAddress ?? WendyE2EEnvironment.deviceAddress
+            )
+        } else {
+            // Empty means absent, never a fabricated route. Cloud-only
+            // commands do not receive a --device-address or LAN pin.
+            device = deviceAddress ?? ""
+        }
+        if requirement == .catalog {
+            asset = assetID ?? ""
+        } else {
+            asset = try assetID ?? Self.setting("WENDY_E2E_APPS_ASSET_UUID")
+        }
         tenant = try Self.setting("WENDY_E2E_APPS_TENANT_UUID")
         cloud = try Self.setting("WENDY_E2E_APPS_CLOUD_GRPC")
-        try #require(UUID(uuidString: asset) != nil && UUID(uuidString: tenant) != nil)
+        try #require(UUID(uuidString: tenant) != nil)
+        if requirement != .catalog { try #require(UUID(uuidString: asset) != nil) }
         try #require(
             cloud.contains(".dev.") && cloud.hasSuffix(":443"),
             "Explicit Dev endpoint required"
@@ -157,6 +173,93 @@ struct AppsDeploymentFixture: Sendable {
             }
             if let primaryError { throw primaryError }
         }
+    }
+
+    /// Records Cloud acceptance without requiring a live device or claiming
+    /// runtime convergence. Targeted commands still use the normal CLI's
+    /// recipient-key verification. The full response specs keep withApp.
+    static func withCloudApp(
+        verifyTarget: Bool = false,
+        filePath: String = #filePath,
+        function: String = #function,
+        line: Int = #line,
+        _ body: @Sendable (WendyE2ESession, AppsDeploymentFixture) async throws -> Void
+    ) async throws {
+        let fixture = try Self(requirement: verifyTarget ? .cloudTarget : .catalog)
+        guard FileManager.default.isExecutableFile(atPath: observerPath) else {
+            throw Prerequisite(description: "Build the in-tree public API fixture adapter")
+        }
+        try fixture.requireDedicatedIdentityFixture(requireDevicePin: false)
+        try await CLIAndAgentScenario().run(filePath: filePath, function: function, line: line) {
+            cli,
+            _ in
+            try await fixture.verifyCloudAccount(cli)
+            if verifyTarget { try await fixture.verifyCloudTarget(cli) }
+            try await fixture.writeProject(cli)
+            let ledger =
+                "app=\(fixture.app)\ntenant=\(fixture.tenant)\n"
+                + (fixture.asset.isEmpty ? "" : "asset=\(fixture.asset)\n")
+                + "deployment=\(fixture.deployment)\nattempt=\(fixture.attempt)\nobserves-runtime=false\n"
+            try await cli.sh("printf '%s' \(quote(ledger)) > owned-resources.txt")
+            var primaryError: (any Error)?
+            do { try await body(cli, fixture) } catch { primaryError = error }
+            do { try await fixture.cleanUpCatalog(cli) } catch {
+                Issue.record("Owned Cloud app cleanup outstanding: \(fixture.app)")
+                primaryError = primaryError ?? error
+            }
+            if let primaryError { throw primaryError }
+        }
+    }
+
+    func verifyCloudAccount(_ cli: WendyE2ESession) async throws {
+        struct Status: Decodable {
+            struct Session: Decodable {
+                struct Certificate: Decodable { let expired: Bool }
+                let current: Bool?
+                let context: String
+                let cloudGrpc: String
+                let principalUri: String?
+                let certificate: Certificate?
+            }
+            let loggedIn: Bool
+            let sessions: [Session]
+        }
+        let result = try await succeed(cli, "wendy --json auth status")
+        let sanitized = Prerequisite(
+            description: "Select a fresh native account in the intended Dev tenant"
+        )
+        // Keep all credential/status objects out of macro operand diagnostics.
+        guard let status = try? JSONDecoder().decode(Status.self, from: Data(result.stdout.utf8)),
+            status.loggedIn
+        else { throw sanitized }
+        let selected = status.sessions.filter { $0.current == true }
+        guard selected.count == 1, let session = selected.first,
+            session.cloudGrpc == cloud, session.certificate?.expired == false,
+            session.principalUri?.hasPrefix("spiffe://wendy.sh/tenant/\(tenant)/operator/") == true,
+            ProcessInfo.processInfo.environment["WENDY_E2E_APPS_ACCOUNT"].map({
+                $0 == session.context
+            }) ?? true
+        else { throw sanitized }
+        // This refresh and self-permission observation are ordinary public
+        // operations. No online-device list is required for Cloud-only work.
+        _ = try await succeed(cli, "wendy --json cloud discover --all \(cloudFlag)")
+        struct Profile: Decodable { let operatorId: String }
+        let profile = try await observe(cli, "operator-profile", as: Profile.self)
+        try #require(!profile.operatorId.isEmpty)
+    }
+
+    func verifyCloudTarget(_ cli: WendyE2ESession) async throws {
+        struct Target: Decodable {
+            let id: String
+            let organizationId: String
+            let deviceName: String
+            let isComputeDevice: Bool
+        }
+        let target = try await observe(cli, "target", as: Target.self)
+        try #require(target.id == asset && target.organizationId == tenant)
+        try #require(target.isComputeDevice && target.deviceName == asset)
+        // A catalog-reserved device name alone is not enrollment proof. The
+        // normal deploy/rotate CLI verifies the actual recipient key itself.
     }
 
     func command(_ cli: WendyE2ESession, _ command: String) async throws -> WendyE2EShellResult {
@@ -258,8 +361,14 @@ struct AppsDeploymentFixture: Sendable {
         extra: String = "",
         target: Bool = true,
         confirm: Bool = true
-    ) -> String {
-        "wendy app deploy --app \(app) --release \(release.id) --digest \(release.digest) --name \(name) "
+    ) throws -> String {
+        guard !target || !asset.isEmpty else {
+            throw Prerequisite(
+                description: "A targeted Cloud command requires an explicitly verified asset"
+            )
+        }
+        return
+            "wendy app deploy --app \(app) --release \(release.id) --digest \(release.digest) --name \(name) "
             + (target ? "--device \(asset) " : "")
             + "--config E2E_ATTEMPT=\(attempt) --config DISPLAY_UNIT=celsius --keep-trying 7d "
             + (run ? "--run " : "--install-only ") + (confirm ? "--yes " : "")
@@ -286,11 +395,19 @@ struct AppsDeploymentFixture: Sendable {
     }
 
     func inventory(_ cli: WendyE2ESession) async throws -> [App] {
+        guard requirement == .runtime else {
+            throw Prerequisite(description: "Cloud-only fixtures do not observe device inventory")
+        }
         let result = try await succeed(cli, "\(deviceCommand) list")
         return try JSONDecoder().decode([App].self, from: Data(result.stdout.utf8))
     }
 
     func response(_ cli: WendyE2ESession) async throws -> Response? {
+        guard requirement == .runtime else {
+            throw Prerequisite(
+                description: "Cloud-only fixtures do not observe device HTTP responses"
+            )
+        }
         let result = try await command(
             cli,
             "curl --silent --show-error --fail --connect-timeout 2 --max-time 3 --noproxy '*' \(Self.quote(url))"
@@ -402,7 +519,7 @@ struct AppsDeploymentFixture: Sendable {
         return value
     }
 
-    func requireDedicatedIdentityFixture() throws {
+    func requireDedicatedIdentityFixture(requireDevicePin: Bool = true) throws {
         // Never use Testing macros on credential objects: operand capture can
         // disclose the entire auth dictionary. Sanitize parsing errors as well.
         let sanitized = Prerequisite(
@@ -428,9 +545,12 @@ struct AppsDeploymentFixture: Sendable {
                 let certificates = sessions[0]["certificates"] as? [[String: Any]],
                 certificates.count == 1,
                 let principal = certificates[0]["principalUri"] as? String,
-                principal.hasPrefix("spiffe://wendy.sh/tenant/\(tenant)/operator/"),
-                let pins = config["devicePins"] as? [String: [String: Any]]
+                principal.hasPrefix("spiffe://wendy.sh/tenant/\(tenant)/operator/")
             else { throw sanitized }
+            guard requireDevicePin else { return }
+            guard let pins = config["devicePins"] as? [String: [String: Any]] else {
+                throw sanitized
+            }
             var key = device.lowercased()
             if key.hasSuffix(".") { key.removeLast() }
             if key.hasSuffix(".local") { key.removeLast(".local".count) }
@@ -534,7 +654,7 @@ struct AppsDeploymentFixture: Sendable {
         }
     }
 
-    func cleanUp(_ cli: WendyE2ESession) async throws {
+    func cleanUpCatalog(_ cli: WendyE2ESession) async throws {
         let present = try await command(cli, "wendy app lifecycle \(app) \(cloudFlag)")
         if present.status.isSuccess {
             _ = try await succeed(cli, "wendy app delete \(app) --yes \(cloudFlag)")
@@ -545,6 +665,14 @@ struct AppsDeploymentFixture: Sendable {
                 "Catalog absence could not be established"
             )
         }
+        let catalog = try await catalog(cli)
+        try #require(catalog.appCode == "NotFound" && catalog.app == nil)
+        #expect(catalog.releases?.isEmpty == true)
+        #expect(catalog.deployments?.isEmpty == true)
+    }
+
+    func cleanUp(_ cli: WendyE2ESession) async throws {
+        try await cleanUpCatalog(cli)
         // Delete is asynchronous. Give signed removal time to apply before a
         // direct cleanup, which is needed for the deliberately detached app.
         try await requireAbsentOrRemoveDetached(cli)

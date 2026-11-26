@@ -23,7 +23,7 @@ struct `'wendy app rotate'` {
     )
     func `refuses another authenticated operator before waiting for device apply`() async throws {
         _ = try AppsDeploymentFixture.setting("WENDY_E2E_APPS_MEMBER_EMAIL")
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withCloudApp(verifyTarget: true) { cli, app in
             try await app.create(cli)
             _ = try await app.succeed(cli, "wendy registry key show \(app.cloudFlag)")
             let release = try await app.publish(cli)

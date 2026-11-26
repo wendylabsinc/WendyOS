@@ -26,6 +26,15 @@ type declaredAssetReceipt struct {
 
 func auxiliary(ctx context.Context, c grpc.ClientConnInterface, a *config.AuthConfig, o options) (any, error) {
 	switch o.operation {
+	case "target":
+		asset, err := pb.NewAssetServiceClient(c).GetAsset(ctx, &pb.GetAssetRequest{Id: o.asset})
+		if err != nil {
+			return nil, atFixtureStage("target_get_asset", err)
+		}
+		return map[string]any{
+			"id": asset.Id, "organizationId": asset.OrganizationId,
+			"deviceName": asset.GetPkiDeviceName(), "isComputeDevice": asset.IsComputeDevice,
+		}, nil
 	case "unbound-create":
 		// A declared compute asset is ordinary catalog data, not an enrolled or
 		// impersonated device. It has never had an encryption key or connection.
