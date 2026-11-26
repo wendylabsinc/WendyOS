@@ -338,7 +338,7 @@ func canonicalRobotGoal(input map[string]any) (map[string]any, string, string, e
 			return nil, "", "", errors.New("name a destination using 1 to 80 printable characters")
 		}
 		fields = append(fields, "destination")
-	case "localize":
+	case "localize", "localize_active":
 		if destination, exists := input["destination"]; exists {
 			name, ok := destination.(string)
 			name = strings.TrimSpace(name)

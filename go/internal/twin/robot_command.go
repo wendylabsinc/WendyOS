@@ -38,6 +38,10 @@ func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) robotCommandUsing(w http.ResponseWriter, r *http.Request, open commandRobotOpener) {
+	s.robotCommandUsingSearch(w, r, open, beginLocalizationSearchOwner)
+}
+
+func (s *Server) robotCommandUsingSearch(w http.ResponseWriter, r *http.Request, open commandRobotOpener, begin activeSearchOwnerFactory) {
 	var q robotCommandRequest
 	if !decode(w, r, &q, 4096) {
 		return
@@ -62,7 +66,7 @@ func (s *Server) robotCommandUsing(w http.ResponseWriter, r *http.Request, open 
 	if q.Action == "stop" {
 		s.cancelCommandSetups(q.Serial)
 	}
-	autoEligible := q.Action == "turn" || q.Action == "forward" || q.Action == "go_to" || q.Action == "localize"
+	autoEligible := q.Action == "turn" || q.Action == "forward" || q.Action == "go_to" || q.Action == "localize" || q.Action == "localize_active"
 	if autoEligible {
 		// Register before checking observations so Stop orders setup and dispatch
 		// cancellation consistently, even when requests arrive together.
@@ -209,6 +213,15 @@ func (s *Server) robotCommandUsing(w http.ResponseWriter, r *http.Request, open 
 		finish(s.localizeCommand(r.Context(), session, q, controller))
 		return
 	}
+	if q.Action == "localize_active" {
+		initial, launch := s.prepareActiveLocalization(r.Context(), session, q, controller, begin)
+		finish(initial)
+		if launch != nil {
+			launch()
+		}
+		return
+	}
+
 	command := twinrobot.Command{Action: q.Action, Degrees: q.Degrees, DistanceMeters: q.DistanceMeters}
 	if q.Action == "go_to_object" {
 		var err error
@@ -279,9 +292,9 @@ func validateRobotCommand(q robotCommandRequest) error {
 	switch q.Action {
 	case "connect", "status":
 		return nil
-	case "stop", "turn", "forward", "go_to", "remember", "go_to_object", "receipt", "localize":
+	case "stop", "turn", "forward", "go_to", "remember", "go_to_object", "receipt", "localize", "localize_active":
 	default:
-		return errors.New("choose connect, status, stop, turn, forward, go_to, go_to_object, remember, or localize")
+		return errors.New("choose connect, status, stop, turn, forward, go_to, go_to_object, remember, localize, or localize_active")
 	}
 	if len(q.RequestID) < 8 || len(q.RequestID) > 80 {
 		return errors.New("request_id must contain 8 to 80 characters; reuse it for retries")
@@ -292,7 +305,7 @@ func validateRobotCommand(q robotCommandRequest) error {
 	if q.Action == "forward" && (math.IsNaN(q.DistanceMeters) || math.IsInf(q.DistanceMeters, 0) || q.DistanceMeters < .1 || q.DistanceMeters > 2) {
 		return errors.New("forward distance must be 0.1 to 2 meters")
 	}
-	if q.Action == "localize" && (len(strings.TrimSpace(q.Destination)) > 80 || strings.ContainsFunc(q.Destination, unicode.IsControl)) {
+	if (q.Action == "localize" || q.Action == "localize_active") && (len(strings.TrimSpace(q.Destination)) > 80 || strings.ContainsFunc(q.Destination, unicode.IsControl)) {
 		return errors.New("room name must contain at most 80 printable characters")
 	}
 	if q.Action == "go_to" || q.Action == "remember" {

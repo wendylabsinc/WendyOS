@@ -36,12 +36,12 @@ func TestRobotLocalizeSchemaPreservesApprovalAndOptionalSelection(t *testing.T) 
 	if err := json.Unmarshal(encoded, &schema); err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	found := map[string]bool{}
 	for _, action := range schema.Properties["action"].Enum {
-		found = found || action == "localize"
+		found[action] = true
 	}
-	if !found {
-		t.Fatal("robot command schema does not offer localize")
+	if !found["localize"] || !found["localize_active"] {
+		t.Fatal("robot command schema does not distinguish passive and active localization")
 	}
 	for _, field := range schema.Required {
 		if field == "serial" || field == "destination" {
@@ -102,6 +102,7 @@ func TestRobotToolsUseSelectedDeviceAndFixedEndpoint(t *testing.T) {
 		{"action": "go_to_object", "request_id": "object-once", "evidence_id": "opaque-evidence"},
 		{"action": "localize", "request_id": "localize-auto"},
 		{"action": "localize", "request_id": "localize-room", "destination": "Living Room"},
+		{"action": "localize_active", "request_id": "localize-active", "destination": "Living Room"},
 	} {
 		result, err = s.handleRobotTool(context.Background(), callToolReq("robot_command", args))
 		if err != nil || result.IsError {
