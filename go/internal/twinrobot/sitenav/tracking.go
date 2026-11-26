@@ -3,7 +3,7 @@ package sitenav
 import (
 	"context"
 	"math"
-	"sort"
+	"slices"
 )
 
 // Search several nearby basins, retaining competing translations and headings.
@@ -20,7 +20,7 @@ func trackRoom(ctx context.Context, prior PoseCandidate, fit func(PoseCandidate)
 			}
 		}
 	}
-	sort.SliceStable(seeds, func(i, j int) bool { return seeds[i].cost < seeds[j].cost })
+	slices.SortStableFunc(seeds, comparePoseCost)
 	// Bound CPU on the gateway while keeping distinct nearby explanations.
 	seeds = seeds[:8]
 	var results []PoseCandidate
@@ -53,7 +53,7 @@ func trackRoom(ctx context.Context, prior PoseCandidate, fit func(PoseCandidate)
 		}
 		results = append(results, c)
 	}
-	sort.SliceStable(results, func(i, j int) bool { return results[i].cost < results[j].cost })
+	slices.SortStableFunc(results, comparePoseCost)
 	return results, nil
 }
 

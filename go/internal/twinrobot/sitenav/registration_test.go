@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func semanticFixture(t *testing.T) ([]Triangle, []Triangle) {
+func semanticFixture(t testing.TB) ([]Triangle, []Triangle) {
 	t.Helper()
 	arch := []Triangle{{{0, 0, 0}, {6, 0, 0}, {6, 0, -8}}, {{0, 0, 0}, {6, 0, -8}, {0, 0, -8}}}
 	wall := func(mesh *[]Triangle, a, b Point, height float64) {
@@ -23,7 +23,7 @@ func semanticFixture(t *testing.T) ([]Triangle, []Triangle) {
 	furniture = append(furniture, Triangle{{1, .75, -5}, {2.5, .75, -5}, {2.5, .75, -6}}, Triangle{{1, .75, -5}, {2.5, .75, -6}, {1, .75, -6}})
 	return arch, furniture
 }
-func fixtureSurfaceCloud(t *testing.T, arch []Triangle, position Point, rotation float64) SurfaceCloud {
+func fixtureSurfaceCloud(t testing.TB, arch []Triangle, position Point, rotation float64) SurfaceCloud {
 	t.Helper()
 	room, err := RoomFromMesh(arch)
 	if err != nil {

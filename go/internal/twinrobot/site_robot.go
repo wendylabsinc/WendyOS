@@ -62,6 +62,7 @@ type SiteRobotHazard struct {
 // UI polling renews a short lease, not motion itself. The agent independently
 // expires MOVE after 500ms if this process or its transport disappears.
 type SiteRobot struct {
+	geometryCache                   layeredGeometryCache
 	commandFaultSink                func(siteCommandFault)
 	pendingCommandFaults            []siteCommandFault
 	commandSequence                 uint64
