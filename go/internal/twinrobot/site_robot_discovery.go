@@ -44,6 +44,10 @@ func (r *SiteRobot) DiscoveryStep(sequence, root uint64) error {
 		return errors.New("This robot order was superseded.")
 	}
 	r.commandSequence = sequence
+	return r.discoveryStepLocked(root)
+}
+
+func (r *SiteRobot) discoveryStepLocked(root uint64) error {
 	if r.moving || r.stopUnconfirmed {
 		return errors.New("Stop Go2 before gathering another viewpoint.")
 	}

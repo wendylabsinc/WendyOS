@@ -55,6 +55,10 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 }
 
 func (r *SiteRobot) fuseLocalization(sequence uint64, request SiteFusionRequest, passive *passiveLocalizationRequest) (SiteFusionReport, error) {
+	return r.fuseLocalizationOwned(sequence, request, passive, nil)
+}
+
+func (r *SiteRobot) fuseLocalizationOwned(sequence uint64, request SiteFusionRequest, passive *passiveLocalizationRequest, owner *LocalizationSearchOwner) (SiteFusionReport, error) {
 	var report SiteFusionReport
 	if len(request.Frame) == 0 || len(request.Frame) > 200 || len(request.Reference) > 3000 {
 		return report, errors.New("Invalid localization request.")
@@ -68,6 +72,15 @@ func (r *SiteRobot) fuseLocalization(sequence uint64, request SiteFusionRequest,
 		return report, err
 	}
 	r.mu.Lock()
+	if owner != nil {
+		if err := owner.nextLocked(sequence, true); err != nil {
+			r.mu.Unlock()
+			return report, err
+		}
+		owner.matchLogical = sequence
+		owner.matchToken++
+		sequence = owner.matchToken
+	}
 	if passive != nil {
 		if err := r.passiveLocalizationReadyLocked(passive.ctx); err != nil {
 			r.mu.Unlock()
@@ -80,15 +93,17 @@ func (r *SiteRobot) fuseLocalization(sequence uint64, request SiteFusionRequest,
 		sequence = r.commandSequence + 1
 		passive.sequence, passive.generation, passive.epoch = sequence, r.intentGeneration, r.poseEpoch
 	}
-	if sequence <= r.commandSequence || r.closed || r.ctx.Err() != nil {
+	if owner == nil && sequence <= r.commandSequence || r.closed || r.ctx.Err() != nil {
 		r.mu.Unlock()
 		return report, errors.New("This localization request is no longer active.")
 	}
-	if r.intentActive {
+	if r.intentActive && owner == nil {
 		r.mu.Unlock()
 		return report, errChatLocalizationBusy
 	}
-	r.commandSequence = sequence
+	if owner == nil {
+		r.commandSequence = sequence
+	}
 	if r.moving || r.stopUnconfirmed {
 		if err = r.stopLocked(); err != nil {
 			r.mu.Unlock()
@@ -124,6 +139,9 @@ func (r *SiteRobot) fuseLocalization(sequence uint64, request SiteFusionRequest,
 	if passive != nil {
 		parent = passive.ctx
 	}
+	if owner != nil {
+		parent = owner.ctx
+	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	stopRuntimeCancel := context.AfterFunc(r.ctx, cancel)
@@ -134,6 +152,14 @@ func (r *SiteRobot) fuseLocalization(sequence uint64, request SiteFusionRequest,
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if owner != nil {
+		if err := owner.checkLocked(true); err != nil {
+			return report, err
+		}
+		if owner.matchToken != sequence || owner.logical != owner.matchLogical {
+			return report, ErrLocalizationSearchSuperseded
+		}
+	}
 	if passive != nil {
 		if err := r.passiveLocalizationReadyLocked(passive.ctx); err != nil {
 			return report, err
@@ -142,10 +168,10 @@ func (r *SiteRobot) fuseLocalization(sequence uint64, request SiteFusionRequest,
 			return report, errors.New("Passive localization was superseded by another robot command.")
 		}
 	}
-	if r.intentActive {
+	if r.intentActive && owner == nil {
 		return report, errChatLocalizationBusy
 	}
-	if r.closed || r.ctx.Err() != nil || r.commandSequence != sequence || r.poseEpoch != epoch {
+	if r.closed || r.ctx.Err() != nil || owner == nil && r.commandSequence != sequence || r.poseEpoch != epoch {
 		return report, errors.New("This localization request was superseded.")
 	}
 	if err = measurementsReady(time.Now()); err != nil {
