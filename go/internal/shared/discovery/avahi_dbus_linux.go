@@ -52,6 +52,7 @@ const (
 	avahiIfUnspec    = int32(-1) // AVAHI_IF_UNSPEC: browse every interface
 	avahiProtoUnspec = int32(-1) // AVAHI_PROTO_UNSPEC: either address family
 	avahiProtoInet   = int32(0)  // AVAHI_PROTO_INET: IPv4 only
+	avahiProtoInet6  = int32(1)  // AVAHI_PROTO_INET6: IPv6 only
 
 	avahiDomainLocal = "local"
 )
@@ -250,25 +251,26 @@ func singleObjectPath(body []any) (dbus.ObjectPath, bool) {
 // ServiceBrowser, ResolveService blocks the D-Bus call until it has an answer
 // or times out on Avahi's side).
 //
-// The first attempt pins aprotocol=avahiProtoInet (IPv4-only): most WendyOS
-// devices answer on IPv4, and asking for it directly avoids Avahi racing an
-// AAAA lookup that would otherwise sometimes win and hand back a
-// less-preferred IPv6 address (preferIPv4Addr encodes the same preference for
-// the darwin/dns-sd path). A device with no IPv4 address at all fails that
-// call, so it is retried once with aprotocol=avahiProtoUnspec, which accepts
-// whatever address family Avahi actually has.
+// Resolve IPv4 announcements as IPv4 first. An announcement received on
+// IPv6 may have only AAAA records in Avahi's IPv6 cache. Requesting A on
+// that protocol can occupy a resolve worker until the entire browse expires,
+// leaving other responses waiting in the queue.
 func resolveAvahiItem(ctx context.Context, conn avahiConn, item avahiItemNew) (MDNSService, bool) {
 	resolveCtx, cancel := context.WithTimeout(ctx, avahiResolveTimeout)
 	defer cancel()
 
+	addressFamily := avahiProtoInet
+	if item.proto == avahiProtoInet6 {
+		addressFamily = avahiProtoUnspec
+	}
 	reply, err := conn.Call(resolveCtx, avahiServerPath, avahiResolveServiceMethod,
-		item.iface, item.proto, item.name, item.stype, item.domain, avahiProtoInet, uint32(0))
-	if err != nil {
+		item.iface, item.proto, item.name, item.stype, item.domain, addressFamily, uint32(0))
+	if err != nil && addressFamily != avahiProtoUnspec && resolveCtx.Err() == nil {
 		reply, err = conn.Call(resolveCtx, avahiServerPath, avahiResolveServiceMethod,
 			item.iface, item.proto, item.name, item.stype, item.domain, avahiProtoUnspec, uint32(0))
-		if err != nil {
-			return MDNSService{}, false
-		}
+	}
+	if err != nil {
+		return MDNSService{}, false
 	}
 	return decodeResolveReply(reply)
 }

@@ -379,6 +379,22 @@ func TestResolveAvahiItemRetriesWithProtoUnspecOnFailure(t *testing.T) {
 	}
 }
 
+func TestResolveAvahiIPv6AnnouncementDoesNotWaitForIPv4(t *testing.T) {
+	fake := newFakeAvahiConn("/browser")
+	fake.resolveFn = func(args []any) ([]any, error) {
+		if family := args[5].(int32); family != avahiProtoUnspec {
+			t.Fatalf("IPv6 announcement was restricted to address family %d", family)
+		}
+		return resolveReplyBody(1, "wendyos-v6", "wendyos-v6.local.", "2001:db8::1", 50052, nil), nil
+	}
+
+	item := avahiItemNew{iface: 1, proto: avahiProtoInet6, name: "wendyos-v6", stype: "_wendyos._udp", domain: "local"}
+	got, ok := resolveAvahiItem(t.Context(), fake, item)
+	if !ok || got.IPAddress != "2001:db8::1" || fake.resolveCallCount() != 1 {
+		t.Fatalf("IPv6 resolve: %+v ok=%v calls=%d", got, ok, fake.resolveCallCount())
+	}
+}
+
 func TestResolveAvahiItemFailsWhenBothAttemptsFail(t *testing.T) {
 	fake := newFakeAvahiConn("/browser")
 	fake.resolveFn = func(args []any) ([]any, error) {
