@@ -176,6 +176,8 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (T
 		return ToolResult{}, err
 	}
 	stop := args["action"] == "stop"
+	// Localization can change the navigation frame. Unlike Stop and reading
+	// observations, it must not bypass an unresolved movement receipt.
 	recovery := stop || args["action"] == "connect" || args["action"] == "status"
 	value, _ := runtime.robotCommands.LoadOrStore(t, &robotCommandTurn{})
 	state := value.(*robotCommandTurn)
@@ -336,6 +338,15 @@ func canonicalRobotGoal(input map[string]any) (map[string]any, string, string, e
 			return nil, "", "", errors.New("name a destination using 1 to 80 printable characters")
 		}
 		fields = append(fields, "destination")
+	case "localize":
+		if destination, exists := input["destination"]; exists {
+			name, ok := destination.(string)
+			name = strings.TrimSpace(name)
+			if !ok || name == "" || len(name) > 80 || strings.ContainsFunc(name, unicode.IsControl) {
+				return nil, "", "", errors.New("choose a saved room using 1 to 80 printable characters, or omit destination for automatic selection")
+			}
+			fields = append(fields, "destination")
+		}
 	case "go_to_object":
 		evidence, _ := input["evidence_id"].(string)
 		if evidence == "" {
