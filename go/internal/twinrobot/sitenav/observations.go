@@ -19,6 +19,10 @@ const CloudTopic = "rt/utlidar/voxel_map_compressed"
 const JointTopic = "rt/lf/lowstate"
 const MaxAge = 750 * time.Millisecond
 
+// IdlePoseMaxAge is only for passive observation/localization on a controller
+// that is stationary and has no active motion goal. It never authorizes motion.
+const IdlePoseMaxAge = 2 * time.Second
+
 var ErrDelayedObservation = errors.New("Robot observations are delayed or the gateway clock is out of sync.")
 var ErrStalePoseCapture = errors.New("Go2 pose capture is stale or its clock is out of sync.")
 var ErrDuplicatePose = errors.New("Repeated Go2 odometry packet.")
@@ -85,7 +89,10 @@ func (o *Observations) ClearCloud(message string) {
 }
 
 func Fresh(stamp, now time.Time) bool {
-	return !stamp.IsZero() && now.Sub(stamp) >= -50*time.Millisecond && now.Sub(stamp) <= MaxAge
+	return freshWithin(stamp, now, MaxAge)
+}
+func freshWithin(stamp, now time.Time, maxAge time.Duration) bool {
+	return !stamp.IsZero() && now.Sub(stamp) >= -50*time.Millisecond && now.Sub(stamp) <= maxAge
 }
 func (o *Observations) Ready(now time.Time) error {
 	if err := o.freshCloud(now); err != nil {
@@ -111,14 +118,24 @@ func (o *Observations) MeasurementsReady(now time.Time) error {
 	return o.freshCloud(now)
 }
 
+// IdleMeasurementsReady tolerates older odometry for passive observations.
+// Callers must reject moving/active-goal controllers. LiDAR freshness, future
+// clock tolerance and all packet acceptance/replay checks remain unchanged.
+func (o *Observations) IdleMeasurementsReady(now time.Time) error {
+	return o.freshCloudWithPoseAge(now, IdlePoseMaxAge)
+}
+
 func (o *Observations) freshCloud(now time.Time) error {
-	if !Fresh(o.Pose.Received, now) {
+	return o.freshCloudWithPoseAge(now, MaxAge)
+}
+func (o *Observations) freshCloudWithPoseAge(now time.Time, poseMaxAge time.Duration) error {
+	if !freshWithin(o.Pose.Received, now, poseMaxAge) {
 		if o.PoseFault != "" {
 			return errors.New(o.PoseFault)
 		}
 		return errors.New("Waiting for fresh Go2 odometry.")
 	}
-	if !Fresh(o.Pose.Captured, now) {
+	if !freshWithin(o.Pose.Captured, now, poseMaxAge) {
 		return errors.New("Go2 odometry has no fresh capture timestamp. Movement is unavailable.")
 	}
 	if !Fresh(o.CloudAt, now) {
@@ -664,6 +681,18 @@ func timestampResolution(value string) float64 {
 // a traversable departure footprint. It is separate from navigation readiness.
 func (o *Observations) SurfaceReady(now time.Time) error {
 	if err := o.freshCloud(now); err != nil {
+		return err
+	}
+	if len(o.Surfaces.Surfaces) < 24 {
+		return errors.New("Waiting for observed surfaces at multiple heights.")
+	}
+	return nil
+}
+
+// IdleSurfaceReady uses the same measured geometry requirement as SurfaceReady
+// with the passive-only odometry allowance. The scan still expires at 750ms.
+func (o *Observations) IdleSurfaceReady(now time.Time) error {
+	if err := o.IdleMeasurementsReady(now); err != nil {
 		return err
 	}
 	if len(o.Surfaces.Surfaces) < 24 {
