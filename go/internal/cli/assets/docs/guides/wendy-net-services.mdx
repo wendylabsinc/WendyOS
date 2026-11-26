@@ -167,10 +167,14 @@ identity-based lookup.
 The agent checks the signed Wendy Net directory and the organization's
 authenticated Cloud roster for short friendly names. Older agents publish a
 local name in the signed directory. Agents with Cloud name support publish their
-Cloud-registered name in that same field and in the LAN discovery `name` TXT
-record after their first roster sync. They retain the last confirmed name
-for offline use, including after reboot. This update leaves the `.local`
-hostname and existing CLI pins for that hostname in place.
+Cloud-registered name in the signed directory and in the optional LAN
+discovery `cloud-name` TXT record after their first roster sync. They retain the
+last confirmed name during an outage, including after reboot. The LAN
+`name` record continues to carry the local device name, which can change
+immediately on a local rename. If the device has never confirmed a Cloud
+name, use its UUID or local hostname where supported. Friendly Cloud DNS
+labels start with a letter. A missing, invalid, or ambiguous Cloud label
+does not change the local advertisement.
 
 One unambiguous binding from either source is enough. If both sources bind the
 name, they must identify the same device. A resolved name still needs a
@@ -216,10 +220,11 @@ Confirm the enrolled client's `wendy.json` uses network mode `mesh` and
 getent ahostsv4 "device-${DEVICE_UUID}.wendy.internal"
 ```
 
-Expect an address in `10.99.0.0/16`. If the command returns no address, check
-that the client is enrolled, the app uses network mode `mesh`, and the UUID
-is correct. Check the client agent's version for short DNS support in the
-[WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
+Expect an address in `10.99.0.0/16`. The resolver allocates a virtual
+address for a well-formed UUID even if no device has that UUID. Verify the
+UUID against the inventory and connect to the published port to check
+reachability. If the lookup returns no address, check client enrollment,
+network mode, and short DNS support in the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
 
 For an offline friendly-name check, verify the destination agent's support
 for Cloud-registered name publication before running the next command. Run

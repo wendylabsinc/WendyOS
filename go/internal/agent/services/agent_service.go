@@ -272,11 +272,7 @@ func (s *AgentService) SetHostname(_ context.Context, req *agentpb.SetHostnameRe
 		return nil, status.Error(codes.Unavailable, "setting the hostname is only supported on WendyOS devices")
 	}
 
-	var registeredName func() (string, bool)
-	if s.meshRoster != nil {
-		registeredName = s.meshRoster.registeredName
-	}
-	if err := applyHostname(s.logger, hostname, registeredName); err != nil {
+	if err := applyHostname(s.logger, hostname); err != nil {
 		s.logger.Warn("SetHostname failed", zap.String("hostname", hostname), zap.Error(err))
 		if !validHostname(hostname) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())

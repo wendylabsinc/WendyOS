@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 )
 
 // explicitHostnamePath holds a literal hostname set via SetHostname. It lives in
@@ -42,8 +44,8 @@ const deviceNamePath = "/etc/wendyos/device-name"
 // title-cased ("orin-nano-pr319" as "Orin Nano Pr319").
 //
 // A host that is not a WendyOS image has neither file and goes by its
-// hostname. The name the device has in Wendy Cloud is not consulted: the agent
-// is never told it. 'wendy device rename' sets both, but 'wendy device enroll'
+// hostname. The name the device has in Wendy Cloud is not consulted: the Cloud label
+// is advertised separately. 'wendy device rename' sets both, but 'wendy device enroll'
 // names the Cloud record without renaming the device, so the two can differ.
 //
 // It returns "" when the host has no name to give.
@@ -100,7 +102,7 @@ func validHostname(name string) bool {
 // it to explicitHostnamePath so it survives reboots. It is the runtime
 // counterpart to the boot-time device-name flow in
 // configpartition.applyDeviceName (which derives "wendyos-<name>" instead).
-func applyHostname(logger *zap.Logger, hostname string, registeredName func() (string, bool)) error {
+func applyHostname(logger *zap.Logger, hostname string) error {
 	if !validHostname(hostname) {
 		return fmt.Errorf("invalid hostname %q: must match ^[a-z][a-z0-9-]{0,62}$ and not end with '-'", hostname)
 	}
@@ -129,7 +131,7 @@ func applyHostname(logger *zap.Logger, hostname string, registeredName func() (s
 	// is published live (a restart is required for avahi to re-read gethostname()).
 	// Best-effort: the hostname is already set and persisted, and avahi will pick
 	// it up on next restart/reboot regardless.
-	updateAvahiHostname(logger, hostname, registeredName)
+	updateAvahiHostname(logger, hostname)
 
 	logger.Info("Applied hostname", zap.String("hostname", hostname))
 	return nil
@@ -169,7 +171,7 @@ func updateEtcHosts(logger *zap.Logger, hostname string) {
 // mirrors configpartition.updateAvahiDeviceName; the two are kept separate to
 // avoid an import cycle (configpartition imports this package). Keep the avahi
 // service-file format in sync between them.
-func updateAvahiHostname(logger *zap.Logger, hostname string, registeredName func() (string, bool)) {
+func updateAvahiHostname(logger *zap.Logger, hostname string) {
 	unlock := LockAvahiServiceFile()
 	defer unlock()
 
@@ -180,11 +182,6 @@ func updateAvahiHostname(logger *zap.Logger, hostname string, registeredName fun
 	}
 
 	content := avahiContentForHostname(string(data), hostname)
-	if registeredName != nil {
-		if name, known := registeredName(); known {
-			content = replaceAvahiTXTRecord(content, "name", name)
-		}
-	}
 	if err := os.WriteFile(avahiServiceFile, []byte(content), 0o644); err != nil {
 		logger.Warn("Could not write avahi service file", zap.String("path", avahiServiceFile), zap.Error(err))
 		return
@@ -277,12 +274,12 @@ func avahiContentForHostname(content, hostname string) string {
 }
 
 // CloudNameAdvertisement returns the roster worker's publisher for the LAN
-// friendly name. The installed hostname and the other TXT fields stay local.
+// friendly name in its own TXT field.
 func CloudNameAdvertisement(logger *zap.Logger) func(principal, name string) {
 	var retryPrincipal string
 	return func(principal, name string) {
 		if publishCloudName(avahiServiceFile, principal, name, retryPrincipal == principal, func() bool {
-			return restartAvahiDaemon(logger)
+			return avahiServiceAction(logger, "kill", "--kill-whom=main", "--signal=HUP", "avahi-daemon")
 		}, logger) {
 			retryPrincipal = ""
 		} else {
@@ -291,7 +288,7 @@ func CloudNameAdvertisement(logger *zap.Logger) func(principal, name string) {
 	}
 }
 
-func publishCloudName(serviceFile, principal, name string, retry bool, restart func() bool, logger *zap.Logger) bool {
+func publishCloudName(serviceFile, principal, name string, retry bool, reload func() bool, logger *zap.Logger) bool {
 	unlock := LockAvahiServiceFile()
 	defer unlock()
 
@@ -304,37 +301,52 @@ func publishCloudName(serviceFile, principal, name string, retry bool, restart f
 		return false
 	}
 	previous := string(data)
-	// An in-flight sync can outlive its enrollment. Only update the
-	// advertisement if it still names the same principal.
-	if !strings.Contains(previous, "<txt-record>principal="+principal+"</txt-record>") {
+	matchesPrincipal := false
+	content := editWendyOSServiceBlock(previous, func(block string) string {
+		// An in-flight sync can outlive its enrollment.
+		if !strings.Contains(block, "<txt-record>principal="+principal+"</txt-record>") {
+			return block
+		}
+		matchesPrincipal = true
+		if label, valid := meshname.FriendlyLabel(name); valid {
+			return setAvahiTXTRecord(block, "cloud-name", label)
+		}
+		return cloudNameTXTRecord.ReplaceAllString(block, "")
+	})
+	if !matchesPrincipal {
 		return true
 	}
-	content := replaceAvahiTXTRecord(previous, "name", name)
 	if content != previous {
 		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
 			logger.Warn("Updating the mDNS Cloud device name failed", zap.Error(err))
 			return false
 		}
 	}
-	return (content == previous && !retry) || restart()
+	return (content == previous && !retry) || reload()
 }
+
+var cloudNameTXTRecord = regexp.MustCompile(`\s*<txt-record>cloud-name=[^<]*</txt-record>`)
 
 // restartAvahiDaemon restarts avahi-daemon so it re-reads both the service file
 // and gethostname(). A full restart is required: --reload (SIGHUP) only
 // refreshes service files, leaving the %h-based records stale.
 func restartAvahiDaemon(logger *zap.Logger) bool {
+	return avahiServiceAction(logger, "restart", "avahi-daemon")
+}
+
+func avahiServiceAction(logger *zap.Logger, args ...string) bool {
 	// A stuck service manager must not hold up the service-file lock's other
 	// writers, among them enrollment, or the agent's shutdown.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	restart := exec.CommandContext(ctx, "/usr/bin/systemctl", "restart", "avahi-daemon")
+	restart := exec.CommandContext(ctx, "/usr/bin/systemctl", args...)
 	restart.Env = systemPathEnv()
 	restart.WaitDelay = time.Second
 	if out, err := restart.CombinedOutput(); err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		logger.Warn("systemctl restart avahi-daemon failed", zap.Error(err), zap.String("output", string(out)))
+		logger.Warn("Avahi service command failed", zap.Strings("args", args), zap.Error(err), zap.String("output", string(out)))
 		return false
 	}
 	return true

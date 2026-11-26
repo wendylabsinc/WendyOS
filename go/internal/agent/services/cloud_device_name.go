@@ -36,12 +36,6 @@ func (r *MeshRoster) LocalCloudName(device meshid.Device) string {
 	return r.localName.Name
 }
 
-func (r *MeshRoster) registeredName() (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.localName.Name, r.localName.Principal != ""
-}
-
 // restoreLocalName and rememberLocalName run with the roster write lock held.
 func (r *MeshRoster) restoreLocalName() {
 	r.localName = registeredDeviceName{}

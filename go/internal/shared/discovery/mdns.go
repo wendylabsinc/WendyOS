@@ -96,6 +96,7 @@ func lanDeviceFromService(svc MDNSService) models.LANDevice {
 	if v, ok := svc.TXTRecords["name"]; ok {
 		dev.MeshName = v
 	}
+	dev.CloudName = svc.TXTRecords["cloud-name"]
 	// The agent stamps its board id here so a sighting can be classified
 	// before any probe -- in particular a local VM, whose announcement may
 	// carry an address nothing on the host can reach.

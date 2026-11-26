@@ -1276,6 +1276,7 @@ func mdnsFieldsChanged(old, updated models.LANDevice) bool {
 		old.AssetID != updated.AssetID ||
 		old.OrgID != updated.OrgID ||
 		old.MeshName != updated.MeshName ||
+		old.CloudName != updated.CloudName ||
 		old.DeviceType != updated.DeviceType ||
 		old.NetworkInterface != updated.NetworkInterface
 }

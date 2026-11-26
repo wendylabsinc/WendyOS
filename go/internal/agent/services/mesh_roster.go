@@ -320,8 +320,7 @@ func (r *MeshRoster) Sync(ctx context.Context) error {
 }
 
 // RunSync refreshes immediately, then every interval, until ctx is done.
-// Failures are logged and retried on the next tick; the cache keeps its last
-// good contents so a transient cloud outage never breaks LAN-cached names.
+// Failures retry sooner with bounded backoff, preserving confirmed names.
 func (r *MeshRoster) RunSync(ctx context.Context, interval time.Duration, publishName func(principal, name string)) {
 	publish := func() {
 		r.mu.RLock()
@@ -332,21 +331,31 @@ func (r *MeshRoster) RunSync(ctx context.Context, interval time.Duration, publis
 		}
 	}
 	publish()
-	t := time.NewTicker(interval)
-	defer t.Stop()
+	const firstRetry = 5 * time.Second
+	retry := firstRetry
 	for {
-		if err := r.Sync(ctx); err != nil && ctx.Err() == nil {
-			r.logger.Warn("wendy net roster sync failed", zap.Error(err))
-		}
+		err := r.Sync(ctx)
 		if ctx.Err() != nil {
 			return
 		}
+		delay := interval
+		if err != nil {
+			r.logger.Warn("wendy net roster sync failed", zap.Error(err))
+			delay = min(retry, interval)
+			retry = min(2*retry, time.Minute)
+		} else {
+			retry = firstRetry
+		}
 		publish()
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
-			return
-		case <-t.C:
+		case <-timer.C:
 		case <-r.refresh:
+		}
+		timer.Stop()
+		if ctx.Err() != nil {
+			return
 		}
 	}
 }

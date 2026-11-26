@@ -17,8 +17,8 @@ func TestCloudDeviceNamePersistsExactRegistrationAndClearsOnRemoval(t *testing.T
 	self := mustDevice(t, rosterTenant, rosterDevice)
 	r := provisionedRoster(t)
 	r.UseLocalNameCache(dir)
-	if name, known := r.registeredName(); name != "" || known {
-		t.Fatalf("fresh device name = %q,%t", name, known)
+	if r.localName != (registeredDeviceName{}) {
+		t.Fatalf("fresh device name = %+v", r.localName)
 	}
 	apply := func(name string) {
 		r.applyResponse(r.generation, &cloudpbv2.GetMeshRosterResponse{
@@ -41,8 +41,8 @@ func TestCloudDeviceNamePersistsExactRegistrationAndClearsOnRemoval(t *testing.T
 
 	r.applyResponse(r.generation, &cloudpbv2.GetMeshRosterResponse{})
 	restarted.UseLocalNameCache(dir)
-	if name, known := restarted.registeredName(); name != "" || !known {
-		t.Fatalf("withdrawn device name = %q,%t", name, known)
+	if restarted.localName != (registeredDeviceName{Principal: self.Principal()}) {
+		t.Fatalf("withdrawn device name = %+v", restarted.localName)
 	}
 }
 
@@ -59,8 +59,8 @@ func TestCloudDeviceNameDoesNotCrossEnrollments(t *testing.T) {
 	cert, key := deviceIdentityCertPEM(t, rosterTenant, rosterDeviceB)
 	r.UpdateIdentity("cloud.example:443", cert, key, "")
 	r.applyResponse(generation, response)
-	if name, known := r.registeredName(); name != "" || known {
-		t.Fatalf("re-enrolled device inherited name %q,%t", name, known)
+	if r.localName != (registeredDeviceName{}) {
+		t.Fatalf("re-enrolled device inherited name %+v", r.localName)
 	}
 	r.UpdateIdentity("", "", "", "")
 	if _, err := os.Stat(filepath.Join(dir, "cloud-device-name.json")); !os.IsNotExist(err) {
@@ -71,9 +71,9 @@ func TestCloudDeviceNameDoesNotCrossEnrollments(t *testing.T) {
 func TestCloudDeviceNameUpdatesOnlyTheEnrolledAdvertisement(t *testing.T) {
 	principal := certs.DeviceSPIFFEURI(rosterTenant, rosterDevice)
 	path := filepath.Join(t.TempDir(), "wendyos-mdns.service")
-	original := "<type>_wendyos._udp</type>\n" +
+	original := "<service>\n<type>_wendyos._udp</type>\n" +
 		"<txt-record>principal=" + principal + "</txt-record>\n" +
-		"<txt-record>name=local-name</txt-record>\n<txt-record>displayname=Local Name</txt-record>\n"
+		"<txt-record>name=local-name</txt-record>\n<txt-record>displayname=Local Name</txt-record>\n  </service>\n"
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,16 @@ func TestCloudDeviceNameUpdatesOnlyTheEnrolledAdvertisement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := strings.Replace(original, "name=local-name", "name=cloud--name", 1); string(got) != want {
-		t.Fatalf("advertisement = %s, want %s", got, want)
+	if !strings.Contains(string(got), "<txt-record>cloud-name=cloud--name</txt-record>") ||
+		!strings.Contains(string(got), "<txt-record>name=local-name</txt-record>") {
+		t.Fatalf("advertisement did not preserve both names: %s", got)
+	}
+	if !publishCloudName(path, principal, "3d-printer", false, restart, logger) {
+		t.Fatal("could not withdraw an invalid Cloud name")
+	}
+	got, err = os.ReadFile(path)
+	if err != nil || strings.Contains(string(got), "<txt-record>cloud-name=") ||
+		!strings.Contains(string(got), "<txt-record>name=local-name</txt-record>") {
+		t.Fatalf("withdrawn advertisement = %s (%v)", got, err)
 	}
 }

@@ -548,7 +548,7 @@ const avahiServiceTemplate = `<?xml version="1.0" standalone='no'?>
 `
 
 func TestUpdateWendyOSServicePort_Provisioned(t *testing.T) {
-	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, "", "local-name")
+	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, "")
 
 	if !strings.Contains(out, "<port>50052</port>") {
 		t.Errorf("expected wendyos port updated to 50052:\n%s", out)
@@ -564,8 +564,8 @@ func TestUpdateWendyOSServicePort_Provisioned(t *testing.T) {
 
 func TestUpdateWendyOSServicePort_Unprovisioned(t *testing.T) {
 	// Start from a provisioned advertisement and revert it.
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal, "local-name")
-	out := updateWendyOSServicePort(provisioned, 50051, false, "", "local-name")
+	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
+	out := updateWendyOSServicePort(provisioned, 50051, false, "")
 
 	if !strings.Contains(out, "<port>50051</port>") {
 		t.Errorf("expected wendyos port reverted to 50051:\n%s", out)
@@ -579,7 +579,7 @@ func TestUpdateWendyOSServicePort_Unprovisioned(t *testing.T) {
 }
 
 func TestUpdateWendyOSServicePort_ProvisionedWithPrincipal(t *testing.T) {
-	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal, "local-name")
+	out := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
 
 	if !strings.Contains(out, "<txt-record>principal="+testPrincipal+"</txt-record>") {
 		t.Errorf("expected principal TXT record:\n%s", out)
@@ -587,12 +587,12 @@ func TestUpdateWendyOSServicePort_ProvisionedWithPrincipal(t *testing.T) {
 }
 
 func TestUpdateWendyOSServicePort_UnprovisioningRemovesPrincipal(t *testing.T) {
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal, "local-name")
+	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
 	if !strings.Contains(provisioned, "principal=") {
 		t.Fatalf("test setup: expected principal TXT to be present:\n%s", provisioned)
 	}
 
-	out := updateWendyOSServicePort(provisioned, 50051, false, "", "local-name")
+	out := updateWendyOSServicePort(provisioned, 50051, false, "")
 
 	if strings.Contains(out, "principal=") {
 		t.Errorf("expected principal TXT record to be removed on unprovisioning:\n%s", out)
@@ -604,9 +604,9 @@ func TestUpdateWendyOSServicePort_UnprovisioningRemovesPrincipal(t *testing.T) {
 }
 
 func TestUpdateWendyOSServicePort_UpdatesExistingPrincipal(t *testing.T) {
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal, "local-name")
+	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, testPrincipal)
 	rotated := "spiffe://wendy.sh/tenant/2f6a8a10-1111-4aaa-8bbb-000000000001/device/00000000-0000-4000-8000-000000000002"
-	out := updateWendyOSServicePort(provisioned, 50052, true, rotated, "local-name")
+	out := updateWendyOSServicePort(provisioned, 50052, true, rotated)
 
 	if !strings.Contains(out, "<txt-record>principal="+rotated+"</txt-record>") {
 		t.Errorf("expected principal updated:\n%s", out)
@@ -625,7 +625,7 @@ func TestUpdateAvahiService_ProvisioningWritesPrincipalTXTRecord(t *testing.T) {
 
 	logger, _ := zap.NewDevelopment()
 	restarts := 0
-	updateAvahiService(logger, dir, 50052, true, testPrincipal, "local-name", func() bool { restarts++; return true })
+	updateAvahiService(logger, dir, 50052, true, testPrincipal, func() bool { restarts++; return true })
 	if restarts != 1 {
 		t.Errorf("restarted avahi %d times, want 1", restarts)
 	}
@@ -649,14 +649,15 @@ func TestUpdateAvahiService_UnprovisioningClearsEnrollment(t *testing.T) {
     <txt-record>tls=true</txt-record>
     <txt-record>principal=`+testPrincipal+`</txt-record>
     <txt-record>id=device-uuid</txt-record>
-    <txt-record>name=previous-cloud-name</txt-record>`, 1)
+    <txt-record>name=local-name</txt-record>
+    <txt-record>cloud-name=previous-cloud-name</txt-record>`, 1)
 	if err := os.WriteFile(serviceFile, []byte(provisioned), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	logger, _ := zap.NewDevelopment()
 	restarts := 0
-	updateAvahiService(logger, dir, 50051, false, "", "local-name", func() bool { restarts++; return true })
+	updateAvahiService(logger, dir, 50051, false, "", func() bool { restarts++; return true })
 	if restarts != 1 {
 		t.Errorf("restarted avahi %d times, want 1", restarts)
 	}

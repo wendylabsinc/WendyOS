@@ -303,7 +303,7 @@ func (s *DNSServer) answerFriendly(w dns.ResponseWriter, r *dns.Msg, q dns.Quest
 	// unaffected.
 	name = Normalize(name)
 	orgSlug = Normalize(orgSlug)
-	if resolver == nil || id == nil || resolver.OrgSlug() == "" || orgSlug != resolver.OrgSlug() {
+	if name == "" || resolver == nil || id == nil || resolver.OrgSlug() == "" || orgSlug != resolver.OrgSlug() {
 		s.reply(w, r, dns.RcodeNameError)
 		return
 	}

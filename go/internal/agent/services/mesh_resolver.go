@@ -51,6 +51,9 @@ func (r *MeshResolver) OrgSlug() string { return r.roster.OrgSlug() }
 // Signed mesh names can fill an absent binding without overriding an existing
 // binding or hiding an ambiguous name.
 func (r *MeshResolver) Resolve(name string) (meshid.Device, bool) {
+	if name == "" {
+		return meshid.Device{}, false
+	}
 	lan := r.resolveLAN(name)
 	if lan.found && !lan.ambiguous {
 		return lan.device, true
