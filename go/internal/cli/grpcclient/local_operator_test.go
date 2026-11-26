@@ -1,3 +1,5 @@
+//go:build !windows
+
 package grpcclient_test
 
 import (
