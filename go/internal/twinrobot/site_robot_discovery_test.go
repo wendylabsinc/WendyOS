@@ -421,3 +421,45 @@ func TestDiscoveryCannotPlanThroughUnobservedFloorOrBodyHazards(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscoveryRetainsMeasuredStopReason(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		x, y, yaw float64
+		epoch     bool
+		want      []string
+	}{
+		{name: "lateral", x: .1, y: .07, want: []string{"lateral drift 0.070 m exceeds 0.060 m", "progress 0.100/0.400 m"}},
+		{name: "heading", x: .1, yaw: .11, want: []string{"heading drift 0.110 rad exceeds 0.100 rad"}},
+		{name: "reverse", x: -.06, want: []string{"reverse progress 0.060 m exceeds 0.050 m"}},
+		{name: "overshoot", x: .51, want: []string{"overshoot 0.110 m exceeds 0.100 m"}},
+		{name: "combined", x: -.06, y: .07, yaw: .11, want: []string{"lateral drift", "heading drift", "reverse progress"}},
+		{name: "epoch", epoch: true, want: []string{"odometry epoch changed from 7 to 8"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r, commands := readySiteRobot()
+			r.poseEpoch = 7
+			if err := r.DiscoveryStep(1, 1); err != nil {
+				t.Fatal(err)
+			}
+			r.observed.Pose.Position = sitenav.Point{X: test.x, Y: test.y}
+			r.observed.Pose.Yaw = test.yaw
+			if test.epoch {
+				r.poseEpoch++
+			}
+			r.stepLocked(time.Now())
+			if r.moving || r.motionRecoveryAllowed || r.discoveryMove != nil || r.discoveryState != 3 || len(commands.commands) != 1 || commands.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+				t.Fatal("diagnostic altered protective stop")
+			}
+			status := r.Status()
+			for _, want := range test.want {
+				if !strings.Contains(status.LastMotionFailure, want) {
+					t.Fatalf("missing %q in %q", want, status.LastMotionFailure)
+				}
+			}
+			if status.Message != status.LastMotionFailure {
+				t.Fatal("lost the measured stop reason")
+			}
+		})
+	}
+}
