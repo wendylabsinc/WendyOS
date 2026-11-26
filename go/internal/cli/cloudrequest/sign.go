@@ -50,6 +50,9 @@ var relayedSignatures = map[string]bool{
 	cloudpbv2.AssetService_DeleteAsset_FullMethodName:           true,
 	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName: true,
 	cloudpbv2.DeploymentService_ControlContainer_FullMethodName: true,
+	cloudpbv2.DeploymentService_AssignDevice_FullMethodName:     true,
+	cloudpbv2.DeploymentService_UnassignDevice_FullMethodName:   true,
+	cloudpbv2.DeploymentService_DetachDevice_FullMethodName:     true,
 }
 
 // Signer creates the JWS request descriptors required by Wendy Cloud for
@@ -142,9 +145,36 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 	return nil
 }
 
+// Sign returns the SignedRequest Invoke would send for method, without
+// sending it: a statement carried inside another request (DeleteApp's
+// device_removals and device_detachments). Only x5c-only methods, which need
+// no leaf registration.
+func Sign(ctx context.Context, auth *config.AuthConfig, method string, req proto.Message) (*cloudpbv2.SignedRequest, error) {
+	if !x5cOnly[method] {
+		return nil, fmt.Errorf("%s is signed only by Invoke", method)
+	}
+	s, err := newSigner(auth)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, fmt.Errorf("%s requires an operator certificate; run 'wendy auth login'", method)
+	}
+	correlationID, err := CorrelationID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	signed, err := s.signRequest(method, req, false, correlationID)
+	if err != nil {
+		return nil, err
+	}
+	markContextChannel(ctx, signed)
+	return signed, nil
+}
+
 // x5cOnly lists the methods always signed with x5c, never kid: the leaf
 // registration itself, the registry key registration (Cloud serves the stored
-// request back to other clients as the binding), and the two whose JWS Cloud
+// request back to other clients as the binding), and those whose JWS Cloud
 // forwards verbatim to devices (PostboxEntry.request_jws), which cannot
 // resolve a kid.
 var x5cOnly = map[string]bool{
@@ -152,6 +182,9 @@ var x5cOnly = map[string]bool{
 	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: true,
 	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:            true,
 	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:            true,
+	cloudpbv2.DeploymentService_AssignDevice_FullMethodName:                true,
+	cloudpbv2.DeploymentService_UnassignDevice_FullMethodName:              true,
+	cloudpbv2.DeploymentService_DetachDevice_FullMethodName:                true,
 }
 
 // registeredKIDs holds the leaves this process has registered.
@@ -445,6 +478,13 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		}
 		return "org/" + tenant + "/device-access/" + in.GetEntryId(), true
 	},
+	cloudpbv2.AccessService_CreateBinding_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateBindingRequest)
+		if !ok || tenant == "" || in.GetOrganizationId() != tenant {
+			return "", false
+		}
+		return "org/" + tenant + "/access-binding", true
+	},
 	invite.OrganizationInviteService_CreateOrganizationInvite_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*invite.CreateOrganizationInviteRequest)
 		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(true) {
@@ -462,6 +502,13 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 	},
 	cloudpbv2.AppService_UpdateApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.UpdateAppRequest)
+		if !ok || tenant == "" || in.GetOrganizationId() != tenant || in.GetId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetId(), true
+	},
+	cloudpbv2.AppService_DeleteApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DeleteAppRequest)
 		if !ok || tenant == "" || in.GetOrganizationId() != tenant || in.GetId() == "" {
 			return "", false
 		}
@@ -526,6 +573,49 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		in, ok := req.(*cloudpbv2.RegisterEncryptionKeyRequest)
 		return "org/" + tenant + "/encryption-key", ok && in.GetOrganizationId() == tenant
 	},
+	// deployments.proto: CreateDeploymentV2 binds the release; the changes
+	// bind the deployment.
+	cloudpbv2.DeploymentService_CreateDeploymentV2_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateDeploymentRequest)
+		return "org/" + tenant + "/release/" + in.GetAppReleaseId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetAppReleaseId())
+	},
+	cloudpbv2.DeploymentService_UpdateDeployment_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateDeploymentRequest)
+		return "org/" + tenant + "/deployment/" + in.GetDeploymentId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetDeploymentId())
+	},
+	cloudpbv2.DeploymentService_RollbackDeployment_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RollbackDeploymentRequest)
+		return "org/" + tenant + "/deployment/" + in.GetDeploymentId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetDeploymentId())
+	},
+	cloudpbv2.DeploymentService_RemoveDeployment_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RemoveDeploymentRequest)
+		return "org/" + tenant + "/deployment/" + in.GetDeploymentId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetDeploymentId())
+	},
+	// The per-device statements under their DeploymentService names (ruling
+	// D2).
+	cloudpbv2.DeploymentService_AssignDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DeviceAssignment)
+		return assignmentResource(tenant, in.GetDeploymentId(), in.GetDevice(), ok && in.GetOrganizationId() == tenant)
+	},
+	cloudpbv2.DeploymentService_UnassignDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UnassignDeviceRequest)
+		return assignmentResource(tenant, in.GetDeploymentId(), in.GetDevice(), ok && in.GetOrganizationId() == tenant)
+	},
+	// registry.proto DetachDeviceRequest: "Its JWS target.resource is the
+	// deployment's, as for UnassignDevice". Not yet in cloud's RequestSigning.md.
+	cloudpbv2.DeploymentService_DetachDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DetachDeviceRequest)
+		return assignmentResource(tenant, in.GetDeploymentId(), in.GetDevice(), ok && in.GetOrganizationId() == tenant)
+	},
+	// Cloud RequestSigning.md: the encrypted registry (registry.proto).
+	cloudpbv2.ArtifactRegistryService_PublishArtifact_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.PublishArtifactRequest)
+		return "org/" + tenant + "/release/" + in.GetAppReleaseId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetAppReleaseId())
+	},
+	cloudpbv2.ArtifactRegistryService_AddWraps_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.AddWrapsRequest)
+		return "org/" + tenant + "/wraps", ok && in.GetOrganizationId() == tenant
+	},
 	cloudpbv2.PKIAdminService_RevokeEnrollmentToken_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RevokeEnrollmentTokenRequest)
 		return "org/" + tenant + "/pki", ok && in.GetOrganizationId() == tenant && in.GetTokenId() != ""
@@ -534,6 +624,21 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		in, ok := req.(*cloudpbv2.RevokeEABKeyRequest)
 		return "org/" + tenant + "/pki", ok && in.GetOrganizationId() == tenant && in.GetKeyId() != ""
 	},
+}
+
+func canonicalUUID(id string) bool {
+	parsed, err := uuid.Parse(id)
+	return err == nil && parsed.String() == id
+}
+
+// assignmentResource is org/<tenant>/deployment/<deployment>/device/<uuid>
+// for an assignment of the tenant's canonical device URI.
+func assignmentResource(tenant, deployment, device string, ok bool) (string, bool) {
+	uuidPart, isDevice := strings.CutPrefix(device, "spiffe://wendy.sh/tenant/"+tenant+"/device/")
+	if !ok || tenant == "" || !isDevice || !canonicalUUID(uuidPart) || !canonicalUUID(deployment) {
+		return "", false
+	}
+	return "org/" + tenant + "/deployment/" + deployment + "/device/" + uuidPart, true
 }
 
 func requestTypeError(method string, req proto.Message) error {

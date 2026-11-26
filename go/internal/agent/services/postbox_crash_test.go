@@ -42,6 +42,22 @@ func (c durablePostboxControl) StopApp(_ context.Context, name string) error {
 	return f.Sync()
 }
 
+// This test only sends container actions; registry releases never reach it.
+func (durablePostboxControl) ImportRelease(context.Context, ReleaseImage) error       { return nil }
+func (durablePostboxControl) RemoveReleases(context.Context, string, []string) error  { return nil }
+func (durablePostboxControl) RemoveReleaseImages(context.Context) error               { return nil }
+func (durablePostboxControl) HasRelease(context.Context, string, string, string) bool { return false }
+func (durablePostboxControl) ReleaseAppConfig(context.Context, string, string, string) ([]byte, error) {
+	return nil, nil
+}
+func (durablePostboxControl) StartRelease(context.Context, ReleaseStart) (bool, error) {
+	return false, nil
+}
+func (durablePostboxControl) AppState(context.Context, string) AppContainerState {
+	return AppContainerState{}
+}
+func (durablePostboxControl) PruneReleases(context.Context, string, []string) error { return nil }
+
 func TestPostboxProcessCrash(t *testing.T) {
 	if path := os.Getenv("WENDY_POSTBOX_CRASH_FIXTURE"); path != "" {
 		runPostboxCrashChild(t, path, os.Getenv("WENDY_POSTBOX_CRASH_PHASE"))

@@ -32,6 +32,8 @@ const (
 	OrganizationService_ListMembers_FullMethodName          = "/wendycloud.v2.OrganizationService/ListMembers"
 	OrganizationService_TransferOwnership_FullMethodName    = "/wendycloud.v2.OrganizationService/TransferOwnership"
 	OrganizationService_SetMemberDefaults_FullMethodName    = "/wendycloud.v2.OrganizationService/SetMemberDefaults"
+	OrganizationService_GetLifecycleSettings_FullMethodName = "/wendycloud.v2.OrganizationService/GetLifecycleSettings"
+	OrganizationService_SetLifecycleSettings_FullMethodName = "/wendycloud.v2.OrganizationService/SetLifecycleSettings"
 )
 
 // OrganizationServiceClient is the client API for OrganizationService service.
@@ -78,6 +80,15 @@ type OrganizationServiceClient interface {
 	// through ownership instead. Changing either half does not affect current members.
 	// Signed; payload_type "wendycloud.v2.SetMemberDefaultsRequest".
 	SetMemberDefaults(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Organization, error)
+	// The organization's lifecycle settings for stored releases (spec 6.9,
+	// 6.10). Gate: as GetOrganization.
+	GetLifecycleSettings(ctx context.Context, in *GetLifecycleSettingsRequest, opts ...grpc.CallOption) (*LifecycleSettings, error)
+	// Replaces the organization's default policy and per-app limit. Gate:
+	// `org:update`. Each value must not exceed the plan limit (INVALID_ARGUMENT
+	// naming it). Existing app overrides above a lowered limit are clamped when
+	// applied, not rewritten.
+	// Signed; payload_type "wendycloud.v2.SetLifecycleSettingsRequest".
+	SetLifecycleSettings(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*LifecycleSettings, error)
 }
 
 type organizationServiceClient struct {
@@ -227,6 +238,26 @@ func (c *organizationServiceClient) SetMemberDefaults(ctx context.Context, in *S
 	return out, nil
 }
 
+func (c *organizationServiceClient) GetLifecycleSettings(ctx context.Context, in *GetLifecycleSettingsRequest, opts ...grpc.CallOption) (*LifecycleSettings, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LifecycleSettings)
+	err := c.cc.Invoke(ctx, OrganizationService_GetLifecycleSettings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *organizationServiceClient) SetLifecycleSettings(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*LifecycleSettings, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LifecycleSettings)
+	err := c.cc.Invoke(ctx, OrganizationService_SetLifecycleSettings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OrganizationServiceServer is the server API for OrganizationService service.
 // All implementations must embed UnimplementedOrganizationServiceServer
 // for forward compatibility.
@@ -271,6 +302,15 @@ type OrganizationServiceServer interface {
 	// through ownership instead. Changing either half does not affect current members.
 	// Signed; payload_type "wendycloud.v2.SetMemberDefaultsRequest".
 	SetMemberDefaults(context.Context, *SignedRequest) (*Organization, error)
+	// The organization's lifecycle settings for stored releases (spec 6.9,
+	// 6.10). Gate: as GetOrganization.
+	GetLifecycleSettings(context.Context, *GetLifecycleSettingsRequest) (*LifecycleSettings, error)
+	// Replaces the organization's default policy and per-app limit. Gate:
+	// `org:update`. Each value must not exceed the plan limit (INVALID_ARGUMENT
+	// naming it). Existing app overrides above a lowered limit are clamped when
+	// applied, not rewritten.
+	// Signed; payload_type "wendycloud.v2.SetLifecycleSettingsRequest".
+	SetLifecycleSettings(context.Context, *SignedRequest) (*LifecycleSettings, error)
 	mustEmbedUnimplementedOrganizationServiceServer()
 }
 
@@ -319,6 +359,12 @@ func (UnimplementedOrganizationServiceServer) TransferOwnership(context.Context,
 }
 func (UnimplementedOrganizationServiceServer) SetMemberDefaults(context.Context, *SignedRequest) (*Organization, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetMemberDefaults not implemented")
+}
+func (UnimplementedOrganizationServiceServer) GetLifecycleSettings(context.Context, *GetLifecycleSettingsRequest) (*LifecycleSettings, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetLifecycleSettings not implemented")
+}
+func (UnimplementedOrganizationServiceServer) SetLifecycleSettings(context.Context, *SignedRequest) (*LifecycleSettings, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetLifecycleSettings not implemented")
 }
 func (UnimplementedOrganizationServiceServer) mustEmbedUnimplementedOrganizationServiceServer() {}
 func (UnimplementedOrganizationServiceServer) testEmbeddedByValue()                             {}
@@ -568,6 +614,42 @@ func _OrganizationService_SetMemberDefaults_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OrganizationService_GetLifecycleSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLifecycleSettingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrganizationServiceServer).GetLifecycleSettings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrganizationService_GetLifecycleSettings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrganizationServiceServer).GetLifecycleSettings(ctx, req.(*GetLifecycleSettingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrganizationService_SetLifecycleSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrganizationServiceServer).SetLifecycleSettings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrganizationService_SetLifecycleSettings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrganizationServiceServer).SetLifecycleSettings(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // OrganizationService_ServiceDesc is the grpc.ServiceDesc for OrganizationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -622,6 +704,14 @@ var OrganizationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetMemberDefaults",
 			Handler:    _OrganizationService_SetMemberDefaults_Handler,
+		},
+		{
+			MethodName: "GetLifecycleSettings",
+			Handler:    _OrganizationService_GetLifecycleSettings_Handler,
+		},
+		{
+			MethodName: "SetLifecycleSettings",
+			Handler:    _OrganizationService_SetLifecycleSettings_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

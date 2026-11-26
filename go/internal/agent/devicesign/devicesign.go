@@ -17,6 +17,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -44,6 +45,9 @@ type Signer struct {
 	random   io.Reader
 }
 
+// ErrNotMLDSA is returned by New for a device key other than ML-DSA-65.
+var ErrNotMLDSA = errors.New("device request signing requires an ML-DSA-65 device key")
+
 // New loads the device identity that signs. It refuses any key other than
 // ML-DSA-65 and any leaf that is not a pki-core device principal.
 func New(certPEM, keyPEM string) (*Signer, error) {
@@ -53,7 +57,7 @@ func New(certPEM, keyPEM string) (*Signer, error) {
 	}
 	key, ok := pair.PrivateKey.(*mldsa.PrivateKey)
 	if !ok || key.PublicKey().Parameters() != mldsa.MLDSA65() {
-		return nil, fmt.Errorf("device request signing requires an ML-DSA-65 device key, but this device holds %T; it switches at its next certificate renewal", pair.PrivateKey)
+		return nil, fmt.Errorf("%w, but this device holds %T; it switches at its next certificate renewal", ErrNotMLDSA, pair.PrivateKey)
 	}
 	leaf, err := x509.ParseCertificate(pair.Certificate[0]) // normalized by TLSKeyPair
 	if err != nil {

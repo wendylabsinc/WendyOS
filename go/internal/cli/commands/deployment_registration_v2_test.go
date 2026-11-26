@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	legacyagentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -103,6 +104,7 @@ func (s *deploymentLegacyProvisioningStub) IsProvisioned(context.Context, *legac
 type deploymentV2Server struct {
 	agentpb.UnimplementedWendyProvisioningServiceServer
 	cloudpb.UnimplementedAppServiceServer
+	cloudpb.UnimplementedDeploymentServiceServer
 	mu        sync.Mutex
 	device    *agentpb.ProvisionedResponse
 	stateErr  error
@@ -111,6 +113,8 @@ type deploymentV2Server struct {
 	key       *mldsa.PublicKey
 	apps      map[string]*cloudpb.App
 	mutations int
+	getApps   int
+	assetApps []*cloudpb.AssetApp
 }
 
 func (s *deploymentV2Server) IsProvisioned(context.Context, *agentpb.IsProvisionedRequest) (*agentpb.IsProvisionedResponse, error) {
@@ -120,6 +124,7 @@ func (s *deploymentV2Server) IsProvisioned(context.Context, *agentpb.IsProvision
 func (s *deploymentV2Server) GetApp(_ context.Context, req *cloudpb.GetAppRequest) (*cloudpb.App, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.getApps++
 	if req.GetOrganizationId() != deploymentTenant {
 		return nil, status.Error(codes.PermissionDenied, "wrong tenant")
 	}
@@ -170,6 +175,17 @@ func (s *deploymentV2Server) UpsertApp(_ context.Context, envelope *cloudpb.Sign
 	return app, nil
 }
 
+func (s *deploymentV2Server) ListAssetApps(_ context.Context, req *cloudpb.ListAssetAppsRequest) (*cloudpb.ListAssetAppsResponse, error) {
+	if req.GetOrganizationId() != deploymentTenant || req.GetAssetId() != s.device.GetAssetUuid() {
+		return nil, status.Error(codes.PermissionDenied, "wrong device")
+	}
+	return &cloudpb.ListAssetAppsResponse{AssetApps: s.assetApps}, nil
+}
+
+func (s *deploymentV2Server) GetDeployment(_ context.Context, req *cloudpb.GetDeploymentRequest) (*cloudpb.Deployment, error) {
+	return &cloudpb.Deployment{Id: req.GetId(), Name: "rollout-" + req.GetId()}, nil
+}
+
 func deploymentTestConnection(t *testing.T, srv *deploymentV2Server, legacy *deploymentLegacyProvisioningStub) *grpcclient.AgentConnection {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -179,6 +195,7 @@ func deploymentTestConnection(t *testing.T, srv *deploymentV2Server, legacy *dep
 	server := grpc.NewServer()
 	agentpb.RegisterWendyProvisioningServiceServer(server, srv)
 	cloudpb.RegisterAppServiceServer(server, srv)
+	cloudpb.RegisterDeploymentServiceServer(server, srv)
 	go server.Serve(listener)
 	t.Cleanup(server.Stop)
 	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -190,6 +207,56 @@ func deploymentTestConnection(t *testing.T, srv *deploymentV2Server, legacy *dep
 		srv.device.CloudHost = listener.Addr().String()
 	}
 	return &grpcclient.AgentConnection{Conn: conn, ProvisioningService: legacy}
+}
+
+// signedInDeploymentConnection reaches an enrolled device whose tenant has a
+// stored operator session.
+func signedInDeploymentConnection(t *testing.T, srv *deploymentV2Server) *grpcclient.AgentConnection {
+	t.Helper()
+	key := testKey(t)
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := "spiffe://wendy.sh/tenant/" + deploymentTenant + "/operator/test"
+	cert := config.CertificateInfo{PrincipalURI: principal,
+		PemCertificate: liteLeafPEM(t, key, principal, time.Now().Add(time.Hour), false),
+		PemPrivateKey:  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
+	}
+	srv.device, srv.key, srv.apps = deploymentV2Device(), key.Public().(*mldsa.PublicKey), map[string]*cloudpb.App{}
+	srv.device.AssetUuid = "019535d9-3df7-79fb-b466-fa907fa17f9e"
+	conn := deploymentTLSConnection(t, srv, nil, srv.device.PrincipalUri)
+	conn.CertInfo, conn.Host = &cert, "edge-1"
+	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{{CloudGRPC: srv.device.CloudHost, Certificates: []config.CertificateInfo{cert}}}})
+	return conn
+}
+
+func TestRunCreatesNoCatalogEntry(t *testing.T) {
+	srv := &deploymentV2Server{}
+	conn := signedInDeploymentConnection(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// The fake agent ends the run at its version query, after the point where
+	// the run used to register the app.
+	_ = runWithAgent(ctx, conn, t.TempDir(), &appconfig.AppConfig{AppID: "app"}, runOptions{})
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.getApps != 0 || srv.mutations != 0 {
+		t.Fatalf("wendy run touched the Cloud app catalog: GetApp=%d UpsertApp=%d", srv.getApps, srv.mutations)
+	}
+}
+
+func TestRunNoticesItReplacesADeployedApp(t *testing.T) {
+	srv := &deploymentV2Server{}
+	conn := signedInDeploymentConnection(t, srv)
+	want := "This replaces app from deployment rollout-d1 on edge-1. Cloud shows the difference until that deployment's next change."
+	for _, unassigned := range []bool{false, true} {
+		srv.assetApps = []*cloudpb.AssetApp{{AppId: "other", DeploymentId: proto.String("d2")}, {AppId: "app", DeploymentId: proto.String("d1"), Unassigned: unassigned}}
+		stdout, stderr := captureBoth(t, func() { noticeReplacedDeployment(context.Background(), conn, "app") })
+		if got := strings.TrimSpace(stdout + stderr); unassigned && got != "" || !unassigned && !strings.Contains(got, want) {
+			t.Fatalf("unassigned=%v: got %q", unassigned, got)
+		}
+	}
 }
 
 func TestCloudRegistrationV2BeforeRosterSyncUsesSignedOperatorRequest(t *testing.T) {

@@ -105,7 +105,7 @@ func TestRecordedReleaseCarriesTagAndDigest(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	ctx := context.Background()
-	id, err := createAppRelease(ctx, conn, auth, deploymentTenant, "com.example.cam", "v1.4.0")
+	id, err := createAppRelease(ctx, conn, auth, deploymentTenant, "com.example.cam", "v1.4.0", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,5 +208,38 @@ func TestDeployReleasePrepareRefusesBeforeBuild(t *testing.T) {
 	}
 	if r.tenant != testOperatorTenant || r.auth == nil || r.id != "" {
 		t.Fatalf("prepared tenant %q, auth %v, id %q: want the device's tenant, a session and no release yet", r.tenant, r.auth, r.id)
+	}
+}
+
+// M24: a recorded deploy (through prepare, before the build) and wendy app
+// release refuse an app Cloud does not have, naming the app and
+// `wendy app create`; an app Cloud has passes.
+func TestDeployReleaseRefusesAMissingAppBeforeBuild(t *testing.T) {
+	op, fake := registryFixture(t)
+	prev := withCloud
+	withCloud = func(ctx context.Context, _ *config.AuthConfig, call func(context.Context, grpc.ClientConnInterface) error) error {
+		return call(ctx, op.conn)
+	}
+	t.Cleanup(func() { withCloud = prev })
+	ctx := context.Background()
+	session := tenantOperatorSession(t, "cloud.example:443")
+	tenant := func() (*config.Config, error) { return &config.Config{Auth: []config.AuthConfig{session}}, nil }
+	device := registrationProvisioned(registrationTenantDevice())
+	r, err := newDeployRelease("sh.wendy.missing", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "wendy app create --app sh.wendy.missing"
+	if err := r.prepare(ctx, device, tenant); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("recorded deploy of a missing app: err %v", err)
+	}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	if err := recordAppRelease(ctx, op.conn, op.auth, testOperatorTenant, "sh.wendy.missing", "v1", digest); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("wendy app release of a missing app: err %v", err)
+	}
+	fake.apps["sh.wendy.there"] = &cloudpb.App{Id: "sh.wendy.there", OrganizationId: testOperatorTenant}
+	r.appID = "sh.wendy.there"
+	if err := r.prepare(ctx, device, tenant); err != nil {
+		t.Fatalf("existing app: %v", err)
 	}
 }

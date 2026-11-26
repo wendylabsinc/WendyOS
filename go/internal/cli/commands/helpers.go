@@ -3827,7 +3827,7 @@ func ensureAppConfig(cfgPath string, autoAccept bool) (*appconfig.AppConfig, err
 	}
 
 	dir := filepath.Dir(cfgPath)
-	dirName := filepath.Base(dir)
+	dirName := appIDFromName(filepath.Base(dir))
 
 	if !autoAccept {
 		// File doesn't exist. If we're not in an interactive terminal, give a

@@ -1,5 +1,5 @@
 {
-  "appId": "sh.wendy.examples.HelloMLX",
+  "appId": "sh.wendy.examples.hellomlx",
   "platform": "linux",
   "version": "1.0.0",
   "language": "swift",

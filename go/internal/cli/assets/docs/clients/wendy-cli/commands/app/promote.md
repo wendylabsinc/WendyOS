@@ -1,0 +1,37 @@
+# `wendy app promote`
+
+Turns an app you ran directly with [`wendy run`](../run.md) into a deployed
+release. Promote publishes the image the last `wendy run` of this project
+built, as [`wendy app publish`](./publish.md) would, and then asks the
+[`wendy app deploy`](./deploy.md) questions with the app, the release and the
+device already answered.
+
+```sh
+wendy app promote --device packer-01 --tag 1.0.0
+wendy app promote --device packer-01 --untagged --name bench --run --yes
+```
+
+Promote publishes the image `wendy run` keeps in its build cache for this
+app and platform, so it does not build again. If there is none (no
+`wendy run` yet, or a builder that keeps no cache, such as Apple
+Container), promote stops: run the app with `wendy run` first, or publish it
+with `wendy app publish`.
+
+Before it publishes, promote checks the deploy answers: the device must
+exist and, without a terminal, every answer must be given and every required
+setting must have a value. If the deploy fails after the publish, the error
+names the release. When the deployment was made (a device failed, or
+`--wait` ran out), it points to `wendy app deployment show`; when nothing
+was made, it gives the `wendy app deploy` command with your answers.
+
+The device replaces the running app with the published release. It does not
+keep the running container yet.
+
+| Flag | Description |
+|------|-------------|
+| `--device` | The device you ran the app on: its name or id. Asked when missing in a terminal |
+| `--tag` | Release tag: the version you give this release, for example `1.0.0`. Asked when missing in a terminal |
+| `--untagged` | Name the release `<git branch>@<manifest digest>` instead of a tag |
+| `--platform` | Platform of the run's image. By default the device's architecture (`linux/arm64` when Cloud lists none), with the OS or platform of `wendy.json` when it sets one |
+| `--name`, `--move`, `--config`, `--config-file`, `--remove-config`, `--run`, `--install-only`, `--keep-trying`, `--note`, `--yes`, `--wait`, `--wait-timeout` | The remaining deploy questions, as in [`wendy app deploy`](./deploy.md) |
+| `--cloud-grpc` | Cloud gRPC endpoint of the session to use |

@@ -18,6 +18,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Release identity (apps spec section 1-2): a release is a tag naming one
@@ -31,7 +33,7 @@ func newAppCmd() *cobra.Command {
 		Use:   "app",
 		Short: "Manage this project's app in Wendy Cloud",
 	}
-	cmd.AddCommand(newAppReleaseCmd())
+	cmd.AddCommand(newAppCreateCmd(), newAppReleaseCmd(), newAppPublishCmd(), newAppPromoteCmd(), newAppDeployCmd(), newAppDeploymentCmd(), newAppRotateCmd(), newAppDeleteCmd(), newAppLifecycleCmd())
 	return cmd
 }
 
@@ -63,15 +65,7 @@ func newAppReleaseCmd() *cobra.Command {
 				return fmt.Errorf("wendy app release needs an operator session; run 'wendy auth login'")
 			}
 			return withCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
-				id, err := createAppRelease(ctx, conn, auth, auth.Certificates[0].TenantUUID(), appCfg.AppID, tag)
-				if err != nil {
-					return err
-				}
-				if err := setAppReleaseDigest(ctx, conn, auth, id, tag, digest); err != nil {
-					return fmt.Errorf("release %s was created without its digest: %w", id, err)
-				}
-				cliLogln("Recorded release %s of %s: %s = %s", id, appCfg.AppID, tag, digest)
-				return nil
+				return recordAppRelease(ctx, conn, auth, auth.Certificates[0].TenantUUID(), appCfg.AppID, tag, digest)
 			})
 		},
 	}
@@ -81,6 +75,22 @@ func newAppReleaseCmd() *cobra.Command {
 	return cmd
 }
 
+// recordAppRelease records release tag = digest of appID (wendy app release).
+func recordAppRelease(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, tenant, appID, tag, digest string) error {
+	if err := checkAppInCloud(ctx, conn, tenant, appID); err != nil {
+		return err
+	}
+	id, err := createAppRelease(ctx, conn, auth, tenant, appID, tag, "", nil)
+	if err != nil {
+		return err
+	}
+	if err := setAppReleaseDigest(ctx, conn, auth, id, tag, digest); err != nil {
+		return fmt.Errorf("release %s was created without its digest: %w", id, err)
+	}
+	cliLogln("Recorded release %s of %s: %s = %s", id, appID, tag, digest)
+	return nil
+}
+
 func validateReleaseTag(tag string) error {
 	if strings.TrimSpace(tag) == "" {
 		return fmt.Errorf("a release tag is required (--tag); there is no implicit 'latest'")
@@ -88,10 +98,13 @@ func validateReleaseTag(tag string) error {
 	return nil
 }
 
-func createAppRelease(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, tenant, appID, tag string) (string, error) {
+// createAppRelease creates release tag of appID; defaults is its default
+// configuration (empty: none) and required the settings a deployment must
+// give a value (wendy.json requiredEnv).
+func createAppRelease(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, tenant, appID, tag, defaults string, required []string) (string, error) {
 	release := new(cloudpb.AppRelease)
 	err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.DeploymentService_CreateAppRelease_FullMethodName,
-		&cloudpb.CreateAppReleaseRequest{AppId: appID, OrganizationId: tenant, Name: tag, ReleaseType: cloudpb.ReleaseType_CONTAINER}, release)
+		&cloudpb.CreateAppReleaseRequest{AppId: appID, OrganizationId: tenant, Name: tag, ReleaseType: cloudpb.ReleaseType_CONTAINER, DefaultConfigJson: defaults, RequiredConfigNames: required}, release)
 	if err != nil {
 		return "", fmt.Errorf("creating release %s of %s: %w", tag, appID, err)
 	}
@@ -165,6 +178,24 @@ func (r *deployRelease) prepare(ctx context.Context, provisioning deploymentProv
 	if r.tenant == "" {
 		return fmt.Errorf("--record-release needs a device enrolled with Wendy Cloud")
 	}
+	// Any failure but "no such app" is left to the release's creation, as
+	// before this check.
+	var missing error
+	_ = withCloud(ctx, r.auth, func(ctx context.Context, cc grpc.ClientConnInterface) error {
+		missing = checkAppInCloud(ctx, cc, r.tenant, r.appID)
+		return nil
+	})
+	return missing
+}
+
+// checkAppInCloud refuses an app Cloud does not have, whose release could
+// not be created (wendy app release, and wendy run --record-release before
+// anything is built). Any other answer is left to the release's creation.
+func checkAppInCloud(ctx context.Context, conn grpc.ClientConnInterface, tenant, appID string) error {
+	_, err := cloudpb.NewAppServiceClient(conn).GetApp(ctx, &cloudpb.GetAppRequest{Id: appID, OrganizationId: tenant})
+	if status.Code(err) == codes.NotFound {
+		return fmt.Errorf("a release of %s cannot be recorded: the app is not in Wendy Cloud yet. Run wendy app create --app %s first.", appID, appID)
+	}
 	return nil
 }
 
@@ -180,7 +211,7 @@ func (r *deployRelease) begin(ctx context.Context) (*string, error) {
 		ctx, cancel := context.WithTimeout(ctx, releaseCallTimeout)
 		defer cancel()
 		err := withCloud(ctx, r.auth, func(ctx context.Context, cc grpc.ClientConnInterface) (err error) {
-			r.id, err = createAppRelease(ctx, cc, r.auth, r.tenant, r.appID, r.tag)
+			r.id, err = createAppRelease(ctx, cc, r.auth, r.tenant, r.appID, r.tag, "", nil)
 			return err
 		})
 		if err != nil {
@@ -230,7 +261,8 @@ func (r *deployRelease) outcome(deployErr error) error {
 	}
 }
 
-func withCloud(ctx context.Context, auth *config.AuthConfig, call func(context.Context, grpc.ClientConnInterface) error) error {
+// withCloud is a variable so tests can hand calls to a fake Cloud.
+var withCloud = func(ctx context.Context, auth *config.AuthConfig, call func(context.Context, grpc.ClientConnInterface) error) error {
 	return cloudsession.With(ctx, auth, ensureOAuthAccessToken, call)
 }
 

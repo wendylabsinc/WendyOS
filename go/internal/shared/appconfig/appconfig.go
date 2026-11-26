@@ -314,6 +314,101 @@ const DiscoveryURLEnvVar = "WENDY_DISCOVERY_URL"
 // envVarNamePattern matches a POSIX-portable environment variable name.
 var envVarNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// ReservedEnvPrefixes are environment variable prefixes a caller may never
+// set: the dynamic linkers' (code injection) and the agent's own WENDY_*
+// variables (device and app identity the agent sets).
+var ReservedEnvPrefixes = []string{"LD_", "DYLD_", "WENDY_"}
+
+// MaxEnvEntries and MaxEnvEntryLen bound the environment a caller supplies
+// (SOC2-CC6, NIST-SI-10): no OCI spec bloat through unbounded injection.
+const (
+	MaxEnvEntries  = 512
+	MaxEnvEntryLen = 32 * 1024
+)
+
+// ValidateRequiredEnv checks requiredEnv against env: each name is a key of
+// env (its default there may be empty), and listed once.
+func ValidateRequiredEnv(required []string, env map[string]string) error {
+	for i, name := range required {
+		if _, ok := env[name]; !ok {
+			return fmt.Errorf("requiredEnv: %q is not in env; add it to env with its default (it may be empty)", name)
+		}
+		if slices.Contains(required[:i], name) {
+			return fmt.Errorf("requiredEnv: %q is listed twice; list it once", name)
+		}
+	}
+	return nil
+}
+
+// ValidateEnvEntries checks caller-supplied KEY=value entries: bounded, no
+// NUL, CR or LF, a POSIX name, and no reserved prefix (case-insensitive).
+// The container runtime applies it to every create, and a deployment's
+// configuration is held to it when its statement arrives.
+func ValidateEnvEntries(entries []string) error {
+	if len(entries) > MaxEnvEntries {
+		return fmt.Errorf("too many env entries: %d exceeds limit of %d (SOC2-CC6, NIST-SI-10)", len(entries), MaxEnvEntries)
+	}
+	for _, kv := range entries {
+		if len(kv) > MaxEnvEntryLen {
+			return fmt.Errorf("env entry exceeds maximum length of %d bytes (SOC2-CC6, NIST-SI-10)", MaxEnvEntryLen)
+		}
+		key, _, ok := strings.Cut(kv, "=")
+		if strings.ContainsAny(kv, "\x00\n\r") {
+			return fmt.Errorf("env entry %q contains a forbidden control character (NUL, CR or LF)", printable(key))
+		}
+		if !ok {
+			return fmt.Errorf("env entry missing '=' separator: %q", printable(kv))
+		}
+		// The pattern also closes the leading-whitespace bypass (" LD_PRELOAD")
+		// and the Unicode case-folding bypass that strings.ToUpper alone cannot.
+		if !envVarNamePattern.MatchString(key) {
+			return fmt.Errorf("env key %q is not a valid POSIX environment variable name (SOC2-CC6, NIST-SI-10)", printable(key))
+		}
+		upper := strings.ToUpper(key) // ASCII after the pattern check
+		for _, prefix := range ReservedEnvPrefixes {
+			if strings.HasPrefix(upper, prefix) {
+				return fmt.Errorf("env key %q is reserved and cannot be set by callers (SOC2-CC6, NIST-SI-10)", key)
+			}
+		}
+	}
+	return nil
+}
+
+// AgentEnvPrefixes and AgentEnvNames are variables the agent sets in a
+// container itself (ROS 2 networking, OpenTelemetry identity and export). A
+// deployment's configuration may not set them: the agent's value would
+// silently win, or the app could take another app's log identity.
+var (
+	AgentEnvPrefixes = []string{"ROS_", "OTEL_"}
+	AgentEnvNames    = []string{"RMW_IMPLEMENTATION", "CYCLONEDDS_URI"}
+)
+
+// IsAgentEnvName reports whether the agent sets name itself (case-insensitive).
+func IsAgentEnvName(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, prefix := range AgentEnvPrefixes {
+		if strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	return slices.Contains(AgentEnvNames, upper)
+}
+
+// printable shortens s for an error message and masks control characters.
+func printable(s string) string {
+	s = s[:min(len(s), 80)]
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '?'
+		}
+		return r
+	}, s)
+}
+
+// IsEnvVarName reports whether name is a POSIX-portable environment variable
+// name.
+func IsEnvVarName(name string) bool { return envVarNamePattern.MatchString(name) }
+
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
 	AppID string     `json:"appId"`
@@ -355,6 +450,11 @@ type AppConfig struct {
 	// key by key. Values may reference host env vars via ${VAR}, expanded by
 	// `wendy run` at deploy time (see ServiceConfig.Env).
 	Env map[string]string `json:"env,omitempty"`
+	// RequiredEnv names the settings a deployment must give a non-empty value
+	// (sem 2026-11-13 11:01). Each is also a key of Env, whose value there is
+	// the default shown and may be empty; an empty value is never required by
+	// itself. Clients check it; the device does nothing with it.
+	RequiredEnv []string `json:"requiredEnv,omitempty"`
 	// MCU is the Arduino sketch flashed to the board's microcontroller.
 	MCU *MCUConfig `json:"mcu,omitempty"`
 }
@@ -889,6 +989,9 @@ func (c *AppConfig) Validate() error {
 	}
 
 	if err := ValidateEnv("env", c.Env); err != nil {
+		return err
+	}
+	if err := ValidateRequiredEnv(c.RequiredEnv, c.Env); err != nil {
 		return err
 	}
 
