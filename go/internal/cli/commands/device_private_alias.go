@@ -541,7 +541,7 @@ func privateAliasCloudConnectError(ctx context.Context, auth *config.AuthConfig,
 		return err
 	}
 	return cloudSelectorMissError(auth, asset.GetId(), "tenant", config.OrganizationLabel(target.Endpoint, target.TenantUUID), nil,
-		[]cloudDiscoveryDevice{{v2: asset, key: asset.GetId()}})
+		[]cloudDiscoveryDevice{{cloudAssetMetadata: asset, v2: asset, key: asset.GetId()}})
 }
 
 // Cloud creates a lazy TLS client, while a mesh proxy verifies the selected
