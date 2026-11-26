@@ -27,6 +27,10 @@ type discoveryMove struct {
 	relative                              bool
 	turning                               bool
 	startYaw, turnDirection, turnProgress float64
+	turnStopping, turnPulse               bool
+	turnStopAt, turnSampleAt              time.Time
+	turnSampleYaw                         float64
+	turnSamplePosition                    sitenav.Point
 }
 
 type discoveryHistory struct {
@@ -240,27 +244,91 @@ func (r *SiteRobot) stepDiscoveryTurnLocked(now time.Time) {
 	move, pose := r.discoveryMove, r.observed.Pose
 	progress := math.Remainder(pose.Yaw-move.startYaw, 2*math.Pi) * move.turnDirection
 	angle := math.Abs(math.Remainder(move.yaw-move.startYaw, 2*math.Pi))
-	if pose.Position.Distance(move.origin) > .06 || progress < -.08 || progress > angle+lookStopMargin {
-		r.message = "Discovery stopped: unexpected drift or rotation."
+	drift := pose.Position.Distance(move.origin)
+	if drift > .06 || progress < -.08 || progress > angle+lookStopMargin {
+		var faults []string
+		if drift > .06 {
+			faults = append(faults, fmt.Sprintf("turn position drift %.3f m exceeds 0.060 m", drift))
+		}
+		if progress < -.08 {
+			faults = append(faults, fmt.Sprintf("reverse rotation %.3f rad exceeds 0.080 rad", -progress))
+		}
+		if progress > angle+lookStopMargin {
+			faults = append(faults, fmt.Sprintf("rotation overshoot %.3f rad exceeds %.3f rad", progress-angle, lookStopMargin))
+		}
+		r.message = fmt.Sprintf("Discovery stopped: %s (rotation %.3f/%.3f rad; odometry epoch %d).", strings.Join(faults, "; "), progress, angle, r.poseEpoch)
 		r.stopLocked()
 		return
 	}
 	remaining := math.Remainder(move.yaw-pose.Yaw, 2*math.Pi)
-	if math.Abs(remaining) <= .04 {
-		// Acknowledge STOP before changing from rotation to forward motion.
-		if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_STOP, 0, 0); err != nil {
-			r.message = siteCommandFailure("Discovery turn stop", err)
-			r.stopLocked()
-			return
-		}
-		move.turning = false
-		move.progressAt = now
-		return
-	}
-	if remaining*move.turnDirection < 0 {
-		r.message = "Discovery stopped: the viewpoint turn overshot."
+	// 0.04 rad is the desired completion window, not an assumption that a
+	// 0.8 rad/s turn sampled every 100 ms must hit it. The existing forward
+	// controller's 0.1 rad heading limit remains the maximum accepted error.
+	if remaining*move.turnDirection < -.1 {
+		r.message = fmt.Sprintf("Discovery stopped: viewpoint turn overshot by %.3f rad (maximum 0.100 rad).", math.Abs(remaining))
 		r.stopLocked()
 		return
+	}
+	if move.turnStopping {
+		// An acknowledged STOP is not proof of settled pose. Require distinct
+		// post-STOP captures with little movement before selecting a forward path.
+		if !pose.Captured.After(move.turnStopAt) || !pose.Received.After(move.turnStopAt) || !pose.Captured.After(move.turnSampleAt) {
+			return
+		}
+		if move.turnSampleAt.IsZero() || math.Abs(math.Remainder(pose.Yaw-move.turnSampleYaw, 2*math.Pi)) > .015 || pose.Position.Distance(move.turnSamplePosition) > .01 {
+			move.turnSampleAt, move.turnSampleYaw, move.turnSamplePosition = pose.Captured, pose.Yaw, pose.Position
+			return
+		}
+		if pose.Captured.Sub(move.turnSampleAt) < 100*time.Millisecond {
+			return
+		}
+		if remaining*move.turnDirection <= .04 {
+			// Replan the straight leg from the measured stopped heading. Never
+			// silently translate along a path validated for a different heading.
+			distance := move.origin.Distance(move.target)
+			target := sitenav.Point{X: pose.Position.X + math.Cos(pose.Yaw)*distance, Y: pose.Position.Y + math.Sin(pose.Yaw)*distance}
+			if len(r.discoveryHistory.visited) == 0 || pose.Position.Distance(r.discoveryHistory.visited[0]) > 1.3 || target.Distance(r.discoveryHistory.visited[0]) > 1.3 {
+				r.message = "Discovery stopped: the settled turn would exceed the discovery radius."
+				r.stopLocked()
+				return
+			}
+			for _, visited := range r.discoveryHistory.visited {
+				if target.Distance(visited) < .25 {
+					r.message = "Discovery stopped: the settled turn does not reach a separated viewpoint."
+					r.stopLocked()
+					return
+				}
+			}
+			if err := discoveryClearanceError(r.observed.Grid.WithDeparture(r.departure), pose.Position, target, pose.Yaw); err != nil {
+				r.message = "Discovery stopped after turning: " + err.Error()
+				r.stopLocked()
+				return
+			}
+			move.origin, move.target, move.yaw = pose.Position, target, pose.Yaw
+			move.turning, move.turnStopping = false, false
+			move.progressAt = now
+			return
+		}
+		// A conservative brake can stop short. Advance for one controller
+		// tick at the supported rate, then Stop and measure again.
+		move.turnStopping, move.turnPulse = false, true
+		move.turnSampleAt = time.Time{}
+	} else {
+		age := math.Max(now.Sub(pose.Captured).Seconds(), now.Sub(pose.Received).Seconds())
+		brake := .04 + lookSpeed*(math.Max(0, age)+.1)
+		if remaining*move.turnDirection <= brake || move.turnPulse {
+			if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_STOP, 0, 0); err != nil {
+				r.message = siteCommandFailure("Discovery turn stop", err)
+				r.stopLocked()
+				return
+			}
+			move.turnStopping, move.turnPulse, move.turnStopAt = true, false, now
+			if acknowledgedAt := time.Now(); acknowledgedAt.After(move.turnStopAt) {
+				move.turnStopAt = acknowledgedAt
+			}
+			move.turnSampleAt = time.Time{}
+			return
+		}
 	}
 	if math.Abs(math.Remainder(pose.Yaw-move.turnProgress, 2*math.Pi)) >= .025 {
 		move.turnProgress, move.progressAt = pose.Yaw, now
