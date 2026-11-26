@@ -49,7 +49,19 @@ func (s *mcpServer) registerRobotTools(srv *server.MCPServer) {
 
 func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolRequest) (result *mcpgo.CallToolResult, resultErr error) {
 	dispatched := false
+	resolvedSerial := ""
 	defer func() {
+		// Bind transport retries and Stop acknowledgement to the robot chosen
+		// by this MCP connection, without making the model carry its identity.
+		if result != nil && resolvedSerial != "" {
+			if result.Meta == nil {
+				result.Meta = &mcpgo.Meta{}
+			}
+			if result.Meta.AdditionalFields == nil {
+				result.Meta.AdditionalFields = make(map[string]any)
+			}
+			result.Meta.AdditionalFields["robot_serial"] = resolvedSerial
+		}
 		if req.Params.Name == "robot_command" && !dispatched && result != nil && result.IsError {
 			if fields, ok := result.StructuredContent.(map[string]any); ok {
 				fields["command_not_started"] = true
@@ -85,6 +97,7 @@ func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolReque
 		}
 		serial = listed.Robots[0].Serial
 	}
+	resolvedSerial = serial
 	if s.robotDial == nil {
 		return errResult(errCodeUnsupported, "This MCP host does not provide the digital-twin transport."), nil
 	}

@@ -10,14 +10,17 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 )
 
 // robotCommandTools owns transport identities rather than asking a model to
 // manufacture them. It wraps an already policy-filtered executor.
 type robotCommandTools struct {
-	base Executor
-	mu   sync.Mutex
+	base           Executor
+	mu             sync.Mutex
+	followInterval time.Duration
+	followLimit    time.Duration
 	// Retain unknown/running outcomes across user turns. Changing the goal
 	// must not accidentally bypass deduplication after a transport failure.
 	pending *pendingRobotCommand
@@ -31,11 +34,14 @@ type pendingRobotCommand struct {
 }
 
 type robotCommandAttempt struct {
-	id        string
-	arguments json.RawMessage
-	sent      bool
-	completed bool
-	result    ToolResult
+	id          string
+	arguments   json.RawMessage
+	sent        bool
+	completed   bool
+	stopped     bool
+	serial      string
+	followUntil time.Time
+	result      ToolResult
 }
 
 type robotCommandTurn struct {
@@ -108,7 +114,7 @@ func (t *robotCommandTools) Execute(ctx context.Context, call ToolCall) (string,
 	return result.Text, err
 }
 
-func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (ToolResult, error) {
+func (t *robotCommandTools) executeCommandOnce(ctx context.Context, call ToolCall, reconcile bool, selected **robotCommandAttempt) (ToolResult, error) {
 	if call.Name != "robot_command" {
 		if call.Name == "device_connect" || call.Name == "device_disconnect" || call.Name == "cloud_connect" {
 			t.mu.Lock()
@@ -128,7 +134,14 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (T
 				return ToolResult{}, errors.New("cannot switch the device connection while a robot command has an unresolved outcome; resolve the prior command on this connection first")
 			}
 		}
-		return executeControlBase(ctx, t.base, call)
+		if call.Name == "robot_status" {
+			call = t.pinPendingRobot(call)
+		}
+		result, err := executeControlBase(ctx, t.base, call)
+		if err == nil && call.Name == "robot_status" {
+			return t.appendPendingReceipt(ctx, call, result)
+		}
+		return result, err
 	}
 	if err := ctx.Err(); err != nil {
 		return ToolResult{}, err
@@ -166,6 +179,10 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (T
 	}
 	var args map[string]any
 	_ = json.Unmarshal(call.Arguments, &args)
+	if args["action"] == "stop" {
+		call = t.pinPendingRobot(call)
+		_ = json.Unmarshal(call.Arguments, &args)
+	}
 	step := 1
 	if value, ok := args["step"].(float64); ok {
 		step = int(value)
@@ -217,14 +234,28 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (T
 		sameStep := step == pending.step || (runtime != pending.turn && step == 1)
 		if key != pending.key || !sameStep {
 			t.mu.Unlock()
-			return ToolResult{}, fmt.Errorf("a previous robot command has an unknown or running outcome; retry its unchanged arguments %s with step %d before another goal, or stop the robot", pending.key, pending.step)
+			if key == pending.key && !sameStep {
+				return ToolResult{}, errors.New("cannot increment step while the original command is unresolved; continue its original receipt first")
+			}
+			if reconcile && receiptLookup {
+				if _, lookupErr := t.lookupRobotAttempt(ctx, call, pending.attempt); lookupErr != nil {
+					return ToolResult{}, lookupErr
+				}
+				t.mu.Lock()
+				resolved := t.pending == nil
+				t.mu.Unlock()
+				if resolved {
+					return t.executeCommandOnce(ctx, call, false, selected)
+				}
+			}
+			return ToolResult{}, errors.New("the previous robot command is still running or unresolved; no new goal was sent; stop the robot or continue following its original receipt")
 		}
 		attempt = pending.attempt
 		steps[step] = attempt
 	}
 	if attempt == nil && step > 1 && !recovery {
 		previous := steps[step-1]
-		if previous == nil || !previous.completed {
+		if previous == nil || !previous.completed || previous.stopped {
 			t.mu.Unlock()
 			return ToolResult{}, errors.New("cannot repeat this move until the previous identical step has a completed receipt; retry its original step to resolve an unknown outcome")
 		}
@@ -243,7 +274,8 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (T
 		}
 		steps[step] = attempt
 	}
-	if attempt.completed && !stop {
+	*selected = attempt
+	if (attempt.completed || attempt.stopped) && !recovery {
 		result := attempt.result
 		t.mu.Unlock()
 		return result, nil
@@ -274,9 +306,30 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (T
 			return ToolResult{}, err
 		}
 	}
+	var stoppedAttempt *robotCommandAttempt
+	if stop && t.pending != nil {
+		stoppedAttempt = t.pending.attempt
+	}
 	attempt.sent = true
+	if args["action"] == "localize_active" && attempt.followUntil.IsZero() {
+		limit := t.followLimit
+		if limit <= 0 {
+			// Include setup and final receipt delivery after the controller's
+			// five-minute search budget; this never extends robot movement.
+			limit = 5*time.Minute + 15*time.Second
+		}
+		attempt.followUntil = time.Now().Add(limit)
+	}
 	t.mu.Unlock()
 	result, err := executeControlBase(ctx, t.base, call)
+	t.mu.Lock()
+	if attempt.stopped {
+		result, err = attempt.result, nil
+	}
+	t.mu.Unlock()
+	if targetErr := t.bindRobotTarget(attempt, result.RobotSerial); targetErr != nil {
+		return result, targetErr
+	}
 	if err != nil && result.CommandNotStarted && !lookupOnly {
 		t.mu.Lock()
 		attempt.sent = false
@@ -289,24 +342,8 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (T
 		}
 		t.mu.Unlock()
 	}
-	var receipt struct {
-		State string `json:"state"`
-	}
-	if err == nil && json.Unmarshal([]byte(result.Text), &receipt) == nil {
-		t.mu.Lock()
-		if receipt.State == "completed" {
-			attempt.completed, attempt.result = true, result
-		}
-		switch receipt.State {
-		case "completed", "rejected", "failed", "canceled", "superseded":
-			if t.pending != nil && t.pending.attempt == attempt {
-				t.pending = nil
-			}
-		}
-		t.mu.Unlock()
-		if receipt.State == "unknown" {
-			return result, errors.New("the controller no longer has this command receipt; movement outcome remains unknown, so no new movement was sent; stop and inspect the robot")
-		}
+	if err == nil {
+		err = t.recordRobotReceipt(attempt, &result, stoppedAttempt)
 	}
 	return result, err
 }

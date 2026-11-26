@@ -97,6 +97,13 @@ func TestRobotToolsUseSelectedDeviceAndFixedEndpoint(t *testing.T) {
 	if structuredMap(t, result)["state"] != "failed" {
 		t.Fatal("lost failure evidence", result)
 	}
+	if result.Meta == nil || result.Meta.AdditionalFields["robot_serial"] != "robot-a" {
+		t.Fatal("missing resolved robot identity on command receipt")
+	}
+	stop, err := s.handleRobotTool(context.Background(), callToolReq("robot_command", map[string]any{"action": "stop", "serial": "robot-b", "request_id": "stop-once"}))
+	if err != nil || stop.IsError || stop.Meta == nil || stop.Meta.AdditionalFields["robot_serial"] != "robot-b" {
+		t.Fatal("explicit Stop lost its distinct target", stop, err)
+	}
 	for _, args := range []map[string]any{
 		{"action": "forward", "request_id": "forward-once", "distance_meters": 1.25},
 		{"action": "go_to_object", "request_id": "object-once", "evidence_id": "opaque-evidence"},
@@ -127,5 +134,8 @@ func TestRobotToolsRequireUnambiguousPairing(t *testing.T) {
 	result, err := s.handleRobotTool(context.Background(), callToolReq("robot_status", nil))
 	if err != nil || !result.IsError {
 		t.Fatal("accepted ambiguous robot", result, err)
+	}
+	if result.Meta != nil && result.Meta.AdditionalFields["robot_serial"] != nil {
+		t.Fatal("ambiguous pairing acquired a resolved identity")
 	}
 }

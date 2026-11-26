@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestRobotActiveLocalizationIsDistinctAndReceiptOnlyOnRetry(t *testing.T) {
@@ -32,7 +33,7 @@ func TestRobotActiveLocalizationIsDistinctAndReceiptOnlyOnRetry(t *testing.T) {
 			return `{"state":"completed","snapshot":{"Aligned":true}}`, nil
 		}
 	}
-	tools := &robotCommandTools{base: base}
+	tools := &robotCommandTools{base: base, followInterval: time.Millisecond}
 	ctx := robotTurnContext()
 	passive := ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"localize","destination":"Living Room"}`)}
 	active := ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"localize_active","destination":"Living Room","degrees":180}`)}
@@ -41,10 +42,7 @@ func TestRobotActiveLocalizationIsDistinctAndReceiptOnlyOnRetry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := tools.Execute(ctx, ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"localize_active","destination":"Living Room","step":2}`)}); err == nil {
-		t.Fatal("running active search permitted another motion step")
-	}
-	if _, err := tools.Execute(robotTurnContext(), active); err != nil {
+	if _, err := tools.Execute(ctx, active); err != nil {
 		t.Fatal(err)
 	}
 	if len(base.calls) != 3 || commandIdentity(t, base.calls[0]) == commandIdentity(t, base.calls[1]) || commandIdentity(t, base.calls[1]) != commandIdentity(t, base.calls[2]) {
@@ -61,7 +59,7 @@ func TestRobotActiveLocalizationCannotBypassUnresolvedMovement(t *testing.T) {
 	if _, err := tools.Execute(robotTurnContext(), ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"localize_active"}`)}); err == nil {
 		t.Fatal("active localization bypassed an unresolved movement")
 	}
-	if len(base.calls) != 1 || tools.pending == nil {
+	if len(base.calls) != 2 || tools.pending == nil {
 		t.Fatal("active localization reached the backend or released the prior goal")
 	}
 }

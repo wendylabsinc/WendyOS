@@ -145,6 +145,7 @@ func sessionEngine(provider Provider, executor Executor, opts SessionOptions) (*
 		prompt += "\nThis is an unattended service task. Only the configured mutation tools are authorized; unavailable tools are blocked. There is no terminal user to answer approval prompts. Report missing capabilities explicitly."
 	}
 	engine := NewEngine(provider, memory, prompt)
+	engine.robotControlMode = opts.Profile.Name == "device-control"
 	engine.skipAutomaticLearning = compactLocalControl(opts)
 	engine.SetMemoryEnabled(!opts.NoMemory)
 	return engine, nil

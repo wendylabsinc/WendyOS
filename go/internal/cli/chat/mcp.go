@@ -221,6 +221,9 @@ func mediaToolResult(result *mcpgo.CallToolResult) (ToolResult, error) {
 		output.Write(structured)
 	}
 	value := ToolResult{Text: truncateOutput(output.String()), Images: images}
+	if result.Meta != nil {
+		value.RobotSerial, _ = result.Meta.AdditionalFields["robot_serial"].(string)
+	}
 	if result.IsError {
 		if fields, ok := result.StructuredContent.(map[string]any); ok {
 			value.CommandNotStarted, _ = fields["command_not_started"].(bool)
