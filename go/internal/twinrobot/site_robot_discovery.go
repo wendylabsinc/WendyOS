@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
@@ -163,7 +164,17 @@ func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 		operation = "Forward movement"
 	}
 	if now.Sub(r.started) > 12*time.Second || now.Sub(move.progressAt) > 2*time.Second || move.epoch != r.poseEpoch {
-		r.message = operation + " stopped: no timely progress or odometry changed."
+		var faults []string
+		if now.Sub(r.started) > 12*time.Second {
+			faults = append(faults, fmt.Sprintf("movement elapsed %.2f s exceeds 12.00 s", now.Sub(r.started).Seconds()))
+		}
+		if now.Sub(move.progressAt) > 2*time.Second {
+			faults = append(faults, fmt.Sprintf("no progress for %.2f s exceeds 2.00 s", now.Sub(move.progressAt).Seconds()))
+		}
+		if move.epoch != r.poseEpoch {
+			faults = append(faults, fmt.Sprintf("odometry epoch changed from %d to %d", move.epoch, r.poseEpoch))
+		}
+		r.message = operation + " stopped: " + strings.Join(faults, "; ") + "."
 		r.stopLocked()
 		return
 	}
@@ -175,9 +186,24 @@ func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 	dx, dy := p.Position.X-move.origin.X, p.Position.Y-move.origin.Y
 	progress := dx*math.Cos(move.yaw) + dy*math.Sin(move.yaw)
 	lateral := math.Abs(-dx*math.Sin(move.yaw) + dy*math.Cos(move.yaw))
-	if lateral > .06 || math.Abs(math.Remainder(p.Yaw-move.yaw, 2*math.Pi)) > .1 ||
-		progress < -.05 || progress > distance+.1 {
-		r.message = operation + " stopped: unexpected drift or odometry change."
+	headingError := math.Abs(math.Remainder(p.Yaw-move.yaw, 2*math.Pi))
+	if lateral > .06 || headingError > .1 || progress < -.05 || progress > distance+.1 {
+		// Retain the measured cause before stopLocked discards the move. A
+		// later fresh pose cannot reconstruct which guard ended this attempt.
+		var faults []string
+		if lateral > .06 {
+			faults = append(faults, fmt.Sprintf("lateral drift %.3f m exceeds 0.060 m", lateral))
+		}
+		if headingError > .1 {
+			faults = append(faults, fmt.Sprintf("heading drift %.3f rad exceeds 0.100 rad", headingError))
+		}
+		if progress < -.05 {
+			faults = append(faults, fmt.Sprintf("reverse progress %.3f m exceeds 0.050 m", -progress))
+		}
+		if progress > distance+.1 {
+			faults = append(faults, fmt.Sprintf("overshoot %.3f m exceeds 0.100 m", progress-distance))
+		}
+		r.message = fmt.Sprintf("%s stopped: %s (progress %.3f/%.3f m; odometry epoch %d).", operation, strings.Join(faults, "; "), progress, distance, r.poseEpoch)
 		r.stopLocked()
 		return
 	}
