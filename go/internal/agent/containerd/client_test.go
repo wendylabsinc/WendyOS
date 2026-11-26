@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
@@ -1168,33 +1170,53 @@ func TestStartPostStartAgentHookSkippedWhenExpansionEmpty(t *testing.T) {
 	}
 }
 
-func TestStartPostStartAgentHookStartErrorDoesNotLogCommand(t *testing.T) {
+// WDY-4398: a post-start host command runs as root on the host, so each run
+// leaves an audit record like a host shell session: who asked, the app, the
+// command, started or not, and the exit result.
+func TestStartPostStartAgentHookWritesAuditRecord(t *testing.T) {
 	old := startPostStartHookCommand
 	t.Cleanup(func() { startPostStartHookCommand = old })
+	startPostStartHookCommand = func(_ []string) (func() error, error) {
+		return exec.Command("sh", "-c", "exit 3").Run, nil
+	}
+	core, observed := observer.New(zap.InfoLevel)
+	client := &Client{logger: zap.New(core)}
+	caller := zap.String("entity_id", "operator-1")
+	const command = "/opt/hook ${WENDY_APP_ID}"
+	want := func(message string, fields map[string]any) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for observed.FilterMessage(message).Len() == 0 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		logs := observed.FilterMessage(message).All()
+		if len(logs) != 1 {
+			t.Fatalf("%q records = %d; want 1", message, len(logs))
+		}
+		got := logs[0].ContextMap()
+		for key, value := range map[string]any{"app_name": "camera-app", "command": command, "entity_id": "operator-1"} {
+			fields[key] = value
+		}
+		for key, value := range fields {
+			if got[key] != value {
+				t.Fatalf("%q %s = %v; want %v (record %v)", message, key, got[key], value, got)
+			}
+		}
+	}
+
+	if !client.startPostStartAgentHook(command, "camera-app", caller) {
+		t.Fatal("hook did not start")
+	}
+	want("post-start host command started", map[string]any{})
+	want("post-start host command exited", map[string]any{"exit_code": int64(3)})
 
 	startPostStartHookCommand = func(_ []string) (func() error, error) {
 		return nil, errors.New("start failed")
 	}
-
-	core, observed := observer.New(zap.WarnLevel)
-	client := &Client{logger: zap.New(core)}
-	started := client.startPostStartAgentHook("echo secret-token-value", "camera-app")
-	if started {
-		t.Fatal("startPostStartAgentHook returned true after start error")
+	if client.startPostStartAgentHook(command, "camera-app", caller) {
+		t.Fatal("hook reported started after a start error")
 	}
-
-	logs := observed.FilterMessage("Failed to start postStart agent hook")
-	if logs.Len() != 1 {
-		t.Fatalf("warning log count = %d; want 1", logs.Len())
-	}
-	if observed.FilterMessageSnippet("secret-token-value").Len() != 0 {
-		t.Fatal("hook command leaked into warning message")
-	}
-	for _, field := range logs.All()[0].Context {
-		if field.Key == "command" {
-			t.Fatal("hook command leaked into warning fields")
-		}
-	}
+	want("post-start host command not started", map[string]any{"error": "start failed"})
 }
 
 func TestLayerMediaType_Zstd(t *testing.T) {
