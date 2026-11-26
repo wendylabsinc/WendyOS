@@ -33,6 +33,7 @@ type Engine struct {
 	// Local robot control skips the extra post-turn model request. Recall and
 	// explicit memory tools remain available under the normal memory setting.
 	skipAutomaticLearning bool
+	robotControlMode      bool
 }
 
 func NewEngine(provider Provider, executor Executor, system string) *Engine {
@@ -126,10 +127,15 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 				memoryWarned = true
 			}
 		}
-		message, err := e.provider.Stream(ctx, messages, available, func(chunk string) {
-			streamed.WriteString(chunk)
-			emit(Event{Type: "text", Text: chunk})
-		})
+		var message Message
+		if forced := e.robotEvidenceCall(prompt, available, round); forced != nil {
+			message = Message{ToolCalls: []ToolCall{*forced}}
+		} else {
+			message, err = e.provider.Stream(ctx, messages, available, func(chunk string) {
+				streamed.WriteString(chunk)
+				emit(Event{Type: "text", Text: chunk})
+			})
+		}
 		if message.Usage != nil {
 			emit(Event{Type: "usage", Usage: message.Usage})
 		}
@@ -230,6 +236,10 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 						e.memory.observe(call, output, toolErr)
 					}
 					if toolErr != nil {
+						var monitoringErr *robotMonitoringError
+						if errors.As(toolErr, &monitoringErr) || errors.Is(toolErr, errRobotReceiptUnknown) {
+							turnErr = toolErr
+						}
 						callFailure = toolErr
 						result = "Tool error: " + toolErr.Error()
 						if output.Text != "" {

@@ -530,6 +530,12 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		return nil
 	}
 	if m.active {
+		if isRobotStopPrompt(prompt) {
+			m.discardQueuedPrompts()
+			m.queuedPrompts = []string{prompt}
+			m.cancelActiveTurn()
+			return nil
+		}
 		m.queuedPrompts = append(m.queuedPrompts, prompt)
 		m.resize(m.width, m.height)
 		return nil
@@ -1023,6 +1029,9 @@ func (m *chatModel) handleEvent(event Event) {
 		}
 		m.appendEntry("result", "Result · "+name, event.Text)
 		m.status = "Thinking"
+	case "tool_progress":
+		m.appendEntry("notice", "Robot progress", event.Text)
+		m.status = "Following robot alignment"
 	case "status":
 		m.status = event.Text
 	case "memory":

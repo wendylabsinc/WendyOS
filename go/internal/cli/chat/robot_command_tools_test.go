@@ -88,7 +88,7 @@ func TestRobotCommandRuntimeIdentityRetryAndIntentionalRepeat(t *testing.T) {
 	if _, err := tools.Execute(robotTurnContext(), call); err != nil {
 		t.Fatal(err)
 	}
-	if commandIdentity(t, base.calls[4]) == commandIdentity(t, base.calls[0]) {
+	if commandIdentity(t, base.calls[len(base.calls)-1]) == commandIdentity(t, base.calls[0]) {
 		t.Fatal("new user turn reused identity")
 	}
 }
@@ -99,7 +99,7 @@ func TestRobotCommandRepeatRequiresCompletedReceipt(t *testing.T) {
 			base := &engineTestExecutor{tools: []Tool{robotCommandTestTool()}, run: func(context.Context, ToolCall) (string, error) { return outcome, nil }}
 			tools := &robotCommandTools{base: base}
 			ctx := robotTurnContext()
-			if _, err := tools.Execute(ctx, ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"turn","degrees":30}`)}); err != nil {
+			if _, err := tools.Execute(ctx, ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"turn","degrees":30}`)}); err != nil && outcome != "not a receipt" {
 				t.Fatal(err)
 			}
 			if _, err := tools.Execute(ctx, ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"turn","degrees":30,"step":2}`)}); err == nil {
@@ -130,6 +130,7 @@ func TestRobotCommandUnknownOutcomeSurvivesUserTurnAndCancellation(t *testing.T)
 	for _, firstOutcome := range []string{"network error", "canceled transport", "running receipt", "unparseable result"} {
 		t.Run(firstOutcome, func(t *testing.T) {
 			base := &engineTestExecutor{tools: []Tool{robotCommandTestTool()}}
+			resolve := false
 			base.run = func(_ context.Context, call ToolCall) (string, error) {
 				if len(base.calls) == 1 {
 					switch firstOutcome {
@@ -142,6 +143,9 @@ func TestRobotCommandUnknownOutcomeSurvivesUserTurnAndCancellation(t *testing.T)
 					default:
 						return "tool returned without a receipt", nil
 					}
+				}
+				if strings.Contains(string(call.Arguments), `"receipt_only":true`) && !resolve {
+					return `{"state":"running"}`, nil
 				}
 				return `{"state":"completed"}`, nil
 			}
@@ -161,16 +165,17 @@ func TestRobotCommandUnknownOutcomeSurvivesUserTurnAndCancellation(t *testing.T)
 					t.Fatal(err)
 				}
 			}
+			resolve = true
 			if _, err := tools.Execute(nextTurn, call); err != nil {
 				t.Fatal(err)
 			}
-			if len(base.calls) != 4 || commandIdentity(t, base.calls[0]) != commandIdentity(t, base.calls[3]) {
+			if len(base.calls) != 6 || commandIdentity(t, base.calls[0]) != commandIdentity(t, base.calls[5]) {
 				t.Fatal("later-turn retry changed unresolved identity")
 			}
 			if _, err := tools.Execute(robotTurnContext(), call); err != nil {
 				t.Fatal(err)
 			}
-			if commandIdentity(t, base.calls[4]) == commandIdentity(t, base.calls[0]) {
+			if commandIdentity(t, base.calls[len(base.calls)-1]) == commandIdentity(t, base.calls[0]) {
 				t.Fatal("completed goal retained identity on a new user turn")
 			}
 		})
@@ -334,7 +339,7 @@ func TestRobotCommandLostReceiptNeverRedispatches(t *testing.T) {
 				t.Fatal("lookup failure cleared original unresolved movement")
 			}
 		}
-		if len(base.calls) != 3 {
+		if len(base.calls) != 4 {
 			t.Fatalf("valid receipt queries blocked or invalid calls dispatched: %d", len(base.calls))
 		}
 		if _, err := tools.Execute(robotTurnContext(), ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"turn","degrees":45}`)}); err == nil {

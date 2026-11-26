@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -55,7 +56,7 @@ func TestRobotLocalizeDoesNotBypassUnknownMovement(t *testing.T) {
 	if _, err := tools.Execute(robotTurnContext(), ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"localize"}`)}); err == nil {
 		t.Fatal("localization changed the navigation frame during unresolved movement")
 	}
-	if len(base.calls) != 1 || tools.pending == nil {
+	if len(base.calls) != 2 || tools.pending == nil || !strings.Contains(string(base.calls[1].Arguments), `"receipt_only":true`) {
 		t.Fatal("localize dispatched or cleared the unresolved movement")
 	}
 }

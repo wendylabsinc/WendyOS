@@ -32,6 +32,8 @@ type ToolResult struct {
 	// Set only by the trusted robot tool transport when dispatch did not occur.
 	// A failed receipt lookup says nothing about an earlier command's outcome.
 	CommandNotStarted bool
+	// Trusted resolved target from Wendy MCP metadata, never inferred from prose.
+	RobotSerial string
 }
 
 // MediaExecutor extends text-only executors without requiring every tool to
