@@ -23,40 +23,35 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
         line: Int = #line,
         _ body: @Sendable (_ cli: WendyE2ESession, _ agent: WendyE2ESession) async throws -> Result
     ) async throws -> Result {
-        let (cli, agent) = try await self.setUp(
-            authenticated: authenticated,
-            useDeviceCache: useDeviceCache,
-            filePath: filePath,
-            function: function,
-            line: line
-        )
-
+        let recorder = try WendyE2ERecorder(filePath: filePath, function: function, line: line)
+        let capture = try WendyE2ECoverage.begin(recorder: recorder)
         var result: Result?
         var primaryError: (any Error)?
 
         do {
-            if let before {
-                try await before(cli, agent)
-            }
-            result = try await body(cli, agent)
-        } catch {
-            primaryError = error
-        }
+            let (cli, agent) = try await self.setUp(
+                authenticated: authenticated,
+                useDeviceCache: useDeviceCache,
+                recorder: recorder
+            )
+            do {
+                if let before { try await before(cli, agent) }
+                result = try await body(cli, agent)
+            } catch { primaryError = error }
 
-        do {
-            if let after {
-                try await after(cli, agent)
+            do {
+                if let after { try await after(cli, agent) }
+            } catch { primaryError = primaryError ?? error }
+
+            do { try await Self.tearDown(cli: cli, agent: agent) } catch {
+                primaryError = primaryError ?? error
             }
         } catch {
+            // setUp already tears down any partially created sessions.
             primaryError = primaryError ?? error
         }
-
-        do {
-            try await Self.tearDown(
-                cli: cli,
-                agent: agent
-            )
-        } catch {
+        do { try capture?.finish() } catch {
+            FileHandle.standardError.write(Data("ERROR: E2E coverage: \(error)\n".utf8))
             primaryError = primaryError ?? error
         }
 
@@ -75,19 +70,12 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
     private func setUp(
         authenticated: Bool,
         useDeviceCache: Bool,
-        filePath: String,
-        function: String,
-        line: Int
+        recorder: WendyE2ERecorder
     ) async throws -> (cli: WendyE2ESession, agent: WendyE2ESession) {
         var cliSession: WendyE2ESession?
         var agentSession: WendyE2ESession?
 
         do {
-            let recorder = try WendyE2ERecorder(
-                filePath: filePath,
-                function: function,
-                line: line
-            )
             let repositoryRootDirectoryURL = Self.repositoryRootDirectoryURL()
             let testDirectoryURL = URL(
                 fileURLWithPath: recorder.testDirectoryPath,

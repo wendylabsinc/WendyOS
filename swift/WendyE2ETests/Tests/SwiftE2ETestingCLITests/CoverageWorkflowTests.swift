@@ -5,6 +5,87 @@ import Testing
 
 @Suite
 struct `coverage workflow evidence` {
+    @Test(arguments: [false, true])
+    func `normal and coverage execution both invoke one ordinary sequential suite`(
+        coverage: Bool
+    ) throws {
+        let product = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: product.appendingPathComponent("swift/Scripts/E2ETest.sh"),
+            encoding: .utf8
+        )
+        let body = try #require(
+            source.components(separatedBy: "(\n  cd \"$PACKAGE_DIR\"\n").last?.components(
+                separatedBy: "\n)\nTEST_STATUS="
+            ).first
+        )
+        let root = try CoverageIO.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tool = root.appendingPathComponent("swift")
+        let capture = root.appendingPathComponent("capture")
+        try "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$ARGV_FILE\"\n".write(
+            to: tool,
+            atomically: true,
+            encoding: .utf8
+        )
+        try "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$CAPTURE_FILE\"\n".write(
+            to: capture,
+            atomically: true,
+            encoding: .utf8
+        )
+        for file in [tool, capture] {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: file.path
+            )
+        }
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = root.path + ":" + env["PATH", default: ""]
+        env["ARGV_FILE"] = root.appendingPathComponent("arguments").path
+        env["CAPTURE_FILE"] = root.appendingPathComponent("capture-arguments").path
+        env["COVERAGE"] = coverage ? "true" : "false"
+        env["COVERAGE_TOOL"] = capture.path
+        env["CLI_REPO_DIR"] = product.path
+        env["RUN_DIR"] = root.path
+        let script = """
+            SWIFT_TEST_ARGS=(test --no-parallel --filter WendyE2ETests)
+            SWIFT_TEST_ENV=(WENDY_E2E_COVERAGE="$COVERAGE")
+            COVERAGE_CONTROL=''
+            TEST_TIMEOUT_SECONDS=0
+            TEST_RESULTS_OUTPUT_PATH="$RUN_DIR/test-results.xml"
+            run_swift_test_with_timeout() { shift 2; "$@"; }
+            \(body)
+            """
+        let result = try CoverageIO.execute(
+            ["/bin/bash", "-euo", "pipefail", "-c", script],
+            cwd: root,
+            environment: env
+        )
+        #expect(result.status == 0, Comment(rawValue: result.error))
+        let arguments = try String(contentsOfFile: env["ARGV_FILE"]!, encoding: .utf8)
+        #expect(CoverageIO.lines(arguments).count == 1)
+        #expect(arguments.hasPrefix("test --no-parallel --filter WendyE2ETests --xunit-output "))
+        #expect(!arguments.contains("list") && !arguments.contains("--skip-build"))
+        if coverage {
+            #expect(
+                try String(contentsOfFile: env["CAPTURE_FILE"]!, encoding: .utf8).contains(
+                    "--phase start"
+                )
+            )
+        }
+        let rejected = try CoverageIO.execute(
+            [
+                "/bin/bash", product.appendingPathComponent("swift/Scripts/E2ETest.sh").path,
+                "--output-dir", root.path, "--coverage", "--parallel",
+            ],
+            environment: env
+        )
+        #expect(rejected.status != 0)
+        #expect(rejected.error.contains("sequential execution"))
+    }
+
     @Test
     func `failed aggregate or render still uploads the derived run and preserves failure status`()
         throws

@@ -135,24 +135,6 @@ final class GoCoverageFixture {
             to: run.appendingPathComponent("attempt.json")
         )
     }
-    func fakeSwift(list: String = "fixture/test()", body: String) throws -> [String: String] {
-        let fake = repo.appendingPathComponent("fake-bin/swift")
-        try write(
-            "fake-bin/swift",
-            """
-            #!/bin/bash
-            if [[ "$1 $2" == "test list" ]]; then printf '%s\\n' "$FAKE_LIST"; exit 0; fi
-            \(body)
-            """
-        )
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = fake.deletingLastPathComponent().path + ":" + env["PATH", default: ""]
-        env["FAKE_LIST"] = list
-        env["TEST_ROOT"] = run.path
-        env["FIXTURE_CLI"] = cli.path
-        return env
-    }
     static func json(_ path: URL) throws -> [String: Any] { try CoverageIO.read(path) }
     static func line(_ handle: FileHandle) throws -> String {
         var data = Data()

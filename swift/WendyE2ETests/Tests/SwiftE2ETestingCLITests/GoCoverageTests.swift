@@ -15,6 +15,10 @@ struct `native Go coverage` {
         #expect(try f.invoke(left, "left") == 0)
         #expect(try f.invoke(right, "right") == 0)
         #expect(try GoCoverage.checkCLICounters(left) == 2)
+        let malformed = left.appendingPathComponent("covcounters.malformed")
+        try Data().write(to: malformed)
+        #expect(throws: (any Error).self) { try GoCoverage.validateNative([left]) }
+        try FileManager.default.removeItem(at: malformed)
         let a = try GoCoverage.profile(
             [left],
             destination: f.run.appendingPathComponent("a"),
@@ -161,91 +165,24 @@ struct `native Go coverage` {
         }
     }
 
-    @Test
-    func
-        `runner preserves original failure repeated calls and canonical receipts and interrupted recovery`()
+    @Test func `zero tests and skipped records retain honest no data through bootstrap archive`()
         throws
     {
         let f = try GoCoverageFixture()
-        try f.attempt(exit: 9)
-        let alias = f.repo.appendingPathComponent("run-alias")
-        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: f.run)
-        var env = try f.fakeSwift(
-            body: """
-                native="$TEST_ROOT/observations/suite/test/coverage/go"
-                mkdir -p "$native"
-                printf '%s' "$RECEIPT_ROOT/observations/suite/test" > "$WENDY_E2E_COVERAGE_RECEIPT"
-                GOCOVERDIR="$native" "$FIXTURE_CLI" left
-                GOCOVERDIR="$native" "$FIXTURE_CLI" fail
-                printf '<testsuite><testcase name="fixture"><failure/></testcase></testsuite>' > "${!#}"
-                exit 9
-                """
-        )
-        env["RECEIPT_ROOT"] = alias.path
-        #expect(
-            try GoCoverage.runTests(
-                run: alias,
-                filters: ["fixture"],
-                control: nil,
-                environment: env
-            ) == 9
-        )
-        #expect(try GoCoverage(repo: f.repo, run: alias).finishCapture(control: nil) == 0)
-        #expect(try GoCoverage(repo: f.repo, run: alias).deriveAttempt() == 0)
-        var records =
-            try JSONSerialization.jsonObject(
-                with: Data(contentsOf: f.run.appendingPathComponent("coverage/tests.json"))
-            ) as! [[String: Any]]
-        #expect(records[0]["directory"] as? String == "observations/suite/test")
-        #expect(records[0]["cliInvocations"] as? Int == 2)
-        #expect(records[0]["testExitStatus"] as? Int == 9)
-        #expect(
-            try CoverageIO.read(f.run.appendingPathComponent("attempt.json"))["exitStatus"] as? Int
-                == 9
-        )
-        records[0]["status"] = "incomplete"
-        records[0].removeValue(forKey: "directory")
-        try f.records(records)
-        #expect(try GoCoverage(repo: f.repo, run: alias).finishCapture(control: nil) == 1)
-        #expect(try GoCoverage(repo: f.repo, run: alias).deriveAttempt() == 1)
-        let partial = try CoverageIO.read(f.run.appendingPathComponent("coverage/summary.json"))
-        #expect(partial["status"] as? String == "incomplete")
-        #expect((partial["summary"] as? [String: Any])?["statements"] as? Int ?? 0 > 0)
-        records[0].removeValue(forKey: "directory")
-        try f.records(records)
-        try f.repo.appendingPathComponent("outside").path.write(
-            to: f.run.appendingPathComponent("coverage/current-test.txt"),
-            atomically: true,
-            encoding: .utf8
-        )
-        #expect(try GoCoverage(repo: f.repo, run: f.run).finishCapture(control: nil) == 1)
-    }
-
-    @Test func `zero tests skipped tests and no Go observations remain honest no data`() throws {
-        let f = try GoCoverageFixture()
         try f.attempt()
-        for state in ["empty", "skipped", "no-go"] {
-            let xml =
-                state == "skipped"
-                ? "<testsuite><testcase><skipped/></testcase></testsuite>"
-                : "<testsuite><testcase/></testsuite>"
-            let env = try f.fakeSwift(
-                list: state == "empty" ? "" : "fixture/test()",
-                body: "printf '%s' '\(xml)' > \"${!#}\""
-            )
-            #expect(
-                try GoCoverage.runTests(
-                    run: f.run,
-                    filters: ["fixture"],
-                    control: nil,
-                    environment: env
-                ) == 0
-            )
-            #expect(try GoCoverage(repo: f.repo, run: f.run).finishCapture(control: nil) == 0)
+        for records: [[String: Any]] in [
+            [],
+            [
+                [
+                    "test": "fixture/test()", "sourceID": try f.source["sourceID"]!,
+                    "status": "skipped",
+                ]
+            ],
+        ] {
+            try f.records(records)
             #expect(try GoCoverage(repo: f.repo, run: f.run).deriveAttempt() == 0)
             let summary = try CoverageIO.read(f.run.appendingPathComponent("coverage/summary.json"))
             #expect(summary["status"] as? String == "no-data")
-            #expect(summary["summary"] == nil)
         }
         let bootstrap = try f.native("coverage/bootstrap")
         try f.invoke(bootstrap, "left")

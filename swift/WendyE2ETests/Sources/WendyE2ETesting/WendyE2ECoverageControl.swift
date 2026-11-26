@@ -1,4 +1,3 @@
-import ArgumentParser
 import Foundation
 
 #if canImport(Darwin)
@@ -7,8 +6,8 @@ import Foundation
     import Glibc
 #endif
 
-extension GoCoverage {
-    static func agentControl(
+extension WendyE2ECoverage {
+    package static func agentControl(
         _ path: String,
         operation: String,
         directory: String = ""
@@ -20,7 +19,7 @@ extension GoCoverage {
                 let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
             #endif
             guard fd >= 0 else {
-                throw ValidationError("Agent coverage socket: \(String(cString: strerror(errno)))")
+                throw failure("Agent coverage socket: \(String(cString: strerror(errno)))")
             }
             defer { _ = close(fd) }
             var timeout = timeval(tv_sec: 30, tv_usec: 0)
@@ -52,7 +51,7 @@ extension GoCoverage {
             address.sun_family = sa_family_t(AF_UNIX)
             let bytes = Array(path.utf8) + [0]
             guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
-                throw ValidationError("Agent coverage socket path too long")
+                throw failure("Agent coverage socket path too long")
             }
             withUnsafeMutableBytes(of: &address.sun_path) { buffer in buffer.copyBytes(from: bytes)
             }
@@ -62,7 +61,7 @@ extension GoCoverage {
                 }
             }
             guard connected == 0 else {
-                throw ValidationError("Agent coverage connect: \(String(cString: strerror(errno)))")
+                throw failure("Agent coverage connect: \(String(cString: strerror(errno)))")
             }
             var request = try JSONSerialization.data(withJSONObject: [
                 "Operation": operation, "Directory": directory,
@@ -87,7 +86,7 @@ extension GoCoverage {
                         )
                     #endif
                     guard count > 0 else {
-                        throw ValidationError(
+                        throw failure(
                             "Agent coverage write: \(String(cString: strerror(errno)))"
                         )
                     }
@@ -99,24 +98,24 @@ extension GoCoverage {
             while !response.contains(10) {
                 let count = recv(fd, &buffer, buffer.count, 0)
                 guard count > 0 else {
-                    throw ValidationError(
+                    throw failure(
                         "Agent coverage response missing: \(String(cString: strerror(errno)))"
                     )
                 }
                 response.append(contentsOf: buffer.prefix(count))
                 guard response.count < 1_048_576 else {
-                    throw ValidationError("Invalid Agent coverage response")
+                    throw failure("Invalid Agent coverage response")
                 }
             }
             guard let value = try JSONSerialization.jsonObject(with: response) as? [String: Any],
                 let error = value["error"] as? String, let pid = value["pid"] as? Int
-            else { throw ValidationError("Invalid Agent coverage response") }
+            else { throw failure("Invalid Agent coverage response") }
             guard error.isEmpty else {
-                throw ValidationError("Agent coverage \(operation): \(error)")
+                throw failure("Agent coverage \(operation): \(error)")
             }
             return pid
         #else
-            throw ValidationError("Managed Go coverage requires an isolated Unix host")
+            throw failure("Managed Go coverage requires an isolated Unix host")
         #endif
     }
 }

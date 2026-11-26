@@ -201,7 +201,7 @@ Options:
   --managed-agent       Build and launch a local wendy-agent for this run.
   --no-managed-agent    Do not launch a managed local wendy-agent.
   --isolation MODE      Sandbox isolation: none, per-run, or per-test; defaults to per-test.
-  --coverage            Collect Go source coverage, one test process at a time.
+  --coverage            Collect Go source coverage in sequential scenario intervals.
   --parallel            Allow SwiftPM to run tests in parallel. Only valid when
                         both CLI and agent machines use local transport.
   --no-parallel         Do not run SwiftPM tests in parallel.
@@ -413,7 +413,7 @@ MANAGED_AGENT="$(normalize_bool "WENDY_E2E_MANAGED_AGENT" "$MANAGED_AGENT")"
 
 if [[ "$COVERAGE" == "true" ]]; then
   if [[ "$PARALLEL" == "true" ]]; then
-    echo "ERROR: --coverage requires single tests without --parallel." >&2
+    echo "ERROR: --coverage requires sequential execution without --parallel." >&2
     exit 64
   fi
   if [[ -n "$CLI_ADDRESS" || -n "$AGENT_ADDRESS" ]]; then
@@ -1366,15 +1366,12 @@ set +e
   # inherits this environment before spawning swift test.
   export "${SWIFT_TEST_ENV[@]}"
   if [[ "$COVERAGE" == "true" ]]; then
-    coverage_args=("$COVERAGE_TOOL" _capture --phase run --run-dir "$RUN_DIR")
-    for filter in "${TEST_FILTERS[@]}"; do
-      coverage_args+=(--filter "$filter")
-    done
-    [[ -z "$COVERAGE_CONTROL" ]] || coverage_args+=(--control "$COVERAGE_CONTROL")
-    test_command=("${coverage_args[@]}")
-  else
-    test_command=(swift "${SWIFT_TEST_ARGS[@]}" --xunit-output "$TEST_RESULTS_OUTPUT_PATH")
+    capture_start_args=()
+    [[ -z "$COVERAGE_CONTROL" ]] || capture_start_args+=(--control "$COVERAGE_CONTROL")
+    "$COVERAGE_TOOL" _capture --phase start --repo "$CLI_REPO_DIR" --run-dir "$RUN_DIR" ${capture_start_args[@]+"${capture_start_args[@]}"} || exit $?
+    export WENDY_E2E_COVERAGE_CONTROL="$COVERAGE_CONTROL"
   fi
+  test_command=(swift "${SWIFT_TEST_ARGS[@]}" --xunit-output "$TEST_RESULTS_OUTPUT_PATH")
   run_swift_test_with_timeout \
     "$TEST_TIMEOUT_SECONDS" \
     "$RUN_DIR/timeout.json" \

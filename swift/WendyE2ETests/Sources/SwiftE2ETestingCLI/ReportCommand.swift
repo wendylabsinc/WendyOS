@@ -894,7 +894,7 @@ private func testResultKey(classname: String, name: String) -> TestResultKey? {
     return TestResultKey(suite: suite, name: testName)
 }
 
-private func normalizedClassname(_ classname: String) -> String {
+func normalizedClassname(_ classname: String) -> String {
     if classname.last == "`", let start = classname.dropLast().lastIndex(of: "`") {
         let suiteStart = classname.index(after: start)
         return String(classname[suiteStart..<classname.index(before: classname.endIndex)])
@@ -903,7 +903,7 @@ private func normalizedClassname(_ classname: String) -> String {
     return stripBackticks(String(classname.split(separator: ".").last ?? ""))
 }
 
-private func normalizedTestName(_ name: String) -> String {
+func normalizedTestName(_ name: String) -> String {
     var value = name
     if value.hasSuffix("()") {
         value.removeLast(2)
