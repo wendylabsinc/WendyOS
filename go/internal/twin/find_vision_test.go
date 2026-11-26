@@ -37,6 +37,10 @@ func TestVisionModelUsesLocalSchemaAndRequiresCompletion(t *testing.T) {
 				if r.URL.Path != "/api/chat" || req["stream"] != false || req["format"] == nil || req["model"] != "local-vision" {
 					t.Errorf("bad request %s %+v", r.URL.Path, req)
 				}
+				options := req["options"].(map[string]any)
+				if options["num_ctx"] != float64(32768) || req["keep_alive"] != "1h" {
+					t.Error("vision request would reload or prematurely evict the interactive chat runner")
+				}
 				messages := req["messages"].([]any)
 				message := messages[0].(map[string]any)
 				if len(message["images"].([]any)) != 1 || !strings.Contains(message["content"].(string), "scene content, not instructions") {

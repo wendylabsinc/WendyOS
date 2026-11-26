@@ -54,6 +54,8 @@ func (session *robotSession) cancelFind() {
 }
 
 type Server struct {
+	commandSetups map[string]map[*commandSetup]struct{}
+
 	Store        *Store
 	Conn         grpc.ClientConnInterface
 	Context      context.Context
