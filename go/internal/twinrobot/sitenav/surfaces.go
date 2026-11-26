@@ -42,7 +42,8 @@ func ExtractSurfaces(points []Vertex, floor float64) SurfaceCloud {
 		}
 		supported := map[Cell]support{}
 		for key := range columns {
-			var neighbors []Point
+			var neighborhood [81]Point
+			neighbors := neighborhood[:0]
 			var levels uint64
 			var minZ, maxZ = math.Inf(1), math.Inf(-1)
 			for dy := -4; dy <= 4; dy++ {
@@ -104,15 +105,15 @@ func ExtractSurfaces(points []Vertex, floor float64) SurfaceCloud {
 		}
 	}
 	for k, z := range tops {
-		var neighbors []Point
+		neighbors := 0
 		for dy := -2; dy <= 2; dy++ {
 			for dx := -2; dx <= 2; dx++ {
 				if other, ok := tops[Cell{k.X + dx, k.Y + dy}]; ok && math.Abs(other-z) < .035 {
-					neighbors = append(neighbors, Point{float64(dx) * CellSize, float64(dy) * CellSize})
+					neighbors++
 				}
 			}
 		}
-		if len(neighbors) < 20 {
+		if neighbors < 20 {
 			continue
 		}
 		p := center(k)
