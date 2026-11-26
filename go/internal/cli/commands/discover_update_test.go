@@ -2,10 +2,12 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -52,6 +54,39 @@ func TestDiscoverModel_UpdateKeyDefersToTheReleaseChannel(t *testing.T) {
 		if want := "Checking Tom Thor Mac..."; dm.flashMessage != want {
 			t.Errorf("cli %s: flash = %q, want %q", cliVer, dm.flashMessage, want)
 		}
+	}
+}
+
+func TestDiscoverModel_UpdateKeyUsesHighlightedLANIdentity(t *testing.T) {
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	originalVersion, originalDial := resolveAgentVersionFn, dialAgentLadderFn
+	t.Cleanup(func() { resolveAgentVersionFn, dialAgentLadderFn = originalVersion, originalDial })
+	resolveAgentVersionFn = func(bool) (string, string, error) { return "2026.11.24-000000", "test", nil }
+	stopAfterDial := errors.New("stop test before the update")
+	var attempted dialTarget
+	dialAgentLadderFn = func(_ context.Context, target dialTarget) (*grpcclient.AgentConnection, error, error) {
+		attempted = target
+		return nil, nil, stopAfterDial
+	}
+
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.collection.LANDevices = []models.LANDevice{
+		{ID: "first", DisplayName: "Robot", Hostname: "first.local", IPAddress: "192.0.2.10"},
+		{ID: "selected", DisplayName: "Robot", Hostname: "selected.local", IPAddress: "192.0.2.20"},
+	}
+	m.refreshTable()
+	m.table.SetCursor(1)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	if cmd == nil {
+		t.Fatal("update shortcut did not start an update")
+	}
+	result := cmd().(discoverUpdateDoneMsg)
+	if !errors.Is(result.err, stopAfterDial) {
+		t.Fatalf("update did not reach the dial seam: %v", result.err)
+	}
+	if attempted.Addr != hostPort("192.0.2.20", defaultAgentPort) || attempted.PinKey != "selected.local" {
+		t.Fatalf("update dialed %q with pin %q, want the highlighted device", attempted.Addr, attempted.PinKey)
 	}
 }
 

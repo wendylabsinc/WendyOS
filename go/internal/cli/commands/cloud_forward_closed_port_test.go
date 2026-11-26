@@ -37,9 +37,8 @@ func loopbackConn(t *testing.T) (client, accepted net.Conn) {
 	return client, accepted
 }
 
-// relayPipe is a tunnel as the v2 relay hands it out: cloudrelay's
-// Session.Conn is one end of a pipe, and closes the other end when the device
-// side of the relay ends. The test holds that other end as the device.
+// relayPipe models a tunnel ending when the device closes. The test holds
+// the pipe's other end as the device.
 func relayPipe(t *testing.T) (tunnel, device net.Conn) {
 	t.Helper()
 	tunnel, device = net.Pipe()

@@ -80,6 +80,8 @@ cp "$POLICY_SCRIPT" "$2"
             ("wendy/lite/sensorlink.proto", "", False),
             ("wendylite/v1/wendy_com_msg.proto", "", False),
             ("wendy/lite/wendy_com_msg.proto", "", False),
+            ("wendy/lite/wendy_com_msg.proto", "wendy/lite/wendy_com_msg.proto", True),
+            ("wendylite/v1/wendy_com_msg.proto", "wendy/lite/wendy_com_msg.proto", False),
             ("service/nested.proto", "", False),
             ("cloud/apps.proto", "cloud/apps.proto", True),
             ("apps.proto", "cloud/apps.proto", False),

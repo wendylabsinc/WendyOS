@@ -71,7 +71,7 @@ struct `'wendy auth default'` {
 
      Required behavior: clearing leaves neither saved account current in fresh
      default/status processes, even when legacy selection preferences were saved.
-     Both accounts, credentials, device preference, analytics and unrelated settings
+     Both accounts, credentials, build-host preference, analytics and unrelated settings
      survive. This specifies public selection behavior without requiring a particular
      representation of cleared or legacy preferences on disk.
 

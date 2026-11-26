@@ -2,7 +2,6 @@ package localmesh
 
 import (
 	"crypto/tls"
-	"crypto/x509"
 	"sync/atomic"
 	"testing"
 
@@ -63,10 +62,10 @@ func TestKnownIssuersDeviceAdmissionMatrix(t *testing.T) {
 							}
 							return selected, err
 						}
-						verify := client.VerifyPeerCertificate
-						client.VerifyPeerCertificate = func(raw [][]byte, chains [][]*x509.Certificate) error {
-							seen.Store(int32(len(raw)))
-							return verify(raw, chains)
+						verify := client.VerifyConnection
+						client.VerifyConnection = func(state tls.ConnectionState) error {
+							seen.Store(int32(len(state.PeerCertificates)))
+							return verify(state)
 						}
 					}
 					run := rootTLSRoundtrip

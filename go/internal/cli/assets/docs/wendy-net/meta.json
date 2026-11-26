@@ -1,0 +1,14 @@
+{
+  "title": "Wendy Net",
+  "pages": [
+    "index",
+    "how-it-works",
+    "multi-hop",
+    "rerouting",
+    "internet-sharing",
+    "bluetooth",
+    "wifi-aware",
+    "../guides/wendy-net",
+    "../guides/wendy-net-services"
+  ]
+}

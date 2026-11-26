@@ -69,6 +69,8 @@ SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS=(
 # Exact local sources deferred by the approved migration scope. Each must
 # still match a catalogue source; remove its exception with its source migration.
 SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
+    # Retain enrollment fields 13 and 14 until the shared WendyCom schema includes them.
+    "wendy/lite/wendy_com_msg.proto"
     # Retain the deployed OTLP common dependency closure; remove under WDY-4154.
     "opentelemetry/proto/common/v1/common.proto"
     # Retain the deployed OTLP resource dependency closure; remove under WDY-4154.
@@ -135,6 +137,8 @@ check_shared_grpc_api_contracts_sources() {
         catalogue_proto="$exception"
         if [ ! -f "$catalogue_dir/$catalogue_proto" ]; then
             case "$exception" in
+                wendy/lite/wendy_com_msg.proto)
+                    catalogue_proto="wendylite/v1/wendy_com_msg.proto" ;;
                 cloud/*)
                     case "${exception#cloud/}" in
                         */*) ;;

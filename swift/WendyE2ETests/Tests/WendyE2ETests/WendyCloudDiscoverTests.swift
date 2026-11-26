@@ -79,8 +79,9 @@ struct `'wendy cloud discover'` {
 
     /**
      Without credentials, Cloud discovery fails with an actionable login error,
-     empty stdout and a machine-readable stderr error. It does not contact even
-     an explicit reachable Cloud endpoint or alter the saved target and settings.
+     empty stdout and a final JSON stderr error after the legacy-default migration
+     notice. It does not contact even an explicit reachable Cloud endpoint or
+     alter the legacy key and unrelated settings.
      */
     @Test
     func `reports missing auth before contacting discovery services`() async throws {
@@ -101,7 +102,8 @@ struct `'wendy cloud discover'` {
                 result,
                 code: "auth_required",
                 exit: 3,
-                message: "not logged in"
+                message: "not logged in",
+                precedingLines: [LocalCLIAssertions.legacyDefaultDeviceNotice]
             )
             #expect(result.readableStderr.contains("wendy auth login"))
             try await LocalCLIAssertions.unchanged(cli)

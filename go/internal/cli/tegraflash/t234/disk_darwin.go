@@ -27,10 +27,17 @@ func parseUSBDevices(out string) []usbDevice {
 		if vid == 0 && pid == 0 {
 			continue
 		}
+		// The string the device reports; "USB Product Name" is macOS's own
+		// name for the device and can differ from it.
+		product := ioregString(chunk, "kUSBProductString")
+		if product == "" {
+			product = ioregString(chunk, "USB Product Name")
+		}
 		devs = append(devs, usbDevice{
 			VID:      uint16(vid),
 			PID:      uint16(pid),
 			Serial:   ioregString(chunk, "USB Serial Number"),
+			Product:  product,
 			PortPath: macUSBPortPath(ioregInt(chunk, "locationID")),
 		})
 	}
@@ -196,7 +203,7 @@ var (
 )
 
 func init() {
-	for _, key := range []string{"Vendor Identification", "Product Identification", "BSD Name", "USB Serial Number"} {
+	for _, key := range []string{"Vendor Identification", "Product Identification", "BSD Name", "USB Serial Number", "kUSBProductString", "USB Product Name"} {
 		ioregStrRe[key] = compileIoregStrRe(key)
 	}
 	for _, key := range []string{"idVendor", "idProduct", "locationID", "Size"} {

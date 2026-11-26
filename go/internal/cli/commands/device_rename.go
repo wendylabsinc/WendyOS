@@ -12,7 +12,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -86,9 +85,6 @@ func newDeviceRenameCmd() *cobra.Command {
 				}
 				return fmt.Errorf("setting device hostname: %w", err)
 			}
-
-			// Keep the configured default device pointing at the new hostname.
-			repointDefaultDevice(name)
 
 			if jsonOutput {
 				out := map[string]any{
@@ -210,29 +206,6 @@ func cloudRenameAsset(ctx context.Context, cloudGRPC, deviceCloudHost string, as
 		return fmt.Errorf("renaming asset %d: %w", assetID, err)
 	}
 	return nil
-}
-
-// repointDefaultDevice updates the configured default device to the new
-// hostname when the default was the device we just renamed. It is best-effort
-// and conservative: it only fires when no explicit --device override was given
-// (so the default device was the connection target) AND the default is an mDNS
-// '.local' name (renaming changes the '.local' name, so the old one stops
-// resolving). An IP or non-mDNS default is left untouched so we never point the
-// default at a name that may not resolve on the device's network.
-func repointDefaultDevice(name string) {
-	if deviceFlag != "" {
-		return
-	}
-	err := config.Update(func(cfg *config.Config) (bool, error) {
-		if !strings.HasSuffix(cfg.DefaultDevice, ".local") {
-			return false, nil
-		}
-		cfg.DefaultDevice = name + ".local"
-		return true, nil
-	})
-	if err != nil {
-		cliLogln("Warning: renamed device but could not update the default device: %v", err)
-	}
 }
 
 // validateHostnameArg validates a device name as a DNS label, mirroring the

@@ -270,9 +270,8 @@ ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $CLOUD_V2_
 
 generate_lite_protos() {
     local output="$1" lite_pkg="$MODULE/go/proto/gen/litepb"
-    # Preserve the descriptor filename used by the existing Go bindings.
-    protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR/wendylite/v1" \
-        --proto_path="$PROTO_DIR/wendy/lite" --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+    # The local exception retains enrollment fields absent from the shared pin.
+    protoc --proto_path="$PROTO_DIR/wendy/lite" --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
         --go_out="$output" --go_opt=module="$MODULE/go/proto/gen" \
         --go_opt=Mwendy_com_msg.proto="$lite_pkg" \
         --go_opt=Mwendy_conf.proto="$lite_pkg" \

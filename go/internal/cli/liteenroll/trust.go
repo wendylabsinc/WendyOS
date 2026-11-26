@@ -15,6 +15,7 @@ import (
 )
 
 const maxTrustBundle = 16384
+const maxDeviceTrustBundle = 32768
 
 // ProvisionTrust explicitly installs operator-supplied CA bundles in the device
 // configuration. No certificates received from an endpoint become trust roots.
@@ -35,7 +36,7 @@ func ProvisionTrustForProfile(cfg *litepb.WendyConfEnrollment, devicePath, tsaPa
 	bundles := make([][]byte, 3)
 	for i, path := range []string{devicePath, tsaPath, httpsPath} {
 		if i == 1 && path == "" && cfg.TimeUrl == DefaultTimeURL {
-			if err := validateTrustBundleForProfile(defaultTSARoots, profile); err != nil {
+			if err := validateTrustDomain(defaultTSARoots, profile, false); err != nil {
 				return nil, fmt.Errorf("bundled Sigstore TSA root: %w", err)
 			}
 			bundles[i] = bytes.Clone(defaultTSARoots)
@@ -48,12 +49,19 @@ func ProvisionTrustForProfile(cfg *litepb.WendyConfEnrollment, devicePath, tsaPa
 		if err != nil {
 			return nil, err
 		}
-		bundles[i], err = io.ReadAll(io.LimitReader(f, maxTrustBundle+1))
+		limit := maxTrustBundle
+		if i == 0 && profile.extendedTrust {
+			limit = maxDeviceTrustBundle
+		}
+		if profile.extendedTrust {
+			limit *= 2
+		}
+		bundles[i], err = io.ReadAll(io.LimitReader(f, int64(limit)+1))
 		f.Close()
 		if err != nil {
 			return nil, err
 		}
-		if err := validateTrustBundleForProfile(bundles[i], profile); err != nil {
+		if err := validateTrustDomain(bundles[i], profile, i == 0); err != nil {
 			return nil, fmt.Errorf("trust bundle %s: %w", path, err)
 		}
 	}
@@ -77,8 +85,12 @@ func trustHTTPClient(httpsRoots []byte) (*http.Client, error) {
 }
 
 func validateTrustBundle(data []byte) error {
-	if len(data) == 0 || len(data) > maxTrustBundle {
-		return fmt.Errorf("must contain 1–%d bytes of PEM CA certificates", maxTrustBundle)
+	return validateTrustBundleSize(data, maxTrustBundle)
+}
+
+func validateTrustBundleSize(data []byte, limit int) error {
+	if len(data) == 0 || len(data) > limit {
+		return fmt.Errorf("must contain 1–%d bytes of PEM CA certificates", limit)
 	}
 	count := 0
 	for rest := bytes.TrimSpace(data); len(rest) > 0; {
@@ -116,6 +128,27 @@ func validateTrustBundle(data []byte) error {
 	return nil
 }
 
+// EncodeTrustForDevice runs after the host has built its HTTPS verifier and
+// checked the firmware challenge. Legacy firmware keeps the original encoding.
+func EncodeTrustForDevice(cfg *litepb.WendyConfEnrollment, challenge *litepb.WendyComEnrollmentChallenge) error {
+	if challenge == nil || challenge.MldsaPeerVerificationSupported == nil || !cfg.ProvisionTrust {
+		return nil
+	}
+	for _, field := range []*[]byte{&cfg.DeviceRoots, &cfg.TsaRoots, &cfg.HttpsRoots} {
+		var der []byte
+		for rest := bytes.TrimSpace(*field); len(rest) != 0; {
+			block, tail := pem.Decode(rest)
+			if block == nil {
+				return fmt.Errorf("invalid PEM trust bundle")
+			}
+			der = append(der, block.Bytes...)
+			rest = bytes.TrimSpace(tail)
+		}
+		*field = der
+	}
+	return nil
+}
+
 // CheckTrustSupport runs before minting a credential so older firmware cannot
 // silently ignore the new configuration fields.
 func CheckTrustSupport(cfg *litepb.WendyConfEnrollment, challenge *litepb.WendyComEnrollmentChallenge) error {
@@ -137,7 +170,7 @@ func CheckTrustSupport(cfg *litepb.WendyConfEnrollment, challenge *litepb.WendyC
 			if bundle.name == "TSA" && cfg.TimeUrl == "roughtime" && len(bundle.data) == 0 {
 				continue
 			}
-			if err := validateTrustBundleForProfile(bundle.data, profile); err != nil {
+			if err := validateTrustDomain(bundle.data, profile, bundle.name == "device"); err != nil {
 				return fmt.Errorf("%s roots: %w", bundle.name, err)
 			}
 		}

@@ -124,6 +124,7 @@ func listUSBDevices() ([]usbDevice, error) {
 			VID:      uint16(v),
 			PID:      uint16(p),
 			Serial:   sysfsString(filepath.Join(dir, "serial")),
+			Product:  sysfsString(filepath.Join(dir, "product")),
 			PortPath: filepath.Base(dir),
 		})
 	}

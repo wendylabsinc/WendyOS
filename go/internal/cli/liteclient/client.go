@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/estcacerts"
 	"github.com/wendylabsinc/wendy/go/internal/shared/literelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
@@ -1301,10 +1302,16 @@ const SensorSourceSetupTimeout = sensorSourceTCPDialTimeout + sensorSourceTLSSet
 // ConnectSensorSource authenticates a pinned SensorLink source using this
 // consumer's device identity. The source limits device callers to SensorLink.
 func (c *WendyLiteClient) ConnectSensorSource(ctx context.Context, address string, cert tls.Certificate, chain, principal string) error {
-	return c.connectSensorSourceWithBudgets(ctx, address, cert, chain, principal, sensorSourceTCPDialTimeout, sensorSourceTLSSetupTimeout)
+	return c.ConnectSensorSourceWithLiteIssuers(ctx, address, cert, chain, principal, "")
 }
 
-func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, address string, cert tls.Certificate, chain, principal string, tcpBudget, tlsBudget time.Duration) error {
+// ConnectSensorSourceWithLiteIssuers adds provisioned, untrusted issuer
+// candidates for a classical source and enables leaf-only WendyCom TLS.
+func (c *WendyLiteClient) ConnectSensorSourceWithLiteIssuers(ctx context.Context, address string, cert tls.Certificate, chain, principal, liteIssuers string) error {
+	return c.connectSensorSourceWithBudgets(ctx, address, cert, chain, principal, liteIssuers, sensorSourceTCPDialTimeout, sensorSourceTLSSetupTimeout)
+}
+
+func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, address string, cert tls.Certificate, chain, principal, liteIssuers string, tcpBudget, tlsBudget time.Duration) error {
 	if len(cert.Certificate) == 0 {
 		return fmt.Errorf("missing consumer certificate")
 	}
@@ -1331,7 +1338,21 @@ func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, ad
 	if err != nil {
 		return err
 	}
-	meshalpn.NewCertificates(cert, known).ConfigureClient(cfg, meshalpn.WendyCom)
+	material := meshalpn.NewCertificates(cert, known)
+	if liteIssuers != "" {
+		now := time.Now()
+		bundle, err := certs.ParseCertsFromPEM([]byte(liteIssuers))
+		if err == nil {
+			if path, window, err := estcacerts.LitePathForEnrolledPeer(bundle, chain, own.TenantUUID, now); err == nil {
+				material.SetLiteIssuers(path, window.NotBefore, window.NotAfter)
+				// This pinned source's candidates were validated independently.
+				// A failure learning issuers for another peer must not push the
+				// constrained source back into a full certificate exchange.
+				material.SetRecovery(&meshalpn.Recovery{})
+			}
+		}
+	}
+	material.ConfigureClient(cfg, meshalpn.WendyCom)
 	dialCtx, cancelDial := context.WithTimeout(ctx, tcpBudget)
 	raw, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", address)
 	cancelDial()

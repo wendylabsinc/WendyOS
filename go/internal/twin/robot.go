@@ -17,6 +17,7 @@ type robotControl interface {
 	ResetLocalization(uint64, string) error
 	StartRoomFromOdometry(uint64, string) error
 	Align(uint64, string, float64, float64, float64, float64) error
+	AlignWithGeometry(uint64, string, float64, float64, float64, float64, twinrobot.SiteFusionRequest) error
 	Destination(uint64, string, float64, float64, bool) error
 	Look(uint64, int) error
 	DiscoveryStep(uint64, uint64) error

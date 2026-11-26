@@ -145,7 +145,7 @@ func TestCloudTunnelOnlyKeepsTunnelForLANDevice(t *testing.T) {
 				wantLocal = 1
 			}
 			tunnelCtx := context.WithValue(ctx, cloudTunnelOnlyKey{}, true)
-			selector, err := cloudDiscoveryDeviceDefault(auth, asset)
+			selector, err := cloudDiscoverySelector(auth, asset)
 			if err != nil {
 				t.Fatal(err)
 			}

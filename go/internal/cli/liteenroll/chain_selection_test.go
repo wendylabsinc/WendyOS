@@ -55,7 +55,7 @@ func TestEnrollmentUsesFirmwareChainSelection(t *testing.T) {
 				profile = profile.WithExistingDeviceIssuer()
 				cfg.DeviceRoots = classical
 			}
-			if err := discoverTrustForProfile(context.Background(), defaultTSATestClient(t, srv, nil), cfg, srv.URL+"/cacerts", profile); err != nil {
+			if err := discoverTrustForProfile(context.Background(), defaultTSATestClient(t, srv, nil), cfg, srv.URL+"/cacerts", profile, nil); err != nil {
 				t.Fatal(err)
 			}
 			if discoveredAlgorithm != tc.wantAlgorithm || !bytes.Equal(cfg.DeviceRoots, tc.wantRoots) {
@@ -83,6 +83,30 @@ func TestEnrollmentUsesFirmwareChainSelection(t *testing.T) {
 				t.Fatalf("token requested chain %q, discovered %q", claims.ChainAlgorithm, discoveredAlgorithm)
 			}
 		})
+	}
+}
+
+func TestEnrollmentReportsDegradedMeshTrust(t *testing.T) {
+	classical := testTrustPEM(t, true, time.Now().Add(time.Hour))
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			return
+		}
+		if r.URL.Query().Get("chain_algorithm") == "" {
+			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set(chainAlgorithmHeader, cloudrequest.EnrollmentChainP256)
+		_, _ = w.Write(classical)
+	}))
+	t.Cleanup(srv.Close)
+	challenge := &litepb.WendyComEnrollmentChallenge{UsbTrustSupported: true, MeshTrustSupported: true}
+	cfg := &litepb.WendyConfEnrollment{DeviceId: deviceID, TenantId: tenant, CsrUrl: srv.URL + "/csr", TimeUrl: DefaultTimeURL}
+	var meshErr error
+	err := discoverTrustForProfile(t.Context(), defaultTSATestClient(t, srv, nil), cfg, srv.URL+"/cacerts",
+		TrustProfileFromChallenge(challenge), func(err error) { meshErr = err })
+	if err != nil || meshErr == nil || !strings.Contains(meshErr.Error(), "503") || !bytes.Equal(cfg.DeviceRoots, classical) {
+		t.Fatalf("wanted usable P-256 enrollment with a separately reported EST failure: enrollment=%v mesh=%v", err, meshErr)
 	}
 }
 

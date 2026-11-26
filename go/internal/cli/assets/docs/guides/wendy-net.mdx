@@ -9,7 +9,7 @@ ordinary Wi-Fi; Bluetooth is useful when a faster connection is unavailable.
 The numbered setup below is for WendyOS. For Wendy Lite firmware with Wendy Net
 support, use the [Lite configuration instructions](#configure-wendy-net-on-wendy-lite).
 
-Run these commands in an interactive terminal. Select the intended device when prompted and check any automatically selected default.
+Run these commands in an interactive terminal. Select the intended device when prompted, or check the target `WENDY_DEVICE` selects automatically.
 
 ## 1. Prepare your devices
 
@@ -129,16 +129,22 @@ Both devices still need enabled Wendy Net connection types and a working route
 between them; the route can pass through other participating devices. A healthy
 Internet connection on the travelling device takes priority. It uses a shared
 gateway only when no healthy independent uplink is available.
+[Reach the Internet through another device](/docs/wendy-net/internet-sharing)
+explains how the borrowed connection travels and how a gateway is chosen.
 
 Sharing and roaming are independent opt-ins. Enabling a Bluetooth or Wi-Fi link
 does not share Internet access. A device cannot offer an Internet connection it
 is itself borrowing from Wendy Net. The selected gateway carries Internet traffic
 and DNS, so choose one you trust to provide that service.
 
-Check `State` and `Gateway principal` in status. Allow time for connectivity checks
-and route recovery after a change; a saved setting is not a connectivity test.
+Check `Gateway principal` and the Internet sharing state in status. While any
+Wendy Net connection type is running, `State` summarizes those connections
+(for example `Local peers active`), and the sharing state appears in the line
+below it as `Internet sharing: <value>`. Otherwise `State` shows the sharing
+value itself. Allow time for connectivity checks and route recovery after a
+change; a saved setting is not a connectivity test.
 
-| State | What it means |
+| Internet sharing | What it means |
 | --- | --- |
 | `local` | The device has a healthy Internet connection of its own. It offers it if sharing is enabled. |
 | `relay` | It participates in Wendy Net, but Internet roaming is off. |

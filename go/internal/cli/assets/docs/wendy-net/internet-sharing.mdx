@@ -1,0 +1,153 @@
+---
+title: Reach the Internet through another device
+description: Share one device's Internet connection with devices that have none, across several hops and different kinds of connection.
+---
+
+Not every device has its own Internet connection. A camera on a pole, a robot
+deep inside a building or a sensor in a field can borrow one from a device that
+does, across as many Wendy Net hops as it takes. The device that shares its
+connection is the gateway.
+
+<YouTubeVideo id="R5EW25RlH2E" title="What happens when a robot loses 5G on a construction site?" />
+
+Gateway sharing is separate from ordinary Wendy Net traffic between your
+devices. You turn it on per device, with two settings:
+
+| Setting | On which device | What it does |
+| --- | --- | --- |
+| `--share-uplink=true` | The gateway | Offers the device's own healthy Internet connection to the rest of your organization's devices on Wendy Net. |
+| `--roam=true` | A device that may need to borrow | Uses a shared gateway whenever the device has no healthy Internet connection of its own. |
+
+Both need `--participate=true`. Devices in between need nothing extra.
+
+## Example: A reaches a server through C
+
+A is a robot with Bluetooth only. It can reach B over Bluetooth, B reaches C
+over Wi-Fi Aware, and C has an Internet connection. D is a server on the
+Internet that A wants to call.
+
+<NetDiagram
+  label="A reaches B over Bluetooth, B reaches C over Wi-Fi Aware, and C reaches server D over the Internet. C shares its uplink and A roams."
+  height={220}
+  nodes={[
+    { id: 'a', x: 70, y: 110, label: 'A', note: '--roam' },
+    { id: 'b', x: 255, y: 110, label: 'B', note: 'Relays' },
+    { id: 'c', x: 440, y: 110, label: 'C', note: '--share-uplink' },
+    { id: 'd', x: 640, y: 110, label: 'D', note: 'Server', server: true },
+  ]}
+  links={[
+    { from: 'a', to: 'b', kind: 'bluetooth', label: 'Bluetooth', state: 'active' },
+    { from: 'b', to: 'c', kind: 'aware', label: 'Wi-Fi Aware', state: 'active' },
+    { from: 'c', to: 'd', kind: 'internet', label: 'Internet', state: 'active' },
+  ]}
+  caption="A has no Internet connection. Its requests to D cross B and leave through C's uplink."
+/>
+
+Turn sharing on at C, roaming on at A, and make sure each pair of neighbors
+shares a kind of connection:
+
+```sh
+wendy net configure --device <C> --participate=true --nan=true --share-uplink=true
+wendy net configure --device <B> --participate=true --ble=true --nan=true
+wendy net configure --device <A> --participate=true --ble=true --roam=true
+```
+
+B only relays. It doesn't need roaming or sharing, just Wendy Net turned on for
+both of the connections it bridges.
+
+### What happens, step by step
+
+1. **C offers its connection.** C checks its own uplink, and while it's healthy
+   it adds a signed gateway offer to its [manifest](/docs/wendy-net/how-it-works#learning-about-everyone-else).
+   The offer reaches A through B like any other manifest.
+2. **A checks C.** A has no healthy uplink of its own, so it looks for gateways
+   it has a route to, and checks each one every five seconds.
+3. **A takes a lease.** A opens an encrypted, authenticated connection to C and
+   asks for a lease. C confirms that A is in the same organization and gives it
+   an address for Internet traffic. Over Bluetooth this can take about a minute.
+4. **A gets a default route.** A sends its Internet traffic through a tunnel to
+   C's Wendy Net address, and its DNS queries to C as well.
+5. **B forwards.** The tunnel's packets are ordinary Wendy Net packets addressed
+   to C, so B passes them on like any others. B doesn't need to know they're
+   Internet traffic.
+6. **C sends it out.** C takes A's traffic out of the tunnel, translates it to
+   its own uplink address and sends it to D. Replies come back the same way.
+
+<Figure src="/images/wendy-net/site-relay.webp" alt="A construction site at dusk, with glowing links from a camera without a SIM to a camera with 5G, which sends the data up to the cloud" caption="A camera without a SIM sends what it sees over Wendy Net to one that has 5G, and from there to the cloud." />
+
+### What your app needs
+
+The device itself can now reach the Internet. A containerized app also needs
+outbound network access in its `wendy.json`:
+
+```json
+{ "type": "network", "mode": "bridge" }
+```
+
+Wendy Net's service mode doesn't give an app Internet access by itself. See
+[Give an app outbound Internet access](/docs/guides/wendy-net#give-an-app-outbound-internet-access).
+
+## Which gateway a device uses
+
+A device's own healthy Internet connection always comes first. It borrows only
+while it has none. A device counts its own connection as healthy when it has an
+Ethernet or Wi-Fi connection with a default route and DNS, and a check over that
+connection reaches the Internet. The same rule decides whether a gateway has
+anything to share.
+
+Only devices that appear as Ethernet and Wi-Fi adapters count today. A cellular
+modem attached directly via USB may not be treated as an available Internet
+connection. To share a 5G or LTE connection, bring it in through a cellular router
+on Ethernet or Wi-Fi.
+
+When several devices share their connections, a roaming device considers every
+gateway in your organization that it has a route to and that answers its
+checks. It keeps the gateway it has for as long as that gateway keeps working.
+It doesn't pick by distance or speed: the nearest gateway isn't necessarily the
+one it uses. The [path to the gateway](/docs/wendy-net/rerouting#how-a-path-is-chosen),
+on the other hand, is always the cheapest one.
+
+A device can't offer a connection it's borrowing itself, so gateways never
+chain.
+
+## When something changes
+
+| What changes | What happens | Open connections |
+| --- | --- | --- |
+| A link on the way to C fails, and another path to C exists | Wendy Net [re-routes](/docs/wendy-net/rerouting) to the other path. The lease and the tunnel stay, because they're addressed to C, not to a path. | Pause, then carry on |
+| C's uplink fails | After three failed checks, C withdraws its offer and ends its leases. A picks another gateway and takes a new lease. | Break; apps reconnect |
+| C disappears, or no path to C is left | A drops C at its next check and moves to another gateway, if there is one. | Break; apps reconnect |
+| A's own uplink comes back | After two good checks, A stops borrowing and uses its own connection again. | Break; apps reconnect |
+
+Moving to another gateway always means a new lease, a new address and a new
+public address on the Internet, so connections made through the old gateway
+end. Write apps to reconnect, as you would for any change of network.
+
+<Frames columns={2}>
+  <Frame src="/images/wendy-net/site-loses-5g.webp" alt="A Spot robot inside a concrete building with an amber ring around it where its 5G connection dropped" caption="Deep inside the building, Spot loses its own 5G connection." />
+  <Frame src="/images/wendy-net/site-reroute.webp" alt="A row of indoor cameras on columns, with the route lit from camera to camera towards one that is still connected" caption="Its data hops from camera to camera to one that is still connected." />
+</Frames>
+
+## Who can see the traffic
+
+Each Wendy Net link is encrypted, but borrowed Internet traffic isn't wrapped in
+an extra layer from A to C. The devices along the way, and the gateway itself,
+handle it as ordinary network traffic. The gateway also handles all of the
+borrowing device's DNS. Choose gateways you trust, and use TLS, such as HTTPS,
+for anything sensitive, as you would on any shared network.
+
+A borrowing device can also reach private addresses on the gateway's side,
+such as other machines on the gateway's office network. The gateway blocks only
+loopback, link-local, multicast and Wendy Net's own address ranges.
+
+## Check it
+
+```sh
+wendy net status --device <A>
+```
+
+Look for `Internet sharing:` in the status detail. It reads `roaming` once A is
+using a gateway, and `offline` while it has none or is still negotiating a
+lease. The [setup guide](/docs/guides/wendy-net#4-share-an-internet-connection)
+lists every value. A working route to the gateway doesn't prove that the
+Internet is reachable, so test a real request from the device or app.

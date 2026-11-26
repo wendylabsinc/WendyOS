@@ -1,0 +1,85 @@
+---
+title: Wendy Net
+description: One private network for your WendyOS devices, over Ethernet, Wi-Fi, Wi-Fi Aware and Bluetooth. It is built into WendyOS.
+---
+
+Wendy Net links your devices into one private network, over whatever connections
+they have: Ethernet, ordinary Wi-Fi, Wi-Fi Aware and Bluetooth. Devices pass
+traffic along for each other, so a robot can reach a server it has no direct
+connection to. Traffic takes the cheapest path, and when a connection drops it
+moves to the next best one by itself.
+
+<YouTubeVideo id="zAoJwEpEK1Q" title="Wendy Net overview" />
+
+## The idea in five lines
+
+- **One identity, one address.** Each device gets a certificate when you enroll
+  it in your organization. That certificate gives it one private address, and
+  the address is the same on every connection.
+- **Any connection.** Devices find each other on Ethernet and Wi-Fi networks,
+  directly over Wi-Fi Aware with no access point, and over Bluetooth.
+- **Many hops.** Every device is also a router. If A can reach B and B can reach
+  C, then A can reach C, even when each hop uses a different kind of connection.
+- **The cheapest path.** Every kind of link has a cost. A route costs the sum of
+  its hops, and traffic takes the cheapest route.
+- **Only your organization.** Before two devices exchange any traffic, they
+  prove who they are with their certificates. A device from another
+  organization cannot join.
+
+<Figure src="/images/wendy-net/topology.webp" alt="Twenty devices, including Jetson boards, humanoid and quadruped robots and drones, on a grid, joined by glowing links that form and break as the robots move" caption="Robots move, links break and re-form, and the network keeps routing around the gaps." />
+
+## Built into WendyOS
+
+Wendy Net is part of WendyOS. The router runs inside the Wendy agent that every
+WendyOS image includes, and the image ships with the kernel features it needs.
+There is nothing extra to install, and one command turns it on:
+
+```sh
+wendy net configure --participate=true --ethernet=true --infrastructure-wifi=true
+```
+
+Run it for each device, then check the devices it found with
+`wendy net topology`. Add `--ble=true` for Bluetooth, and `--nan=true` for
+Wi-Fi Aware on [hardware that supports it](/docs/wendy-net/wifi-aware). The
+[setup guide](/docs/guides/wendy-net) walks through every option.
+
+<Figure src="/images/wendy-net/built-into-wendyos.webp" alt="A seafoam block labelled Wendy Net inside a frame labelled WendyOS, under the title Built into WendyOS" caption="Wendy Net ships inside WendyOS. It is off until you turn it on." />
+
+On another Linux distribution, such as Ubuntu with
+[Wendy Agent](/docs/installation/linux), the agent runs the same router. There
+it's up to you to provide the kernel features it needs, such as IPv6 policy
+routing and TUN devices, and drivers for the radios you want to use. These
+guides are written for WendyOS.
+
+Wendy Net stays off until you enable it, and you choose which kinds of
+connection each device may use. Your apps don't need any radio permissions to
+use it: the agent manages the connections, and apps opt in through
+[their `wendy.json`](/docs/guides/wendy-net-services).
+
+Your computer can join too. `wendy net connect` starts a router in the Wendy CLI
+that uses your organization's sign-in, so you can find and manage devices that
+are only reachable through other devices. See
+[Connect to Wendy Net from your computer](/docs/advanced/development/local-mesh-radio).
+
+## What your apps get
+
+An app on one device can call an app on another with an ordinary HTTP, TCP or
+UDP request, whichever connections sit in between. It finds the other app with
+the same mDNS discovery it would use on a local network, and connects to the
+address that discovery returns. See
+[Share and discover app services](/docs/guides/wendy-net-services).
+
+A device without its own Internet connection can also borrow one from another
+device on Wendy Net, several hops away if needed. See
+[Reach the Internet through another device](/docs/wendy-net/internet-sharing).
+
+## Read next
+
+<Cards>
+  <Card title="How Wendy Net works" href="/docs/wendy-net/how-it-works" description="Identity, discovery, signed manifests and link costs." />
+  <Card title="Multi-hop routing" href="/docs/wendy-net/multi-hop" description="How traffic crosses several devices and several kinds of connection." />
+  <Card title="Re-routing and path choice" href="/docs/wendy-net/rerouting" description="What happens when a link or a device disappears." />
+  <Card title="Reach the Internet through another device" href="/docs/wendy-net/internet-sharing" description="Share one device's uplink with the devices around it." />
+  <Card title="Wendy Net over Bluetooth" href="/docs/wendy-net/bluetooth" description="What a Bluetooth link carries, and how it shows up in mDNS." />
+  <Card title="Add Wi-Fi Aware" href="/docs/wendy-net/wifi-aware" description="Fast direct links with an Intel BE200 or BE202 card." />
+</Cards>
