@@ -279,7 +279,7 @@ func CloudNameAdvertisement(logger *zap.Logger) func(principal, name string) {
 	var retryPrincipal string
 	return func(principal, name string) {
 		if publishCloudName(avahiServiceFile, principal, name, retryPrincipal == principal, func() bool {
-			return avahiServiceAction(logger, "kill", "--kill-whom=main", "--signal=HUP", "avahi-daemon")
+			return avahiServiceAction(logger, "reload", "avahi-daemon")
 		}, logger) {
 			retryPrincipal = ""
 		} else {
