@@ -63,7 +63,7 @@ Use workspace scope for project-specific knowledge, device scope with an explici
 `
 
 func (e *Engine) learnMemory(ctx context.Context, prompt string, emit func(Event)) {
-	if !e.MemoryEnabled() || ctx.Err() != nil {
+	if e.skipAutomaticLearning || !e.MemoryEnabled() || ctx.Err() != nil {
 		return
 	}
 	e.memory.mu.Lock()

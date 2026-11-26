@@ -77,7 +77,11 @@ func (p *deviceProvider) stream(ctx context.Context, messages []Message, tools [
 			v.ToolName = names[m.ToolCallID]
 		}
 		for _, image := range m.Images {
-			v.Images = append(v.Images, image.Data)
+			data, err := ollamaSceneImage(ctx, image)
+			if err != nil {
+				return Message{}, fmt.Errorf("preparing local chat image: %w", err)
+			}
+			v.Images = append(v.Images, data)
 		}
 		wire = append(wire, v)
 	}
@@ -85,7 +89,7 @@ func (p *deviceProvider) stream(ctx context.Context, messages []Message, tools [
 	for _, tool := range tools {
 		wireTools = append(wireTools, map[string]any{"type": "function", "function": map[string]any{"name": tool.Name, "description": tool.Description, "parameters": tool.Parameters}})
 	}
-	payload := map[string]any{"model": p.fallback.config.Model, "messages": wire, "stream": true, "tools": wireTools, "options": map[string]any{"num_ctx": 32768, "num_predict": p.fallback.config.MaxTokens}, "keep_alive": "10m"}
+	payload := map[string]any{"model": p.fallback.config.Model, "messages": wire, "stream": true, "tools": wireTools, "options": map[string]any{"num_ctx": 32768, "num_predict": p.fallback.config.MaxTokens}, "keep_alive": "1h"}
 	// Suppress optional thinking output only for models advertising that feature.
 	var details struct {
 		Capabilities []string `json:"capabilities"`
