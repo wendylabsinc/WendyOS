@@ -252,3 +252,19 @@ func containsEnv(env []string, want string) bool {
 	}
 	return false
 }
+
+func TestPreAuthElevationHintOnlyWhenSudoWillAsk(t *testing.T) {
+	origNeeds, origValidate := sudoNeedsPassword, sudoValidate
+	t.Cleanup(func() { sudoNeedsPassword, sudoValidate = origNeeds, origValidate })
+	sudoValidate = func() error { return nil }
+	for _, needs := range []bool{false, true} {
+		sudoNeedsPassword = func() bool { return needs }
+		out, err := captureCommandStdout(t, preAuthElevation)
+		if err != nil {
+			t.Fatalf("preAuthElevation: %v", err)
+		}
+		if got := strings.Contains(out, "You may be prompted for your password (sudo is required)."); got != needs {
+			t.Fatalf("sudo needs a password=%v: output %q", needs, out)
+		}
+	}
+}

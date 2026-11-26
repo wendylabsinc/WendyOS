@@ -592,7 +592,7 @@ var pickListedDeviceFn = pickFromItems
 // true). No version picker is shown — the version is chosen automatically.
 // storageMedium is the device's reported medium, which picks the NVMe variant.
 func pickDeviceTypeAndGetLatestOTA(storageMedium string, nightly bool) (string, error) {
-	fmt.Println("Fetching available devices...")
+	installNote(os.Stdout, "Fetching available devices...")
 
 	// The list and the chosen device's update read the same master manifest.
 	ctx := withMainManifestMemo(context.Background())
