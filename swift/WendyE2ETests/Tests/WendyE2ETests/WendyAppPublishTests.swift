@@ -111,7 +111,12 @@ struct `'wendy app publish'` {
         try await AppsDeploymentFixture.withApp { cli, app in
             try await app.create(cli)
             let release = try await app.publish(cli)
-            try await app.requireArtifact(cli, release: release)
+            let artifact = try await app.requireArtifact(cli, release: release)
+            try await app.requireArtifactListing(
+                cli,
+                release: release,
+                blobCount: artifact.manifest.blobs.count
+            )
             let catalog = try await app.catalog(cli)
             #expect(catalog.deployments?.isEmpty == true)
         }

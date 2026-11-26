@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import WendyE2ETesting
 
-// Gates opt in to future execution; none of these drafts has been run.
+// Each tier requires an explicit opt-in; run evidence is recorded separately.
 let appsDeploymentTestsEnabled =
     ProcessInfo.processInfo.environment["WENDY_E2E_APPS_DEPLOYMENTS"] == "true"
 let appsDeploymentLocalTestsEnabled =
@@ -63,7 +63,10 @@ struct AppsDeploymentFixture: Sendable {
         port = portNumber ?? Int.random(in: 30_000...49_999)
         try #require(appsDeploymentTestsEnabled, "Explicit Apps & Deployments opt-in required")
         try #require(WendyE2EEnvironment.isolation == .perTest, "Use per-test isolation")
-        try #require(!WendyE2EEnvironment.parallel, "Use --no-parallel for the one-Pi fixture")
+        try #require(
+            !WendyE2EEnvironment.parallel,
+            "Use --no-parallel for the dedicated device fixture"
+        )
         let env = ProcessInfo.processInfo.environment
         // Environment dictionaries can also contain credentials: keep them out
         // of assertion operand capture.
@@ -90,7 +93,9 @@ struct AppsDeploymentFixture: Sendable {
             cloud.contains(".dev.") && cloud.hasSuffix(":443"),
             "Explicit Dev endpoint required"
         )
-        _ = try Self.setting("WENDY_E2E_CLI_AUTH_CONFIG_PATH")
+        if env["WENDY_E2E_APPS_ACCOUNT"] == nil {
+            _ = try Self.setting("WENDY_E2E_CLI_AUTH_CONFIG_PATH")
+        }
     }
 
     var deployment: String { "\(app)/\(name)" }
@@ -116,6 +121,11 @@ struct AppsDeploymentFixture: Sendable {
             cli,
             _ in
             try await fixture.verifyIdentity(cli)
+            // Confirm the real signed-in list before creating a project or any
+            // Cloud resource. Redirects and partially loaded lists must fail here.
+            if appsBrowserTestsEnabled {
+                _ = try await fixture.console(cli, path: "/apps")
+            }
             let before = try await fixture.inventory(cli)
             try #require(!before.contains { $0.name == fixture.app })
             // Fail before creating Cloud resources if another app owns the port.
@@ -399,6 +409,16 @@ struct AppsDeploymentFixture: Sendable {
             description:
                 "Dedicated identity fixture is missing, unreadable or does not match the expected Dev tenant, endpoint and pinned asset. Supply one fresh verified session; credential details are suppressed."
         )
+        if let account = ProcessInfo.processInfo.environment["WENDY_E2E_APPS_ACCOUNT"] {
+            guard !account.isEmpty,
+                let path = ProcessInfo.processInfo.environment["WENDY_E2E_SAVED_CONFIG_DIR"],
+                path.hasPrefix("/"),
+                FileManager.default.fileExists(atPath: path + "/config.json")
+            else { throw sanitized }
+            // Actual account, endpoint and tenant are verified through the
+            // normal CLI status/selection APIs below, without parsing secrets.
+            return
+        }
         do {
             let path = try Self.setting("WENDY_E2E_CLI_AUTH_CONFIG_PATH")
             let data = try Data(contentsOf: URL(fileURLWithPath: path))
@@ -430,8 +450,16 @@ struct AppsDeploymentFixture: Sendable {
             try JSONSerialization.jsonObject(with: Data(authResult.stdout.utf8)) as? [String: Any]
         )
         try #require(auth["loggedIn"] as? Bool == true)
-        let sessions = try #require(auth["sessions"] as? [[String: Any]])
-        try #require(sessions.count == 1)
+        let allSessions = try #require(auth["sessions"] as? [[String: Any]])
+        let sessions: [[String: Any]]
+        if let account = ProcessInfo.processInfo.environment["WENDY_E2E_APPS_ACCOUNT"] {
+            sessions = allSessions.filter {
+                $0["context"] as? String == account && $0["current"] as? Bool == true
+            }
+        } else {
+            sessions = allSessions
+        }
+        try #require(sessions.count == 1, "Exactly the intended saved account must be selected")
         try #require(sessions[0]["cloudGrpc"] as? String == cloud)
         let principal = try #require(sessions[0]["principalUri"] as? String)
         try #require(principal.hasPrefix("spiffe://wendy.sh/tenant/\(tenant)/operator/"))
@@ -459,15 +487,51 @@ struct AppsDeploymentFixture: Sendable {
         )
         let organization = try #require(info["organization"] as? [String: Any])
         try #require(organization["id"] as? String == tenant)
-        try #require(
-            info["cpuArchitecture"] as? String == "arm64"
-                || info["cpuArchitecture"] as? String == "aarch64"
-        )
         let kind = (info["deviceType"] as? String ?? "").lowercased()
-        try #require(
-            kind.contains("raspberry") || kind.contains("rpi"),
-            "First journey requires the approved Pi"
-        )
+        if let path = ProcessInfo.processInfo.environment["WENDY_E2E_APPS_DEVICES_PATH"] {
+            let declared = try JSONDecoder().decode(
+                [AppsFleetDevice].self,
+                from: Data(contentsOf: URL(fileURLWithPath: path))
+            )
+            let target = try #require(declared.first { $0.asset == asset && $0.host == device })
+            let architecture = try #require(target.architecture)
+            let reported = info["cpuArchitecture"] as? String ?? ""
+            let normalize: (String) -> String = {
+                $0 == "aarch64" ? "arm64" : ($0 == "amd64" ? "x86_64" : $0)
+            }
+            try #require(
+                normalize(reported) == normalize(architecture),
+                "Declared device architecture must match"
+            )
+            if let deviceType = target.deviceType {
+                try #require(
+                    kind.contains(deviceType.lowercased()),
+                    "Declared device type must match"
+                )
+            } else {
+                // Desktop Ubuntu has no WendyOS board model. Its signed asset
+                // identity, Ubuntu OS, x86 architecture and hostname remain
+                // mandatory; absence of a board model does not waive those.
+                try #require(info["os"] as? String == "ubuntu")
+                try #require(normalize(reported) == "x86_64")
+                struct Profile: Decodable {
+                    let hostname: String
+                    let principal: String
+                }
+                let profile = try await observe(cli, "device-profile", as: Profile.self)
+                #expect(profile.principal == "spiffe://wendy.sh/tenant/\(tenant)/device/\(asset)")
+                let expectedHostname = try #require(
+                    target.hostname ?? targets[0]["name"] as? String
+                )
+                try #require(!expectedHostname.isEmpty && profile.hostname == expectedHostname)
+            }
+        } else {
+            try #require(["arm64", "aarch64"].contains(info["cpuArchitecture"] as? String ?? ""))
+            try #require(
+                kind.contains("raspberry") || kind.contains("rpi"),
+                "Supply the approved device resource file for a non-Pi target"
+            )
+        }
     }
 
     func cleanUp(_ cli: WendyE2ESession) async throws {

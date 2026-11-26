@@ -9,6 +9,16 @@ let appsFleetTestsEnabled =
 struct AppsFleetDevice: Decodable, Sendable {
     let asset: String
     let host: String
+    let architecture: String?
+    let deviceType: String?
+    let hostname: String?
+}
+struct AppsFleetAssetState: Decodable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let site: String
+    let siteId: String
+    let tags: [String]
 }
 struct AppsFleetLease: Decodable, Sendable {
     let site: String
@@ -50,15 +60,22 @@ extension AppsDeploymentFixture {
                 try target.requireDedicatedIdentityFixture()
                 try await target.verifyIdentity(cli)
             }
+            let control = try app.target(devices[2])
+            let beforeControl = try await control.inventory(cli)
+            let beforeState = try await app.observe(
+                cli,
+                "fleet-state",
+                as: [AppsFleetAssetState].self
+            )
             var primaryError: (any Error)?
             do {
                 let lease = try await app.observe(cli, "fleet-prepare", as: AppsFleetLease.self)
                 try await body(cli, app, devices, lease)
             } catch { primaryError = error }
-            // Every declared target participates in owned-app cleanup, including
+            // Only deployment targets participate in owned-app cleanup, including
             // B's detached survivor when an assertion or restart fails midway.
             // Control C is read, never assigned or relabeled by this cleanup.
-            for device in devices.dropFirst() {
+            for device in devices.dropFirst().prefix(1) {
                 do { try await app.target(device).cleanUp(cli) } catch {
                     Issue.record(
                         "Owned app cleanup failed on declared asset \(device.asset): \(error)"
@@ -69,6 +86,18 @@ extension AppsDeploymentFixture {
             do {
                 let exists = try await cli.sh("test -f fleet-lease.json") { $0.status.isSuccess }
                 if exists { _ = try await app.succeed(cli, app.observerCommand("fleet-restore")) }
+                let afterState = try await app.observe(
+                    cli,
+                    "fleet-state",
+                    as: [AppsFleetAssetState].self
+                )
+                #expect(
+                    afterState.first { $0.id == devices[2].asset }
+                        == beforeState.first { $0.id == devices[2].asset }
+                )
+                let afterControl = try await control.inventory(cli)
+                #expect(afterControl == beforeControl)
+                #expect(afterState.allSatisfy { !$0.tags.contains(app.app) })
             } catch {
                 Issue.record(
                     "Dedicated fleet restoration failed; retain fleet-lease.json: \(error)"

@@ -32,8 +32,18 @@ import (
 
 type options struct {
 	operation, cloud, tenant, app, name, deployment, release, asset, note string
+	account, devices                                                      string
 	expected                                                              int
 }
+
+type fixtureError struct {
+	stage string
+	cause error
+}
+
+func (e *fixtureError) Error() string              { return "E2E fixture stage failed: " + e.stage }
+func (e *fixtureError) Unwrap() error              { return e.cause }
+func atFixtureStage(stage string, err error) error { return &fixtureError{stage: stage, cause: err} }
 
 func main() {
 	var o options
@@ -47,12 +57,19 @@ func main() {
 	flag.StringVar(&o.asset, "asset", "", "Asset UUID")
 	flag.StringVar(&o.note, "note", "E2E pending removal", "Public history note")
 	flag.IntVar(&o.expected, "expected-revision", 0, "Expected revision")
+	flag.StringVar(&o.account, "account", "", "Existing saved auth context")
+	flag.StringVar(&o.devices, "devices", "", "Approved device resource file")
 	flag.Parse()
 	value, err := run(o)
 	if err != nil {
 		// Deliberately omit auth structs, raw envelopes and arbitrary server text.
 		code := status.Code(err).String()
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"code": code, "operation": o.operation})
+		diagnostic := map[string]any{"code": code, "operation": o.operation}
+		var fixture *fixtureError
+		if errors.As(err, &fixture) {
+			diagnostic["stage"] = fixture.stage
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(diagnostic)
 		fmt.Fprintln(os.Stderr, "E2E public operation failed; inspect its sanitized code and prerequisites")
 		os.Exit(1)
 	}
@@ -64,13 +81,16 @@ func main() {
 func heldToken(_ context.Context, a *config.AuthConfig) error {
 	if a.OAuthIssuer != "" {
 		expiry, err := time.Parse(time.RFC3339, a.OAuthExpiresAt)
-		if err != nil || time.Until(expiry) < 2*time.Minute || !a.HasAPIKey() {
-			return errors.New("fresh dedicated session required; fixture never refreshes")
+		if err != nil || time.Until(expiry) < 90*time.Second || !a.HasAPIKey() {
+			return atFixtureStage("saved_session_freshness", errors.New("fresh selected session required; adapter never refreshes"))
 		}
 	}
 	return nil
 }
 func run(o options) (any, error) {
+	if o.operation == "pin-approved-devices" {
+		return pinApprovedDevices(o)
+	}
 	if os.Getenv("WENDY_E2E_APPS_DEPLOYMENTS") != "true" || !strings.HasPrefix(o.app, "sh.wendy.e2e.apps-") {
 		return nil, errors.New("owned app and explicit opt-in required")
 	}
@@ -78,12 +98,23 @@ func run(o options) (any, error) {
 		return nil, errors.New("explicit TLS Dev endpoint required")
 	}
 	cfg, err := config.Load()
-	if err != nil || len(cfg.Auth) != 1 {
-		return nil, errors.New("dedicated session required")
+	if err != nil {
+		return nil, errors.New("saved session required")
 	}
-	auth := &cfg.Auth[0]
+	var auth *config.AuthConfig
+	if account := os.Getenv("WENDY_E2E_APPS_ACCOUNT"); account != "" {
+		auth, err = cloudsession.LoadAccount(account, o.tenant)
+	} else if len(cfg.Auth) == 1 {
+		auth = &cfg.Auth[0]
+	}
+	if err != nil || auth == nil {
+		return nil, errors.New("explicit saved account or dedicated session required")
+	}
 	if auth.CloudGRPC != o.cloud || len(auth.Certificates) != 1 || auth.Certificates[0].TenantUUID() != o.tenant {
 		return nil, errors.New("session identity mismatch")
+	}
+	if o.operation == "device-profile" {
+		return approvedDeviceProfile(auth, o)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -91,6 +122,47 @@ func run(o options) (any, error) {
 	err = cloudsession.With(ctx, auth, heldToken, func(ctx context.Context, conn grpc.ClientConnInterface) error {
 		var err error
 		switch o.operation {
+		case "operator-profile":
+			self, e := pb.NewAccessServiceClient(conn).GetEffectivePermissions(ctx, &pb.GetEffectivePermissionsRequest{OrganizationId: o.tenant, PrincipalType: pb.BindingPrincipalType_BINDING_PRINCIPAL_TYPE_USER})
+			if e != nil {
+				return e
+			}
+			ids := map[string]bool{}
+			for _, permission := range self.Permissions {
+				for _, binding := range permission.Bindings {
+					if binding.GetPrincipal().GetType() == pb.BindingPrincipalType_BINDING_PRINCIPAL_TYPE_USER && binding.GetPrincipal().GetId() != "" {
+						ids[binding.Principal.Id] = true
+					}
+				}
+			}
+			if len(ids) != 1 {
+				return errors.New("public self-permissions must identify one user")
+			}
+			var id string
+			for value := range ids {
+				id = value
+			}
+			user, e := pb.NewUserServiceClient(conn).GetUser(ctx, &pb.GetUserRequest{Id: id})
+			if e != nil {
+				return e
+			}
+			keys, e := pb.NewKeyDirectoryServiceClient(conn).GetRecipientKeys(ctx, &pb.GetRecipientKeysRequest{OrganizationId: o.tenant, Principals: []string{auth.Certificates[0].PrincipalURI}})
+			if e != nil {
+				return e
+			}
+			keyCount := 0
+			for _, key := range keys.Keys {
+				if key.Principal == auth.Certificates[0].PrincipalURI && key.Registration != nil {
+					keyCount++
+				}
+			}
+			out = map[string]any{"operatorId": id, "matchesExpectedEmail": user.Email == os.Getenv("WENDY_E2E_APPS_MEMBER_EMAIL"), "registeredKeyCount": keyCount}
+		case "roles":
+			var response *pb.ListRolesResponse
+			response, err = pb.NewRoleServiceClient(conn).ListRoles(ctx, &pb.ListRolesRequest{OrganizationId: o.tenant})
+			if err == nil {
+				out = wire(response)
+			}
 		case "catalog":
 			out, err = catalog(ctx, conn, auth, o)
 		case "deployment":
@@ -101,13 +173,15 @@ func run(o options) (any, error) {
 			if err == nil {
 				out = wire(r)
 			}
-		case "artifact", "material":
+		case "artifact", "artifacts", "material":
 			var registry *grpc.ClientConn
 			registry, err = dialRegistry(auth)
 			if err == nil {
 				defer registry.Close()
 				if o.operation == "artifact" {
 					out, err = artifact(ctx, registry, o)
+				} else if o.operation == "artifacts" {
+					out, err = artifacts(ctx, registry, o)
 				} else {
 					out, err = material(ctx, registry, o)
 				}
@@ -143,7 +217,7 @@ func run(o options) (any, error) {
 					}
 				}
 			}
-		case "unbound-create", "unbound-delete", "partial-delete":
+		case "unbound-create", "unbound-delete", "unbound-state", "partial-delete":
 			out, err = auxiliary(ctx, conn, auth, o)
 		case "stale-update":
 			var d *pb.Deployment
@@ -165,7 +239,7 @@ func run(o options) (any, error) {
 					out = wire(response)
 				}
 			}
-		case "fleet-prepare", "fleet-join", "fleet-restore":
+		case "fleet-prepare", "fleet-join", "fleet-restore", "fleet-state":
 			out, err = fleet(ctx, conn, auth, o)
 		default:
 			err = errors.New("unknown public fixture operation")
@@ -294,7 +368,29 @@ func catalog(ctx context.Context, c grpc.ClientConnInterface, a *config.AuthConf
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"appCode": "OK", "app": wire(app), "operatorId": a.Certificates[0].UserID, "bindings": wires(bs), "releases": wires(rs), "deployments": wires(ds)}, nil
+	// PKI operator principals are not Cloud user ids. Resolve the authenticated
+	// caller through the public self-permissions read, never through JWT claims
+	// or an expected id supplied by the test.
+	self, err := pb.NewAccessServiceClient(c).GetEffectivePermissions(ctx, &pb.GetEffectivePermissionsRequest{OrganizationId: o.tenant, PrincipalType: pb.BindingPrincipalType_BINDING_PRINCIPAL_TYPE_USER})
+	if err != nil {
+		return nil, err
+	}
+	users := map[string]bool{}
+	for _, permission := range self.Permissions {
+		for _, binding := range permission.Bindings {
+			if binding.GetPrincipal().GetType() == pb.BindingPrincipalType_BINDING_PRINCIPAL_TYPE_USER && binding.GetPrincipal().GetId() != "" {
+				users[binding.Principal.Id] = true
+			}
+		}
+	}
+	if len(users) != 1 {
+		return nil, errors.New("self-permissions must identify one directly bound Cloud user")
+	}
+	var operatorID string
+	for id := range users {
+		operatorID = id
+	}
+	return map[string]any{"appCode": "OK", "app": wire(app), "operatorId": operatorID, "bindings": wires(bs), "releases": wires(rs), "deployments": wires(ds)}, nil
 }
 func ownedDeployment(ctx context.Context, c grpc.ClientConnInterface, o options) (*pb.Deployment, error) {
 	if o.deployment != "" {
@@ -379,17 +475,22 @@ func artifact(ctx context.Context, c grpc.ClientConnInterface, o options) (any, 
 	client := pb.NewArtifactRegistryServiceClient(c)
 	r, err := client.GetArtifact(ctx, &pb.GetArtifactRequest{OrganizationId: o.tenant, AppReleaseId: o.release})
 	if err != nil {
-		return nil, err
+		return nil, atFixtureStage("get_artifact", err)
 	}
+	sum := sha256.Sum256(r.GetManifest().GetOciManifest())
+	return map[string]any{"manifest": wire(r.Manifest), "computedDigest": "sha256:" + hex.EncodeToString(sum[:]), "imageName": services.ReleaseImageName(o.app, o.release)}, nil
+}
+
+func artifacts(ctx context.Context, c grpc.ClientConnInterface, o options) (any, error) {
+	client := pb.NewArtifactRegistryServiceClient(c)
 	list, err := pages(func(token string) ([]*pb.StoredArtifact, string, error) {
 		r, e := client.ListArtifacts(ctx, &pb.ListArtifactsRequest{OrganizationId: o.tenant, AppId: o.app, PageSize: 2, PageToken: token})
 		return r.GetArtifacts(), r.GetNextPageToken(), e
 	})
 	if err != nil {
-		return nil, err
+		return nil, atFixtureStage("list_artifacts", err)
 	}
-	sum := sha256.Sum256(r.GetManifest().GetOciManifest())
-	return map[string]any{"manifest": wire(r.Manifest), "computedDigest": "sha256:" + hex.EncodeToString(sum[:]), "imageName": services.ReleaseImageName(o.app, o.release), "artifacts": wires(list)}, nil
+	return map[string]any{"artifacts": wires(list)}, nil
 }
 func material(ctx context.Context, c grpc.ClientConnInterface, o options) (any, error) {
 	r, err := pb.NewArtifactRegistryServiceClient(c).GetMyWraps(ctx, &pb.GetMyWrapsRequest{OrganizationId: o.tenant, Scope: &pb.WrapScope{Scope: &pb.WrapScope_DeploymentId{DeploymentId: o.deployment}}})

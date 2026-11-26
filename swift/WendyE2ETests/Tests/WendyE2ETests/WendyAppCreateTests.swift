@@ -119,13 +119,23 @@ struct `'wendy app create'` {
             let intended = try await app.catalog(cli)
             #expect(
                 intended.bindings?.contains {
-                    $0.principal.id == member && $0.role.name == "App operator"
+                    $0.principal.id == member && $0.role.name == "app-operator"
                         && $0.scope.ref == app.app
+                        && $0.scope.type == "BINDING_SCOPE_TYPE_APP"
+                        && $0.effect == "BINDING_EFFECT_ALLOW"
                 } == true
             )
             try await app.withRelatedApp(cli) { other in
                 let unrelated = try await other.catalog(cli)
-                #expect(unrelated.bindings?.contains { $0.principal.id == member } == false)
+                #expect(
+                    unrelated.bindings?.contains {
+                        $0.principal.id == member
+                            && $0.scope.type == "BINDING_SCOPE_TYPE_APP"
+                            && $0.scope.ref == other.app
+                            && $0.effect == "BINDING_EFFECT_ALLOW"
+                    } == false,
+                    "An inherited organization membership is not an app-specific grant"
+                )
             }
         }
     }

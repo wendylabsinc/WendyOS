@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
@@ -15,30 +18,72 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+type declaredAssetReceipt struct {
+	ID   string `json:"id"`
+	App  string `json:"app"`
+	Name string `json:"name"`
+}
+
 func auxiliary(ctx context.Context, c grpc.ClientConnInterface, a *config.AuthConfig, o options) (any, error) {
 	switch o.operation {
 	case "unbound-create":
 		// A declared compute asset is ordinary catalog data, not an enrolled or
 		// impersonated device. It has never had an encryption key or connection.
 		asset := new(pb.Asset)
-		err := cloudrequest.Invoke(ctx, c, a, pb.AssetService_CreateAsset_FullMethodName, &pb.CreateAssetRequest{OrganizationId: o.tenant, Name: o.app + "-unbound", Details: o.app, IsComputeDevice: true, DeviceType: proto.String("raspberry-pi-5"), Architecture: proto.String("arm64")}, asset)
+		name := strings.ReplaceAll(o.app, ".", "-") + "-unbound"
+		err := cloudrequest.Invoke(ctx, c, a, pb.AssetService_CreateAsset_FullMethodName, &pb.CreateAssetRequest{OrganizationId: o.tenant, Name: name, Details: o.app, IsComputeDevice: true, DeviceType: proto.String("raspberry-pi-5"), Architecture: proto.String("arm64")}, asset)
 		if err != nil {
-			return nil, err
+			return nil, atFixtureStage("unbound_create", err)
+		}
+		// A public create receipt, never identity/key material. Cleanup must be
+		// bound to the actual returned ID as well as its unique app/name marker.
+		receipt, err := json.Marshal(declaredAssetReceipt{ID: asset.Id, App: o.app, Name: name})
+		if err == nil {
+			err = os.WriteFile("unbound-asset.json", receipt, 0600)
+		}
+		if err != nil {
+			return nil, atFixtureStage("unbound_receipt", err)
 		}
 		return map[string]any{"id": asset.Id}, nil
-	case "unbound-delete":
-		asset, err := pb.NewAssetServiceClient(c).GetAsset(ctx, &pb.GetAssetRequest{Id: o.asset, OrganizationId: proto.String(o.tenant)})
+	case "unbound-delete", "unbound-state":
+		data, err := os.ReadFile("unbound-asset.json")
+		var receipt declaredAssetReceipt
+		if err != nil || json.Unmarshal(data, &receipt) != nil || receipt.ID != o.asset || receipt.App != o.app || receipt.Name != strings.ReplaceAll(o.app, ".", "-")+"-unbound" {
+			return nil, atFixtureStage("unbound_receipt", errors.New("exact public create receipt required"))
+		}
+		asset, err := pb.NewAssetServiceClient(c).GetAsset(ctx, &pb.GetAssetRequest{Id: o.asset})
 		if status.Code(err) == codes.NotFound {
+			if o.operation == "unbound-state" {
+				return map[string]any{"exists": false}, nil
+			}
 			return map[string]any{"deleted": true}, nil
 		}
 		if err != nil {
-			return nil, err
+			return nil, atFixtureStage("unbound_get_asset", err)
 		}
-		if asset.OrganizationId != o.tenant || asset.Details != o.app || asset.GetPkiDeviceName() != "" {
-			return nil, errors.New("only this test's never-enrolled declaration may be deleted")
+		expectedName := strings.ReplaceAll(o.app, ".", "-") + "-unbound"
+		if asset.OrganizationId != o.tenant || asset.Details != o.app || asset.Name != expectedName || !asset.IsComputeDevice {
+			return nil, atFixtureStage("unbound_ownership", errors.New("only this test's never-enrolled declaration may be deleted"))
 		}
-		err = cloudrequest.Invoke(ctx, c, a, pb.AssetService_DeleteAsset_FullMethodName, &pb.DeleteAssetRequest{Id: o.asset}, new(pb.DeleteAssetResponse))
-		return map[string]any{"deleted": err == nil}, err
+		if o.operation == "unbound-state" {
+			return map[string]any{"exists": true, "hasDeviceName": asset.GetPkiDeviceName() != ""}, nil
+		}
+		// Dev can reserve the asset UUID as a device name at catalog creation.
+		// That is not a credential or enrollment. Retain the exact CAS binding,
+		// and refuse cleanup if a heartbeat appeared or its identity changed.
+		binding := asset.GetPkiDeviceName()
+		if asset.LastHeartbeat != nil || binding != "" && binding != asset.Id {
+			return nil, atFixtureStage("unbound_not_enrolled", errors.New("owned declaration became active or its reserved identity changed"))
+		}
+		request := &pb.DeleteAssetRequest{Id: o.asset}
+		if binding != "" {
+			request.ExpectedDeviceId = proto.String(binding)
+		}
+		err = cloudrequest.Invoke(ctx, c, a, pb.AssetService_DeleteAsset_FullMethodName, request, new(pb.DeleteAssetResponse))
+		if err != nil {
+			return nil, atFixtureStage("unbound_delete", err)
+		}
+		return map[string]any{"deleted": true}, nil
 	case "partial-delete":
 		rows, err := pages(func(token string) ([]*pb.PendingDeviceStatement, string, error) {
 			r, e := pb.NewDeploymentServiceClient(c).ListPendingDeviceStatements(ctx, &pb.ListPendingDeviceStatementsRequest{AppId: o.app, PageToken: token, PageSize: 2})

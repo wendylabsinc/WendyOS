@@ -52,7 +52,7 @@ struct AppsDeploymentSnapshot: Decodable, Sendable {
         let revision: Int
         let removedAt: String?
     }
-    struct Revision: Decodable, Sendable {
+    struct Revision: Decodable, Equatable, Sendable {
         let revision: Int
         let appReleaseId: String
         let configJson: String
@@ -63,8 +63,8 @@ struct AppsDeploymentSnapshot: Decodable, Sendable {
         let rollbackOf: Int
         let removed: Bool
     }
-    struct History: Decodable, Sendable {
-        struct Move: Decodable, Sendable {
+    struct History: Decodable, Equatable, Sendable {
+        struct Move: Decodable, Equatable, Sendable {
             let deviceId: String
             let fromDeploymentId: String
             let toDeploymentId: String
@@ -131,7 +131,9 @@ struct AppsArtifact: Decodable, Sendable {
     let manifest: Manifest
     let imageName: String
     let computedDigest: String
-    let artifacts: [Stored]
+}
+struct AppsArtifactListing: Decodable, Sendable {
+    let artifacts: [AppsArtifact.Stored]
 }
 
 extension AppsDeploymentFixture {
@@ -181,14 +183,19 @@ extension AppsDeploymentFixture {
         try #require(!owner.isEmpty)
         #expect(
             bindings.contains {
-                $0.principal.id == owner && $0.role.name == "App owner"
+                $0.principal.id == owner && $0.role.name == "app-owner"
                     && $0.scope.ref == app && $0.scope.type == "BINDING_SCOPE_TYPE_APP"
                     && $0.effect == "BINDING_EFFECT_ALLOW"
             }
         )
     }
 
-    func requireArtifact(_ cli: WendyE2ESession, release: Release) async throws {
+    @discardableResult
+    func requireArtifact(
+        _ cli: WendyE2ESession,
+        release: Release,
+        defaultUnit: String? = nil
+    ) async throws -> AppsArtifact {
         let catalog = try await catalog(cli)
         let row = try #require(catalog.releases?.first { $0.id == release.id })
         #expect(row.appId == app)
@@ -199,7 +206,10 @@ extension AppsDeploymentFixture {
             [String: String].self,
             from: Data(row.defaultConfigJson.utf8)
         )
-        #expect(defaults["DISPLAY_UNIT"] == (release.tag == "1.0.0" ? "fahrenheit" : "kelvin"))
+        #expect(
+            defaults["DISPLAY_UNIT"]
+                == (defaultUnit ?? (release.tag == "1.0.0" ? "fahrenheit" : "kelvin"))
+        )
         let artifact = try await observe(
             cli,
             "artifact",
@@ -217,10 +227,19 @@ extension AppsDeploymentFixture {
             #expect(blob.plaintextDigest != blob.ciphertextDigest)
             #expect((UInt64(blob.ciphertextSize) ?? 0) > (UInt64(blob.plaintextSize) ?? UInt64.max))
         }
-        let stored = try #require(artifact.artifacts.first { $0.appReleaseId == release.id })
+        return artifact
+    }
+
+    func requireArtifactListing(
+        _ cli: WendyE2ESession,
+        release: Release,
+        blobCount: Int
+    ) async throws {
+        let listing = try await observe(cli, "artifacts", as: AppsArtifactListing.self)
+        let stored = try #require(listing.artifacts.first { $0.appReleaseId == release.id })
         #expect(stored.appId == app)
         #expect(stored.complete)
-        #expect(stored.blobCount == artifact.manifest.blobs.count)
+        #expect(stored.blobCount == blobCount)
     }
 
     func requireHistory(
@@ -255,6 +274,25 @@ struct AppsAssetApps: Decodable, Sendable {
 struct AppsKeyMaterial: Decodable, Sendable {
     let keyIds: [String]
     let sealedKeyIds: [String]
+}
+
+struct AppsOperatorProfile: Decodable, Sendable {
+    let operatorId: String
+    let matchesExpectedEmail: Bool
+    let registeredKeyCount: Int
+}
+
+extension AppsDeploymentFixture {
+    func operatorProfile(
+        _ cli: WendyE2ESession,
+        nativeEnvironment: String = ""
+    ) async throws -> AppsOperatorProfile {
+        let result = try await succeed(
+            cli,
+            "\(nativeEnvironment) \(observerCommand("operator-profile"))"
+        )
+        return try JSONDecoder().decode(AppsOperatorProfile.self, from: Data(result.stdout.utf8))
+    }
 }
 
 extension AppsDeploymentFixture {
@@ -324,63 +362,74 @@ extension AppsDeploymentFixture {
 extension AppsDeploymentFixture {
     func withUnauthorizedOperator(
         _ cli: WendyE2ESession,
-        _ body: @Sendable () async throws -> Void
+        _ body: @Sendable (_ nativeEnvironment: String) async throws -> Void
     ) async throws {
-        let path = try Self.setting("WENDY_E2E_APPS_UNAUTHORIZED_AUTH_CONFIG_PATH")
-        // Never send credential dictionaries through an assertion macro.
+        let owner = try Self.setting("WENDY_E2E_APPS_ACCOUNT")
+        let other = try Self.setting("WENDY_E2E_APPS_UNAUTHORIZED_ACCOUNT")
+        guard let ownerDirectory = cli.env["WENDY_CONFIG_DIR"] else {
+            throw Prerequisite(description: "An explicit native owner config directory is required")
+        }
+        let memberDirectory =
+            ProcessInfo.processInfo.environment["WENDY_E2E_APPS_MEMBER_CONFIG_DIR"]
+            ?? ownerDirectory
+        let nativeEnvironment =
+            "env WENDY_CONFIG_DIR=\(Self.quote(memberDirectory)) WENDY_E2E_APPS_ACCOUNT=\(Self.quote(other))"
         let sanitized = Prerequisite(
             description:
-                "Supply a distinct authenticated same-tenant operator fixture; credential details suppressed"
+                "Supply two distinct native saved Dev account references for the same tenant; no credential export is supported"
         )
-        do {
-            let ownerData = try Data(
-                contentsOf: URL(fileURLWithPath: Self.setting("WENDY_E2E_CLI_AUTH_CONFIG_PATH"))
-            )
-            let otherData = try Data(contentsOf: URL(fileURLWithPath: path))
-            func principal(_ data: Data) throws -> String {
-                guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                    let entries = root["auth"] as? [[String: Any]], entries.count == 1,
-                    entries[0]["cloudGRPC"] as? String == cloud,
-                    let certificates = entries[0]["certificates"] as? [[String: Any]],
-                    certificates.count == 1,
-                    let uri = certificates[0]["principalUri"] as? String,
-                    uri.hasPrefix("spiffe://wendy.sh/tenant/\(tenant)/operator/")
-                else { throw sanitized }
-                return uri
+        struct Status: Decodable {
+            struct Session: Decodable {
+                struct Certificate: Decodable { let expired: Bool }
+                let context: String
+                let current: Bool?
+                let principalUri: String?
+                let cloudGrpc: String
+                let certificate: Certificate?
             }
-            guard try principal(ownerData) != principal(otherData) else { throw sanitized }
-        } catch { throw sanitized }
-        try await cli.sh(#"cp "$HOME/.wendy/config.json" owner-held-config.json"#)
+            let sessions: [Session]
+        }
+        let status = try await succeed(cli, "wendy --json auth status")
+        let summary = try JSONDecoder().decode(Status.self, from: Data(status.stdout.utf8))
+        let memberStatus = try await succeed(cli, "\(nativeEnvironment) wendy --json auth status")
+        let memberSummary = try JSONDecoder().decode(
+            Status.self,
+            from: Data(memberStatus.stdout.utf8)
+        )
+        let prefix = "spiffe://wendy.sh/tenant/\(tenant)/operator/"
+        guard memberDirectory.hasPrefix("/"),
+            memberDirectory != ownerDirectory || owner != other,
+            let first = summary.sessions.first(where: { $0.context == owner && $0.current == true }
+            ),
+            let second = memberSummary.sessions.first(where: { $0.context == other }),
+            let originalMemberSelector = memberSummary.sessions.first(where: { $0.current == true }
+            )?.context,
+            first.cloudGrpc == cloud, second.cloudGrpc == cloud,
+            first.certificate?.expired == false, second.certificate?.expired == false,
+            let firstURI = first.principalUri, let secondURI = second.principalUri,
+            firstURI.hasPrefix(prefix), secondURI.hasPrefix(prefix), firstURI != secondURI
+        else { throw sanitized }
         var primaryError: (any Error)?
         do {
-            try await cli.sh(
-                "cp \(Self.quote(path)) \"$HOME/.wendy/config.json\"; chmod 600 \"$HOME/.wendy/config.json\""
-            )
-            let status = try await succeed(cli, "wendy --json auth status")
-            // auth status returns public metadata, not the credential JSON.
-            struct Status: Decodable {
-                struct Session: Decodable {
-                    struct Certificate: Decodable { let expired: Bool }
-                    let certificate: Certificate?
-                }
-                let loggedIn: Bool
-                let sessions: [Session]
-            }
-            let summary = try JSONDecoder().decode(Status.self, from: Data(status.stdout.utf8))
-            try #require(
-                summary.loggedIn && summary.sessions.count == 1
-                    && summary.sessions[0].certificate?.expired == false
-            )
-            try await body()
+            _ = try await succeed(cli, "\(nativeEnvironment) wendy auth use \(Self.quote(other))")
+            let selected = try await succeed(cli, "\(nativeEnvironment) wendy --json auth status")
+            let observed = try JSONDecoder().decode(Status.self, from: Data(selected.stdout.utf8))
+            guard
+                observed.sessions.contains(where: {
+                    $0.context == other && $0.current == true && $0.principalUri == secondURI
+                        && $0.cloudGrpc == cloud && $0.certificate?.expired == false
+                })
+            else { throw sanitized }
+            _ = try await succeed(cli, "\(nativeEnvironment) wendy registry key show \(cloudFlag)")
+            try await body(nativeEnvironment)
         } catch { primaryError = error }
         do {
-            try await cli.sh(
-                #"cp owner-held-config.json "$HOME/.wendy/config.json"; chmod 600 "$HOME/.wendy/config.json"; rm owner-held-config.json"#
+            _ = try await succeed(
+                cli,
+                "\(nativeEnvironment) wendy auth use \(Self.quote(originalMemberSelector))"
             )
         } catch {
-            Issue.record(
-                "Owner credential restoration failed in the isolated HOME; stop using this sandbox"
-            )
+            Issue.record("Native operator selector restoration failed; stop this serial run")
             primaryError = primaryError ?? error
         }
         if let primaryError { throw primaryError }
