@@ -30,6 +30,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/powermode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/internal/supervisor"
@@ -597,7 +598,7 @@ func advertisedEntitlementTypes() []string {
 }
 
 func detectFeatureset() []string {
-	features := []string{"data-inference-classification"}
+	features := []string{"data-inference-classification", cloudrelay.TCPHalfCloseFeature}
 
 	if _, err := os.Stat("/dev/nvidia0"); err == nil {
 		features = append(features, "gpu")

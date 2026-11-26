@@ -199,9 +199,21 @@ func (d cloudDiscoveryDevice) serveTunnelForward(ctx context.Context, ln net.Lis
 	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
-	return serveTCPForward(session.Context(ctx), ln, func(ctx context.Context) (net.Conn, error) {
-		return d.openTunnel(ctx, brokerConn, auth, remotePort)
-	}, dialFailed, unanswered)
+	ctx = session.Context(ctx)
+	dial := func(ctx context.Context) (net.Conn, error) {
+		return d.openTunnel(ctx, brokerConn, auth, remotePort, false)
+	}
+	if d.v2 != nil && remotePort != defaultAgentPort+1 {
+		// A single lazy, authenticated management channel checks support for
+		// this forward. Raw ports can work even when management is unavailable.
+		if agent, err := connectCloudDiscoveryTransport(ctx, auth, d, ""); err == nil {
+			defer agent.Close()
+			dial = func(ctx context.Context) (net.Conn, error) {
+				return agent.RegistryDialer(ctx, int(remotePort))
+			}
+		}
+	}
+	return serveTCPForward(ctx, ln, dial, dialFailed, unanswered)
 }
 
 // serveTCPForward accepts connections on ln until ctx ends and relays each one
@@ -298,8 +310,8 @@ func serveTunnelConn(ctx context.Context, tcpConn net.Conn, brokerConn *grpc.Cli
 }
 
 // relayTunnel copies between a forwarded local connection and its tunnel
-// until the tunnel's side ends or ctx does. The local client finishing its
-// sending does not end the relay: the device may still answer. The tunnel
+// until the tunnel's side ends or ctx does. Forward local EOF as a half-close
+// when the tunnel supports it, keeping the response path open. The tunnel
 // ending does: nothing more can come back, and a tunnel whose device side has
 // ended takes nothing more either, so the local connection is closed at once
 // rather than left open until its client gives up waiting.
@@ -311,7 +323,20 @@ func relayTunnel(ctx context.Context, tcpConn, tunnelConn io.ReadWriteCloser) (u
 	defer tcpConn.Close()
 	defer tunnelConn.Close()
 	local := &endNotingReader{Reader: tcpConn}
-	go func() { _, _ = io.Copy(tunnelConn, local) }()
+	clientFailed := make(chan struct{}, 1)
+	go func() {
+		_, err := io.Copy(tunnelConn, local)
+		if half, ok := tunnelConn.(interface{ CloseWrite() error }); ok {
+			if err == nil {
+				err = half.CloseWrite()
+			}
+			// Let the return path report tunnel write failures. A device
+			// closing its port can also make the uplink write fail.
+			if err != nil && local.ended.Load() {
+				clientFailed <- struct{}{}
+			}
+		}
+	}()
 	type copied struct {
 		n   int64
 		err error
@@ -323,6 +348,8 @@ func relayTunnel(ctx context.Context, tcpConn, tunnelConn io.ReadWriteCloser) (u
 	}()
 	select {
 	case <-ctx.Done():
+		return false
+	case <-clientFailed:
 		return false
 	case c := <-fromTunnel:
 		// A tunnel that ctx ended also reads as a clean end.
