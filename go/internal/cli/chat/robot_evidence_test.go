@@ -9,6 +9,87 @@ import (
 	"time"
 )
 
+func TestRobotConnectionQuestionsSelectPairings(t *testing.T) {
+	available := []Tool{{Name: "wendy_status"}, {Name: "robot_status"}, {Name: "unitree_pairings"}}
+	for _, tc := range []struct {
+		prompt string
+		prior  bool
+		want   bool
+	}{
+		{"Is the robot online?", false, true},
+		{"Is my Go2 paired with the device?", false, true},
+		{"Is the Go2 connected after reboot?", false, true},
+		{"Check whether the robot is offline", false, true},
+		{"Are my Unitree robots disconnected?", false, true},
+		{"Is it still online?", true, true},
+		{"Are they paired?", true, true},
+		{"Is it online?", false, false},
+		{"Is my Orin online?", true, false},
+		{"Is my Orin still online?", true, false},
+		{"Is the gateway online or is it disconnected?", true, false},
+		{"Is the device connected?", true, false},
+		{"How do I get my Go2 connected?", true, false},
+		{"Connect the robot", true, false},
+	} {
+		t.Run(tc.prompt, func(t *testing.T) {
+			e := NewEngine(nil, nil, "")
+			if tc.prior {
+				e.messages = []Message{{ToolCalls: []ToolCall{{Name: "unitree_pairings"}}}}
+			}
+			got := e.robotEvidenceCall(tc.prompt, available, 0)
+			if tc.want {
+				if got == nil || got.Name != "unitree_pairings" || string(got.Arguments) != "{}" {
+					t.Fatalf("connection question did not read pairings: %+v", got)
+				}
+			} else if got != nil {
+				t.Fatalf("unrelated question forced robot evidence: %+v", got)
+			}
+		})
+	}
+}
+
+func TestRobotConnectionEvidenceHonorsOfferedReadTools(t *testing.T) {
+	e := NewEngine(nil, nil, "")
+	for _, available := range [][]Tool{
+		{{Name: "wendy_status"}, {Name: "robot_status"}},
+		{{Name: "unitree_pairings", RequiresApproval: true}},
+	} {
+		if got := e.robotEvidenceCall("Is the robot still connected?", available, 0); got != nil {
+			t.Fatalf("unavailable read tool replaced or policy bypassed: %+v", got)
+		}
+	}
+	if got := e.robotEvidenceCall("Is the robot online?", []Tool{{Name: "unitree_pairings"}}, 1); got != nil {
+		t.Fatal("pairing evidence repeated on later model rounds")
+	}
+}
+
+func TestRobotOnlineReadsPairingEvenWhenGatewayConnected(t *testing.T) {
+	base := &engineTestExecutor{tools: []Tool{
+		{Name: "wendy_status", Parameters: json.RawMessage(`{"type":"object"}`)},
+		{Name: "unitree_pairings", Parameters: json.RawMessage(`{"type":"object"}`)},
+	}}
+	base.run = func(_ context.Context, call ToolCall) (string, error) {
+		if call.Name != "unitree_pairings" {
+			t.Fatalf("robot online question used gateway status: %s", call.Name)
+		}
+		return `{"robots":[{"serial":"robot-a","connected":false}]}`, nil
+	}
+	provider := engineTestProvider(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
+		if len(base.calls) != 1 || messages[len(messages)-1].Role != "tool" || !strings.Contains(messages[len(messages)-1].Content, `"connected":false`) {
+			t.Fatal("model answered without current robot pairing evidence")
+		}
+		return Message{Content: "The gateway is connected, but the Go2 pairing reports disconnected."}, nil
+	})
+	e := NewEngine(provider, base, "")
+	e.messages = []Message{{Role: "assistant", Content: "The Orin gateway is connected."}}
+	if err := e.Turn(context.Background(), "Is the robot online?", nil, func(context.Context, ToolCall) (bool, error) {
+		t.Fatal("read-only pairing evidence requested approval")
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRobotStatusEvidencePrecedesModelAndStopKeepsApproval(t *testing.T) {
 	for _, prompt := range []string{"Is it aligned?", "status?", "It's not moving", "stop"} {
 		base := &engineTestExecutor{tools: []Tool{robotCommandTestTool(), {Name: "robot_status", Parameters: json.RawMessage(`{"type":"object"}`)}}}
