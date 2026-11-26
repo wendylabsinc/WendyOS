@@ -9,12 +9,12 @@ import subprocess
 
 PINS = {
     'upstream_revision': '0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4',
-    'builder_revision': '7206daae5b379794fbe36cf978cd77e3c5b0ec71',
+    'builder_revision': '21bf838798dc16ac2bdbf3e7d1c0e0d88c74fd65',
     'source_sha256': 'a3e78c9ee061e5ce81b0ea45bb1730ce531b5ece7194f56a47d831ec2d009c2b',
-    'patched_source_sha256': 'b31e15d99523c90198ae34ced701a76887800cfeb3891e144f4f0a29b6c1855b',
+    'patched_source_sha256': '35942b3c7461a11c69bdf22b1748ade248ad80b76ac7857ff75da697552576a9',
     'recipe_sha256': 'b70285d1b139f1cfa69f3aad0733467c1be373cf88de7abf2583caa3cba57135',
-    'fresh_patch_sha256': 'dcd9abd0b2fbf3d30ab5708165e5d07ca5a40ea17e91ff91ccdf2030d724b9be',
-    'patch_sha256': '57d6b61e2335cc3225dd35c667bc2eba58682ff3e611905ce970144d761493e5',
+    'fresh_patch_sha256': '504b7cce2c2952b32091a56bdbc8ee33472cd8d24f85374a4a88e98ab84e7601',
+    'patch_sha256': 'b27ee9278d8b296e6add0880eea5eea007e8baa0f96d90b46a7f5672c5ed6121',
 }
 RECIPE = Path('recipes-kernel/v4l2loopback/v4l2loopback_0.15.4.bb')
 PATCH = RECIPE.parent / 'files/0001-output-completion-queue.patch'
