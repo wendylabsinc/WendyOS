@@ -243,13 +243,13 @@ func TestVisionModelSelectionAndGrounding(t *testing.T) {
 			}
 		case "/api/chat":
 			json.NewDecoder(r.Body).Decode(&asked)
-			w.Write([]byte(`{"message":{"content":"{\"objects\":[{\"label\":\"toolbox\",\"box\":[100,200,300,600]},{\"label\":\"speck\",\"box\":[0,0,5,5]}]}"}}`))
+			w.Write([]byte(`{"done":true,"message":{"content":"{\"objects\":[{\"label\":\"toolbox\",\"box\":[100,200,300,600]}]}"}}`))
 		}
 	}))
 	defer ollama.Close()
 	address, _ := url.Parse(ollama.URL)
 	port, _ := strconv.Atoi(address.Port())
-	vision, err := selectVisionModel(context.Background(), ollama.Client(), uint32(port), "qwen3:4b")
+	vision, err := selectPreferredVisionModel(context.Background(), ollama.Client(), uint32(port), "qwen3:4b")
 	if err != nil || vision.model != "qwen3-vl:4b" {
 		t.Fatalf("picked %q: %v", vision.model, err)
 	}
@@ -261,8 +261,8 @@ func TestVisionModelSelectionAndGrounding(t *testing.T) {
 	if message["images"].([]any)[0] != "/9g=" || !strings.Contains(message["content"].(string), `"tool\"box"`) {
 		t.Fatalf("request lost the image or quoted the query unsafely: %v", message)
 	}
-	for _, content := range []string{`{"objects":[]}`, `{"objects":[{"label":"x","box":[5,5,5,5]}]}`, `{"objects":[{"label":"x","box":[0,0,2000,10]}]}`} {
-		if _, found, err := parseGrounding(content); found || err != nil {
+	for _, content := range []string{`{"objects":[{"label":"x","box":[5,5,5,5]}]}`, `{"objects":[{"label":"x","box":[0,0,2000,10]}]}`} {
+		if _, found, err := parseGrounding(content); found || err == nil {
 			t.Fatalf("%s: found=%v err=%v", content, found, err)
 		}
 	}

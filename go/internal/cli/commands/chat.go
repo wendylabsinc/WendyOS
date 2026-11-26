@@ -20,6 +20,8 @@ func newChatCmd() *cobra.Command {
 	var autoApprove, setup, helpAll, voice, noMemory bool
 	var preferredDevice, headlessPrompt, profileName, agentModelsFile, peersFile string
 	var listProfiles bool
+	var modelDevice string
+	var modelPort uint32
 	cmd := &cobra.Command{
 		Use:   "chat [prompt...]",
 		Short: "Build apps and work with your devices through a conversation",
@@ -69,9 +71,23 @@ would otherwise ask a person.`,
 			if err != nil {
 				return err
 			}
+			var providerFactory func(chat.Config) (chat.Provider, error)
+			if modelDevice != "" {
+				if setup || voice || cfg.Provider != "" || cfg.BaseURL != "" || len(models) > 0 || len(peers) > 0 {
+					return fmt.Errorf("--model-device uses only the selected local runtime; omit --setup, --voice, --provider, --base-url, --agent-models and --agent-peers")
+				}
+				local, factory, close, err := connectChatModel(cmd.Context(), modelDevice, modelPort, cfg)
+				if err != nil {
+					return err
+				}
+				defer close()
+				cfg, providerFactory = local, factory
+			} else if cmd.Flags().Changed("model-port") {
+				return fmt.Errorf("--model-port requires --model-device")
+			}
 			if headlessPrompt != "" {
 				return runChatHeadless(cmd, chatHeadlessOptions{
-					Config: cfg, Profile: profile, AgentModels: models, Peers: peers, NoMemory: noMemory, Prompt: headlessPrompt, Workspace: workspace, Device: preferredDevice,
+					Config: cfg, ProviderFactory: providerFactory, Profile: profile, AgentModels: models, Peers: peers, NoMemory: noMemory, Prompt: headlessPrompt, Workspace: workspace, Device: preferredDevice,
 					AutoApprove: autoApprove, JSON: jsonOutput, Voice: voice, Setup: setup,
 				})
 			}
@@ -81,9 +97,12 @@ would otherwise ask a person.`,
 			if jsonOutput {
 				return fmt.Errorf("wendy chat is interactive; remove --json to start the chat")
 			}
-			resolved, err := chat.Setup(cmd.Context(), chat.SetupOptions{
-				Config: cfg, Force: setup, Input: cmd.InOrStdin(), Output: cmd.OutOrStdout(),
-			})
+			resolved := cfg
+			if providerFactory == nil {
+				resolved, err = chat.Setup(cmd.Context(), chat.SetupOptions{
+					Config: cfg, Force: setup, Input: cmd.InOrStdin(), Output: cmd.OutOrStdout(),
+				})
+			}
 			if errors.Is(err, tui.ErrCancelled) || errors.Is(err, context.Canceled) {
 				return ErrUserCancelled
 			}
@@ -120,7 +139,7 @@ would otherwise ask a person.`,
 					if session != nil {
 						_ = session.Close()
 					}
-					session, err = chat.NewSession(ctx, chat.SessionOptions{Config: resolved, Profile: profile,
+					session, err = chat.NewSession(ctx, chat.SessionOptions{Config: resolved, ProviderFactory: providerFactory, Profile: profile,
 						Executable: executable, Workspace: workspace, Device: preferredDevice, NoMemory: noMemory, AgentModels: models, Peers: peers})
 					if err != nil {
 						return err
@@ -158,6 +177,9 @@ would otherwise ask a person.`,
 				if !errors.Is(err, chat.ErrReconfigure) {
 					return err
 				}
+				if providerFactory != nil {
+					return fmt.Errorf("restart chat with --model-device and --model to change the local model")
+				}
 				nextConfig, err := chat.Setup(ctx, chat.SetupOptions{Config: cfg, Force: true, Input: cmd.InOrStdin(), Output: cmd.OutOrStdout()})
 				if errors.Is(err, tui.ErrCancelled) {
 					// Resume the current conversation if setup was canceled.
@@ -192,13 +214,15 @@ would otherwise ask a person.`,
 	cmd.Flags().BoolVar(&noMemory, "no-memory", false, "Disable recall and learning of local chat memories")
 	cmd.Flags().BoolVar(&helpAll, "help-all", false, "Show advanced connection options")
 	cmd.Flags().StringVarP(&preferredDevice, "device", "d", "", "Preferred Wendy device (you can also choose while chatting)")
+	cmd.Flags().StringVar(&modelDevice, "model-device", "", "Run inference on this Wendy device through its authenticated model runtime")
+	cmd.Flags().Uint32Var(&modelPort, "model-port", 11434, "Managed Ollama runtime port on --model-device")
 	cmd.Flags().StringVar(&cfg.Provider, "provider", "", "Model API: openai, anthropic, ollama, or local (WENDY_CHAT_PROVIDER)")
 	cmd.Flags().StringVarP(&cfg.Model, "model", "m", "", "Model name served by your endpoint (WENDY_CHAT_MODEL)")
 	cmd.Flags().StringVar(&cfg.BaseURL, "base-url", "", "API base URL, including /v1 for compatible servers (WENDY_CHAT_BASE_URL)")
 	cmd.Flags().IntVar(&cfg.MaxTokens, "max-tokens", 0, "Maximum generated tokens per response (WENDY_CHAT_MAX_TOKENS)")
 	cmd.Flags().StringVarP(&directory, "directory", "C", ".", "Project directory for local file and command tools")
 	cmd.Flags().BoolVarP(&autoApprove, "yes", "y", false, "Approve all tool calls, including shell commands and device changes")
-	advanced := []string{"provider", "model", "base-url", "max-tokens", "yes", "agent-models", "agent-peers"}
+	advanced := []string{"model-device", "model-port", "provider", "model", "base-url", "max-tokens", "yes", "agent-models", "agent-peers"}
 	for _, name := range advanced {
 		_ = cmd.Flags().MarkHidden(name)
 	}
@@ -227,18 +251,19 @@ Options:
 }
 
 type chatHeadlessOptions struct {
-	Config      chat.Config
-	Profile     chat.Profile
-	AgentModels map[string]chat.Config
-	Peers       map[string]chat.PeerSpec
-	NoMemory    bool
-	Prompt      string
-	Workspace   string
-	Device      string
-	AutoApprove bool
-	JSON        bool
-	Voice       bool
-	Setup       bool
+	Config          chat.Config
+	ProviderFactory func(chat.Config) (chat.Provider, error)
+	Profile         chat.Profile
+	AgentModels     map[string]chat.Config
+	Peers           map[string]chat.PeerSpec
+	NoMemory        bool
+	Prompt          string
+	Workspace       string
+	Device          string
+	AutoApprove     bool
+	JSON            bool
+	Voice           bool
+	Setup           bool
 }
 
 // runChatHeadless is wendy chat for a caller that is not a person at a
@@ -256,7 +281,12 @@ func runChatHeadless(cmd *cobra.Command, opts chatHeadlessOptions) error {
 	if err != nil {
 		saved = chat.Config{}
 	}
-	resolved, err := chat.ResolveConfig(chat.MergeSettings(opts.Config, saved))
+	resolved := opts.Config
+	if opts.ProviderFactory == nil {
+		resolved, err = chat.ResolveConfig(chat.MergeSettings(opts.Config, saved))
+	} else {
+		err = nil
+	}
 	if err != nil {
 		return fmt.Errorf("chat is not set up for headless use: %w\nRun wendy chat --setup once, or pass --provider, --model and --base-url", err)
 	}
@@ -266,7 +296,7 @@ func runChatHeadless(cmd *cobra.Command, opts chatHeadlessOptions) error {
 	}
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
-	session, err := chat.NewSession(ctx, chat.SessionOptions{Config: resolved, Profile: opts.Profile,
+	session, err := chat.NewSession(ctx, chat.SessionOptions{Config: resolved, ProviderFactory: opts.ProviderFactory, Profile: opts.Profile,
 		Executable: executable, Workspace: opts.Workspace, Device: opts.Device, NoMemory: opts.NoMemory, AgentModels: opts.AgentModels, Peers: opts.Peers})
 	if err != nil {
 		return err

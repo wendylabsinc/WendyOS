@@ -91,3 +91,37 @@ func TestRobotCommandRejectsStaleMapAndSearch(t *testing.T) {
 		t.Fatal("unlocalized movement")
 	}
 }
+
+func TestRobotCommandForwardRetryAndObjectEvidence(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	robot := &commandRobot{}
+	s := &Server{Store: store}
+	h := s.Handler()
+	s.observers["go2"] = &robotSession{robot: robot, serial: "go2"}
+	call := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/robot/command", bytes.NewBufferString(body)))
+		return w
+	}
+	body := `{"serial":"go2","action":"forward","request_id":"forward-one","distance_meters":1.25}`
+	for i := 0; i < 2; i++ {
+		if w := call(body); w.Code != 200 {
+			t.Fatal(w.Body.String())
+		}
+	}
+	if len(robot.commands) != 1 || robot.commands[0].Action != "forward" || robot.commands[0].DistanceMeters != 1.25 {
+		t.Fatal(robot.commands)
+	}
+	if w := call(`{"serial":"go2","action":"forward","request_id":"forward-one","distance_meters":2}`); w.Code != 400 {
+		t.Fatal("accepted changed retry", w.Body.String())
+	}
+	if w := call(`{"serial":"go2","action":"go_to_object","request_id":"object-one","evidence_id":"invented"}`); !bytes.Contains(w.Body.Bytes(), []byte(`"state":"rejected"`)) {
+		t.Fatal(w.Body.String())
+	}
+	if w := call(`{"serial":"go2","action":"approach_object","request_id":"object-two","x":1,"z":2}`); w.Code != 400 {
+		t.Fatal("accepted raw coordinates", w.Body.String())
+	}
+	if len(robot.commands) != 1 {
+		t.Fatal("object without evidence moved", robot.commands)
+	}
+}

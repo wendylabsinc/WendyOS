@@ -112,7 +112,7 @@ func (s *Server) startFind(session *robotSession, q twinrobot.Request) error {
 		return errors.New("Go2 is not ready to move: " + state.Message)
 	}
 	setup, done := context.WithTimeout(s.Context, 8*time.Second)
-	vision, err := selectVisionModel(setup, &http.Client{Timeout: 100 * time.Second}, q.ModelPort, q.Model)
+	vision, err := selectPreferredVisionModel(setup, &http.Client{Timeout: 100 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, q.ModelPort, q.Model)
 	done()
 	if err != nil {
 		return err

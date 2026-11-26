@@ -71,7 +71,7 @@ func TestRoomCorrectionStopsWhenReplanningFails(t *testing.T) {
 }
 
 func TestInFlightRoomCorrectionCannotSurviveInvalidation(t *testing.T) {
-	for _, fault := range []string{"none", "stop", "epoch", "model", "frame", "alignment", "old-scan", "stale-pose", "stop-unconfirmed", "closed"} {
+	for _, fault := range []string{"none", "chat", "turn", "forward", "stop", "epoch", "model", "frame", "alignment", "old-scan", "stale-pose", "stop-unconfirmed", "closed"} {
 		t.Run(fault, func(t *testing.T) {
 			r, commands := readySiteRobot()
 			r.observed.Surfaces.Surfaces = make([]sitenav.Surface, 24)
@@ -79,6 +79,12 @@ func TestInFlightRoomCorrectionCannotSurviveInvalidation(t *testing.T) {
 			r.roomTracking = g
 			pose, alignment, sequence, captured := r.observed.Pose, r.alignment, r.commandSequence, r.observed.CloudAt
 			switch fault {
+			case "chat":
+				r.intentActive = true
+			case "turn":
+				r.lookTurn = &siteLookTurn{}
+			case "forward":
+				r.discoveryMove = &discoveryMove{}
 			case "stop":
 				r.Stop(1)
 			case "epoch":

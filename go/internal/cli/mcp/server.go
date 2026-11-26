@@ -343,6 +343,8 @@ func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 	s.registerROS2Tools(srv)
 	s.registerRobotTools(srv)
 	s.registerWorldTools(srv)
+	s.registerRobotCameraTools(srv)
+	s.registerRobotFindTools(srv)
 	s.registerWiFiTools(srv)
 	s.registerBluetoothTools(srv)
 	s.registerHardwareTools(srv)

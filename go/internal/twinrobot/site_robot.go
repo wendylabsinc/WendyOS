@@ -90,6 +90,7 @@ type SiteRobot struct {
 	lastPosePacket                  time.Time
 	stopUnconfirmed                 bool
 	underBodyAllowance              bool
+	strictMeasuredFloor             bool
 	allowUnobservedFloor            bool
 	departure                       *sitenav.Departure
 	localizations                   []siteRobotLocalization
@@ -439,6 +440,7 @@ func (r *SiteRobot) stopLocked() error {
 		r.flushCommandFaults()
 	}()
 	r.moving = false
+	r.strictMeasuredFloor = false
 	r.forwardOrigin = nil
 	if r.lookTurn != nil && r.lookState != 2 {
 		r.lookState = 3
@@ -599,6 +601,10 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 }
 
 func (r *SiteRobot) destinationLocked(frame string, x, z float64, move bool) error {
+	return r.destinationWithPolicyLocked(frame, x, z, move, false)
+}
+
+func (r *SiteRobot) destinationWithPolicyLocked(frame string, x, z float64, move, strict bool) error {
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err
@@ -618,6 +624,12 @@ func (r *SiteRobot) destinationLocked(frame string, x, z float64, move bool) err
 		return errors.New("Invalid destination.")
 	}
 	goal := r.alignment.ToRobot(p)
+	r.strictMeasuredFloor = strict
+	defer func() {
+		if !r.moving {
+			r.strictMeasuredFloor = false
+		}
+	}()
 	r.preview = nil
 	r.departure = nil
 	if r.underBodyAllowance {
@@ -672,10 +684,15 @@ func (r *SiteRobot) SetUnderBodyAllowance(sequence uint64, enabled bool) error {
 	if sequence <= r.commandSequence {
 		return errors.New("This robot order was superseded.")
 	}
-	r.commandSequence = sequence
 	if r.closed || r.ctx.Err() != nil {
 		return errors.New("Robot connection closed.")
 	}
+	// Repeated desktop settings do not take ownership of an active chat goal.
+	// A real policy change still supersedes it and requires acknowledged Stop.
+	if r.intentActive && r.underBodyAllowance == enabled {
+		return nil
+	}
+	r.commandSequence = sequence
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err
@@ -696,10 +713,15 @@ func (r *SiteRobot) SetAllowUnobservedFloor(sequence uint64, enabled bool) error
 	if sequence <= r.commandSequence {
 		return errors.New("This robot order was superseded.")
 	}
-	r.commandSequence = sequence
 	if r.closed || r.ctx.Err() != nil {
 		return errors.New("Robot connection closed.")
 	}
+	// Repeated desktop settings do not take ownership of an active chat goal.
+	// A real policy change still supersedes it and requires acknowledged Stop.
+	if r.intentActive && r.allowUnobservedFloor == enabled {
+		return nil
+	}
+	r.commandSequence = sequence
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err
@@ -716,6 +738,11 @@ func (r *SiteRobot) SetAllowUnobservedFloor(sequence uint64, enabled bool) error
 
 // Never use this planning-only grid as measured evidence for localization.
 func (r *SiteRobot) navigationGridLocked(departure *sitenav.Departure) sitenav.Grid {
+	// Camera-derived destinations require measured floor throughout execution,
+	// including replans; operator allowances apply only to manual navigation.
+	if r.strictMeasuredFloor {
+		return r.observed.Grid
+	}
 	if r.allowUnobservedFloor {
 		return r.observed.Grid.WithUnobservedFloor(r.observed.Pose.Position)
 	}
@@ -728,10 +755,15 @@ func (r *SiteRobot) SetArrivalTiming(sequence uint64, enabled bool) error {
 	if sequence <= r.commandSequence {
 		return errors.New("This robot order was superseded.")
 	}
-	r.commandSequence = sequence
 	if r.closed || r.ctx.Err() != nil {
 		return errors.New("Robot connection closed.")
 	}
+	// Repeated desktop settings do not take ownership of an active chat goal.
+	// A real policy change still supersedes it and requires acknowledged Stop.
+	if r.intentActive && r.observed.AllowArrivalTime == enabled {
+		return nil
+	}
+	r.commandSequence = sequence
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err

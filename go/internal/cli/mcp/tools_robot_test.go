@@ -61,6 +61,21 @@ func TestRobotToolsUseSelectedDeviceAndFixedEndpoint(t *testing.T) {
 	if structuredMap(t, result)["state"] != "failed" {
 		t.Fatal("lost failure evidence", result)
 	}
+	for _, args := range []map[string]any{
+		{"action": "forward", "request_id": "forward-once", "distance_meters": 1.25},
+		{"action": "go_to_object", "request_id": "object-once", "evidence_id": "opaque-evidence"},
+	} {
+		result, err = s.handleRobotTool(context.Background(), callToolReq("robot_command", args))
+		if err != nil || result.IsError {
+			t.Fatal(err, result)
+		}
+		for key, want := range args {
+			if captured[key] != want {
+				t.Fatalf("lost %s: got %v want %v", key, captured[key], want)
+			}
+		}
+	}
+
 }
 
 func TestRobotToolsRequireUnambiguousPairing(t *testing.T) {

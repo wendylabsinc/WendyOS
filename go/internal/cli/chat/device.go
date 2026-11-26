@@ -11,10 +11,14 @@ import (
 // DeviceProvider uses an explicit transport to the selected device. It never
 // inherits cloud endpoints, credentials, or model names from the environment.
 func DeviceProvider(model string, transport http.RoundTripper) (Provider, error) {
+	return DeviceProviderWithLimit(model, transport, 0)
+}
+
+func DeviceProviderWithLimit(model string, transport http.RoundTripper, maxTokens int) (Provider, error) {
 	if !validModelID(model) {
 		return nil, fmt.Errorf("choose a model running on the device")
 	}
-	c, err := resolveConnection(Config{Provider: "local", BaseURL: "http://wendy-device/v1", Model: model}, false)
+	c, err := resolveConnection(Config{Provider: "local", BaseURL: "http://wendy-device/v1", Model: model, MaxTokens: maxTokens}, false)
 	if err != nil {
 		return nil, err
 	}

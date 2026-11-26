@@ -78,7 +78,7 @@ func (r *SiteRobot) refineRoomAlignment() {
 	r.mu.Lock()
 	now := time.Now()
 	g := r.roomTracking
-	if g == nil || r.closed || r.ctx.Err() != nil || r.frame == "" || r.frame != g.frame || r.poseEpoch != g.epoch || r.stopUnconfirmed || r.lookTurn != nil || r.discoveryMove != nil || r.observed.SurfaceReady(now) != nil || r.observed.CloudReceived == r.lastTrackingScan {
+	if g == nil || r.intentActive || r.closed || r.ctx.Err() != nil || r.frame == "" || r.frame != g.frame || r.poseEpoch != g.epoch || r.stopUnconfirmed || r.lookTurn != nil || r.discoveryMove != nil || r.observed.SurfaceReady(now) != nil || r.observed.CloudReceived == r.lastTrackingScan {
 		r.mu.Unlock()
 		return
 	}
@@ -104,7 +104,7 @@ func (r *SiteRobot) refineRoomAlignment() {
 }
 
 func (r *SiteRobot) commitRoomFitLocked(g *roomTracking, pose sitenav.Pose, alignment sitenav.Alignment, sequence uint64, captured time.Time, fit sitenav.PoseCandidate) {
-	if r.closed || r.ctx.Err() != nil || r.roomTracking != g || r.poseEpoch != g.epoch || r.frame != g.frame || r.alignment != alignment || r.commandSequence != sequence || r.stopUnconfirmed || !sitenav.Fresh(captured, time.Now()) || r.observed.SurfaceReady(time.Now()) != nil {
+	if r.intentActive || r.lookTurn != nil || r.discoveryMove != nil || r.closed || r.ctx.Err() != nil || r.roomTracking != g || r.poseEpoch != g.epoch || r.frame != g.frame || r.alignment != alignment || r.commandSequence != sequence || r.stopUnconfirmed || !sitenav.Fresh(captured, time.Now()) || r.observed.SurfaceReady(time.Now()) != nil {
 		return
 	}
 	r.applyRoomFitLocked(pose, fit)
