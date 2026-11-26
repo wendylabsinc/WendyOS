@@ -1,30 +1,44 @@
 # Apps & Deployments test guide
 
-Local sources on `kb.apps-and-deployments.1`, based on
-`b9dcee95facd2f9ab5bee8e95d427abce1c5268a`. No test has been executed.
-Only offline compilation, formatting and syntax/source checks were performed.
-There were no CLI/Agent runs, browser launches, Cloud/device operations, pushes,
-PRs or posts. Commands in this guide are for later authorized preparation/runs.
+Sources on `kb.apps-and-deployments.1`, based on
+`b9dcee95facd2f9ab5bee8e95d427abce1c5268a`. The original handoff was compile-only.
+Subsequent authorized regular runs and their failures are recorded separately in
+local attempt artifacts. Commands below require the relevant operation and
+device authorization; opt-in flags alone do not provide it.
 
 ## Coverage and counts
 
-There are **67 Swift test declarations in 14 command/Console suites**. All have
+There are **77 Swift test declarations in 15 command/Console suites**. All have
 actual logic and explicit opt-in gates. There are no disabled or empty stubs.
 The two excluded scenarios are interactive publish/registration prompts and the
 interactive deploy review. Their scripted counterparts remain covered.
 
 | Tier | Declarations | What the bodies exercise |
 | --- | ---: | --- |
-| Local CLI validation | 8 | Missing input/confirmation, invalid project/required names/services, exact deployment syntax, uncached promotion and rotate identifiers |
-| Cloud/CLI/device | 48 | Public operations, actual catalog/registry/history/report reads, independent HTTP responses; includes additional dedicated fleet, service-control, reboot, second-operator and natural-sweep opt-ins |
+| Local CLI validation | 7 | Missing input/confirmation, invalid project/required names/services, exact deployment syntax and rotate identifiers |
+| Cloud/CLI/device | 59 | Public operations, actual catalog/registry/history/report reads, authenticated uncached promotion, scripted first builds and independent HTTP responses; includes additional dedicated fleet, service-control, reboot, second-operator and natural-sweep opt-ins |
 | Real browser DOM | 7 | Rendered catalog/access/settings/releases, rollout and history, waiting/failed states, removal/deletion/detach and pending device work |
 | Isolated protocol/signing | 4 | Real Agent/CLI logic with synthetic in-process peers and deterministic test-only barriers; **not live Cloud/containerd coverage** |
 
-Parameterization expands these to 72 Swift invocations before filtering: 12
-local, 49 Cloud/device, 7 browser and 4 isolation. These are source counts, not
+Parameterization expands these to 83 Swift invocations before filtering: 11
+local, 61 Cloud/device, 7 browser and 4 isolation. These are source counts, not
 runtime discovery or passing results. Four Go top-level isolation cases underlie
 the four Swift isolation wrappers and are counted once, not added again. The
 bad-data Go case contains six synthetic subcases.
+
+The earlier 69-declaration measured baseline remains separate. Two of its cases
+read Cloud rollback history and removal/release retention without waiting for a
+device result. Seven additional declarations now cover release/configuration
+updates, unsigned interrupted-delivery resume, pending key rotation, digest
+refusal/retry, target union, manual canary growth, and parameterized scripted
+first publication from new/existing projects. These establish their named Cloud
+or publication behavior; none replaces the original terminal runtime assertions.
+The new-project example derives its app id from a mixed-case directory, builds
+the in-tree small scratch HTTP image and verifies an untagged branch@digest
+receipt against the actual registry manifest hash.
+The remaining added declaration checks a second native operator's rotation
+refusal and unchanged Cloud/key state before device acknowledgment. Its strict
+permission diagnostic is separate from the original running-device assertion.
 
 Each live case owns a unique app and creates its prerequisites independently.
 The core path creates an app and reads its owner/empty catalogs; refuses a
@@ -38,9 +52,15 @@ The in-tree `go/cmd/e2e-apps-fixture` adapter uses the existing generated client
 `cloudsession`, transport/DPoP code and `cloudrequest` signer. It performs public
 reads and narrowly scoped fixture operations. Assertions live in Swift. It
 accepts no expected responses, assertion JSON, alternate executables or opaque
-scripts. Its error output contains only operation and gRPC code, never auth
+scripts. Its error output contains only operation, fixed stage and gRPC code, never auth
 structs, keys, tokens or raw signed envelopes. Reads follow every page; a small
 page size exercises history/membership pagination.
+
+Common deployment setup verifies the publish receipt and `GetArtifact`, including
+manifest digest and encrypted descriptors. The publication metadata case also
+requires the complete app-filtered `ListArtifacts` result. Listing availability
+is a publication assertion, rather than a prerequisite for unrelated rollout
+assertions. An unavailable listing remains a failed metadata case.
 
 ### Acceptance coverage audit
 
@@ -58,9 +78,9 @@ page size exercises history/membership pagination.
 | Rollback / nonexistent revision | Four retained revisions and rollback linkage to 1; unknown revision 9 refuses without changing B, revision or history |
 | Resume after partial delivery | Public config-only UpdateDeployment records pending revision 2 without delivering its statements; normal CLI resume delivers it without adding another revision |
 | Resume N-confirm / N+1-sign race | **Isolated CLI tier**, using a forwarding GetDeployment barrier after scripted confirmation and before current-key loading/signPending. It must refuse or sign N's original content. This is separate from the live stale expected_revision refusal test. No live timing proof is claimed. |
-| Removal during pull | **Isolated Agent tier**, blocked blob callback, terminal removal, durable state reload, delayed assignment refusal and no import/start. Real transport interruption/cache behavior is not established by this tier. |
+| Removal during pull | **Isolated Agent tier**, blocked blob callback, terminal removal, durable state reload and no import/start; pure ordering against the reloaded mark refuses an ordinary earlier revision without signed replay. Full delayed delivery and real transport/cache behavior are not established by this tier. |
 | Replacement overlap | **Isolated Agent tier**, hold B's start, observe C's accepted revision, release B, require the last applied A configuration after both fail. Synthetic runtime peer; no real-containerd timing claim. |
-| Bad delivery data | **Isolated Agent tier**, synthetic signature, wrong target, revision zero, manifest, blob and wrap failures; real verifier/pull logic rejects them and the prior working runtime-peer state survives. No real service is attacked or spoofed. |
+| Bad delivery data | **Isolated Agent tier**, synthetic signature, revision-zero, manifest, blob and wrap boundaries, plus unsigned target-validator controls. The acceptance wrapper requires all six named subcases. Focused benign manifest/blob and pure target-validator checks are separate partial evidence; the prior working runtime-peer state survives. No signed cross-target delivery is used. |
 | Runtime-down removal | Dedicated containerd stop/start; acceptance is not device completion; runtime/endpoint absence is required after recovery |
 | Remove/delete/detach visibility | Removed history, retained reusable release, and a dedicated ctr check of owned image-record removal with an unrelated control preserved; deleted catalog/release/deployment reads and inaccessible artifact; detached device-applied direct-run report plus unchanged HTTP state. Browser independently checks rendered removed history, complete catalog absence and Run directly. |
 | Pending deletion vs device removal | Stop the dedicated Agent; catalog deletion finishes while the owned app still responds. Reconnect before requiring runtime absence. Browser must still show the reported device app before removal and omit it only afterward. |
@@ -130,19 +150,43 @@ default and is required; deploy supplies a unique value. `DISPLAY_UNIT` defaults
 to fahrenheit in A and kelvin in B. `FILE_ONLY` has a default and a file override
 in the precedence test. All settings are public fixture data.
 
+### Small image for functional runs
+
+The separate [static Go fixture](../../.github/ci-tests/apps-deployments-small/README.md)
+builds stripped ARM64 executables in `scratch` for baked versions 1.0.0, 2.0.0
+and intentionally failing 3.0.0. It uses the same settings and response contract,
+including the declared boot-id condition for mixed-device failure. Its builder
+verifies real local HTTP responses, both failure modes, OCI digests and loaded
+image equivalence, then removes its verification containers. It uses installed
+Go/Docker/Buildx and no fetched Go dependencies or base image.
+
+Select its separately generated A/B/fail paths through the existing layout
+inputs for authorized functional runs. Keep the original Python layouts and
+large-layer run evidence for the registry upload-timeout regression. Actual
+run outcomes, including downstream assertions not reached, belong in separate
+attempt reports; fixture verification is not an additional Swift acceptance case.
+
 ## Prepare fixtures later
 
-The existing harness is unchanged. From the repository root, build only the
+From the repository root, build the
 in-tree support programs (these commands compile; they do not run tests):
 
 ```sh
-GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build -mod=readonly \
+GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build -mod=readonly -tags=e2e_apps_fixture \
   -o Build/e2e-apps-fixture ./go/cmd/e2e-apps-fixture
 GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test -c \
   -o Build/apps-agent-isolation.test ./go/internal/agent/services
 GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test -c \
   -o Build/apps-cli-isolation.test ./go/internal/cli/commands
 ```
+
+The adapter build tag enables only test-driver Site create/delete and owned unenrolled Asset create resource
+mappings in the existing Cloud request signer. The generated Site API requires
+signed envelopes; the normal CLI's resource map does not yet contain those
+methods. The mappings match Cloud's Site and Asset handlers, retain the normal signer,
+validity, leaf registration and transport, and are absent from normal product
+builds. They authorize no unsigned fallback. Adapter failures expose a fixed
+stage name as well as the operation and code, without printing arbitrary errors.
 
 The isolation runner accepts only four fixed test names in those fixed in-tree
 binaries, requires an actual named PASS and rejects skips/no-test output. It
@@ -151,18 +195,44 @@ Recompile the binaries from the same source before running this tier.
 
 ### Identity and device fixture
 
-No device has been selected or operated by this work. Supply a named approved
-Dev Pi, matching CLI/Agent builds, and a dedicated fresh single-session auth
-config outside Git with the originating registry key and verified saved
-endpoint/tenant/asset/principal pin. Never reuse a Prod board or re-enroll one.
-Do not concurrently refresh copied handles. The long sweep needs a dedicated
-session whose certificate/access-token lifetime covers its entire budget.
+Select a named, approved Dev device with matching CLI/Agent builds. The primary
+and deployment targets need ARM64 layouts. A fleet control can be x86_64 because
+no app is assigned to it. Keep actual endpoint, tenant, asset IDs and addresses
+in local run inputs, never in the test source.
+
+For an authorized existing account, set `WENDY_E2E_APPS_ACCOUNT` to its saved
+context name and `WENDY_E2E_SAVED_CONFIG_DIR` to its normal config directory.
+Select that account through `wendy auth use <context>` before the run. The
+harness verifies the current context, endpoint and tenant, keeps work files in
+an isolated HOME and points only the CLI's config directory at the normal saved
+config. It does not copy credentials. Native credential references remain in
+their normal store; ordinary CLI refresh uses the original session and lock.
+Do not export private keys, registry keys, DPoP keys or access/refresh tokens.
+Restore the previous current context after a serialized batch.
+
+`WENDY_E2E_APPS_DEVICES_PATH` names a public resource file with `asset`, `host`,
+`architecture` (`arm64`/`aarch64` or `x86_64`/`amd64`) and a `deviceType`
+substring for each approved board. The fixture compares both identity and
+reported hardware. Desktop Ubuntu may omit `deviceType`: that path requires
+`os=ubuntu`, normalized x86_64 architecture and a signed hostname read through
+the existing pinned mTLS client. The expected hostname is the optional public
+`hostname` field or the authenticated Cloud asset name. No board-model string
+is fabricated for Ubuntu. The test-only
+adapter's `pin-approved-devices` operation can complete approved LAN bindings in
+the normal config after a read-only authenticated GetAsset check. It refuses
+any conflicting Cloud, principal or asset constraint; it exports no credentials.
+Supply its `--account`, `--cloud`, `--tenant` and `--devices` arguments explicitly.
+
+The original independently supplied single-session fixture mode is retained;
+this helper must not manufacture such a fixture from a saved account. Never
+reuse a Prod board, enroll a new board or concurrently refresh copied handles.
+Long-sweep runs need a normal session valid for the entire budget.
 
 Before any fixture mutation, the Swift helper privately validates its auth
 config with plain guards and sanitized errors (no credential dictionaries in
 Testing macros). Through the existing harness it then checks public auth
 status, the exact online Cloud selector, and the pinned device's read-only
-organization, Pi type and ARM64 architecture. Missing, mismatched or expired
+organization and declared device type/architecture (Pi/ARM64 when no resource file is supplied). Missing, mismatched or expired
 identity fails before app creation. Ambient socket, insecure-Cloud and registry
 overrides are rejected; the unavailable-registry case supplies a loopback-only
 override for that one command.
@@ -172,23 +242,30 @@ override for that one command.
 | `WENDY_E2E_APPS_DEPLOYMENTS_LOCAL=true` | Local CLI validation tier |
 | `WENDY_E2E_APPS_DEPLOYMENTS=true` | Base live Cloud/CLI/device opt-in |
 | `WENDY_E2E_APPS_TENANT_UUID` | Expected Dev tenant UUID |
-| `WENDY_E2E_APPS_ASSET_UUID` | Expected primary Pi asset UUID |
+| `WENDY_E2E_APPS_ASSET_UUID` | Expected approved primary ARM64 asset UUID |
 | `WENDY_E2E_APPS_CLOUD_GRPC` | Explicit Dev host:443 |
-| `WENDY_E2E_DEVICE_ADDRESS` | Exact verified primary Pi LAN hostname/IPv4 |
-| `WENDY_E2E_CLI_AUTH_CONFIG_PATH` | Dedicated single-session config file |
+| `WENDY_E2E_DEVICE_ADDRESS` | Exact verified primary LAN hostname/IPv4 |
+| `WENDY_E2E_APPS_ACCOUNT` | Explicit existing saved Dev account; normal `auth use` must select it |
+| `WENDY_E2E_SAVED_CONFIG_DIR` | Normal config directory for saved-account runs; no credential copy |
+| `WENDY_E2E_APPS_DEVICES_PATH` | Public approved asset/host/architecture/device-type resource file |
+| `WENDY_E2E_CLI_AUTH_CONFIG_PATH` | Independently supplied single-session fixture in legacy fixture mode |
 | `WENDY_E2E_APPS_LAYOUT_A`, `_B`, `_FAIL` | Extracted OCI layout paths on the local CLI host |
 | `WENDY_E2E_APPS_FAILURES=true` | Declared failing image / unavailable registry cases |
 | `WENDY_E2E_APPS_ACCESS=true` | Grant an existing dedicated member; also supply `WENDY_E2E_APPS_MEMBER_EMAIL` and `_MEMBER_ID` |
 | `WENDY_E2E_APPS_CATALOG_FIXTURES=true` | Create/delete an owned never-enrolled compute declaration to exercise missing-key refusal |
 | `WENDY_E2E_APPS_BUILDER=true` | Real cached direct run/promotion; requires local Docker/buildx |
 | `WENDY_E2E_APPS_ROTATE=true` | Creator key-rotation case |
-| `WENDY_E2E_APPS_SECOND_OPERATOR=true` | Unauthorized rotation; also supply `WENDY_E2E_APPS_UNAUTHORIZED_AUTH_CONFIG_PATH` with a distinct fresh same-tenant identity and registered registry key lacking app authority |
+| `WENDY_E2E_APPS_SECOND_OPERATOR=true` | Unauthorized rotation; also supply `WENDY_E2E_APPS_UNAUTHORIZED_ACCOUNT`, a distinct fresh native saved same-tenant identity. The helper validates both public principals, uses standard `registry key show`, and restores the selector. It never copies credentials. |
+| `WENDY_E2E_APPS_MEMBER_CONFIG_DIR` | Optional independently signed-in member's normal config directory. Member CLI/API invocations receive this path and their account reference through `env`; owner commands retain `WENDY_E2E_SAVED_CONFIG_DIR`. Equal account aliases in separate directories are allowed only after distinct same-tenant principal verification. Omit this variable to retain the existing single-directory/two-account mode. |
 | `WENDY_E2E_APPS_FLEET=true` | Private site/tag/multiple-device cases; also supply `WENDY_E2E_APPS_FLEET_PATH` |
 | `WENDY_E2E_APPS_DEDICATED_DEVICE=true` | Ordinary Agent/containerd service stop/start on dedicated targets; requires `WENDY_E2E_APPS_SSH_USER`, known SSH host keys and noninteractive sudo for those service controls |
+| `WENDY_E2E_APPS_SYSTEMD_OUTAGE=true` | Alternative Agent-only control through normal authenticated device shell: detect the active supported Agent unit, arm and verify an independent systemd restart at 60 seconds before scheduling its stop, prove mTLS port closure, then verify reconnect, identity, binary hash, service command and unrelated task PIDs. Requires the dedicated-device opt-in, standard mTLS port 50052, Python 3, systemd and ctr. No SSH, override, binary, trust or enrollment change. Other service/reboot/image controls still require their dedicated fixtures. |
 | `WENDY_E2E_APPS_REBOOT=true` | Additional full-reboot opt-in; requires noninteractive `systemctl reboot` on the declared dedicated target |
 | `WENDY_E2E_APPS_NATURAL_SWEEP=true` | Long-running hourly sweep case; optional `WENDY_E2E_APPS_SWEEP_TIMEOUT_SECONDS` is 3600–10800, default 7500 |
 | `WENDY_E2E_APPS_BROWSER=true` | Real DOM tier; needs the browser dependencies/session below |
 | `WENDY_E2E_APPS_ISOLATION=true` | Isolated Agent/CLI boundary tier, independent of live Cloud opt-in |
+| `WENDY_E2E_APPS_DOCKER_HOST` | Explicit local `unix:///` Docker socket for builder tests; no saved Docker config is copied |
+| `WENDY_E2E_APPS_DOCKER_PLUGIN_DIR` | Installed Buildx plugin directory; an empty per-test Docker config references only this public path |
 
 Use the normal runner with `--no-managed-agent --no-parallel --isolation per-test`
 and explicit `--device-address`. Python 3 and curl are required on the local
@@ -196,6 +273,15 @@ POSIX CLI host, which must directly reach the app's chosen free port. Commands
 have a 180-second bound; ordinary rollout polling uses a 120-second window.
 Set the runner's process timeout high enough for the selected tier, especially
 the natural sweep; a timeout is a failure, never sweep evidence.
+
+The pending rotation authorization example requires the designated member email
+and a registered native key, proves no APP-scoped grant, invokes ordinary rotate,
+and compares the owner's full history, revision, targets and key identifiers
+without waiting for device apply. Its explicit permission-diagnostic assertion
+remains strict: an observed missing-deployment-wrap refusal with unchanged state
+does not count as a server authorization rejection or pass that assertion.
+The existing running-device variant still requires the independent version and
+configuration response before and after the unauthorized attempt.
 
 ### Dedicated fleet
 
@@ -217,6 +303,9 @@ file, fsync, atomic rename and directory fsync. Preparation failure enters
 cleanup. Cleanup reads current state, removes only its unique tag, restores a
 site only while it still equals the fixture site, preserves unrelated tag/site
 edits, records progress atomically and tolerates an already deleted owned site.
+The lease keeps both site UUID and original name: Asset updates use names,
+while Site APIs and membership reads use UUIDs. Before/after snapshots cover
+all three assets and control C inventory even when the main body fails.
 A partial cleanup is retryable. Unexpected members in the owned site prevent
 its deletion and retain the lease for inspection.
 
@@ -240,19 +329,22 @@ proof, or use prerecorded DOM. It observes loaded landmarks, exact asset links,
 rows, lifecycle-panel definitions and rendered history; polls post-change state
 with a 90-second bound; and records screenshots in the test sandbox. It refuses
 sign-in redirects, rendered errors, loading states or incomplete catalog pages
-before any absence assertion. The retention assertion is exactly the Tagged
+before any absence assertion. A loaded real Apps-list preflight runs before
+project/resource creation whenever the browser tier is enabled. DOM snapshots
+include their observation UTC time for correlation with a bounded outage.
+The retention assertion is exactly the Tagged
 releases definition in the Lifecycle policy panel, excluding plan-limit text.
-The pre-existing browser is disconnected, not terminated.
+Auth redirects produce an actionable origin/path-only sign-in diagnostic. All probe failures use fixed printable text without raw Playwright messages/stacks or OAuth query parameters, preserving JUnit serialization. The pre-existing browser is disconnected, not terminated.
 
 ## Honest technical limits
 
-No compiled body has been run. Build success establishes type/link correctness,
+Build success establishes type/link correctness,
 not environment readiness or passing behavior. Fresh Dev auth, approved devices,
 Docker, the dedicated browser and the relevant privileges remain run
 prerequisites; supplying an opaque shell helper is never a substitute.
 
 The four isolation cases use synthetic peers around production Agent/CLI code.
-They provide finite deterministic barrier/negative checks, not proof of live
+They provide finite deterministic barrier/negative checks. Target validation uses an unsigned own-target control and a value differing only in device identifier; terminal-removal ordering uses the reloaded mark and an ordinary earlier revision without signed replay. These layer checks are not proof of end-to-end cross-target or delayed-delivery handling, live
 registry transport corruption, real containerd replacement timing or the Cloud
 relay's refusal behavior. The actual resume signing race has its own isolated
 case; the separate public stale-update assertion is not counted as that race.
@@ -280,7 +372,7 @@ bucket contents. These are separate from runtime and image-record assertions.
 
 Cleanup uses the unique owned app id, public release receipts and fleet lease.
 It separately reports cleanup errors while preserving the original failure,
-cleans surviving direct runs on every declared target, compares unrelated
+cleans surviving direct runs on deployment targets A/B while leaving control C untouched, compares unrelated
 primary inventory, and never resets/re-enrolls a device or prunes shared caches.
 Failed cleanup retains an exact app/asset or membership receipt. Do not reuse a
 failed sandbox until its pending removal/detach and any retained fleet lease
@@ -290,13 +382,13 @@ secrets and raw signed envelopes.
 The source audit used the control instructions, operator acceptance/reference
 cases, Dev findings, WendyOS instructions, harness README/examples, generated
 client contracts, CLI/Agent sources and the pinned Console DOM/Lifecycle source.
-Offline verification completed on these sources: the Swift test target built
+The original offline verification completed on these sources: the Swift test target built
 with `swift build --build-tests` using only cached dependencies and
 `GIT_ALLOW_PROTOCOL=file`; the adapter built with `GOPROXY=off GOSUMDB=off`;
 both Go isolation packages compiled with `go test -c`; browser JavaScript passed
 `node --check`; Python parsed with `ast.parse`; Go code was gofmt-formatted and
 Swift formatting was scoped to these test files through the repository's make
-target. `git diff --check` passed. No resulting test binary was executed.
+target. `git diff --check` passed. That original validation executed no test binary; later authorized run outcomes are separate evidence.
 Go links emitted only the duplicate `-lobjc` warning.
 
 Product behavior,

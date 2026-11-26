@@ -49,8 +49,9 @@ swift test --filter WendyE2ETests
 
 The [Apps & Deployments guide](AppsDeploymentsDraft.md) describes the opt-in
 Swift specs, tiny HTTP app, ARM64 layouts, public client adapter, real DOM checks
-and separate isolation tier. Offline build-only checks pass. No tests or live
-journeys have been run.
+and separate isolation tier. It includes explicit saved-account execution using
+the normal credential store without copying private material. Live observations
+and original compile-only validation must be reported separately.
 
 ### Run a single test or suite
 
