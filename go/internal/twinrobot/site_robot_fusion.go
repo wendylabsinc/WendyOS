@@ -148,7 +148,7 @@ func (r *SiteRobot) fuseLocalizationOwned(sequence uint64, request SiteFusionReq
 	defer stopRuntimeCancel()
 	fits, err := sitenav.RegisterSurfaces(ctx, model, input)
 	if err != nil {
-		return report, err
+		return report, localizationMatchError(parent, r.ctx, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -236,6 +236,21 @@ func (r *SiteRobot) fuseLocalizationOwned(sequence uint64, request SiteFusionReq
 	}
 	r.recordLocalizationEvidence(request, input, report, time.Now())
 	return report, nil
+}
+
+// Preserve cancellation identity while explaining a compute timeout separately
+// from transport cancellation or observation readiness failures.
+type localizationComputeLimitError struct{}
+
+func (localizationComputeLimitError) Error() string {
+	return "Room matching reached its five-second compute limit; no alignment was confirmed."
+}
+func (localizationComputeLimitError) Unwrap() error { return context.DeadlineExceeded }
+func localizationMatchError(request, runtime context.Context, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) && request.Err() == nil && runtime.Err() == nil {
+		return localizationComputeLimitError{}
+	}
+	return err
 }
 
 // Waiting never exposes an old candidate or allows confirmation. A later fresh
