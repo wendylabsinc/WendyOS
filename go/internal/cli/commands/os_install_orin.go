@@ -496,6 +496,10 @@ func orinRecoveryHints(opts t234InstallOptions) recoveryWaitHints {
 	return hints
 }
 
+// orinBriefingOS is the host OS whose prompts the briefing warns about; a var
+// so tests can check every platform's notes on any host.
+var orinBriefingOS = runtime.GOOS
+
 func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) string {
 	lines := []string{
 		briefMarker.Render("●") + " " + briefTitle.Render("Destructive full recovery"),
@@ -529,15 +533,19 @@ func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) str
 			)
 		}
 	}
-	if runtime.GOOS == "darwin" {
+	if orinBriefingOS == "darwin" {
 		lines = append(lines,
+			"",
+			briefMarker.Render("●")+" "+briefTitle.Render("macOS accessory prompt"),
+			"  macOS may ask "+briefKey.Render(`"Allow accessory to connect?"`)+" again during the flash, when the Jetson",
+			"  reconnects as its flashing disk. Choose "+briefKey.Render("Allow")+" each time, or it stays disconnected.",
 			"",
 			briefMarker.Render("●")+" "+briefTitle.Render("macOS disk prompts"),
 			"  wendy keeps macOS from asking about the Jetson's flashing disks. If it still says a",
 			"  disk is not readable, choose "+briefKey.Render("Ignore")+"; "+briefKey.Render("Eject")+" interrupts the flash.",
 		)
 	}
-	if runtime.GOOS == "windows" {
+	if orinBriefingOS == "windows" {
 		lines = append(lines,
 			"",
 			briefMarker.Render("●")+" "+briefTitle.Render("Windows disk prompts"),

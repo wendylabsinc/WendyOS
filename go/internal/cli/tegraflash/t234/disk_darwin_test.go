@@ -196,3 +196,55 @@ func TestParseUMSDisksPairsEachLUNWithItsMedia(t *testing.T) {
 		t.Fatalf("disk = %+v", d)
 	}
 }
+
+// ioregTwoGadgets is the device part of `ioreg -rc IOUSBHostDevice -l -w0` with a
+// running WendyOS board next to the flashing gadget: same 1d6b:0104 IDs,
+// different product strings. The board's keys are as macOS 26 lists them,
+// including a "USB Product Name" that differs from the string the device
+// reports; the gadget's are assembled from the fixtures above and its
+// descriptor strings, not captured.
+const ioregTwoGadgets = `+-o WendyOS Device brave-otter@01200000  <class IOUSBHostDevice, id 0x10000a1b2, registered, matched, active, busy 0 (0 ms), retain 30>
+  | {
+  |   "idProduct" = 260
+  |   "USB Product Name" = "WendyOS Device brave_otter"
+  |   "locationID" = 18874368
+  |   "USB Vendor Name" = "Wendy Labs Inc"
+  |   "idVendor" = 7531
+  |   "kUSBProductString" = "WendyOS Device brave-otter"
+  |   "USB Serial Number" = "1421425005379"
+  |   "kUSBVendorString" = "Wendy Labs Inc"
+  | }
+  | 
+  | +-o CDC NCM Comm@0  <class IOUSBHostInterface, id 0x10000a1c0, registered, matched, active, busy 0 (0 ms), retain 8>
+  | | {
+  | |   "idProduct" = 260
+  | |   "USB Product Name" = "WendyOS Device brave_otter"
+  | |   "locationID" = 18874368
+  | |   "idVendor" = 7531
+  | | }
++-o Linux for Tegra@01100000  <class IOUSBHostDevice, id 0x100034f5c, registered, matched, active, busy 0 (0 ms), retain 20>
+  | {
+  |   "idProduct" = 260
+  |   "USB Product Name" = "Linux for Tegra"
+  |   "locationID" = 17825792
+  |   "USB Vendor Name" = "NVIDIA"
+  |   "idVendor" = 7531
+  |   "USB Serial Number" = "ddb4ab3d"
+  | }
+`
+
+// The product string is what tells a running WendyOS board from the flashing
+// gadget before the flash session is known.
+func TestParseUSBDevicesReadsProductString(t *testing.T) {
+	devs := parseUSBDevices(ioregTwoGadgets)
+	if len(devs) != 2 {
+		t.Fatalf("parseUSBDevices returned %d devices, want 2: %+v", len(devs), devs)
+	}
+	board, gadget := devs[0], devs[1]
+	if board.Product != "WendyOS Device brave-otter" || board.PortPath != "1-2" || board.Serial != "1421425005379" {
+		t.Errorf("running board = %+v, want the device's own product string at usb 1-2", board)
+	}
+	if gadget.Product != "Linux for Tegra" || gadget.PortPath != "1-1" || gadget.Serial != "ddb4ab3d" {
+		t.Errorf("flashing gadget = %+v, want the USB Product Name fallback at usb 1-1", gadget)
+	}
+}
