@@ -343,7 +343,15 @@ func (o *Observations) cloud(raw []byte, isBinary bool, received, now time.Time)
 	if err != nil || decoded != m.Size {
 		return fail("Could not decode Go2 LiDAR.")
 	}
-	var points []Vertex
+	// Count occupied bits before decoding so a dense cloud does not repeatedly
+	// copy an expanding point slice. Keep the existing retained-point limit:
+	// out-of-range voxels still do not count toward that limit.
+	pointCapacity := 0
+	for _, b := range buf {
+		pointCapacity += bits.OnesCount8(b)
+	}
+	pointCapacity = min(pointCapacity, 500001)
+	points := make([]Vertex, 0, pointCapacity)
 	// Bit and axis order match the existing Go2 ROS bridge decoder. Z is up.
 	for i, b := range buf {
 		if b == 0 {
@@ -483,7 +491,8 @@ func wallStripLandmarks(points []Vertex, bottom, top float64) []Point {
 	}
 	var result []Point
 	for c := range columns {
-		var neighbors []Point
+		var neighborhood [81]Point
+		neighbors := neighborhood[:0]
 		var levels uint64
 		for y := -4; y <= 4; y++ {
 			for x := -4; x <= 4; x++ {
