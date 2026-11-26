@@ -32,6 +32,7 @@ import simd
     private var lastInspectionRouteRevision = -1
     private var lastCameraRevision = -1
     private var lastLayers: Set<DemoLayer> = []
+    private let labels = SceneLabelCache()
     private weak var model: DemoModel?
     private var followYaw = Double.pi / 4
     private var followDistance = 8.0
@@ -456,22 +457,7 @@ import simd
         }
     }
     private func label(_ text:String,position:[Double],size:CGFloat)->SCNNode {
-        let geom=SCNText(string:text,extrusionDepth:0);geom.font=NSFont.systemFont(ofSize:1,weight:.medium);geom.flatness=0.15
-        let textMaterial=flat(NSColor(red:0.16,green:0.25,blue:0.26,alpha:1))
-        textMaterial.readsFromDepthBuffer=false;textMaterial.writesToDepthBuffer=false;geom.firstMaterial=textMaterial
-        let textNode=SCNNode(geometry:geom);textNode.castsShadow=false
-        let (min,max)=textNode.boundingBox
-        textNode.pivot=SCNMatrix4MakeTranslation((min.x+max.x)/2,(min.y+max.y)/2,0)
-        textNode.renderingOrder=101
-        let plate=SCNPlane(width:CGFloat(max.x-min.x)+1.5,height:CGFloat(max.y-min.y)+0.9)
-        plate.cornerRadius=0.45
-        let background=flat(NSColor(red:0.98,green:0.98,blue:0.96,alpha:0.94))
-        background.readsFromDepthBuffer=false;background.writesToDepthBuffer=false;plate.firstMaterial=background
-        let plateNode=SCNNode(geometry:plate);plateNode.position.z = -0.01;plateNode.renderingOrder=100;plateNode.castsShadow=false
-        let node=SCNNode();node.addChildNode(plateNode);node.addChildNode(textNode)
-        node.scale=SCNVector3(Float(size),Float(size),Float(size));node.position=vector(position)
-        node.constraints=[SCNBillboardConstraint()]
-        return node
+        labels.label(text, position: vector(position), size: size)
     }
     func preset(_ preset:CameraPreset,robot:Robot?) {
         view.allowsCameraControl = preset != .robot
