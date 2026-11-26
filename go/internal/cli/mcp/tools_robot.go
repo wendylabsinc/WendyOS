@@ -37,12 +37,14 @@ func (s *mcpServer) registerRobotTools(srv *server.MCPServer) {
 	register("unitree_pairings", "Read saved Unitree Go2 pairings and their current connection status directly from the selected Wendy device. Does not scan, pair, or move a robot. Use this for 'is my Go2 paired?' instead of interactive wendy device pair commands.", true)
 	serial := mcpgo.WithString("serial", mcpgo.Description("Serial returned by unitree_pairings. Omit when exactly one robot is paired; never invent one. Include a known serial for Stop to avoid a pairing lookup."))
 	register("robot_status", "Read the Go2's live digital-twin position, controller status, and saved named destinations. ReadinessMessage and readiness fields describe current state; LastMotionFailure is historical and legacy Message may preserve it. IdleMeasurementsReady and IdleReadinessMessage permit bounded passive matching while stationary, not movement; MeasurementsReady remains strict. This only reads state, not localization. For align/localize/find my position, use robot_command action localize. If observations are absent, use action connect.", true, serial)
-	register("robot_command", "Control the paired Go2 through its existing digital-twin controller. Actions: connect (start observations without a map click), localize (match current observations to a saved room without movement), localize_active (only for explicitly requested movement-assisted alignment: controller-managed nearby viewpoints and turns), turn (signed degrees, positive left; 1 to 180), forward (0.1 to 2 meters measured with odometry), go_to a saved destination, go_to_object with evidence from robot_find_object, remember the current map position under a name, or stop. Both localization actions accept an optional destination room name. Plain align/localize/find my position means localize; look around and align means localize_active, never arbitrary turn commands. A candidate does not confirm alignment. 'Turn around' is 180 degrees. Individual turn/forward/route goals are bounded to 30 seconds; active localization runs in the background for at most five minutes, with at most six turns and three nearby viewpoint moves. Stop cancels it. Query its original command receipt to follow progress; do not restart it. Controller obstacle and freshness checks remain authoritative. Reuse request_id on retries; a running receipt is not completion. Report returned state and message; never claim success for rejected/failed/superseded/canceled. Use robot_status for destination names, never invent coordinates. Perform supported recovery within the turn or report why the task stopped; do not promise a later retry. Do not repeat failed movement as recovery. The user's explicit movement request authorizes that bounded goal under the current approval policy.", false, serial,
-		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("connect", "localize", "localize_active", "turn", "forward", "go_to", "go_to_object", "remember", "stop")),
+	register("robot_command", "Control the Go2 with bounded goals. connect starts observations. localize matches a saved room without motion; localize_active permits movement-assisted alignment only when requested. find_active uses fresh onboard camera frames and local vision to search by query: at most five minutes, six turns and three nearby viewpoints on measured clear floor; no saved object location or map required. It stops on a visual match, which does not authorize approach. These active actions use original receipt polling; never restart them. stop cancels. turn uses signed degrees; forward measures distance with odometry. go_to uses a saved destination; go_to_object needs navigable evidence_id from robot_find_object. remember saves current map position. Plain align means localize, never arbitrary turns. Individual motion goals last at most 30 seconds. Controller obstacle/freshness checks remain authoritative. Reuse request_id for retries. Report exact state/message; running is not completed. Perform supported prerequisite recovery within the turn, never repeat failed movement as recovery. find_active includes camera capture and motion under the current approval policy.", false, serial,
+		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("connect", "localize", "localize_active", "find_active", "turn", "forward", "go_to", "go_to_object", "remember", "stop")),
 		mcpgo.WithString("request_id", mcpgo.Required(), mcpgo.Description("Unique ID of 8 to 80 characters for this user command. Reuse for retries; never reuse for a different command.")),
 		mcpgo.WithBoolean("receipt_only", mcpgo.Description("Runtime retry lookup: return the existing receipt for request_id without executing or starting observations. Missing receipts have unknown outcome.")),
 		mcpgo.WithNumber("degrees", mcpgo.Description("For turn: integer degrees from -180 to 180, excluding zero.")),
 		mcpgo.WithNumber("distance_meters", mcpgo.Min(0.1), mcpgo.Max(2), mcpgo.Description("For forward: distance in meters, 0.1 to 2.")),
+		mcpgo.WithString("query", mcpgo.Description("For find_active: one printable object description, 1 to 160 characters.")),
+		mcpgo.WithString("model", mcpgo.Description("For find_active: optional installed local vision model; omit for automatic selection.")),
 		mcpgo.WithString("evidence_id", mcpgo.Description("For go_to_object: opaque evidence_id from a navigable robot_find_object result. Never invent it.")),
 		mcpgo.WithString("destination", mcpgo.Description("For go_to or remember: saved map position name. For localize or localize_active: optional saved room name; omit only when the room can be selected unambiguously.")))
 }
@@ -103,7 +105,7 @@ func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolReque
 	}
 	args := map[string]any{"serial": serial, "action": "status"}
 	if req.Params.Name == "robot_command" {
-		for _, field := range []string{"action", "request_id", "degrees", "distance_meters", "destination", "evidence_id"} {
+		for _, field := range []string{"action", "request_id", "degrees", "distance_meters", "destination", "evidence_id", "query", "model"} {
 			if value, ok := req.GetArguments()[field]; ok {
 				args[field] = value
 			}
@@ -151,6 +153,15 @@ func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolReque
 	var out map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&out); err != nil {
 		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	if req.Params.Name == "robot_command" && stringParam(req, "action") == "find_active" {
+		out, err = provideRobotSearchView(ctx, serial, stringParam(req, "request_id"), out,
+			func(ctx context.Context, serial string) (string, cameraSnapshot, int64, error) {
+				return captureGo2SnapshotOnConn(ctx, conn, serial, true)
+			}, func(ctx context.Context) (net.Conn, error) { return s.robotDial(ctx, conn) })
+		if err != nil {
+			return errResult(errCodeDeviceUnreachable, "Object-search camera handshake failed; use the same receipt to check its outcome, do not restart motion: "+err.Error()), nil
+		}
 	}
 	return okResult(out), nil
 }
