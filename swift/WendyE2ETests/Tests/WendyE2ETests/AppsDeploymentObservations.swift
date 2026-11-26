@@ -49,6 +49,7 @@ struct AppsDeploymentSnapshot: Decodable, Sendable {
         let appReleaseId: String
         let configJson: String
         let desiredState: String
+        let validity: String?
         let revision: Int
         let removedAt: String?
     }

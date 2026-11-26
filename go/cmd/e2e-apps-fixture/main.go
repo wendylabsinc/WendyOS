@@ -217,7 +217,7 @@ func run(o options) (any, error) {
 					}
 				}
 			}
-		case "unbound-create", "unbound-delete", "unbound-state", "partial-delete":
+		case "target", "unbound-create", "unbound-delete", "unbound-state", "partial-delete":
 			out, err = auxiliary(ctx, conn, auth, o)
 		case "stale-update":
 			var d *pb.Deployment

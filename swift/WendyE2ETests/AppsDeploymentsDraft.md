@@ -8,7 +8,7 @@ device authorization; opt-in flags alone do not provide it.
 
 ## Coverage and counts
 
-There are **83 Swift test declarations in 15 command/Console suites**. All have
+There are **92 Swift test declarations in 16 command/Console suites**. All have
 actual logic and explicit opt-in gates. There are no disabled or empty stubs.
 The two excluded scenarios are interactive publish/registration prompts and the
 interactive deploy review. Their scripted counterparts remain covered.
@@ -16,18 +16,27 @@ interactive deploy review. Their scripted counterparts remain covered.
 | Tier | Declarations | What the bodies exercise |
 | --- | ---: | --- |
 | Local CLI validation | 11 | Missing input/confirmation, invalid project/required names/services, exact deployment syntax and rotate identifiers |
-| Cloud/CLI/device | 61 | Public operations, actual catalog/registry/history/report reads, authenticated uncached promotion, scripted first builds and independent HTTP responses; includes additional dedicated fleet, service-control, reboot, second-operator and natural-sweep opt-ins |
+| Cloud/CLI/device | 70 | Public operations, actual catalog/registry/history/report reads, authenticated uncached promotion, scripted first builds and independent HTTP responses; includes additional dedicated fleet, service-control, reboot, second-operator and natural-sweep opt-ins |
 | Real browser DOM | 7 | Rendered catalog/access/settings/releases, rollout and history, waiting/failed states, removal/deletion/detach and pending device work |
 | Isolated protocol/signing | 4 | Real Agent/CLI logic with synthetic in-process peers and deterministic test-only barriers; **not live Cloud/containerd coverage** |
 
-All eleven former argument variants now have independently named Swift
-functions. Each declaration owns one recording/coverage interval; none of the
-former inputs or assertions was removed. These are source counts, not runtime
-passing results. The four Go top-level isolation cases remain counted once;
-the bad-data wrapper retains all six existing subcases.
+All former parameter values now have independently named, nonparameterized
+Swift declarations. Each declaration owns one recording/coverage interval.
+This preserves all eleven former variants without changing the collector or
+hiding later arguments. These are source counts, not passing results. Four Go
+top-level isolation cases underlie the four Swift wrappers and are counted
+once, not added again; the bad-data wrapper retains all six existing subcases.
 
-Eight existing declarations use Cloud-only acceptance fixtures. Their full
-device-response counterparts retain terminal and HTTP assertions.
+Eighteen declarations use Cloud-only acceptance fixtures, including nine new
+operator cases for status/history, install/start/stop intent, confirmation, rollback range, release reuse,
+assigned-app deletion and actual retention limits. Existing terminal device
+response, removal, rotation and independent HTTP assertions remain intact.
+
+File-mounted encrypted secrets are a current operator-fixture gap. The pinned
+CLI assignment path does not provision or forward secret values. Verified
+managed delivery and a supported operator producer are prerequisites for their
+actual file/lifecycle acceptance. The ordinary direct-run case checks that an
+app with no secrets still responds; it does not establish secret-file behavior.
 
 ## Cloud-only fixture inputs
 
@@ -58,7 +67,7 @@ The earlier 69-declaration measured baseline remains separate. Two of its cases
 read Cloud rollback history and removal/release retention without waiting for a
 device result. Seven additional declarations now cover release/configuration
 updates, unsigned interrupted-delivery resume, pending key rotation, digest
-refusal/retry, target union, manual canary growth, and parameterized scripted
+refusal/retry, target union, manual canary growth, and scripted
 first publication from new/existing projects. These establish their named Cloud
 or publication behavior; none replaces the original terminal runtime assertions.
 The new-project example derives its app id from a mixed-case directory, builds

@@ -524,7 +524,7 @@ struct AppsDeploymentFixture: Sendable {
         // disclose the entire auth dictionary. Sanitize parsing errors as well.
         let sanitized = Prerequisite(
             description:
-                "Dedicated identity fixture is missing, unreadable or does not match the expected Dev tenant, endpoint and pinned asset. Supply one fresh verified session; credential details are suppressed."
+                "Dedicated identity fixture is missing, unreadable or does not match the intended Dev account. Supply one fresh verified session for the required tenant and endpoint; credential details are suppressed."
         )
         if let account = ProcessInfo.processInfo.environment["WENDY_E2E_APPS_ACCOUNT"] {
             guard !account.isEmpty,

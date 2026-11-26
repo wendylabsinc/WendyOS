@@ -213,7 +213,7 @@ struct `'wendy app publish'` {
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
     func `records the encrypted artifact and release metadata`() async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withCloudApp { cli, app in
             try await app.create(cli)
             let release = try await app.publish(cli)
             let artifact = try await app.requireArtifact(cli, release: release)
