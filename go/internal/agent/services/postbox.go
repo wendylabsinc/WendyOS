@@ -154,7 +154,7 @@ type postboxState struct {
 	// deployment id.
 	Marks map[string]*postboxMark `json:"marks,omitempty"`
 	// Detached are the apps a detach left running as direct runs, each with
-	// the statement it runs, stripped of every key (applyDetach). A removal
+	// the statement it runs, retaining encrypted secrets for restart (applyDetach). A removal
 	// of one only prunes images no container uses, until a new deployment of
 	// the app is accepted.
 	Detached map[string][]byte `json:"detached,omitempty"`
@@ -423,7 +423,7 @@ func (p *Postbox) cycle(ctx context.Context) error {
 
 	for {
 		hwm := p.snapshot().HighWater
-		resp, err := client.PullChanges(ctx, &cloudpbv2.PullChangesRequest{AfterEntryId: hwm, Limit: postboxPageSize, AcceptedOperations: postboxAccepted})
+		resp, err := client.PullChanges(ctx, &cloudpbv2.PullChangesRequest{AfterEntryId: hwm, Limit: postboxPageSize, AcceptedOperations: postboxAccepted, AcceptedFields: p.acceptedSecretFields()})
 		if err != nil {
 			return fmt.Errorf("pulling postbox: %w", err)
 		}

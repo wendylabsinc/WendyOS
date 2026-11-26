@@ -47,12 +47,15 @@ func (c *Client) recoverInterruptedTaskStart(ctx context.Context, ctr containerd
 	}
 	task, err := ctr.Task(ctx, nil)
 	if errdefs.IsNotFound(err) {
-		return nil
+		return c.cleanupContainerSecrets(ctx, ctr)
 	}
 	if err != nil {
 		return err
 	}
 	status, err := task.Status(ctx)
+	if err == nil && status.Status == containerdclient.Stopped {
+		return c.cleanupContainerSecrets(ctx, ctr)
+	}
 	if err != nil || status.Status != containerdclient.Created {
 		return err
 	}

@@ -269,6 +269,7 @@ func main() {
 	// panics on first use rather than failing the service's nil check.
 	var buildChunkSource services.ChunkSource
 	if ctrdErr == nil {
+		ctrdClient.SetAppSecretOpener(services.NewAppSecretOpener(configPath))
 		buildChunkSource = ctrdClient
 	}
 	if ctrdErr == nil {

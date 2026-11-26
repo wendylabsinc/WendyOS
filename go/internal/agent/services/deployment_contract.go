@@ -119,7 +119,7 @@ func assignOrder(st *postboxState, a *cloudpbv2.DeviceAssignment) (repeat bool, 
 func sameContent(x, y *cloudpbv2.DeviceAssignment) bool {
 	return x.GetAppId() == y.GetAppId() && x.GetAppReleaseId() == y.GetAppReleaseId() &&
 		x.GetManifestDigest() == y.GetManifestDigest() && x.GetConfigJson() == y.GetConfigJson() &&
-		x.GetDesiredState() == y.GetDesiredState() &&
+		x.GetDesiredState() == y.GetDesiredState() && SecretContentID(x) == SecretContentID(y) &&
 		x.GetReplacesDeploymentId() == y.GetReplacesDeploymentId() && x.GetReplacesRevision() == y.GetReplacesRevision()
 }
 
@@ -176,6 +176,9 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 	if outcome, reason, err := checkAssignment(r); err != nil {
 		return app, outcome, reason, err
 	}
+	if err := p.checkAppSecrets(r); err != nil {
+		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_UNWRAP, "secrets", err
+	}
 	raw, err := proto.Marshal(r)
 	if err != nil {
 		return refused(app, err)
@@ -186,6 +189,15 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 	p.mu.Unlock()
 	if err != nil {
 		return refused(app, err)
+	}
+	if repeat && len(r.GetSecrets()) > 0 {
+		if control, ok := p.control.(interface {
+			UpdateAppSecretWraps(context.Context, *cloudpbv2.DeviceAssignment) error
+		}); ok {
+			if err := control.UpdateAppSecretWraps(ctx, r); err != nil {
+				return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "secret_wraps", err
+			}
+		}
 	}
 	from := r.GetReplacesDeploymentId()
 	move := from != "" && !repeat
@@ -430,7 +442,8 @@ func (p *Postbox) heldStatement(dep string) *postboxAssignment {
 // detachedStatement is what a detached app runs: the held statement when it
 // runs (or was applied), else the last applied one before it; nil for none.
 // Only what a put-back needs is kept (app, release, signed digest,
-// configuration, desired state), never the key id or the device wrap.
+// configuration, desired state and encrypted secrets). Secret device wraps
+// are retained so a detached app can restart without storing plaintext.
 func detachedStatement(held *postboxAssignment, runs bool) []byte {
 	raw := held.Previous
 	if runs || held.Applied {
@@ -443,6 +456,7 @@ func detachedStatement(held *postboxAssignment, runs bool) []byte {
 	out, err := proto.Marshal(&cloudpbv2.DeviceAssignment{
 		DeploymentId: a.GetDeploymentId(), AppId: a.GetAppId(), AppReleaseId: a.GetAppReleaseId(),
 		ManifestDigest: a.GetManifestDigest(), ConfigJson: a.GetConfigJson(), DesiredState: a.GetDesiredState(),
+		OrganizationId: a.GetOrganizationId(), Device: a.GetDevice(), Secrets: a.GetSecrets(),
 	})
 	if err != nil {
 		return nil

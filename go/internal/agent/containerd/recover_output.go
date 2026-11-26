@@ -22,6 +22,7 @@ type taskOutputOwner struct {
 	// the container's mount namespace (camera_share_wiring.go). Set before
 	// the run's exit watcher starts and never changed.
 	cameraShared bool
+	secretMount  string
 }
 
 type recoveredTaskOutput struct {
@@ -156,8 +157,10 @@ func (c *Client) recoverTaskOutput(ctx context.Context, ctr containerdclient.Con
 	// A sharing container's namespace, held again by the startup sync, is let
 	// go of when this inherited task exits, as for one this agent started.
 	cameraShared := false
+	hasSecrets := false
 	if labels, labelErr := ctr.Labels(ctx); labelErr == nil {
 		cameraShared = sharesCamera(labels)
+		hasSecrets = labels[secretContentLabel] != ""
 	}
 	c.outputMu.Lock()
 	owner := c.outputOwners[name]
@@ -191,6 +194,15 @@ func (c *Client) recoverTaskOutput(ctx context.Context, ctr containerdclient.Con
 		r.close()
 		return err
 	}
+	secretMount := ""
+	if hasSecrets {
+		spec, err := ctr.Spec(ctx)
+		if err != nil {
+			r.close()
+			return err
+		}
+		secretMount = spec.Annotations[secretMountAnnotation]
+	}
 	c.outputMu.Lock()
 	if c.outputClosed {
 		c.outputMu.Unlock()
@@ -203,7 +215,7 @@ func (c *Client) recoverTaskOutput(ctx context.Context, ctr containerdclient.Con
 	if c.recoveredOutput == nil {
 		c.recoveredOutput = make(map[string]*recoveredTaskOutput)
 	}
-	r.owner = &taskOutputOwner{pid: pid, cameraShared: cameraShared}
+	r.owner = &taskOutputOwner{pid: pid, cameraShared: cameraShared, secretMount: secretMount}
 	c.outputOwners[name] = r.owner
 	c.recoveredOutput[name] = r
 	c.outputMu.Unlock()
@@ -211,6 +223,7 @@ func (c *Client) recoverTaskOutput(ctx context.Context, ctr containerdclient.Con
 		exit := <-exitCh
 		code, exitedAt, exitErr := exit.Result()
 		if exitErr == nil {
+			c.cleanupAppSecretMount(r.owner.secretMount)
 			// Deliver remaining output before retiring this task's FIFO paths.
 			if r.io != nil {
 				r.io.Wait()

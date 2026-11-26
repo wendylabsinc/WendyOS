@@ -242,7 +242,7 @@ func (c *Client) AppState(ctx context.Context, app string) (services.AppContaine
 	if err != nil {
 		return services.AppContainerState{}, fmt.Errorf("reading container %q: %w", app, err)
 	}
-	st := services.AppContainerState{Image: info.Image, Present: true, StoppedByUser: info.Labels[labelKeyStoppedByUser] == "true"}
+	st := services.AppContainerState{SecretContentID: info.Labels[secretContentLabel], Image: info.Image, Present: true, StoppedByUser: info.Labels[labelKeyStoppedByUser] == "true"}
 	if spec, err := ctr.Spec(ctx); err == nil && spec.Process != nil {
 		st.Env = spec.Process.Env
 	}

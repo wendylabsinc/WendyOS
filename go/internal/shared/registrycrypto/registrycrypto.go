@@ -265,6 +265,7 @@ func appendAll(b []byte, fields ...string) ([]byte, error) {
 const (
 	ScopeDeployment byte = 1 // WrapScope.deployment_id: the wrap opens a deployment key
 	ScopeRelease    byte = 2 // WrapScope.app_release_id: the wrap opens a content key
+	ScopeSecret     byte = 3 // WrapScope.secret_version
 )
 
 // Wrap binds one KeyWrap to everything it may open for: tenant, scope, the
@@ -283,7 +284,10 @@ type Wrap struct {
 // info = "wendy-registry-wrap-v1" ‖ lp(org) ‖ u8 scope kind ‖ lp(scope id) ‖
 // lp(key_id) ‖ u8 recipient_kind ‖ lp(recipient) ‖ lp(recipient_key_id).
 func (w Wrap) info() ([]byte, error) {
-	if w.Scope != ScopeDeployment && w.Scope != ScopeRelease {
+	if w.Scope == ScopeSecret && w.RecipientKind == 3 {
+		return nil, errors.New("custodian wraps are forbidden for app secrets")
+	}
+	if w.Scope != ScopeDeployment && w.Scope != ScopeRelease && w.Scope != ScopeSecret {
 		return nil, fmt.Errorf("unknown wrap scope %d", w.Scope)
 	}
 	b, err := appendLP([]byte(wrapLabel), w.OrganizationID)

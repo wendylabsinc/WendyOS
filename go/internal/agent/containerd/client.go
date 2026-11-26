@@ -118,6 +118,7 @@ func dbusProxyManagerOrNil(m *dbusproxy.Manager) dbusProxyManager {
 }
 
 type Client struct {
+	appSecretOpener         services.AppSecretOpener
 	deliverySource          delivery.Source
 	client                  *containerd.Client
 	logger                  *zap.Logger
@@ -484,6 +485,11 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 	cl.forceGC = func(ctx context.Context) error {
 		return forceContainerdGC(ctx, cl.client.LeasesService())
 	}
+	secretCtx, secretCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := cl.recoverAppSecretMounts(secretCtx); err != nil {
+		logger.Warn("Could not recover all app secret mounts", zap.Error(err))
+	}
+	secretCancel()
 	return cl, nil
 }
 
@@ -1751,6 +1757,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	if err := localoci.ValidateMounts(spec); err != nil {
 		return err
 	}
+	secretOption, err := secretCreateOptions(ctx, appID, spec, labels)
+	if err != nil {
+		return err
+	}
 	specDuration = time.Since(phaseStarted)
 	// Before the old version is removed: a refused deploy leaves it running.
 	if err := c.checkHostPorts(ctx, appID, entCfg.Entitlements); err != nil {
@@ -1770,6 +1780,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// task alive and join it.
 	phaseStarted = time.Now()
 	if existing != nil {
+		oldSpec, _ := existing.Spec(ctx)
 		oldNPUTaskRetained := false
 		// From here on the old container loses its network and its task, so
 		// a failure leaves the app without a running version, even when the
@@ -1900,6 +1911,9 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 		if delErr != nil && !errdefs.IsNotFound(delErr) {
 			return fmt.Errorf("deleting existing container %q during replace: %w", containerName, delErr)
+		}
+		if oldSpec != nil {
+			c.cleanupAppSecretMount(oldSpec.Annotations[secretMountAnnotation])
 		}
 		// The old container's shares go before the new container's are made,
 		// and on this goroutine, so the removal never races the new
@@ -2108,6 +2122,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		containerd.WithSnapshotter(c.snapshotter),
 		snapshotOpt,
 		containerd.WithContainerLabels(labels),
+		secretOption,
 		containerd.WithNewSpec(
 			oci.WithSpecFromBytes(specJSON),
 		),
@@ -2719,6 +2734,16 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		return nil, fmt.Errorf("cleaning stale task for %q: %w", appName, err)
 	}
 	staleTaskDuration = time.Since(phaseStarted)
+	secretDir, err := c.prepareAppSecrets(ctx, container)
+	if err != nil {
+		return nil, fmt.Errorf("preparing app secrets: %w", err)
+	}
+	secretsStarted := false
+	defer func() {
+		if !secretsStarted {
+			c.cleanupAppSecretMount(secretDir)
+		}
+	}()
 
 	// The task's IO pipeline must live as long as the task, not the RPC that
 	// started it: containerd's fifo package closes the FIFO fds when the
@@ -3136,6 +3161,8 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	outputOwner := c.trackTaskOutput(appName, task.Pid())
 	// Set before streamOutput, its only reader, starts.
 	outputOwner.cameraShared = sharesCamera(containerLabels)
+	outputOwner.secretMount = secretDir
+	secretsStarted = true
 	meshIngressStarted = true
 	nanStartLease.committed = true
 	go c.streamOutput(taskCtx, task, exitStatusCh, outputCh, appName, nanTaskAppID, meshIngressRun, outputOwner, stdoutR, stderrR, stdoutW, stderrW)
@@ -4027,6 +4054,7 @@ func (c *Client) recreateContainer(ctx context.Context, ctr containerd.Container
 		containerd.WithSnapshotter(c.snapshotter),
 		containerd.WithNewSnapshot(snapshotKey, image),
 		containerd.WithContainerLabels(info.Labels),
+		copyContainerExtensions(info.Extensions),
 		containerd.WithNewSpec(
 			oci.WithSpecFromBytes(specJSON),
 		),
@@ -4286,6 +4314,7 @@ func (c *Client) refreshSecondaryNamespaces(ctx context.Context, name string, pr
 		containerd.WithSnapshotter(c.snapshotter),
 		containerd.WithNewSnapshot(snapshotKey, image),
 		containerd.WithContainerLabels(info.Labels),
+		copyContainerExtensions(info.Extensions),
 		containerd.WithNewSpec(
 			oci.WithSpecFromBytes(newSpecJSON),
 		),
@@ -4364,6 +4393,9 @@ func (c *Client) streamOutput(
 	// would hang this goroutine forever.
 	taskExited := err == nil
 	if taskExited {
+		if outputOwner != nil {
+			c.cleanupAppSecretMount(outputOwner.secretMount)
+		}
 		c.releaseMeshIngressRun(appName, meshIngressRun)
 		if nanAppID != "" {
 			go c.releaseNANAfterTaskExit(context.WithoutCancel(ctx), appName, nanAppID, meshIngressRun)
@@ -4640,7 +4672,7 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 					return errors.Join(clearSandboxErr, err)
 				}
 			}
-			return clearSandboxErr // No task running; exact rules were retired above.
+			return errors.Join(clearSandboxErr, c.cleanupContainerSecrets(ctx, container)) // No task running.
 		}
 		return errors.Join(clearSandboxErr, fmt.Errorf("getting task for %q: %w", containerID, err))
 	}
@@ -4715,6 +4747,7 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	}
 	_ = c.avahiManager.Stop(containerID)
 
+	clearSandboxErr = errors.Join(clearSandboxErr, c.cleanupContainerSecrets(ctx, container))
 	c.logger.Info("Container stopped", zap.String("container_id", containerID))
 
 	// Recompute camera-loopback nodes/consumers from truth now that this
@@ -5056,6 +5089,9 @@ func (c *Client) deleteOne(ctx context.Context, ctr containerd.Container, wantIm
 			c.removeCameraShares(ctr.ID())
 		}
 		return "", fmt.Errorf("deleting container %q: %w", ctr.ID(), err)
+	}
+	if persistedSpec != nil {
+		c.cleanupAppSecretMount(persistedSpec.Annotations[secretMountAnnotation])
 	}
 	// Every delete removes a sharing container's shares here, without waiting
 	// for its nodes to go; a sync would otherwise keep them for a minute.

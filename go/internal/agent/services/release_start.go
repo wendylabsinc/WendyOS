@@ -41,11 +41,12 @@ func ReleaseImageRef(appID, releaseID, manifestDigest string) string {
 
 // AppContainerState is the app's container as the runtime holds it.
 type AppContainerState struct {
-	Image         string   // the image name the container was created from
-	Env           []string // its process environment
-	Present       bool     // a container exists for the app
-	Running       bool     // its task runs
-	StoppedByUser bool     // stopped explicitly (a user, or install only)
+	SecretContentID string   // digest of sealed secret values only
+	Image           string   // the image name the container was created from
+	Env             []string // its process environment
+	Present         bool     // a container exists for the app
+	Running         bool     // its task runs
+	StoppedByUser   bool     // stopped explicitly (a user, or install only)
 }
 
 // AppConfigLabel is the image config label that carries a release's app
@@ -61,6 +62,7 @@ var ErrNoAppDefinition = errors.New("this release has no app definition; publish
 
 // ReleaseStart is one start of a deployed app.
 type ReleaseStart struct {
+	Secrets          *cloudpbv2.DeviceAssignment // verified, encrypted; never plaintext
 	AppID, ReleaseID string
 	ManifestDigest   string   // the signed digest the release image must have
 	AppConfig        []byte   // the release's app definition
@@ -83,8 +85,16 @@ func (p *Postbox) releaseStart(ctx context.Context, a *cloudpbv2.DeviceAssignmen
 	if err != nil {
 		return ReleaseStart{}, pullFailed("config", err)
 	}
+	if err := p.checkAppSecrets(a); err != nil {
+		return ReleaseStart{}, err
+	}
+	var secrets *cloudpbv2.DeviceAssignment
+	if len(a.GetSecrets()) > 0 {
+		secrets = a
+	}
 	return ReleaseStart{
-		AppID: a.GetAppId(), ReleaseID: a.GetAppReleaseId(), ManifestDigest: a.GetManifestDigest(), AppConfig: def, Env: env,
+		Secrets: secrets,
+		AppID:   a.GetAppId(), ReleaseID: a.GetAppReleaseId(), ManifestDigest: a.GetManifestDigest(), AppConfig: def, Env: env,
 		Run: a.GetDesiredState() == cloudpbv2.Running_RUNNING,
 	}, nil
 }
@@ -196,7 +206,7 @@ func (p *Postbox) expiredResume(ctx context.Context, a *cloudpbv2.DeviceAssignme
 func (p *Postbox) runsStatement(st AppContainerState, a *cloudpbv2.DeviceAssignment) bool {
 	env, err := appconfig.DeploymentConfigEnv(a.GetConfigJson())
 	if err != nil || !st.Present || st.Image != ReleaseImageName(a.GetAppId(), a.GetAppReleaseId()) ||
-		st.Running != (a.GetDesiredState() == cloudpbv2.Running_RUNNING) {
+		st.Running != (a.GetDesiredState() == cloudpbv2.Running_RUNNING) || st.SecretContentID != SecretContentID(a) {
 		return false
 	}
 	for _, kv := range env {
@@ -291,6 +301,13 @@ type releaseReader interface {
 // is true once the create was attempted: from then on the old container may
 // be gone.
 func (c containerControl) StartRelease(ctx context.Context, s ReleaseStart) (bool, error) {
+	if len(s.Secrets.GetSecrets()) > 0 && !c.SupportsAppSecrets() {
+		return false, errors.New("container runtime does not support app secret mounts")
+	}
+	ctx, err := secretStartContext(ctx, s)
+	if err != nil {
+		return false, err
+	}
 	release := s.ReleaseID
 	req := &agentpb.CreateContainerRequest{
 		ImageName: ReleaseImageRef(s.AppID, s.ReleaseID, s.ManifestDigest), AppName: s.AppID, AppConfig: s.AppConfig, Env: s.Env,
