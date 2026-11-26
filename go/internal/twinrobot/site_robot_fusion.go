@@ -131,7 +131,7 @@ func (r *SiteRobot) fuseLocalizationOwned(sequence uint64, request SiteFusionReq
 	report.VisualUsed = input.Visual != nil
 
 	r.mu.Unlock()
-	model, err := sitenav.NewLayeredRoom(architecture, furniture)
+	model, err := r.geometryCache.load(architecture, furniture)
 	if err != nil {
 		return report, err
 	}

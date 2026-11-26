@@ -18,7 +18,7 @@ type roomTracking struct {
 
 // Geometry is bound to the imported model revision. It supplies no pose and
 // cannot authorize motion. Manual placement can provide it along with Align.
-func trackingGeometry(request SiteFusionRequest) (*roomTracking, error) {
+func (r *SiteRobot) trackingGeometry(request SiteFusionRequest) (*roomTracking, error) {
 	if request.Frame == "" || len(request.Frame) > 200 {
 		return nil, errors.New("Invalid room frame.")
 	}
@@ -30,7 +30,7 @@ func trackingGeometry(request SiteFusionRequest) (*roomTracking, error) {
 	if err != nil {
 		return nil, err
 	}
-	m, err := sitenav.NewLayeredRoom(a, f)
+	m, err := r.geometryCache.load(a, f)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func (r *SiteRobot) AlignWithGeometry(sequence uint64, frame string, x, z, floor
 	if request.Frame != frame {
 		return errors.New("Room geometry frame mismatch.")
 	}
-	geometry, err := trackingGeometry(request)
+	geometry, err := r.trackingGeometry(request)
 	if err != nil {
 		return err
 	}
