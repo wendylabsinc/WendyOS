@@ -297,7 +297,7 @@ func TestEncoderSegment_ByteStreamCapsOnlyForX264WithoutH264Parse(t *testing.T) 
 	}{
 		{"x264enc", false, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au"},
 		{"x264enc", true, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high" + h264ByteStream},
-		{"v4l2h264enc", false, "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc extra-controls=\"controls,h264_i_frame_period=30\" ! video/x-h264,profile=baseline,level=(string)4"},
+		{"v4l2h264enc", false, "videoconvert ! videoscale ! video/x-raw,format={I420,NV12} ! v4l2h264enc extra-controls=\"controls,h264_i_frame_period=30\" ! video/x-h264,profile=baseline,level=(string)4"},
 		{"vaapih264enc", false, "videoconvert ! video/x-raw,format=I420 ! vaapih264enc"},
 	} {
 		if got := encoderSegment(tc.encoder, tc.hasH264Parse, 30); got != tc.want {
@@ -438,7 +438,7 @@ func TestBuildGStreamerArgs_V4L2LetsTheDriverPickItsInputFormat(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{}
 	args := mustBuildGStreamerArgs(t, "/usr/bin/gst-launch-1.0", "/dev/video0", req, "v4l2h264enc", true)
 	joined := strings.Join(args, " ")
-	const want = "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc"
+	const want = "videoconvert ! videoscale ! video/x-raw,format={I420,NV12} ! v4l2h264enc"
 	if !strings.Contains(joined, want) {
 		t.Errorf("v4l2h264enc input caps must offer both formats (%q): %v", want, args)
 	}

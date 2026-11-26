@@ -804,7 +804,7 @@ build_managed_agent() {
     mkdir -p "$AGENT_BIN_DIR"
     (
       cd "$REPO_DIR/go"
-      go build -o "$agent_path" ./cmd/wendy-agent
+      python3 scripts/with-agent-tls.py build -o "$agent_path" ./cmd/wendy-agent
     )
     "$agent_path" --version
   fi

@@ -79,6 +79,26 @@ func withMJPEGProbe(t *testing.T, fn func(string, uint32, uint32) bool) {
 	t.Cleanup(func() { deviceSupportsMJPEGSize = orig })
 }
 
+func TestSmallROSImageKeepsCaptureSizeAndScalesForHardwareEncoder(t *testing.T) {
+	previous := bestDefaultFrameSizeForDevice
+	bestDefaultFrameSizeForDevice = func(string) (uint32, uint32) { return 32, 24 }
+	t.Cleanup(func() { bestDefaultFrameSizeForDevice = previous })
+	withMJPEGProbe(t, func(_ string, w, h uint32) bool { return w == 32 && h == 24 })
+	args, err := buildGStreamerArgs("gst-launch-1.0", "/dev/video132", &agentpb.StreamVideoRequest{},
+		"v4l2h264enc", true, camera.TransportUnknown, "", pipeWireSource{}, map[string]bool{"jpegdec": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "image/jpeg,width=32,height=24") {
+		t.Fatalf("source size changed: %s", joined)
+	}
+	decode, scale, encode := strings.Index(joined, "jpegdec"), strings.Index(joined, "videoscale"), strings.Index(joined, "v4l2h264enc")
+	if !(decode >= 0 && decode < scale && scale < encode) {
+		t.Fatalf("small source must be decoded and resized before hardware encoding: %s", joined)
+	}
+}
+
 // A USB camera that advertises MJPEG at the negotiated size should be captured
 // compressed (image/jpeg + jpegdec) — raw capture is USB-bandwidth-capped to
 // single-digit frame rates at 720p+ on common webcams.

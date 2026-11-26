@@ -25,6 +25,7 @@ var protocolID = [4]byte{'R', 'T', 'P', 'S'}
 const (
 	subACKNACK   = 0x06
 	subHEARTBEAT = 0x07
+	subGAP       = 0x08
 	subINFO_TS   = 0x09
 	subINFO_SRC  = 0x0c
 	subINFO_DST  = 0x0e
@@ -378,15 +379,18 @@ const acknackMaxBits = 256
 // replays the DATA once the reader asks. Without this, discovery receives
 // heartbeats indefinitely and never a single publication.
 func buildAcknack(readerID, writerID uint32, base, last SequenceNumber, count uint32) []byte {
+	return buildAcknackMissing(readerID, writerID, base, last, count, nil)
+}
+
+// known is called while the participant lock is held, to leave received or
+// explicitly unavailable sequence numbers clear in the request bitmap.
+func buildAcknackMissing(readerID, writerID uint32, base, last SequenceNumber, count uint32, known func(SequenceNumber) bool) []byte {
 	if base < 1 {
 		base = 1
 	}
-	n := int(last - base + 1)
-	if n < 0 {
-		n = 0
-	}
-	if n > acknackMaxBits {
-		n = acknackMaxBits
+	n := 0
+	if last >= base {
+		n = int(min(last-base, acknackMaxBits-1)) + 1
 	}
 
 	words := (n + 31) / 32
@@ -397,8 +401,7 @@ func buildAcknack(readerID, writerID uint32, base, last SequenceNumber, count ui
 	binary.BigEndian.PutUint32(idb[4:8], writerID)
 	body = append(body, idb...)
 
-	// readerSNState: bitmapBase, numBits, bitmap. Every bit set means "I have
-	// none of these, send them all".
+	// readerSNState: bitmapBase, numBits, bitmap. Set bits request missing DATA.
 	snb := make([]byte, 12)
 	binary.LittleEndian.PutUint32(snb[0:4], uint32(int32(base>>32)))
 	binary.LittleEndian.PutUint32(snb[4:8], uint32(base))
@@ -408,7 +411,7 @@ func buildAcknack(readerID, writerID uint32, base, last SequenceNumber, count ui
 	for w := 0; w < words; w++ {
 		var bits uint32
 		for bit := 0; bit < 32; bit++ {
-			if w*32+bit < n {
+			if w*32+bit < n && (known == nil || !known(base+SequenceNumber(w*32+bit))) {
 				// Bit 0 is the most significant bit of the word.
 				bits |= 1 << (31 - bit)
 			}
@@ -488,4 +491,37 @@ func buildDispose(writer uint32, sn SequenceNumber, guid GUID) []byte {
 	data := buildData(entityUnknown, writer, sn, nil)
 	body := append(data[4:], qos.finish()[4:]...)
 	return buildSubmessage(subDATA, 0x02, body)
+}
+
+// GAP contains an unavailable contiguous interval [start, base), followed by
+// a sparse SequenceNumberSet. Validate the entire bitmap before changing state.
+type gapSubmessage struct {
+	readerID, writerID uint32
+	start, base        SequenceNumber
+	numBits            uint32
+	bitmap             []uint32
+}
+
+func parseGap(s Submessage) (*gapSubmessage, error) {
+	b, order := s.Body, s.Endian
+	if len(b) < 28 {
+		return nil, ErrShort
+	}
+	sn := func(off int) SequenceNumber {
+		return SequenceNumber(int64(int32(order.Uint32(b[off:off+4])))<<32 | int64(order.Uint32(b[off+4:off+8])))
+	}
+	g := &gapSubmessage{readerID: binary.BigEndian.Uint32(b[:4]), writerID: binary.BigEndian.Uint32(b[4:8]), start: sn(8), base: sn(16), numBits: order.Uint32(b[24:28])}
+	if g.start < 1 || g.base < g.start || g.numBits > acknackMaxBits ||
+		(g.numBits > 0 && g.base > SequenceNumber(1<<63-1)-SequenceNumber(g.numBits-1)) {
+		return nil, errors.New("rtps: invalid discovery GAP range")
+	}
+	words := int((g.numBits + 31) / 32)
+	if len(b) < 28+4*words {
+		return nil, ErrShort
+	}
+	g.bitmap = make([]uint32, words)
+	for i := range g.bitmap {
+		g.bitmap[i] = order.Uint32(b[28+4*i : 32+4*i])
+	}
+	return g, nil
 }

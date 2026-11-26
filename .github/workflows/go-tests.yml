@@ -22,6 +22,10 @@ permissions:
   contents: read
 
 jobs:
+  agent-tls-interop:
+    if: ${{ !inputs.media_only }}
+    uses: ./.github/workflows/agent-tls-interop.yml
+
   plugin-launcher:
     if: ${{ !inputs.media_only }}
     uses: ./.github/workflows/plugin-launcher.yml

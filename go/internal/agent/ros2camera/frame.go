@@ -4,11 +4,13 @@ package ros2camera
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
+	"math"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/rtps/cdr"
@@ -291,6 +293,14 @@ func decodeRawImage(payload []byte) ([]byte, int, int, error) {
 
 	var img image.Image
 	switch strings.ToLower(encoding) {
+	case "32fc1":
+		if step < width*4 {
+			return nil, 0, 0, errors.New("ROS 2 image step is smaller than one row")
+		}
+		img, err = floatImagePreview(data, int(width), int(height), int(step), bigEndian != 0)
+		if err != nil {
+			return nil, 0, 0, err
+		}
 	case "mono8", "8uc1":
 		if step < width {
 			return nil, 0, 0, errors.New("ROS 2 image step is smaller than one row")
@@ -345,6 +355,50 @@ func decodeRawImage(payload []byte) ([]byte, int, int, error) {
 		return nil, 0, 0, fmt.Errorf("%w: %s", ErrUnsupportedEncoding, encoding)
 	}
 	return encodeJPEG(img)
+}
+
+// floatImagePreview renders a scalar image for the ordinary video path. 32FC1
+// specifies storage, not units: it may contain temperature, depth, or another
+// measurement. Map finite values to relative grayscale without labelling them
+// as Celsius or modifying the original ROS sample. Consumers needing absolute
+// measurements must continue reading the source topic.
+//
+// Dimensions, row stride and data length are validated by decodeRawImage.
+func floatImagePreview(data []byte, width, height, step int, bigEndian bool) (*image.Gray, error) {
+	var order binary.ByteOrder = binary.LittleEndian
+	if bigEndian {
+		order = binary.BigEndian
+	}
+	valueAt := func(x, y int) float64 {
+		return float64(math.Float32frombits(order.Uint32(data[y*step+x*4:])))
+	}
+	low, high := math.Inf(1), math.Inf(-1)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			v := valueAt(x, y)
+			if !math.IsNaN(v) && !math.IsInf(v, 0) {
+				low, high = min(low, v), max(high, v)
+			}
+		}
+	}
+	if math.IsInf(low, 1) {
+		return nil, errors.New("ROS 2 float image contains no finite pixels")
+	}
+	img := image.NewGray(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			v := valueAt(x, y)
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				continue // Invalid measurements are black, not part of the range.
+			}
+			intensity := uint8(128) // A valid constant image remains visible.
+			if high > low {
+				intensity = uint8(math.Round((v - low) / (high - low) * 255))
+			}
+			img.Pix[y*img.Stride+x] = intensity
+		}
+	}
+	return img, nil
 }
 
 func encodeJPEG(img image.Image) ([]byte, int, int, error) {
