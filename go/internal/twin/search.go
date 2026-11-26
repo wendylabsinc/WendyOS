@@ -250,12 +250,13 @@ searchLoop:
 					}
 					state := session.robot.Status()
 					if state.Disconnected || state.DiscoveryState == 3 {
+						message := searchMotionStopMessage(state)
 						if !state.Disconnected && state.MotionRecoveryAllowed {
 							recoveringMotion = true
-							awaitObservations(turn, state.Message, true)
+							awaitObservations(turn, message, true)
 							continue searchLoop
 						}
-						fail(state.Message)
+						fail(message)
 						return
 					}
 					if state.DiscoveryState == 2 && !state.Moving {
@@ -303,12 +304,13 @@ searchLoop:
 			}
 			state := session.robot.Status()
 			if state.LookState == 3 || state.Disconnected {
+				message := searchMotionStopMessage(state)
 				if !state.Disconnected && state.MotionRecoveryAllowed {
 					recoveringMotion = true
-					awaitObservations(turn, state.Message, true)
+					awaitObservations(turn, message, true)
 					continue searchLoop
 				}
-				fail(state.Message)
+				fail(message)
 				return
 			}
 			if state.LookState == 2 && !state.Moving {
@@ -320,4 +322,14 @@ searchLoop:
 			}
 		}
 	}
+}
+
+// Packet rejection diagnostics may update the legacy message after a movement
+// has stopped. Its latched failure records why this goal stopped; a terminal
+// stream disconnection still takes precedence over that historical motion.
+func searchMotionStopMessage(state twinrobot.SiteRobotSnapshot) string {
+	if !state.Disconnected && state.LastMotionFailure != "" {
+		return state.LastMotionFailure
+	}
+	return state.Message
 }
