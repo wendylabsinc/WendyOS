@@ -54,7 +54,7 @@ func privateAliasTestDevice(t *testing.T, id string) meshid.Device {
 	return device
 }
 func privateAliasTestLAN(id, name string) models.LANDevice {
-	return models.LANDevice{PrincipalURI: certs.DeviceSPIFFEURI(privateAliasTenant, id), TenantUUID: privateAliasTenant, MeshName: name, IPAddress: "192.0.2.10", Port: 50052, IsMTLS: true}
+	return models.LANDevice{PrincipalURI: certs.DeviceSPIFFEURI(privateAliasTenant, id), TenantUUID: privateAliasTenant, MeshName: name, CloudName: name, IPAddress: "192.0.2.10", Port: 50052, IsMTLS: true}
 }
 func privateAliasTestCloud(id, name string) *cloudpbv2.Asset {
 	return &cloudpbv2.Asset{Id: id, Name: name, OrganizationId: privateAliasTenant}
@@ -150,7 +150,7 @@ func TestPrivateDeviceAliasIdentitySources(t *testing.T) {
 		{name: "legacy Cloud name collides with exact mesh name", alias: privateDeviceAlias{host: "jetson-a.wendy.internal", label: "jetson-a"}, sources: privateAliasSources{mesh: privateAliasTestMesh(t, privateAliasOtherDevice, "jetson-a"), cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasDevice, "Jetson A")}}, wantError: "ambiguous"},
 		{name: "all sources agree", alias: friendly, sources: privateAliasSources{mesh: privateAliasTestMesh(t, privateAliasDevice, "jetson"), lan: []models.LANDevice{privateAliasTestLAN(privateAliasDevice, "jetson")}, cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasDevice, "jetson")}}, wantID: privateAliasDevice},
 		{name: "LAN conflicts with signed mesh", alias: friendly, sources: privateAliasSources{mesh: privateAliasTestMesh(t, privateAliasDevice, "jetson"), lan: []models.LANDevice{privateAliasTestLAN(privateAliasOtherDevice, "jetson")}}, wantError: "ambiguous"},
-		{name: "Cloud conflicts with saved name", alias: friendly, expected: expected, sources: privateAliasSources{cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasOtherDevice, "jetson")}}, wantError: "ambiguous"},
+		{name: "Cloud conflicts with saved name", alias: friendly, expected: expected, sources: privateAliasSources{cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasOtherDevice, "jetson")}}, wantError: "different device"},
 		{name: "duplicate Cloud name", alias: friendly, sources: privateAliasSources{cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasDevice, "jetson"), privateAliasTestCloud(privateAliasOtherDevice, "jetson")}}, wantError: "ambiguous"},
 		{name: "repeated hyphens do not collapse", alias: privateDeviceAlias{host: "jetson--a.wendy.internal", label: "jetson--a"}, sources: privateAliasSources{cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasDevice, "jetson-a"), privateAliasTestCloud(privateAliasOtherDevice, "jetson--a")}}, wantID: privateAliasOtherDevice},
 		{name: "reserved UUID cannot be claimed as friendly name", alias: uuidAlias, sources: privateAliasSources{cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasOtherDevice, "device-"+privateAliasDevice)}}, wantID: privateAliasDevice},
@@ -413,7 +413,12 @@ func TestPrivateDeviceAliasCloudPreparationFailureDoesNotListInventory(t *testin
 				return nil, nil
 			}
 			auth := privateAliasTestAuth()
-			sources := gatherPrivateAliasSources(context.Background(), &auth)
+			alias, _, _ := parsePrivateDeviceAlias("jetson.wendy.internal")
+			tenant, _ := meshid.ParseTenant(privateAliasTenant)
+			sources, _, err := gatherPrivateAliasSources(context.Background(), alias, tenant, nil, &auth)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if listed || sources.cloudErr == nil || len(sources.lan) != 1 {
 				t.Fatalf("unprepared inventory listed or independent LAN discovery lost: listed=%v sources=%+v", listed, sources)
 			}
@@ -661,13 +666,10 @@ func TestPrivateDeviceAliasMeshReadinessFallback(t *testing.T) {
 		{"identity refused", errDeviceIdentityRefused, false},
 		{"joined denial", errors.Join(readiness("OPERATOR_NO_PEERS"), status.Error(codes.PermissionDenied, "denied")), false},
 	} {
-		for _, path := range []string{"LAN", "Cloud", "none", "canceled"} {
+		for _, path := range []string{"Cloud", "none", "canceled"} {
 			t.Run(tc.name+"/"+path, func(t *testing.T) {
 				privateAliasConfig(t, nil)
 				sources := privateAliasSources{mesh: privateAliasTestMesh(t, privateAliasDevice, "jetson")}
-				if path == "LAN" {
-					sources.lan = []models.LANDevice{privateAliasTestLAN(privateAliasDevice, "jetson")}
-				}
 				if path == "Cloud" || path == "canceled" {
 					sources.cloud = []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasDevice, "jetson")}
 				}
@@ -698,7 +700,7 @@ func TestPrivateDeviceAliasMeshReadinessFallback(t *testing.T) {
 					return privateAliasTestAgent(), nil
 				}
 				_, _, err := connectPrivateDeviceAlias(ctx, "jetson.wendy.internal", true)
-				want := tc.fallback && (path == "LAN" || path == "Cloud")
+				want := tc.fallback && path == "Cloud"
 				if want {
 					if calls != 1 || err != nil {
 						t.Fatalf("fallback calls=%d err=%v", calls, err)

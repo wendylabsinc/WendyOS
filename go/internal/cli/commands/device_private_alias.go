@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,9 +21,13 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const privateAliasDiscoveryTimeout = 3 * time.Second
+const privateAliasLANHeadStart = 500 * time.Millisecond
+const privateAliasMeshDiscoveryTimeout = 15 * time.Second
 const privateAliasMeshProbeTimeout = 15 * time.Second
 const privateAliasScopePrefix = "private-alias/"
 
@@ -36,8 +41,6 @@ type privateDeviceAlias struct {
 func (a privateDeviceAlias) pinKey(tenant meshid.Tenant) string {
 	return privateAliasScopePrefix + tenant.String() + "/" + a.host
 }
-
-func (a privateDeviceAlias) legacyPinKeys() [2]string { return [2]string{a.host, a.label} }
 
 func privateAliasPinIdentity(cfg *config.Config, key string) (*certs.WendyIdentity, bool) {
 	pin, ok := cfg.DevicePinFor(key)
@@ -54,20 +57,13 @@ func (a privateDeviceAlias) expectedIdentity(cfg *config.Config, tenant meshid.T
 		}
 		return identity, nil
 	}
-	// Older aliases and verified enrollment used global name keys. Only a
-	// same-tenant binding can seed a new scoped pin.
-	var expected *certs.WendyIdentity
-	for _, key := range a.legacyPinKeys() {
-		identity, _ := privateAliasPinIdentity(cfg, key)
-		if identity == nil || identity.EntityType != certs.EntityAsset || identity.TenantUUID != tenant.String() {
-			continue
-		}
-		if expected != nil && !expected.SameEntity(*identity) {
-			return nil, refuseIdentity("private device alias %q has conflicting saved bindings", a.host)
-		}
-		expected = identity
+	// An older full alias can seed the scoped pin. A bare name can also
+	// come from ordinary LAN discovery and has no Cloud-name provenance.
+	identity, _ := privateAliasPinIdentity(cfg, a.host)
+	if identity != nil && identity.EntityType == certs.EntityAsset && identity.TenantUUID == tenant.String() {
+		return identity, nil
 	}
-	return expected, nil
+	return nil, nil
 }
 
 // Private device aliases select an enrolled identity, rather than asking the
@@ -151,7 +147,13 @@ var privateAliasLANBrowse = func(ctx context.Context) ([]models.LANDevice, error
 	// Keep the entire browse window: the normal picker collector can settle on
 	// the local agent before a delayed peer or conflicting name responds. The
 	// collector also returns confirmed sightings on a budget-expired shutdown.
-	devices, err := privateAliasLANCollect(ctx, discovery.StreamOptions{}, privateAliasDiscoveryTimeout)
+	var backendErr error
+	devices, err := privateAliasLANCollect(ctx, discovery.StreamOptions{
+		OnBackendError: func(err error) { backendErr = err },
+	}, privateAliasDiscoveryTimeout)
+	if backendErr != nil {
+		return devices, backendErr
+	}
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		return nil, err
 	}
@@ -171,34 +173,144 @@ type privateAliasSources struct {
 	mesh     sessionbroker.OperatorDirectory
 	lan      []models.LANDevice
 	cloud    []*cloudpbv2.Asset
+	meshErr  error
+	lanErr   error
 	cloudErr error
 }
 
-func gatherPrivateAliasSources(ctx context.Context, auth *config.AuthConfig) privateAliasSources {
-	var sources privateAliasSources
-	selectedTenant := auth.Certificates[0].TenantUUID()
+func (s privateAliasSources) failure(err error) error {
+	for _, item := range []struct {
+		source string
+		err    error
+	}{{"Wendy Net", s.meshErr}, {"LAN discovery", s.lanErr}, {"Cloud inventory", s.cloudErr}} {
+		if item.err != nil {
+			err = errors.Join(err, fmt.Errorf("%s: %w", item.source, item.err))
+		}
+	}
+	return err
+}
+
+func gatherPrivateAliasSources(ctx context.Context, alias privateDeviceAlias, tenant meshid.Tenant, expected *certs.WendyIdentity, auth *config.AuthConfig) (privateAliasSources, *SelectedDevice, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	var work sync.WaitGroup
-	work.Add(3)
-	bounded, cancel := context.WithTimeout(ctx, privateAliasDiscoveryTimeout)
-	defer cancel()
-	go func() { defer work.Done(); sources.mesh, _ = privateAliasMeshRead(bounded) }()
-	go func() { defer work.Done(); sources.lan, _ = privateAliasLANBrowse(bounded) }()
-	go func() {
-		defer work.Done()
-		// Inventory uses mTLS too. Renew the selected session before listing,
-		// rather than waiting until an asset has already been found to dial.
-		if err := privateAliasPrepareAuth(bounded, auth); err != nil {
-			sources.cloudErr = err
-			return
-		}
-		if len(auth.Certificates) == 0 || auth.Certificates[0].TenantUUID() != selectedTenant {
-			sources.cloudErr = errors.New("selected organization changed during private alias discovery")
-			return
-		}
-		sources.cloud, sources.cloudErr = privateAliasCloudFetch(bounded, auth, false)
+	defer func() {
+		cancel()
+		work.Wait()
 	}()
-	work.Wait()
-	return sources
+	var sources privateAliasSources
+	type meshResult struct {
+		directory sessionbroker.OperatorDirectory
+		err       error
+	}
+	type lanResult struct {
+		rows []models.LANDevice
+		err  error
+	}
+	type cloudResult struct {
+		assets []*cloudpbv2.Asset
+		err    error
+	}
+	mesh := make(chan meshResult, 1)
+	lan := make(chan lanResult, 1)
+	cloud := make(chan cloudResult, 1)
+	work.Add(1)
+	go func(out chan<- meshResult) {
+		defer work.Done()
+		bounded, stop := context.WithTimeout(ctx, privateAliasMeshDiscoveryTimeout)
+		defer stop()
+		result, err := privateAliasMeshRead(bounded)
+		out <- meshResult{result, err}
+	}(mesh)
+	startLAN := func(out chan<- lanResult, budget time.Duration) {
+		work.Go(func() {
+			bounded, stop := context.WithTimeout(ctx, budget)
+			defer stop()
+			rows, err := privateAliasLANBrowse(bounded)
+			out <- lanResult{rows, err}
+		})
+	}
+	lanBudget := privateAliasDiscoveryTimeout
+	if alias.uuid != "" {
+		lanBudget = privateAliasLANHeadStart
+	}
+	startLAN(lan, lanBudget)
+	cloudAuth := *auth
+	cloudAuth.Certificates = slices.Clone(auth.Certificates)
+	work.Add(1)
+	go func(out chan<- cloudResult) {
+		defer work.Done()
+		bounded, stop := context.WithTimeout(ctx, privateAliasDiscoveryTimeout)
+		defer stop()
+		if err := privateAliasPrepareAuth(bounded, &cloudAuth); err != nil {
+			out <- cloudResult{err: err}
+			return
+		}
+		if len(cloudAuth.Certificates) == 0 || cloudAuth.Certificates[0].TenantUUID() != tenant.String() {
+			out <- cloudResult{err: errors.New("selected organization changed during private alias discovery")}
+			return
+		}
+		assets, err := privateAliasCloudFetch(bounded, &cloudAuth, false)
+		out <- cloudResult{assets, err}
+	}(cloud)
+
+	lanHeadStart := time.NewTimer(privateAliasLANHeadStart)
+	defer lanHeadStart.Stop()
+	grace := lanHeadStart.C
+	nameWindow := time.NewTimer(privateAliasDiscoveryTimeout)
+	defer nameWindow.Stop()
+	nameDeadline := nameWindow.C
+	extendedLAN := false
+	var lanFailure error
+	for {
+		select {
+		case <-ctx.Done():
+			return sources, nil, ctx.Err()
+		case <-grace:
+			grace = nil
+		case <-nameDeadline:
+			nameDeadline = nil
+		case result := <-mesh:
+			mesh = nil
+			sources.mesh, sources.meshErr = result.directory, result.err
+		case result := <-lan:
+			lan = nil
+			sources.lan, sources.lanErr = result.rows, result.err
+		case result := <-cloud:
+			cloud = nil
+			sources.cloud, sources.cloudErr = result.assets, result.err
+			if len(cloudAuth.Certificates) != 0 && cloudAuth.Certificates[0].TenantUUID() == tenant.String() {
+				*auth = cloudAuth
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return sources, nil, err
+		}
+		candidate, selectionErr := selectPrivateAliasCandidate(alias, tenant, expected, auth, sources, time.Now())
+		if alias.uuid != "" && selectionErr == nil && len(candidate.lan) != 0 {
+			selected, err := connectPrivateAliasLAN(ctx, alias, auth, candidate)
+			if !privateAliasLANUnreachable(err) {
+				return sources, selected, err
+			}
+			lanFailure, sources.lan = err, nil
+		}
+		// Process the initial browse even when its result and the grace
+		// timer become ready together.
+		if alias.uuid != "" && grace == nil && (lan == nil || extendedLAN) && selectionErr == nil && (candidate.mesh != "" || candidate.cloud != nil) {
+			return sources, nil, nil
+		}
+		if alias.uuid == "" && lan == nil && cloud == nil &&
+			(mesh == nil || nameDeadline == nil && selectionErr == nil && (len(candidate.lan) != 0 || candidate.cloud != nil)) {
+			return sources, nil, nil
+		}
+		if lan == nil && alias.uuid != "" && !extendedLAN && lanFailure == nil && sources.lanErr == nil {
+			extendedLAN = true
+			lan = make(chan lanResult, 1)
+			startLAN(lan, privateAliasDiscoveryTimeout-privateAliasLANHeadStart)
+		}
+		if mesh == nil && lan == nil && cloud == nil {
+			return sources, nil, lanFailure
+		}
+	}
 }
 
 type privateAliasCandidate struct {
@@ -260,14 +372,6 @@ func selectPrivateAliasCandidate(alias privateDeviceAlias, tenant meshid.Tenant,
 			add(device, true).mesh = row.Selector
 		}
 	}
-	for _, row := range sources.lan {
-		device, err := meshid.DeviceFromPrincipal(row.PrincipalURI)
-		if err != nil || device.Tenant() != tenant || !matches(row.MeshName, device) {
-			continue
-		}
-		candidate := add(device, alias.uuid != "")
-		candidate.lan = append(candidate.lan, row)
-	}
 	for _, asset := range sources.cloud {
 		if asset == nil || asset.GetOrganizationId() != tenant.String() {
 			continue
@@ -286,7 +390,28 @@ func selectPrivateAliasCandidate(alias privateDeviceAlias, tenant meshid.Tenant,
 		}
 		candidate.cloud = asset
 	}
+	for _, row := range sources.lan {
+		device, err := meshid.DeviceFromPrincipal(row.PrincipalURI)
+		if err != nil || device.Tenant() != tenant {
+			continue
+		}
+		candidate := candidates[device]
+		if candidate == nil {
+			if !matches(row.CloudName, device) {
+				continue
+			}
+			candidate = add(device, alias.uuid != "")
+		}
+		candidate.lan = append(candidate.lan, row)
+	}
 	if len(candidates) > 1 {
+		if expected != nil {
+			for _, candidate := range candidates {
+				if candidate.trusted && candidate.device.UUID().String() != expectedUUID {
+					return privateAliasCandidate{}, refuseIdentity("private device alias %q now points to a different device; verify the device UUID and use 'wendy device unpin %s' before reconnecting", alias.host, alias.host)
+				}
+			}
+		}
 		return privateAliasCandidate{}, fmt.Errorf("private device alias %q is ambiguous; use its device UUID or canonical mesh/Cloud selector", alias.host)
 	}
 	for _, candidate := range candidates {
@@ -294,9 +419,6 @@ func selectPrivateAliasCandidate(alias privateDeviceAlias, tenant meshid.Tenant,
 			return privateAliasCandidate{}, fmt.Errorf("cannot authenticate friendly private alias %q from LAN discovery alone: %w; try the same hostname when Cloud inventory is reachable, or use device-<uuid>.wendy.internal", alias.host, certs.ErrExpectedDeviceIdentity)
 		}
 		return *candidate, nil
-	}
-	if sources.cloudErr != nil {
-		return privateAliasCandidate{}, fmt.Errorf("private device alias %q was not found in the selected organization (Cloud inventory unavailable: %w)", alias.host, sources.cloudErr)
 	}
 	return privateAliasCandidate{}, fmt.Errorf("private device alias %q was not found in the selected organization", alias.host)
 }
@@ -322,13 +444,22 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 	if alias.uuid != "" && expected != nil && expected.EntityID != alias.uuid {
 		return nil, true, refuseIdentity("private device alias %q does not match its saved device binding", alias.host)
 	}
-	sources := gatherPrivateAliasSources(ctx, auth)
-	if err := ctx.Err(); err != nil {
-		return nil, true, err
+	sources, selected, err := gatherPrivateAliasSources(ctx, alias, tenant, expected, auth)
+	if selected != nil {
+		return selected, true, nil
+	}
+	if err != nil {
+		return nil, true, sources.failure(err)
 	}
 	candidate, err := selectPrivateAliasCandidate(alias, tenant, expected, auth, sources, time.Now())
 	if err != nil {
-		return nil, true, err
+		return nil, true, sources.failure(err)
+	}
+	if len(candidate.lan) > 0 {
+		selected, err := connectPrivateAliasLAN(ctx, alias, auth, candidate)
+		if err == nil || !privateAliasLANUnreachable(err) || (candidate.mesh == "" && candidate.cloud == nil) {
+			return selected, true, err
+		}
 	}
 	if candidate.mesh != "" {
 		selected, _, err := privateAliasConnectMesh(ctx, candidate.mesh, suppress)
@@ -355,17 +486,9 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 		if ctx.Err() != nil {
 			return nil, true, ctx.Err()
 		}
-		if !recoverable || len(candidate.lan) == 0 && candidate.cloud == nil {
+		if !recoverable || candidate.cloud == nil {
 			return nil, true, err
 		}
-	}
-	if len(candidate.lan) > 0 {
-		selected, err := connectPrivateAliasLAN(ctx, alias, auth, candidate)
-		if err == nil || candidate.cloud == nil || !privateAliasLANUnreachable(err) {
-			return selected, true, err
-		}
-		// Only absence of an authenticated endpoint permits another independently
-		// authenticated path. Identity/key/certificate refusals remain terminal.
 	}
 	if candidate.cloud != nil {
 		if err := privateAliasPrepareAuth(ctx, auth); err != nil {
@@ -381,11 +504,11 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 		}
 		conn, err := connectDefaultCloudAssetV2Fn(ctx, auth, candidate.cloud, os.Getenv("WENDY_BROKER_URL"))
 		if err != nil {
-			return nil, true, err
+			return nil, true, privateAliasCloudConnectError(ctx, auth, selector, candidate.cloud, err)
 		}
 		if err := probePrivateAliasAgent(ctx, conn, cloudAgentConnectTimeout); err != nil {
 			conn.Close()
-			return nil, true, fmt.Errorf("authenticating the device through Cloud: %w", err)
+			return nil, true, privateAliasCloudConnectError(ctx, auth, selector, candidate.cloud, fmt.Errorf("authenticating the device through Cloud: %w", err))
 		}
 		if err := privateAliasEnforcePin(pinKey, conn.Addr, conn); err != nil {
 			conn.Close()
@@ -394,7 +517,28 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 		conn.DevicePinKey = pinKey
 		return &SelectedDevice{Agent: conn, Selector: selector, PinKey: pinKey}, true, nil
 	}
-	return nil, true, fmt.Errorf("private device alias %q identifies %s but no reachable LAN, mesh or Cloud endpoint was found", alias.host, candidate.device.Principal())
+	return nil, true, sources.failure(fmt.Errorf("private device alias %q identifies %s but no reachable LAN, mesh or Cloud endpoint was found", alias.host, candidate.device.Principal()))
+}
+
+// Cloud inventory already confirmed enrollment. Ask for the online view
+// after a transport-level refusal so an authentication failure keeps its
+// own status, and an available device keeps its original transport error.
+func privateAliasCloudConnectError(ctx context.Context, auth *config.AuthConfig, selector string, asset *cloudpbv2.Asset, err error) error {
+	if status.Code(err) != codes.Unavailable {
+		return err
+	}
+	bounded, cancel := context.WithTimeout(ctx, privateAliasDiscoveryTimeout)
+	defer cancel()
+	online, lookupErr := privateAliasCloudFetch(bounded, auth, true)
+	if lookupErr != nil || slices.ContainsFunc(online, func(a *cloudpbv2.Asset) bool { return a.GetId() == asset.GetId() }) {
+		return err
+	}
+	target, _, parseErr := parseCloudDeviceSelector(selector)
+	if parseErr != nil {
+		return err
+	}
+	return cloudSelectorMissError(auth, asset.GetId(), "tenant", config.OrganizationLabel(target.Endpoint, target.TenantUUID), nil,
+		[]cloudDiscoveryDevice{{v2: asset, key: asset.GetId()}})
 }
 
 // Cloud creates a lazy TLS client, while a mesh proxy verifies the selected
@@ -416,12 +560,6 @@ func probePrivateAliasAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 }
 
 func connectPrivateAliasLAN(ctx context.Context, alias privateDeviceAlias, auth *config.AuthConfig, candidate privateAliasCandidate) (*SelectedDevice, error) {
-	if err := privateAliasPrepareAuth(ctx, auth); err != nil {
-		return nil, err
-	}
-	if len(auth.Certificates) == 0 || auth.Certificates[0].TenantUUID() != candidate.device.Tenant().String() {
-		return nil, fmt.Errorf("selected organization changed during private alias connection")
-	}
 	var addresses []string
 	seen := map[string]bool{}
 	for _, row := range candidate.lan {
@@ -436,27 +574,43 @@ func connectPrivateAliasLAN(ctx context.Context, alias privateDeviceAlias, auth 
 		return nil, &noAuthenticatedEndpointError{msg: "private alias has no LAN agent address"}
 	}
 	pinKey := alias.pinKey(candidate.device.Tenant())
-	target := newDialTargetCandidates(pinKey, addresses)
-	identity := certs.WendyIdentity{TenantUUID: candidate.device.Tenant().String(), EntityType: certs.EntityAsset, EntityID: candidate.device.UUID().String(), Principal: candidate.device.Principal()}
-	if target.Expected != nil && !target.Expected.SameEntity(identity) {
-		return nil, refuseIdentity("private device alias %q changed identity", alias.host)
+	dial := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		credentials := *auth
+		credentials.Certificates = slices.Clone(auth.Certificates)
+		if err := privateAliasPrepareAuth(ctx, &credentials); err != nil {
+			return nil, err
+		}
+		if len(credentials.Certificates) == 0 || credentials.Certificates[0].TenantUUID() != candidate.device.Tenant().String() {
+			return nil, fmt.Errorf("selected organization changed during private alias connection")
+		}
+		target := newDialTargetCandidates(pinKey, addresses)
+		identity := certs.WendyIdentity{TenantUUID: candidate.device.Tenant().String(), EntityType: certs.EntityAsset, EntityID: candidate.device.UUID().String(), Principal: candidate.device.Principal()}
+		if target.Expected != nil && !target.Expected.SameEntity(identity) {
+			return nil, refuseIdentity("private device alias %q changed identity", alias.host)
+		}
+		target.Expected = &identity
+		conn, _, err := dialAgentLadderWithCertsFn(ctx, target, credentials.Certificates)
+		if err != nil {
+			return nil, err
+		}
+		if conn == nil || !conn.IsMTLS {
+			if conn != nil {
+				conn.Close()
+			}
+			return nil, certs.ErrExpectedDeviceIdentity
+		}
+		if err := privateAliasEnforcePin(pinKey, addresses[0], conn); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		conn.Host, conn.DevicePinKey = alias.host, pinKey
+		return conn, nil
 	}
-	target.Expected = &identity
-	conn, _, err := dialAgentLadderWithCertsFn(ctx, target, auth.Certificates)
+	conn, err := dial(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if conn == nil || !conn.IsMTLS {
-		if conn != nil {
-			conn.Close()
-		}
-		return nil, certs.ErrExpectedDeviceIdentity
-	}
-	if err := privateAliasEnforcePin(pinKey, addresses[0], conn); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	conn.Host, conn.DevicePinKey = alias.host, pinKey
+	conn.Reconnect = dial
 	return &SelectedDevice{Agent: conn, Selector: pinKey, PinKey: pinKey}, nil
 }
 

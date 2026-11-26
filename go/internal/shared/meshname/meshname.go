@@ -97,3 +97,10 @@ func Friendly(name string) (string, bool) {
 	}
 	return label + "." + ShortSuffix, true
 }
+
+// IsShortHostname reports whether host belongs to the short private hostname
+// namespace. Consumers can preserve it as a selector instead of adding a port.
+func IsShortHostname(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return strings.HasSuffix(host, "."+ShortSuffix) && !strings.HasSuffix(host, "."+Suffix)
+}

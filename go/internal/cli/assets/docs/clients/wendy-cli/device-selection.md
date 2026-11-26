@@ -43,8 +43,11 @@ Valid enrolled DNS labels keep their repeated hyphens, so `jetson--a` and
 `jetson-a` refer to different names. A legacy display name such as `Jetson A`
 becomes `jetson-a.wendy.internal`.
 
-The CLI gathers mesh, LAN, and Cloud candidates in parallel with a three-second
-budget. A friendly name needs a trusted binding from the signed mesh directory,
+The CLI gathers LAN, Wendy Net, and Cloud candidates in parallel. Direct LAN
+gets a 500 ms head start before choosing another ready route. When nothing is
+reachable, Wendy Net can take up to 15 seconds to discover a route, including
+over Bluetooth. Friendly names use a bounded discovery window to check for
+conflicts and require a trusted binding from the signed mesh directory,
 authenticated Cloud inventory, or a saved pin. If the mesh directory reports
 that its results are incomplete, the CLI refuses friendly names even when
 Cloud inventory or a saved pin has a match. An omitted peer could share the
@@ -54,7 +57,8 @@ For LAN access when Cloud is unavailable, use the credentials for the device's
 organization and choose the hostname form:
 
 - **Friendly hostname.** When LAN discovery is the only available source, the
-  CLI requires a saved pin for that hostname in the selected organization.
+  CLI requires a saved pin for that private hostname in the selected
+  organization. An ordinary `.local` pin does not establish the binding.
   To save it, connect once by the exact friendly hostname while Cloud
   inventory is reachable. The CLI verifies the peer's certificate before
   saving the binding.
@@ -68,6 +72,10 @@ The CLI refuses a saved selector from another organization before starting
 discovery. Switch back to the original organization with `wendy auth use` and
 retry. A pin under the selected organization's key that points to a device in
 another organization also causes a refusal before discovery.
+
+A saved private hostname can still reach its original device while offline.
+If Cloud or Wendy Net reports that the hostname now belongs to a different
+device, the command stops and asks you to verify the change.
 
 After verifying an intentional replacement or an invalid saved pin, select
 the intended organization's context and unpin the hostname:

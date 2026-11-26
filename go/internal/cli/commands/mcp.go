@@ -166,6 +166,9 @@ func enterLocalMCPChannel() error {
 }
 
 func mcpStartupAddress(address string) string {
+	if _, matched, _ := parsePrivateDeviceAlias(address); matched {
+		return address
+	}
 	if _, matched, _ := sessionbroker.ParseMeshSelector(address); matched {
 		return address
 	}

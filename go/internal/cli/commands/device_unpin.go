@@ -130,8 +130,7 @@ func clearPrivateAliasPins(cfg *config.Config, alias privateDeviceAlias, tenant 
 	var cleared []clearedPin
 	var identityKeys []string
 	scoped := alias.pinKey(tenant)
-	legacy := alias.legacyPinKeys()
-	for _, key := range []string{scoped, legacy[0], legacy[1]} {
+	for _, key := range []string{scoped, alias.host} {
 		pin, ok := cfg.DevicePinFor(key)
 		if !ok {
 			continue
