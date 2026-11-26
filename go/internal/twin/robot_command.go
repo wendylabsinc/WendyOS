@@ -473,6 +473,8 @@ func retireDisconnectedCommands(session *robotSession, explicit bool) error {
 	for _, receipt := range session.commandReceipts {
 		switch receipt.result.State {
 		case "completed", "failed", "rejected", "canceled", "superseded":
+		case "running":
+			return errors.New("a robot command is still finishing; stop it and wait for its receipt before reconnecting")
 		default:
 			if !explicit {
 				return errors.New("a prior robot command outcome is still running or unknown; explicitly connect to stop and recover observations without replaying it")
