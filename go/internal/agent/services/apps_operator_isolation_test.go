@@ -65,17 +65,32 @@ func TestAppsOperatorIsolationRemovalDuringPull(t *testing.T) {
 	if mark := f.mark(r.assign.DeploymentId); mark == nil || !mark.Removed || mark.Revision != maxRevision {
 		t.Fatal("terminal removal mark missing")
 	}
-	// Reload durable state and deliver an older legitimate synthetic assignment.
+	// Reload durable state without constructing or replaying another request.
+	// This proves cancellation/recovery only; delayed-assignment admission is
+	// a separate ordering-layer obligation, not inferred from an app outcome.
 	f.p.mu.Lock()
 	f.p.state = nil
 	f.p.mu.Unlock()
-	f.assignEntry(r.assign)
-	f.cycle()
-	if f.held(r.assign.DeploymentId) != nil || len(rec.starts) != 0 {
-		t.Fatal("late assignment resurrected a terminally removed app")
+	if err := f.p.load(f.uri); err != nil {
+		t.Fatal(err)
 	}
-	if f.outcome("web").Outcome != pb.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE {
-		t.Fatal("late assignment did not report stale refusal")
+	if f.held(r.assign.DeploymentId) != nil || len(rec.starts) != 0 {
+		t.Fatal("removed pull survived state reload")
+	}
+	if mark := f.mark(r.assign.DeploymentId); mark == nil || !mark.Removed || mark.Revision != maxRevision {
+		t.Fatal("terminal removal mark did not survive reload")
+	}
+	// Check ordering against the actual reloaded mark using the ordinary
+	// earlier assignment value. No postbox entry or signature is constructed.
+	state := f.p.snapshot()
+	before := f.outcome("web")
+	_, err := assignOrder(&state, r.assign)
+	var refusal *contractRefusal
+	if !errors.As(err, &refusal) || !refusal.old || refusal.outcome != pb.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE {
+		t.Fatal("reloaded terminal mark did not refuse the earlier revision as audit-only")
+	}
+	if f.outcome("web") != before || f.held(r.assign.DeploymentId) != nil || len(rec.starts) != 0 {
+		t.Fatal("ordering validation changed the removed application's state")
 	}
 }
 
@@ -177,8 +192,28 @@ func TestAppsOperatorIsolationBadDataRefused(t *testing.T) {
 				next.Revision = 0
 				want = pb.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE
 			case "wrong-target":
-				next.Device = "spiffe://wendy.sh/tenant/" + f.tenant + "/device/unrelated-isolated-device"
-				want = pb.ApplyOutcome_APPLY_OUTCOME_REJECTED_TARGET
+				// Target binding runs before an app can be attributed. Check the
+				// pure validator using two unsigned values; never build
+				// a cross-target signed request. A refusal at this layer must not
+				// replace the app's previous successful outcome.
+				before := f.outcome("web")
+				identity := &postboxIdentity{tenant: f.tenant, uuid: f.uuid, uri: f.uri}
+				resource := "org/" + f.tenant + "/deployment/" + base.DeploymentId + "/device/" + f.uuid
+				if err := bindsThisDevice(base, resource, identity); err != nil {
+					t.Fatal("valid own-target control was refused")
+				}
+				different := proto.Clone(base).(*pb.DeviceAssignment)
+				different.Device = "spiffe://wendy.sh/tenant/" + f.tenant + "/device/00000000-0000-4000-8000-000000000001"
+				if err := bindsThisDevice(different, resource, identity); err == nil {
+					t.Fatal("unsigned different device identifier was accepted")
+				}
+				if after := f.outcome("web"); after != before {
+					t.Fatal("target validation changed an attributed app outcome")
+				}
+				if rec.app == nil || !rec.app.running || !slices.Contains(rec.app.env, "MODE=a") {
+					t.Fatal("target validation displaced the previous good app")
+				}
+				return
 			}
 			if kind == "bad-signature" {
 				resource := "org/" + f.tenant + "/deployment/" + next.DeploymentId + "/device/" + f.uuid

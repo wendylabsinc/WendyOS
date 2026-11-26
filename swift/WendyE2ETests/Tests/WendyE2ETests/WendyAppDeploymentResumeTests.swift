@@ -43,7 +43,7 @@ struct `'wendy app deployment resume'` {
     /**
      A stored newer revision cannot be overwritten using an earlier expected
      revision. The public signed update refuses and history remains intact.
-     A barrier inside resume signing is a separate technical gap in the guide.
+     The separate isolated case below covers the resume confirmation barrier.
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
     func `preserves a newer revision when a stale change is refused`() async throws {

@@ -26,6 +26,17 @@ enum AppsIsolationFixture {
             ? "apps-cli-isolation.test" : "apps-agent-isolation.test"
         let path = URL(fileURLWithPath: AppsDeploymentFixture.observerPath)
             .deletingLastPathComponent().appendingPathComponent(binary).path
+        let package = URL(fileURLWithPath: AppsDeploymentFixture.observerPath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(
+                test == "TestAppsOperatorIsolationResumeConfirmationRace"
+                    ? "go/internal/cli/commands" : "go/internal/agent/services"
+            ).path
+        // Acceptance always runs the complete existing aggregate. Focused Go
+        // investigations are separate evidence and cannot satisfy this wrapper.
+        let subcases =
+            test == "TestAppsOperatorIsolationBadDataRefused"
+            ? ["manifest", "blob", "wrap", "revision-zero", "wrong-target", "bad-signature"] : []
         guard FileManager.default.isExecutableFile(atPath: path) else {
             throw AppsDeploymentFixture.Prerequisite(
                 description: "Compile the in-tree isolation test binaries before opting in"
@@ -38,13 +49,16 @@ enum AppsIsolationFixture {
             line: line
         ) { cli, _ in
             try await cli.sh(
-                "env WENDY_E2E_APPS_ISOLATION=true \(AppsDeploymentFixture.quote(path)) -test.v -test.count=1 -test.timeout=45s -test.run '^\(test)$'"
+                "cd \(AppsDeploymentFixture.quote(package)) && env WENDY_E2E_APPS_ISOLATION=true \(AppsDeploymentFixture.quote(path)) -test.v -test.count=1 -test.timeout=45s -test.run '^\(test)$'"
             ) { result in
                 #expect(result.status.isSuccess)
                 #expect(result.stdout.contains("--- PASS: \(test)"))
                 #expect(!result.stdout.contains("--- SKIP: \(test)"))
                 #expect(!result.stdout.contains("[no tests to run]"))
                 #expect(!result.stdout.contains("[no test files]"))
+                for subcase in subcases {
+                    #expect(result.stdout.contains("--- PASS: \(test)/\(subcase)"))
+                }
             }
         }
     }
