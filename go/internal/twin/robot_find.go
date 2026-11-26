@@ -81,17 +81,20 @@ func (s *Server) robotFindObjectUsing(w http.ResponseWriter, r *http.Request, cl
 	s.mu.Lock()
 	session := s.observers[q.Serial]
 	s.mu.Unlock()
-	if session == nil {
-		respond(w, nil, errors.New("use robot_command action connect before finding objects"))
-		return
-	}
-	observer, ok := session.robot.(objectObserver)
+	// Seeing the current camera image does not require an active map or robot
+	// controller. Their absence prevents a navigable target, not local vision.
+	var observer objectObserver
 	var view *twinrobot.ObjectView
 	var geometryErr error
-	if ok && q.CameraMode == "go2-front-native-1280x720" && cfg.Width == 1280 && cfg.Height == 720 {
-		view, geometryErr = observer.BeginObjectView(q.Received, cfg.Width, cfg.Height)
+	if session == nil {
+		geometryErr = errors.New("no geometric controller is active; connect robot observations to locate an approach")
 	} else {
-		geometryErr = errors.New("controller or camera mode does not support this object localization preset")
+		observer, _ = session.robot.(objectObserver)
+		if observer != nil && q.CameraMode == "go2-front-native-1280x720" && cfg.Width == 1280 && cfg.Height == 720 {
+			view, geometryErr = observer.BeginObjectView(q.Received, cfg.Width, cfg.Height)
+		} else {
+			geometryErr = errors.New("controller or camera mode does not support this object localization preset")
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
 	defer cancel()

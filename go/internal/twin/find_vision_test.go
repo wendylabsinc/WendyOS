@@ -79,3 +79,44 @@ func TestExplicitVisionModelNeverFallsBack(t *testing.T) {
 		t.Fatalf("%+v %v", model, err)
 	}
 }
+
+func TestVisionSelectionPrefersNonThinkingCapability(t *testing.T) {
+	for _, test := range []struct {
+		name, preferred string
+		onlyThinking    bool
+		want            string
+	}{
+		{name: "automatic", want: "plain"},
+		{name: "explicit-thinking", preferred: "reasoning", want: "reasoning"},
+		{name: "explicit-plain", preferred: "plain", want: "plain"},
+		{name: "thinking-fallback", onlyThinking: true, want: "reasoning"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/tags" {
+					if test.onlyThinking {
+						fmt.Fprint(w, `{"models":[{"name":"reasoning"}]}`)
+					} else {
+						fmt.Fprint(w, `{"models":[{"name":"reasoning"},{"name":"plain"}]}`)
+					}
+					return
+				}
+				var request map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				if request["model"] == "reasoning" {
+					fmt.Fprint(w, `{"capabilities":["completion","vision","thinking"]}`)
+				} else {
+					fmt.Fprint(w, `{"capabilities":["completion","vision"]}`)
+				}
+			}))
+			defer srv.Close()
+			port, _ := strconv.Atoi(strings.TrimPrefix(srv.URL, "http://127.0.0.1:"))
+			model, err := selectVisionModel(context.Background(), srv.Client(), uint32(port), test.preferred)
+			if err != nil || model.model != test.want {
+				t.Fatalf("got %q, %v; want %q", model.model, err, test.want)
+			}
+		})
+	}
+}

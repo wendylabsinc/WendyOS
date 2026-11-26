@@ -50,8 +50,9 @@ func (v visionModel) call(ctx context.Context, method, path string, body, out an
 	return json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out)
 }
 
-// selectVisionModel prefers the chat's model when it can see, otherwise the
-// first installed model that reports the vision capability.
+// selectVisionModel requires an explicitly selected model to support vision.
+// With no explicit model it prefers an installed vision model without thinking
+// capability, retaining a thinking-capable model only as a fallback.
 func selectVisionModel(ctx context.Context, client *http.Client, port uint32, preferred string) (visionModel, error) {
 	if port == 0 {
 		port = 11434
@@ -79,14 +80,24 @@ func selectVisionModel(ctx context.Context, client *http.Client, port uint32, pr
 			names = append(names, m.Name)
 		}
 	}
+	thinkingFallback := ""
 	for _, name := range names {
 		var shown struct {
 			Capabilities []string `json:"capabilities"`
 		}
 		if v.call(ctx, "POST", "/api/show", map[string]string{"model": name}, &shown) == nil && slices.Contains(shown.Capabilities, "vision") {
-			v.model = name
-			return v, nil
+			if preferred != "" || !slices.Contains(shown.Capabilities, "thinking") {
+				v.model = name
+				return v, nil
+			}
+			if thinkingFallback == "" {
+				thinkingFallback = name
+			}
 		}
+	}
+	if thinkingFallback != "" {
+		v.model = thinkingFallback
+		return v, nil
 	}
 	if preferred != "" {
 		return v, fmt.Errorf("requested local model %q is not installed with vision capability", preferred)
