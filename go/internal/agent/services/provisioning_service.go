@@ -44,6 +44,7 @@ type provisioningState struct {
 	KeyPEM           string             `json:"keyPem,omitempty"` // read-only: migration only; never written
 	CertPEM          string             `json:"certPem,omitempty"`
 	ChainPEM         string             `json:"chainPem,omitempty"`
+	LitePeerIssuers  string             `json:"litePeerIssuers,omitempty"`
 	PrincipalURI     string             `json:"principalURI,omitempty"`
 	ACMEDirectoryURL string             `json:"acmeDirectoryURL,omitempty"`
 	Unenrollment     *unenrollmentState `json:"unenrollment,omitempty"`
@@ -148,6 +149,7 @@ type ProvisioningService struct {
 	keyPEM                   []byte // stored as []byte so it can be zeroed on rotation/shutdown
 	certPEM                  string
 	chainPEM                 string
+	litePeerIssuers          string
 	principalURI             string
 	acmeDirectoryURL         string
 	CloudDialer              CloudDialer
@@ -398,6 +400,7 @@ func (s *ProvisioningService) persistProvisioning(state *provisioningState, keyP
 	s.keyPEM = keyPEM
 	s.certPEM = state.CertPEM
 	s.chainPEM = state.ChainPEM
+	s.litePeerIssuers = state.LitePeerIssuers
 
 	s.logger.Info("Provisioning completed successfully",
 		zap.Int32("org_id", s.orgID),
@@ -502,6 +505,7 @@ func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint
 	s.keyPEM = nil
 	s.certPEM = ""
 	s.chainPEM = ""
+	s.litePeerIssuers = ""
 
 	s.logger.Info("Device unprovisioned; agent will restart into unprovisioned mode")
 
@@ -605,6 +609,7 @@ func (s *ProvisioningService) loadState() {
 	s.acmeDirectoryURL = state.ACMEDirectoryURL
 	s.certPEM = state.CertPEM
 	s.chainPEM = state.ChainPEM
+	s.litePeerIssuers = state.LitePeerIssuers
 
 	// Load the private key from device-key.pem.  Fall back to the legacy
 	// KeyPEM field in provisioning.json for one-time migration of existing

@@ -198,6 +198,9 @@ type Client struct {
 	// Teardown paths check this before SIGKILLing a sidecar (WDY-1702 H5).
 	ros2ExecRefs map[string]int
 
+	// Standalone inspectors share image preparation across request lifetimes.
+	ros2ImagePreparation ros2ImagePreparation
+
 	// chunkIndex maps CDC chunk hashes to byte ranges in uncompressed layer
 	// blobs (Model B). staging holds chunks received this session until the
 	// following AssembleLayerFromChunks consumes them.
@@ -501,6 +504,10 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 // Close releases the underlying containerd client connection and stops all
 // D-Bus proxy processes.
 func (c *Client) Close() error {
+	if !c.ros2ImagePreparation.close() {
+		c.logger.Warn("ROS 2 inspector image preparation did not stop in time",
+			zap.Duration("waited", ros2ImageShutdownTimeout))
+	}
 	c.closeRecoveredTaskOutput()
 	c.meshIngressStopOnce.Do(func() {
 		if c.meshIngressStop != nil {

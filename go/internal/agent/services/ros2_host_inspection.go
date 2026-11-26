@@ -60,7 +60,7 @@ func (s *ROS2Service) resolveInspectionSidecars(ctx context.Context, domain *int
 	}
 	sidecar, err := runtime.EnsureHostROS2Sidecar(ctx, opts)
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+		return nil, ros2PreparationError(ctx, err)
 	}
 	return []ros2SC{{name: sidecar.Name, rmw: sidecar.RMW, domainID: opts.DomainID}}, nil
 }

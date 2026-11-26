@@ -115,6 +115,50 @@ class MultipartGitHub(FakeGitHub):
 
 
 class RenderingTests(unittest.TestCase):
+    def test_retired_findings_do_not_change_api_acceptance_state(self):
+        body = review.render_comment(result(), REPO).replace("- [ ] Accept", "- [x] Accept")
+        extended = body + "\n## Compatibility review\n\n<!-- compatibility-finding:v1:retired -->\n"
+        records = review.parse_comment_state([extended])
+        self.assertEqual(records, review.parse_comment_state([body]))
+        self.assertEqual(records[0]["state"], "accepted")
+        self.assertEqual(set(review.model_prior_state(records)), {"version", "decisions"})
+        rendered = review.render_comment(result(), REPO)
+        self.assertNotIn("## Compatibility review", rendered)
+        self.assertIn("**Compatibility:**", rendered)
+
+    def test_code_examples_cannot_inject_api_state(self):
+        body = review.render_comment(result(), REPO)
+        for fence in ("```", "~~~~"):
+            with self.subTest(fence=fence):
+                self.assertEqual(review.parse_comment_state([fence + "\n" + body + "\n" + fence]), [])
+                self.assertEqual(review.parse_comment_state([fence + "\n" + body + "\n" + fence + "\n" + body]),
+                                 review.parse_comment_state([body]))
+
+    def test_ordinary_links_do_not_become_pagination_state(self):
+        data = result()
+        data["decisions"][0]["compatibility"] = "Keep callback `https://example.test/#issuecomment-999`."
+        body = review.render_comment(data, REPO)
+        self.assertEqual(review.authoritative_bodies([bot_comment(body, 11)]), [body])
+        primary = review.render_primary(data, REPO, 1911, [55])
+        primary += "\nReference `https://example.test/#issuecomment-999`.\n"
+        part = review.render_comment(data, REPO) + "\n<!-- ai-api-review:part=1/1 -->"
+        self.assertEqual(review.authoritative_bodies([bot_comment(primary, 11), bot_comment(part, 55)]), [primary, part])
+
+    def test_pagination_requires_complete_owned_matching_parts(self):
+        primary = review.render_primary(result(), REPO, 1911, [55])
+        for parts in ([], [bot_comment("<!-- ai-api-review:part=2/2 -->", 55)],
+                      [bot_comment("<!-- ai-api-review:part=1/2 -->", 55)]):
+            with self.subTest(parts=parts), self.assertRaises(ValueError):
+                review.authoritative_bodies([bot_comment(primary, 11), *parts])
+
+    def test_retired_or_private_results_cannot_publish(self):
+        for fields in ({"compatibility_findings": []}, {"compatibility_verdict": "not_assessed"},
+                       {"input_visibility": "private"}):
+            github = FakeGitHub()
+            with self.subTest(fields=fields), self.assertRaisesRegex(ValueError, "fresh API decision review"):
+                review.publish(dict(result(), **fields), REPO, 1911, HEAD, BASE, REVIEW_DIFF, github)
+            self.assertEqual(github.calls, [])
+
     def test_grouped_linked_unchecked_decisions_keep_existing_api_layout(self):
         body = review.render_comment(result(), REPO, diff=REVIEW_DIFF.decode())
         self.assertIn("- [ ] Accept **Native `run.command` launch command** — 🟢 **Additive**.", body)
@@ -122,7 +166,6 @@ class RenderingTests(unittest.TestCase):
         self.assertTrue(body.startswith("# API decisions\n\nReviewed "))
         self.assertIn("## Network contracts and constants\n\nNo API decisions changed.", body)
         self.assertNotIn("<summary>API decisions", body)
-        self.assertLess(body.index("- [ ] Accept"), body.index("## Compatibility review"))
         self.assertIn("**Change:** Add optional `run.command` and `run.cwd`", body)
         self.assertIn("**Compatibility:** Existing `wendy.json` manifests keep their launch behavior.", body)
         self.assertIn("**Code:**", body)
@@ -142,8 +185,8 @@ class RenderingTests(unittest.TestCase):
         self.assertTrue(body.startswith(expected_intro))
         headings = [body.index(f"## {title}\n") for title in review.CATEGORIES.values()]
         self.assertEqual(headings, sorted(headings))
-        self.assertGreater(body.index("## Compatibility review"), max(headings))
-        self.assertIn("Compatibility was not assessed by this legacy result.", body)
+        self.assertNotIn("## Compatibility review", body)
+
 
     def test_each_compatibility_class_has_a_text_labeled_color_symbol(self):
         for impact, rendered in (

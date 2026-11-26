@@ -1499,17 +1499,15 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		return connectAgentAtAddressKeyed(ctx, addr, pinKey, func() bool { return mtls }, candidates...)
 	}
 	conn, err := dial()
-	if err != nil {
+	if err != nil && monitoringPickerTimeout(ctx) == 0 {
 		// A picked device that rejects our certificate gets the same clock
 		// recovery as a named one: before this, a device chosen in the picker
 		// went straight to "TLS authentication failed" with no time proof.
-		// An expired login is renewed instead. Same endpoint and candidates;
-		// the picker only runs interactively, so read-only monitoring (always
-		// non-interactive) never reaches here. Recovery declines identity
-		// refusals itself. A pinned device that rejected our certificate
-		// arrives as the pinned refusal, so filtering on
-		// blocksUnauthenticatedFallback here would skip the one picker case
-		// that needs the time proof.
+		// An expired login is renewed instead. The monitoring picker reports
+		// the failure without recovery. Recovery declines identity refusals.
+		// A pinned peer that rejects our certificate can also report a pinned
+		// refusal, so filtering on blocksUnauthenticatedFallback here would
+		// skip the case that needs the time proof.
 		conn, err = recoverRejectedHandshake(ctx, err, dial)
 	}
 	if err != nil {
@@ -3743,8 +3741,8 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		return &SelectedDevice{Agent: conn}, nil
 	}
 
-	// No device specified — run interactive picker if we have a TTY.
-	if jsonOutput || cfg.nonInteractive {
+	// No device specified — run the picker unless prompts are disabled.
+	if jsonOutput || (cfg.nonInteractive && monitoringPickerTimeout(ctx) == 0) {
 		return nil, commandErrorf(errNoDevice, "%s", noDeviceMessage)
 	}
 
@@ -4222,6 +4220,15 @@ func discoverProviderForPicker(ctx context.Context, prov providers.DeviceProvide
 	}
 }
 
+// The monitoring picker starts the connection deadline after selection and
+// skips automatic connection recovery.
+type monitoringPickerTimeoutKey struct{}
+
+func monitoringPickerTimeout(ctx context.Context) time.Duration {
+	timeout, _ := ctx.Value(monitoringPickerTimeoutKey{}).(time.Duration)
+	return timeout
+}
+
 // pickDevice runs the interactive Local | Cloud TUI. The local page discovers
 // devices across all transports and providers; the cloud page lists the
 // selected organization's online Wendy Cloud devices.
@@ -4435,6 +4442,11 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 	choice, ok := dm.choice()
 	if !ok {
 		return nil, commandErrorf(errNoDevice, "no device selected")
+	}
+	if timeout := monitoringPickerTimeout(ctx); timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 	switch choice.Tab {
 	case devicePickerCloudTab:

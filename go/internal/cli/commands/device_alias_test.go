@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
@@ -82,17 +81,9 @@ func TestApplyDeviceTypeAlias(t *testing.T) {
 }
 
 func TestDeviceInfosHideAliases(t *testing.T) {
-	var mu sync.Mutex
-	var fetched []string
-	devices := fetchDeviceInfos(decodeMasterWithAlias(t), func(dev manifestDevice) string { return dev.Latest },
-		func(path string) (*deviceManifest, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			fetched = append(fetched, path)
-			return &deviceManifest{}, nil
-		})
-	if len(devices) != 1 || devices[0].Key != orinDeviceType || len(fetched) != 1 {
-		t.Fatalf("devices = %+v, fetched %v; want only %s", devices, fetched, orinDeviceType)
+	devices := deviceInfos(decodeMasterWithAlias(t), func(dev manifestDevice) string { return dev.Latest })
+	if len(devices) != 1 || devices[0].Key != orinDeviceType {
+		t.Fatalf("devices = %+v; want only %s", devices, orinDeviceType)
 	}
 }
 

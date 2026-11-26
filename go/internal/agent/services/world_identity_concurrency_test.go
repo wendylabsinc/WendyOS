@@ -150,7 +150,7 @@ func TestWorldClockIdentityActualMutationsWaitForAllReaders(t *testing.T) {
 					_, err := s.unprovision("", "")
 					mutated <- err
 				} else {
-					mutated <- s.commitRenewal("untrusted test old certificate", "untrusted test renewed certificate", "untrusted test renewed chain", []byte("untrusted test renewed key"))
+					mutated <- s.commitRenewal("untrusted test old certificate", "untrusted test renewed certificate", "untrusted test renewed chain", "", []byte("untrusted test renewed key"))
 				}
 			}()
 			worldWaitIdentityWriter(t, s)

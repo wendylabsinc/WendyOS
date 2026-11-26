@@ -27,7 +27,7 @@ func TestProvisioningSummary(t *testing.T) {
 	var b bytes.Buffer
 	printProvisioningSummary(&b, "nano-lab", creds, cloudPreEnrolled)
 	got := b.String()
-	for _, want := range []string{"First boot will apply:", "Device name", "nano-lab", "Home, Cafe (open), Off[31mice", "Cloud", "pre-enrolled"} {
+	for _, want := range []string{"› First boot:", "name nano-lab", "Wi-Fi Home, Cafe (open), Off[31mice", "Cloud pre-enrolled"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary %q does not contain %q", got, want)
 		}
@@ -41,7 +41,7 @@ func TestProvisioningSummary(t *testing.T) {
 	b.Reset()
 	printProvisioningSummary(&b, "", nil, "")
 	got = b.String()
-	for _, want := range []string{"auto-generated", "none — reach the board over Ethernet or USB"} {
+	for _, want := range []string{"name auto-generated", "Wi-Fi none (Ethernet or USB)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("empty summary %q does not contain %q", got, want)
 		}
@@ -71,16 +71,12 @@ func TestLogProvisioningSummaryIsPlain(t *testing.T) {
 	}
 }
 
-func TestProvisioningWrittenLine(t *testing.T) {
-	got := provisioningWrittenLine("nano-lab", []wendyconf.WifiCredential{{SSID: "Home", Password: "hunter2"}}, true)
-	want := "Config partition written: name nano-lab · Wi-Fi Home · agent seed · Cloud enrollment"
-	if got != want {
+func TestFirstBootWrittenDetail(t *testing.T) {
+	if got, want := firstBootWrittenDetail("2026.11.04-081952"), "· agent 2026.11.04-081952"; got != want {
 		t.Fatalf("got %q; want %q", got, want)
 	}
-	got = provisioningWrittenLine("", nil, false)
-	want = "Config partition written: auto-generated name · no Wi-Fi · agent seed"
-	if got != want {
-		t.Fatalf("got %q; want %q", got, want)
+	if got := firstBootWrittenDetail(""); got != "" {
+		t.Fatalf("got %q; want no detail without a version", got)
 	}
 }
 
@@ -91,7 +87,7 @@ func TestProvisionConfigWithRetryReportsWhatLanded(t *testing.T) {
 		_, _, err := provisionConfigWithRetry(context.Background(), drive{}, creds, "nano-lab", nil, true, agentSeed{})
 		return err
 	})
-	if !strings.Contains(out, "Config partition written: name nano-lab · Wi-Fi Home · agent seed") || strings.Contains(out, "hunter2") {
+	if !strings.Contains(out, "✓ First-boot settings written · agent test-agent") || strings.Contains(out, "hunter2") {
 		t.Fatalf("output %q; want the written line without the password", out)
 	}
 
@@ -102,7 +98,7 @@ func TestProvisionConfigWithRetryReportsWhatLanded(t *testing.T) {
 		_, _, err := provisionConfigWithRetry(context.Background(), drive{}, creds, "nano-lab", nil, true, agentSeed{})
 		return err
 	})
-	if strings.Contains(out, "Config partition written") {
+	if strings.Contains(out, "First-boot settings written") {
 		t.Fatalf("output %q claims a write that failed", out)
 	}
 }
@@ -147,7 +143,7 @@ func TestConfirmDiskInstallSettlesWiFiBeforeErasing(t *testing.T) {
 		if err != nil || name != "nano-lab" || len(creds) != 1 {
 			t.Fatalf("got %+v, %q, %v", creds, name, err)
 		}
-		summary, question := strings.Index(out, "First boot will apply:"), strings.Index(out, "<erase question>")
+		summary, question := strings.Index(out, "› First boot:"), strings.Index(out, "<erase question>")
 		if summary < 0 || question < 0 || summary > question {
 			t.Fatalf("output %q: want the summary before the erase question", out)
 		}
@@ -182,7 +178,7 @@ func TestConfirmDiskInstallSettlesWiFiBeforeErasing(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "needs confirmation") || len(*asked) != 0 {
 			t.Fatalf("got %v, asked %v", err, *asked)
 		}
-		if strings.Contains(out, "First boot will apply:") {
+		if strings.Contains(out, "› First boot:") {
 			t.Fatalf("output %q: printed a summary for an install that cannot go ahead", out)
 		}
 	})
@@ -261,7 +257,7 @@ func TestConfirmDiskInstallSummaryShowsTheNamePreEnrollmentChose(t *testing.T) {
 	if want := []string{"name?", "pre-enroll?", "required name?", "erase?"}; !slices.Equal(events, want) {
 		t.Fatalf("events %v; want %v, with nothing minted", events, want)
 	}
-	summary, erase := strings.Index(out, "First boot will apply:"), strings.Index(out, "<erase question>")
+	summary, erase := strings.Index(out, "› First boot:"), strings.Index(out, "<erase question>")
 	if summary < 0 || erase < summary {
 		t.Fatalf("output %q: want the summary before the erase question", out)
 	}
@@ -447,7 +443,7 @@ func TestAlsoOnPromptTerminal(t *testing.T) {
 // terminal where the question is answered; stdout keeps them for the log.
 func TestDestructiveConfirmsShowTheSummaryWherePromptsAre(t *testing.T) {
 	creds := []wendyconf.WifiCredential{{SSID: "Home", Password: "hunter2"}}
-	recovery := recoveryFlashConfirm{target: "Jetson AGX Thor (1-2)", warning: []string{"This erases QSPI + internal NVMe on the Thor."}, question: "Flash Jetson AGX Thor (1-2)?"}
+	recovery := recoveryFlashConfirm{target: "Jetson AGX Thor (1-2)", warning: []string{thorEraseWarning}, question: "Flash Jetson AGX Thor (1-2)?"}
 	disk := drive{Name: "SD Card", DevicePath: "/dev/disk4", IsRemovable: true}
 	installers := map[string]func() error{
 		"disk": func() error {
@@ -469,7 +465,7 @@ func TestDestructiveConfirmsShowTheSummaryWherePromptsAre(t *testing.T) {
 				if err != nil || len(*asked) != 1 {
 					t.Fatalf("%v, asked %v", err, *asked)
 				}
-				want := []string{"First boot will apply:", "lab-pi", "Home"}
+				want := []string{"› First boot:", "lab-pi", "Home"}
 				if name == "recovery" {
 					want = append(want, "Target:", recovery.target, recovery.warning[0])
 				}
@@ -516,4 +512,99 @@ func TestConfirmRecoveryFlash(t *testing.T) {
 			t.Fatalf("got %v, asked %v", err, *asked)
 		}
 	})
+}
+
+func TestSettleDiskInstallPrintsInstallTitle(t *testing.T) {
+	device := settleDiskFixture(t)
+	var events []string
+	stubDiskPreEnroll(t, &events)
+	stubWifiChoice(t, false, "")
+	out, err := captureCommandStdout(t, func() error {
+		_, err := settleDiskInstall(context.Background(), "raspberry-pi-5", device, "1.0.0", settleTestDrive(32<<30), false, false, "",
+			wifiCLIOptions{NoWifi: true, RequireChoice: true}, "lab-pi", preEnrollOptions{mode: preEnrollSkip}, true, false)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("settleDiskInstall: %v", err)
+	}
+	if !strings.Contains(out, "Installing WendyOS 1.0.0 on Raspberry Pi 5 → /dev/disk4 (34.4 GB, SD image)") || strings.Contains(out, "Preparing Raspberry Pi 5") {
+		t.Fatalf("output %q; want the install title instead of the Preparing line", out)
+	}
+}
+
+// The agent download behind the settings line can take half a minute; say
+// what is happening before it starts.
+func TestProvisionConfigWithRetryShowsWorkBeforeTheResult(t *testing.T) {
+	withStubbedProvisioning(t, func(drive, []wendyconf.WifiCredential, string, []byte) error { return nil }, false, nil)
+	out, _ := captureCommandStdout(t, func() error {
+		_, _, err := provisionConfigWithRetry(context.Background(), drive{}, nil, "nano-lab", nil, true, agentSeed{})
+		return err
+	})
+	working, done := strings.Index(out, "Writing first-boot settings..."), strings.Index(out, "✓ First-boot settings written")
+	if working < 0 || done < working {
+		t.Fatalf("output %q; want a working line before the result", out)
+	}
+}
+
+func TestFirstBootSummaryIsOneLine(t *testing.T) {
+	var b bytes.Buffer
+	printProvisioningSummary(&b, "brave-dolphin", []wendyconf.WifiCredential{{SSID: "Home", Password: "pw"}}, cloudWillPreEnroll)
+	if got, want := b.String(), "› First boot: name brave-dolphin · Wi-Fi Home · Cloud will pre-enroll\n"; got != want {
+		t.Fatalf("got %q; want %q", got, want)
+	}
+	b.Reset()
+	printProvisioningSummary(&b, "", nil, "")
+	if got, want := b.String(), "› First boot: name auto-generated · Wi-Fi none (Ethernet or USB)\n"; got != want {
+		t.Fatalf("got %q; want %q", got, want)
+	}
+}
+
+// One empty line between stages and none inside one: header, first boot, then the work.
+func TestSettleDiskInstallStages(t *testing.T) {
+	device := settleDiskFixture(t)
+	var events []string
+	stubDiskPreEnroll(t, &events)
+	stubWifiChoice(t, false, "")
+	out, err := captureCommandStdout(t, func() error {
+		_, err := settleDiskInstall(context.Background(), "raspberry-pi-5", device, "1.0.0", settleTestDrive(32<<30), false, false, "",
+			wifiCLIOptions{NoWifi: true, RequireChoice: true}, "lab-pi", preEnrollOptions{mode: preEnrollSkip}, true, false)
+		return err
+	})
+	want := "\nInstalling WendyOS 1.0.0 on Raspberry Pi 5 → /dev/disk4 (34.4 GB, SD image)\n\n" +
+		"› First boot: name lab-pi · Wi-Fi none (Ethernet or USB) · Cloud not enrolled\n\n"
+	if err != nil || out != want {
+		t.Fatalf("err %v\noutput %q\nwant   %q", err, out, want)
+	}
+}
+
+func TestConfirmEraseDriveRecordsTheAnswer(t *testing.T) {
+	d := drive{Name: "SD Card", DevicePath: "/dev/disk4", IsRemovable: true, SizeBytes: 64_000_000_000}
+	setInteractive(t, true)
+	stubInstallConfirms(t, true)
+	out, err := captureCommandStdout(t, func() error { return confirmEraseDrive(d, false) })
+	if err != nil || !strings.Contains(out, "? Erase /dev/disk4 (SD Card, 64.0 GB)? yes") {
+		t.Fatalf("err %v, output %q; want the answered erase question", err, out)
+	}
+	out, _ = captureCommandStdout(t, func() error { return confirmEraseDrive(d, true) })
+	if strings.Contains(out, "? Erase") {
+		t.Fatalf("output %q; --force asks nothing, so there is no answer to show", out)
+	}
+}
+
+func TestFirstBootWiFiRecordsTheAnswer(t *testing.T) {
+	stubWifiChoice(t, true, "") // the person declines Wi-Fi
+	out, err := captureCommandStdout(t, func() error {
+		_, err := resolveFirstBootWiFi(wifiCLIOptions{RequireChoice: true})
+		return err
+	})
+	if err != nil || !strings.Contains(out, "? Wi-Fi: none") {
+		t.Fatalf("err %v, output %q; want the answered Wi-Fi question", err, out)
+	}
+	out, err = captureCommandStdout(t, func() error {
+		_, err := resolveFirstBootWiFi(wifiCLIOptions{NoWifi: true, RequireChoice: true})
+		return err
+	})
+	if err != nil || strings.Contains(out, "? Wi-Fi") {
+		t.Fatalf("err %v, output %q; a flag answers nothing on screen", err, out)
+	}
 }

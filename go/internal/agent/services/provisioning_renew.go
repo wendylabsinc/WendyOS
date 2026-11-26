@@ -142,6 +142,14 @@ func (s *ProvisioningService) RenewIfDue(ctx context.Context, now time.Time) (bo
 		return false, fmt.Errorf("no pki-core renew endpoint derivable from %q; set %s", directory, renewEndpointEnv)
 	}
 
+	// Fetch the optional issuer material before asking PKI to issue an
+	// identity. Once the response arrives, only local validation and durable
+	// writes stand between us and a recoverable renewal.
+	tenant, issuerEndpoint := liteIssuerEndpoint(directory)
+	var liteBundle string
+	if issuerEndpoint != nil {
+		liteBundle, _ = fetchLiteIssuers(ctx, issuerEndpoint)
+	}
 	newKey, err := certs.GenerateMLDSAKeyPair()
 	if err != nil {
 		return false, err
@@ -163,7 +171,10 @@ func (s *ProvisioningService) RenewIfDue(ctx context.Context, now time.Time) (bo
 	if err != nil {
 		return false, err
 	}
-	if err := s.commitRenewal(certPEM, newLeaf, newChain, []byte(newKey)); err != nil {
+	if liteBundle != "" {
+		liteBundle, _ = validatedLiteIssuers(liteBundle, newChain, tenant)
+	}
+	if err := s.commitRenewal(certPEM, newLeaf, newChain, liteBundle, []byte(newKey)); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -313,7 +324,7 @@ func checkRenewedIdentity(bundle, newKey, principal, currentChainPEM string, now
 // so replacing the leaf in between would strand the reset. Order: certificate
 // first, then device-key.pem, then the pending key goes; a crash in between
 // is finished by finishInterruptedRenewal at the next start.
-func (s *ProvisioningService) commitRenewal(previousCertPEM, certPEM, chainPEM string, keyPEM []byte) error {
+func (s *ProvisioningService) commitRenewal(previousCertPEM, certPEM, chainPEM, liteBundle string, keyPEM []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.enrolled || s.certPEM != previousCertPEM {
@@ -331,6 +342,9 @@ func (s *ProvisioningService) commitRenewal(previousCertPEM, certPEM, chainPEM s
 		return errors.New("device unenrollment is pending; renewed certificate discarded")
 	}
 	state.CertPEM, state.ChainPEM = certPEM, chainPEM
+	if liteBundle != "" {
+		state.LitePeerIssuers = liteBundle
+	}
 	if err := s.saveState(&state); err != nil {
 		return fmt.Errorf("saving renewed certificate: %w", err)
 	}
@@ -348,6 +362,7 @@ func (s *ProvisioningService) commitRenewal(previousCertPEM, certPEM, chainPEM s
 		s.keyPEM[i] = 0
 	}
 	s.certPEM, s.chainPEM, s.keyPEM = certPEM, chainPEM, keyPEM
+	s.litePeerIssuers = state.LitePeerIssuers
 	return nil
 }
 

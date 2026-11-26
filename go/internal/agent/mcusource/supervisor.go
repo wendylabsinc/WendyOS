@@ -178,15 +178,49 @@ func (s *Supervisor) releasePairing(p SensorPairing) {
 const (
 	backoffBase = 1 * time.Second
 	backoffCap  = 30 * time.Second
+	// idleBackoffCap bounds retries of a source that answers but offers
+	// nothing this device can mount: each retry costs the source a full
+	// handshake, and such a source rarely gains a channel soon.
+	idleBackoffCap  = 5 * time.Minute
+	maxBackoffLevel = 9
 )
 
-func backoffDelay(level int) time.Duration {
+// errNothingToMount reports a source that answered with no camera,
+// microphone or generic channel this device can mount.
+var errNothingToMount = errors.New("source offers no channel this device can mount")
+
+func backoffDelay(level int, idle bool) time.Duration {
+	limit := backoffCap
+	if idle {
+		limit = idleBackoffCap
+	}
 	d := backoffBase << level
-	if d > backoffCap || d <= 0 {
-		return backoffCap
+	if d > limit || d <= 0 {
+		return limit
 	}
 	return d
 }
+
+// retrySchedule gives an idle source its own level, so a streak of failures
+// does not make the first idle check wait the longest idle delay.
+type retrySchedule struct{ level, idleLevel int }
+
+func (r *retrySchedule) next(idle bool) time.Duration {
+	level := &r.level
+	if idle {
+		level = &r.idleLevel
+	} else {
+		r.idleLevel = 0
+	}
+	d := backoffDelay(*level, idle)
+	if *level < maxBackoffLevel {
+		*level++
+	}
+	return d
+}
+
+// reset follows a stream that delivered frames.
+func (r *retrySchedule) reset() { *r = retrySchedule{} }
 
 // RunPairing reconciles a single pairing until ctx is cancelled.
 //
@@ -203,7 +237,7 @@ func (s *Supervisor) RunPairing(ctx context.Context, p SensorPairing, addr strin
 }
 
 func (s *Supervisor) runPairing(ctx context.Context, p SensorPairing, addr string, pinned bool) error {
-	level := 0
+	var retry retrySchedule
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -225,10 +259,7 @@ func (s *Supervisor) runPairing(ctx context.Context, p SensorPairing, addr strin
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
-				case <-time.After(backoffDelay(level)):
-				}
-				if level < 5 {
-					level++
+				case <-time.After(retry.next(false)):
 				}
 				continue
 			}
@@ -243,29 +274,33 @@ func (s *Supervisor) runPairing(ctx context.Context, p SensorPairing, addr strin
 		var err error
 		for _, dialAddr := range dialAddrs {
 			delivered, err = s.streamOnce(ctx, p, dialAddr)
-			if delivered || ctx.Err() != nil {
+			// A source with nothing to mount was reached; its other
+			// addresses lead to the same answer at the cost of a handshake.
+			if delivered || ctx.Err() != nil || errors.Is(err, errNothingToMount) {
 				break
 			}
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err != nil {
-			s.logger.Warn("sensor source stream ended", zap.String("source", p.Key()), zap.Error(err))
-		}
 		if delivered {
 			// A healthy stream delivered at least one frame before ending;
 			// don't let a brief drop after hours of good streaming pay the
 			// full climbed-up backoff (up to backoffCap) to reconnect.
-			level = 0
+			retry.reset()
+		}
+		idle := errors.Is(err, errNothingToMount)
+		delay := retry.next(idle)
+		if idle {
+			s.logger.Info("sensor source offers nothing to mount; checking again later",
+				zap.String("source", p.Key()), zap.Duration("retry_in", delay))
+		} else if err != nil {
+			s.logger.Warn("sensor source stream ended", zap.String("source", p.Key()), zap.Error(err))
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoffDelay(level)):
-		}
-		if level < 5 {
-			level++
+		case <-time.After(delay):
 		}
 	}
 }
@@ -334,7 +369,7 @@ func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr st
 		sort.Slice(mics, func(i, j int) bool { return mics[i].ChannelId < mics[j].ChannelId })
 	}
 	if len(cams) == 0 && len(mics) == 0 && len(generic) == 0 {
-		return false, nil // nothing to mount; caller backs off and retries
+		return false, errNothingToMount
 	}
 
 	// Assign a stable per-(source,channel) MCU-band node id to each camera

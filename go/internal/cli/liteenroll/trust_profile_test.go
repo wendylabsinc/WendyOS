@@ -150,7 +150,7 @@ func TestDiscoverTrustUsesNegotiatedProfile(t *testing.T) {
 			cfg := &litepb.WendyConfEnrollment{CsrUrl: srv.URL + "/csr", TimeUrl: DefaultTimeURL}
 			before := proto.Clone(cfg)
 			challenge := &litepb.WendyComEnrollmentChallenge{UsbTrustSupported: true, MldsaVerificationSupported: capability}
-			err := discoverTrustForProfile(context.Background(), defaultTSATestClient(t, srv, nil), cfg, srv.URL+"/cacerts", TrustProfileFromChallenge(challenge))
+			err := discoverTrustForProfile(context.Background(), defaultTSATestClient(t, srv, nil), cfg, srv.URL+"/cacerts", TrustProfileFromChallenge(challenge), nil)
 			if capability == nil || !*capability {
 				if err == nil || requests != 1 || !proto.Equal(cfg, before) {
 					t.Fatal("legacy/disabled firmware received incompatible discovered configuration")

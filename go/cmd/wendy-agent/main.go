@@ -639,7 +639,7 @@ func main() {
 	sensorTransportFor := func(p mcusource.SensorPairing, addr string) (mcusource.SensorTransport, error) {
 		if p.Transport == "wendycom" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
-			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr)
+			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr, provisioningSvc.LitePeerIssuers())
 		}
 		if p.Transport == "grpc" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
@@ -670,7 +670,8 @@ func main() {
 			logger.Warn("World native camera capture unavailable", zap.Error(err))
 		}
 	}
-	sensorSup.SetSourceResolver(mcusource.NewSourceResolver(meshCatalog.SensorSources))
+	resolveSensorSource := mcusource.NewSourceResolver(meshCatalog.SensorSources)
+	sensorSup.SetSourceResolver(resolveSensorSource)
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
 	sensorAgentScope := func() certs.Scope {
 		certPEM, _, _ := mcuIdentity()
@@ -679,6 +680,7 @@ func main() {
 		return scope
 	}
 	sensorSvc := services.NewSensorPairingService(logger, sensorStore, sensorAgentScope, sensorRunner.StartDiscovered, sensorRunner.StopPairing, sensorSup.IsPairingConnected)
+	sensorSvc.SetPairingProbe(sensorSup.ProbePairing)
 	// `device pair` lists sources from this device's network, so this device
 	// must not offer itself. Its asset ID is read per request because
 	// enrollment can assign one while the agent runs.
@@ -1037,7 +1039,7 @@ func main() {
 	// from the legacy physical and primary-operator listener's clock policy.
 	meshNativeListener := meshoperatorlink.NewMeshTLSListener()
 	defer meshNativeListener.Close()
-	startMeshNativeServer := func(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy) error {
+	startMeshNativeServer := func(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy, credentials *localmesh.Credentials) error {
 		mtlsMu.Lock()
 		defer mtlsMu.Unlock()
 		if meshNativeServer != nil {
@@ -1047,7 +1049,7 @@ func main() {
 		if orgMode != interceptor.OrgModeOff && !haveScope {
 			return errors.New("cannot determine mesh native agent identity scope")
 		}
-		srv, err := mtls.NewServerWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy, expectedScope, orgMode,
+		srv, err := mtls.NewMeshServer(certPEM, chainPEM, keyPEM, logger, policy, expectedScope, orgMode, credentials.ConfigureTLSServer,
 			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.ChainStreamInterceptor(interceptor.StreamErrorInterceptor(logger)))
 		if err != nil {
@@ -1183,6 +1185,7 @@ func main() {
 	agentSvc.SetRestartFunc(agentRestart.Schedule)
 	agentUpdateSvc.SetRestartFunc(agentRestart.Schedule)
 	var localMeshAppClient *meshsession.Client
+	var reloadLocalMeshIssuers func()
 	// currentAppRoutes reads the live node view at call time, never a view
 	// saved at dial start. It reports no routes once appClient's runtime has
 	// been replaced or stopped, so a late recheck fails closed.
@@ -1246,7 +1249,18 @@ func main() {
 			logger.Error("wendy net identity unavailable", zap.Error(err))
 			return
 		}
-		if err := startMeshNativeServer(certPEM, chainPEM, keyPEM, meshTimePolicy); err != nil {
+		updateIssuers := func() {
+			if bundle := provisioningSvc.LitePeerIssuers(); bundle != "" {
+				if err := credentials.SetLiteIssuerChain(bundle, chainPEM, meshTimePolicy.BaseTime(meshTimePolicy.WallTime())); err != nil {
+					logger.Warn("wendy net Lite issuers unavailable", zap.Error(err))
+				}
+			}
+		}
+		localMeshMu.Lock()
+		reloadLocalMeshIssuers = updateIssuers
+		updateIssuers()
+		localMeshMu.Unlock()
+		if err := startMeshNativeServer(certPEM, chainPEM, keyPEM, meshTimePolicy, credentials); err != nil {
 			logger.Error("wendy net native agent TLS ingress unavailable", zap.Error(err))
 			return
 		}
@@ -1321,9 +1335,9 @@ func main() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
 						Name: name, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
-						Agent:        services.MeshAgentMetadata(),
-						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
-						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
+						Agent:               services.MeshAgentMetadata(),
+						AppEndpoints:        []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
+						PreparedCredentials: credentials,
 					}, logger, meshCatalog, meshVIPs, meshSharing, func(snapshot func() localmesh.NodeSnapshot) {
 						localMeshMu.Lock()
 						localMeshSnapshot = snapshot
@@ -1741,7 +1755,7 @@ func main() {
 		stopErr := localMeshLife.Stop(stopCtx)
 		stopCancel()
 		localMeshMu.Lock()
-		localMeshSnapshot, localMeshAppClient = nil, nil
+		localMeshSnapshot, localMeshAppClient, reloadLocalMeshIssuers = nil, nil, nil
 		localMeshMu.Unlock()
 		meshDialer.UpdateIdentity("", "", "")
 		meshRoster.UpdateIdentity("", "", "", "")
@@ -1779,6 +1793,13 @@ func main() {
 	go provisioningSvc.RunRenewal(ctx, func() {
 		logger.Info("Device certificate renewed — restarting agent to load the new identity")
 		agentRestart.Schedule()
+	})
+	go provisioningSvc.RunLiteIssuerRefresh(ctx, func() {
+		localMeshMu.Lock()
+		defer localMeshMu.Unlock()
+		if reloadLocalMeshIssuers != nil {
+			reloadLocalMeshIssuers()
+		}
 	})
 
 	if accessPolicy.AllowsNetwork {
