@@ -27,11 +27,12 @@ multiple Cloud contexts, run [`wendy auth use`](./commands/auth/use.md) and
 select the context for the device's enrolled organization. The CLI searches
 for the hostname through mesh, LAN, and Cloud within that organization.
 
-To use the UUID hostname, set `DEVICE_UUID` to the device UUID from the
-[Wendy Net services guide's inventory lookup](/docs/guides/wendy-net-services#verify-short-dns-from-the-client-app).
-The lookup requires an active Cloud login and includes offline devices. If
-`pkiDeviceName` is missing, use `id` if it is a UUID. Devices with only a
-numeric asset ID use a Cloud selector.
+To use the UUID hostname, set `DEVICE_UUID` to the device's `pkiDeviceName`
+from `wendy cloud discover --all --json`. This command requires an active
+Cloud login and includes offline devices. If `pkiDeviceName` is missing,
+use `id` if it is a UUID. Devices with only a numeric asset ID use a Cloud
+selector. See the
+[inventory lookup example](/docs/guides/wendy-net-services#verify-short-dns-from-the-client-app).
 
 ```sh
 wendy --device jetson.wendy.internal device info
@@ -76,10 +77,10 @@ discovery. Switch back to the original organization with `wendy auth use` and
 retry. A pin under the selected organization's key that points to a device in
 another organization also causes a refusal before discovery.
 
-A saved private hostname can still reach its original device while offline
-when the Wendy Net directory is unavailable or complete. If Cloud or Wendy
-Net reports that the hostname now belongs to a different device, the command
-stops and asks you to verify the change.
+When LAN discovery is the only available source, a saved private hostname
+can still reach its original device. If Cloud inventory or a complete Wendy
+Net directory identifies a different device by that name, the CLI refuses
+the connection and asks you to verify the change.
 
 After verifying an intentional replacement or an invalid saved pin, select
 the intended organization's context and unpin the hostname:
@@ -92,8 +93,8 @@ The CLI clears the selected organization's binding. It also clears the exact
 legacy hostname pin if it belongs to that organization or has no recorded
 organization UUID. With no enrolled organization selected, the command can
 still clear the exact legacy hostname pin. To clear a scoped binding in another
-organization, switch to its context first. Check the replacement's UUID with
-`wendy cloud discover --all --json`, then reconnect by hostname while Cloud
+organization, switch to its context first. Check the replacement's UUID
+using the inventory lookup above, then reconnect by hostname while Cloud
 inventory is reachable or the device appears in the signed Wendy Net
 directory. If the replacement has yet to be enrolled, complete enrollment
 first.
@@ -186,6 +187,9 @@ replacement. It does not authorize learning an identity from the next
 connection: refresh the trusted inventory binding, or complete enrollment if
 the device is unprovisioned. Keep the pin and verify the device if the change
 was unexpected.
+
+For organization-scoped pins, see
+[Private Wendy Net hostnames](#private-wendy-net-hostnames).
 
 Loopback addresses share the pin of their bare host, whatever the port:
 `127.0.0.1:50051` and `127.0.0.1:50061` are both checked against the
