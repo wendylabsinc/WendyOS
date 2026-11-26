@@ -584,6 +584,9 @@ func artifactURLPath(filePath string) string {
 	return fmt.Sprintf("%x", h.Sum(nil))[:16]
 }
 
+// pickListedDeviceFn asks which listed device to use; a seam for tests.
+var pickListedDeviceFn = pickFromItems
+
 // pickDeviceTypeAndGetLatestOTA shows a device-type picker and returns the OTA
 // artifact URL for the latest stable release (or latest nightly when nightly is
 // true). No version picker is shown — the version is chosen automatically.
@@ -591,30 +594,21 @@ func artifactURLPath(filePath string) string {
 func pickDeviceTypeAndGetLatestOTA(storageMedium string, nightly bool) (string, error) {
 	fmt.Println("Fetching available devices...")
 
-	devices, err := getAvailableDevices()
+	// The list and the chosen device's update read the same master manifest.
+	ctx := withMainManifestMemo(context.Background())
+	devices, err := getAvailableDevices(ctx)
 	if err != nil {
 		return "", fmt.Errorf("fetching device manifest: %w", err)
 	}
 
 	var items []tui.PickerItem
+	names := make(map[string]string, len(devices))
 	for _, dev := range devices {
-		if dev.Manifest == nil {
-			continue
-		}
-		hasOTA := false
-		for _, v := range dev.Manifest.Versions {
-			if v.OTAUpdatePath != "" {
-				hasOTA = true
-				break
-			}
-		}
-		if !hasOTA {
-			continue
-		}
 		latestLabel := dev.LatestVersion
 		if nightly && dev.NightlyVersion != "" {
 			latestLabel = dev.NightlyVersion
 		}
+		names[dev.Key] = dev.Name
 		items = append(items, tui.PickerItem{
 			Name:        dev.Name,
 			Description: fmt.Sprintf("(latest: %s)", latestLabel),
@@ -622,21 +616,28 @@ func pickDeviceTypeAndGetLatestOTA(storageMedium string, nightly bool) (string, 
 		})
 	}
 	if len(items) == 0 {
-		return "", fmt.Errorf("no devices with OTA update support found in manifest")
+		return "", fmt.Errorf("no devices found in manifest")
 	}
 
-	fmt.Println()
-	key, err := pickFromItems("Select a device type", items)
-	if err != nil {
-		return "", err
-	}
+	// The rows came from the master manifest alone. Whether the chosen device
+	// publishes an update is in its own manifest, read now; when there is no
+	// update to use, the list opens again.
+	for {
+		fmt.Println()
+		key, err := pickListedDeviceFn("Select a device type", items)
+		if err != nil {
+			return "", err
+		}
 
-	otaURL, latestVer, err := getLatestOTAInfoForDeviceType(key, storageMedium, nightly)
-	if err != nil {
-		return "", fmt.Errorf("resolving OTA artifact for %q: %w", key, err)
+		otaURL, latestVer, err := getLatestOTAInfoForDeviceTypeContext(ctx, key, storageMedium, nightly)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf("Could not get the update for %s: %v.", names[key], err)))
+			fmt.Fprintln(os.Stderr, "Choose it again to retry, or choose another device type.")
+			continue
+		}
+		fmt.Printf("Latest OS version: %s\n", latestVer)
+		return otaURL, nil
 	}
-	fmt.Printf("Latest OS version: %s\n", latestVer)
-	return otaURL, nil
 }
 
 // dialOSUpdateAgent retains the target's transport and identity across an OS
