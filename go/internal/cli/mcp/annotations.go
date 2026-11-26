@@ -66,6 +66,9 @@ func localOnly() []mcpgo.ToolOption {
 // toolTitles are the human-readable names MCP clients and app directories show
 // for each tool. Every registered tool needs one (TestEveryToolHasTitleAndHints).
 var toolTitles = map[string]string{
+	"unitree_pairings":   "List Paired Go2 Robots",
+	"robot_status":       "Read Go2 Map and Status",
+	"robot_command":      "Control Go2",
 	"world_sites":        "Read World Sites",
 	"world_zones":        "Read World Zones",
 	"world_annotations":  "Read World Annotations",

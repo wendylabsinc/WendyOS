@@ -39,6 +39,7 @@ type commandTarget struct {
 }
 
 type mcpServer struct {
+	robotDial            func(context.Context, *grpcclient.AgentConnection) (net.Conn, error)
 	cfg                  *config.Config
 	connectFn            ConnectFunc
 	startupConnectFn     func(context.Context)
@@ -340,6 +341,7 @@ func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 	s.registerContainerTools(srv)
 	s.registerTelemetryTools(srv)
 	s.registerROS2Tools(srv)
+	s.registerRobotTools(srv)
 	s.registerWorldTools(srv)
 	s.registerWiFiTools(srv)
 	s.registerBluetoothTools(srv)

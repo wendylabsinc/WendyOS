@@ -19,6 +19,8 @@ import (
 var ErrRobotBusy = errors.New("robot is controlled by another session; close it or wait 15 seconds after it disconnects")
 
 type robotSession struct {
+	commandMu                  sync.Mutex
+	commandReceipts            map[string]robotCommandReceipt
 	robot                      robotControl
 	serial                     string
 	lastActivity               time.Time
@@ -124,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 		respond(w, result, e)
 	})
 	mux.HandleFunc("POST /v1/robot", s.robotRequest)
+	mux.HandleFunc("POST /v1/robot/command", s.robotCommand)
 	return mux
 }
 func decode(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
@@ -177,6 +180,13 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 		defer s.openMu.Unlock()
 		s.mu.Lock()
 		previous := s.observers[q.Serial]
+		if previous != nil {
+			if controller, ok := previous.robot.(robotCommander); ok && controller.CommandActive() {
+				s.mu.Unlock()
+				respond(w, nil, ErrRobotBusy)
+				return
+			}
+		}
 		for _, v := range s.robots {
 			if v.serial == q.Serial && (v.lastActivity.IsZero() || time.Since(v.lastActivity) < 15*time.Second) {
 				s.mu.Unlock()

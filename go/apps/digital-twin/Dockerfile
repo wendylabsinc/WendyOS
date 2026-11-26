@@ -10,7 +10,7 @@ RUN mkdir -p /runtime/usr/share/doc/wendy-twin-vision && cp /tmp/opencv-*/LICENS
 RUN for loader in /lib/ld-linux-aarch64.so.1 /lib64/ld-linux-x86-64.so.2; do if [ -e "$loader" ]; then cp -L --parents "$loader" /runtime; fi; done
 
 # Build with the repository root as context.
-FROM golang:1.27.3 AS build
+FROM golang:1.27.4 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY go ./go

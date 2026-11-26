@@ -246,8 +246,8 @@ func newDevicePairCmd() *cobra.Command {
 			if unitreeRegion != "global" && unitreeRegion != "cn" {
 				return fmt.Errorf("--unitree-region must be global or cn")
 			}
-			if listOnly && unitreeFlags {
-				return fmt.Errorf("--list prints SensorLink pairings and cannot be combined with Unitree flags")
+			if listOnly && (cmd.Flags().Changed("ip") || cmd.Flags().Changed("unitree-region")) {
+				return fmt.Errorf("--list cannot be combined with Unitree pairing options --ip or --unitree-region")
 			}
 			armScript := usbArms && (listOnly || bindArm != "" || forgetArm != "" || jsonOutput)
 			if !armScript && !listOnly && !pairSensor && !forgetSensor && (jsonOutput || !isInteractiveTerminal()) {
@@ -262,6 +262,9 @@ func newDevicePairCmd() *cobra.Command {
 
 			if armScript {
 				return runArmPair(ctx, conn.RobotArmService, bindArm, forgetArm, armName, allowLocation, jsonOutput, cmd.OutOrStdout())
+			}
+			if listOnly && unitreeTab {
+				return runUnitreeList(ctx, conn.UnitreeService, jsonOutput, cmd.OutOrStdout())
 			}
 			if listOnly {
 				return runSensorList(ctx, conn.SensorPairingService, jsonOutput, cmd.OutOrStdout())

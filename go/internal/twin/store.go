@@ -48,6 +48,8 @@ type Room struct {
 	// Where a robot last saw a named object. A hint for the next search, never
 	// proof that the object is still there.
 	Objects map[string]RoomObject `json:"objects,omitempty"`
+	// Operator-named destinations are separate from transient object sightings.
+	Waypoints map[string]RoomObject `json:"waypoints,omitempty"`
 }
 type RoomObject struct {
 	X        float64 `json:"x"`
@@ -295,6 +297,7 @@ func (s *Store) Put(r Room) (Room, error) {
 		r.HasVisualMap = old.HasVisualMap
 		r.References = old.References
 		r.Objects = old.Objects
+		r.Waypoints = old.Waypoints
 		r.Points = old.Points
 		r.PointLayers = old.PointLayers
 		r.LegacyPoints = old.LegacyPoints
@@ -320,6 +323,7 @@ func (s *Store) Put(r Room) (Room, error) {
 		r.LegacyPoints = nil
 		r.References = nil
 		r.Objects = nil
+		r.Waypoints = nil
 		r.Sources = nil
 	}
 	r.Revision++
@@ -524,4 +528,23 @@ func (s *Store) withFrame(frame string, commit func() error) error {
 		return errors.New("room frame changed")
 	}
 	return commit()
+}
+
+// SaveWaypoint stores a user-named map destination without evicting other places.
+func (s *Store) SaveWaypoint(frame, name string, waypoint RoomObject) error {
+	return s.withFrame(frame, func() error {
+		r, err := s.read(strings.Split(frame, "/")[0])
+		if err != nil {
+			return err
+		}
+		if r.Waypoints == nil {
+			r.Waypoints = map[string]RoomObject{}
+		}
+		if _, exists := r.Waypoints[name]; !exists && len(r.Waypoints) >= 64 {
+			return errors.New("this map already has 64 named destinations")
+		}
+		r.Waypoints[name] = waypoint
+		r.Revision++
+		return s.write(r)
+	})
 }

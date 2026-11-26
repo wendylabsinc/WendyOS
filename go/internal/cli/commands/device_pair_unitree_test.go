@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -365,7 +366,7 @@ func TestDevicePairUnitreeCancelsFormsAndSanitizesView(t *testing.T) {
 }
 
 func TestUnitreePairFlagsRejectInvalidInputBeforeConnecting(t *testing.T) {
-	for _, flags := range [][]string{{"--ip", ""}, {"--ip", "robot.local"}, {"--ip", "127.0.0.1"}, {"--ip", "::1"}, {"--unitree-region", "other"}, {"--list", "--unitree"}} {
+	for _, flags := range [][]string{{"--ip", ""}, {"--ip", "robot.local"}, {"--ip", "127.0.0.1"}, {"--ip", "::1"}, {"--unitree-region", "other"}, {"--list", "--unitree", "--ip", "192.168.1.2"}} {
 		cmd := newDevicePairCmd()
 		if err := cmd.ParseFlags(flags); err != nil {
 			t.Fatal(err)
@@ -373,5 +374,16 @@ func TestUnitreePairFlagsRejectInvalidInputBeforeConnecting(t *testing.T) {
 		if err := cmd.RunE(cmd, nil); err == nil {
 			t.Fatalf("accepted invalid flags %v", flags)
 		}
+	}
+}
+
+func TestUnitreeListIsNonInteractiveAndDoesNotDiscover(t *testing.T) {
+	client := &unitreePairTestClient{paired: []*agentpbv2.UnitreeRobot{{Serial: "go2", Name: "Office Go2", Paired: true, Connected: false}}}
+	var out bytes.Buffer
+	if err := runUnitreeList(context.Background(), client, true, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "go2") || client.scans != 0 || client.saved != nil || client.forgot != "" {
+		t.Fatal(out.String(), client)
 	}
 }

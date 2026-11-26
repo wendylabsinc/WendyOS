@@ -70,7 +70,7 @@ its own permission policy.
 | simulator | `simulator_list`, `simulator_create`, `simulator_start`, `simulator_stop`, `simulator_delete` | Local VMs; `device_connect(device="vm:<name>")` also boots one |
 | hardware | `camera_list`, `camera_controls`, `camera_set_control`, `camera_snapshot`, `bluetooth_scan`, `bluetooth_connect`, `bluetooth_disconnect` | Cameras and Bluetooth |
 | world | `world_query`, `world_watch`, `world_task_catalog`, `world_task_status`, `world_task_propose`, `world_sites`, `world_zones`, `world_annotations`, `world_proposals`, `world_proposal`, `world_task_history`, `world_task_result` | World observations and non-executable mission proposals. Uses the host-selected `WENDY_WORLD_AGENT_CONFIG` simulation agent profile, independently of device selection. Operator signing stays in the native review workflow. |
-| robotics | `ros2_topics`, `ros2_topic_info`, `ros2_topic_sample`, `ros2_topic_hz`, `ros2_lidar_summary` | ROS 2 inspection; see `wendy-robot-deploy` |
+| robotics | `unitree_pairings`, `robot_status`, `robot_command`, `ros2_topics`, `ros2_topic_info`, `ros2_topic_sample`, `ros2_topic_hz`, `ros2_lidar_summary` | ROS 2 inspection; see `wendy-robot-deploy` |
 | observability | `app_inspect`, `job_inspect`, `job_artifacts_pull`, `compute_status`, `job_submit`, `checkpoint_inspect`, `experiment_plan`, `device_os_logs`, `telemetry_metrics`, `telemetry_traces` | Service state, training jobs (see `wendy-training`), recorded exits, kernel log (dmesg), metrics, traces |
 | cloud | `cloud_discover`, `cloud_connect`, `cloud_ping`, `cloud_tunnel`, `cloud_tunnel_list`, `cloud_tunnel_close` | Cloud devices, reachability and port forwards |
 
@@ -98,3 +98,5 @@ before calls that interrupt or erase: `container_stop`, `container_delete`,
 A running server keeps the tools of the CLI that started it. When `wendy_status`
 reports a CLI update, give the user the update command and ask them to restart
 the MCP server; newer skill text cannot add tools to an older process.
+
+Go2 chat control uses the digital twin's existing controller. `unitree_pairings` reads saved robots without opening the pairing UI. `robot_status` reads the active map position and saved destinations. `robot_command` turns by up to 180 degrees, goes to a named destination, remembers the current position, or stops. Movement calls wait for a bounded controller result. Keep the same `request_id` when retrying. Use the connect action to start Go2 observations without opening a map. Unknown destinations and unconfirmed map positions are reported explicitly.
