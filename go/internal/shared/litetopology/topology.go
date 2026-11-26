@@ -232,7 +232,7 @@ func appendRecord(out *pb.LocalMeshTopology, row *lite.WendyComNetTopologyRecord
 		if origin == "" || addr == "" {
 			return status.Error(codes.DataLoss, "incomplete Lite peer")
 		}
-		transport := map[uint32]string{1: "infrastructure-wifi", 2: "ble", 3: "nan"}[row.Transport]
+		transport := map[uint32]string{1: "infrastructure-wifi", 2: "ble", 3: "nan", 4: "espnow"}[row.Transport]
 		out.Peers = append(out.Peers, &pb.LocalMeshPeerLink{LinkId: row.LinkId, Principal: origin, DeviceId: id, MeshAddress: addr, Transport: transport, Cost: row.Metric})
 	case 2:
 		if addr == "" {

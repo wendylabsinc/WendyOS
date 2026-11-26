@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -186,12 +187,15 @@ func driverExtensionsForChannel(ctx context.Context, deviceType, osVersion strin
 
 // deviceInfo is the aggregated info shown in the picker for one device.
 type deviceInfo struct {
-	Key            string          // manifest key, e.g. "raspberry-pi-5"
-	Name           string          // human-readable name
-	LatestVersion  string          // latest stable version tag
-	NightlyVersion string          // latest prerelease version tag
-	Stability      string          // "stable" or "experimental"
-	Manifest       *deviceManifest // cached manifest to avoid re-fetching
+	Key            string // manifest key, e.g. "raspberry-pi-5"
+	Name           string // human-readable name
+	LatestVersion  string // latest stable version tag
+	NightlyVersion string // latest prerelease version tag
+	Stability      string // "stable" or "experimental"
+	ManifestPath   string // where the device's own manifest is published
+	// Manifest is nil until loadManifest reads it: a device list is built from
+	// the master manifest alone.
+	Manifest *deviceManifest
 }
 
 // imageInfo describes a downloadable OS image.
@@ -213,7 +217,53 @@ func fetchMainManifest() (*mainManifest, error) {
 	return fetchMainManifestContext(context.Background())
 }
 
+// mainManifestMemo keeps the master manifests one command has downloaded, by
+// URL, so that its steps (alias lookup, driver pinning, the device list) share
+// one download.
+type mainManifestMemo struct {
+	mu    sync.Mutex
+	byURL map[string]*mainManifest
+}
+
+type mainManifestMemoKey struct{}
+
+// withMainManifestMemo returns a context under which each master manifest is
+// downloaded at most once. A failed download is not kept, so the next step that
+// needs the manifest tries again. The manifest is shared: do not modify it.
+func withMainManifestMemo(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(mainManifestMemoKey{}).(*mainManifestMemo); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, mainManifestMemoKey{}, &mainManifestMemo{byURL: make(map[string]*mainManifest)})
+}
+
+// memoizedMainManifest returns the master manifest at url, downloading it with
+// download unless ctx's memo already holds it.
+func memoizedMainManifest(ctx context.Context, url string, download func() (*mainManifest, error)) (*mainManifest, error) {
+	memo, ok := ctx.Value(mainManifestMemoKey{}).(*mainManifestMemo)
+	if !ok {
+		return download()
+	}
+	memo.mu.Lock()
+	defer memo.mu.Unlock()
+	if m, ok := memo.byURL[url]; ok {
+		return m, nil
+	}
+	m, err := download()
+	if err != nil {
+		return nil, err
+	}
+	memo.byURL[url] = m
+	return m, nil
+}
+
 func fetchMainManifestContext(ctx context.Context) (*mainManifest, error) {
+	return memoizedMainManifest(ctx, gcsBaseURL+"/manifests/master.json", func() (*mainManifest, error) {
+		return downloadMainManifest(ctx)
+	})
+}
+
+func downloadMainManifest(ctx context.Context) (*mainManifest, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, gcsBaseURL+"/manifests/master.json", nil)
 	if err != nil {
@@ -264,13 +314,15 @@ func fetchDeviceManifestContext(ctx context.Context, path string) (*deviceManife
 	return &dm, nil
 }
 
-func getAvailableDevices() ([]deviceInfo, error) {
-	main, err := fetchMainManifest()
+// getAvailableDevices lists the devices of the release master manifest. It
+// reads no device's own manifest; see deviceInfos.
+func getAvailableDevices(ctx context.Context) ([]deviceInfo, error) {
+	main, err := fetchMainManifestContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	devices := fetchDeviceInfos(main, func(dev manifestDevice) string { return dev.Latest }, fetchDeviceManifest)
+	devices := deviceInfos(main, func(dev manifestDevice) string { return dev.Latest })
 
 	// Stable devices first, then alphabetically within each group.
 	sort.Slice(devices, func(i, j int) bool {
@@ -285,53 +337,73 @@ func getAvailableDevices() ([]deviceInfo, error) {
 	return devices, nil
 }
 
-// deviceManifestFetchLimit caps how many device manifests fetchDeviceInfos
-// downloads at once.
-const deviceManifestFetchLimit = 8
-
-// fetchDeviceInfos downloads the manifest of every device in main that has one
-// and returns a deviceInfo for each, in no particular order. The downloads run
-// in parallel: fetched one after another they took seconds before the device
-// picker could open, and minutes on a slow network. latest picks the version
-// reported as the device's latest. Devices whose manifest can't be fetched are
-// skipped.
-func fetchDeviceInfos(main *mainManifest, latest func(manifestDevice) string, fetch func(path string) (*deviceManifest, error)) []deviceInfo {
-	var keys []string
+// deviceInfos returns a deviceInfo for every device in main that publishes a
+// manifest, in no particular order. latest picks the version reported as the
+// device's latest. Everything a device list shows is in the master manifest, so
+// no device's own manifest is read here: reading all of them first kept the
+// device picker closed for seconds, and for minutes on a slow network. The
+// manifest of the device that gets chosen is read with loadManifest.
+func deviceInfos(main *mainManifest, latest func(manifestDevice) string) []deviceInfo {
+	var devices []deviceInfo
 	for key, dev := range main.Devices {
 		// Every caller lists devices to pick from; an alias would duplicate its device.
-		if dev.ManifestPath != "" && dev.AliasOf == "" {
-			keys = append(keys, key)
-		}
-	}
-
-	manifests := make([]*deviceManifest, len(keys))
-	errs := make([]error, len(keys))
-	var g errgroup.Group
-	g.SetLimit(deviceManifestFetchLimit)
-	for i, key := range keys {
-		g.Go(func() error {
-			manifests[i], errs[i] = fetch(main.Devices[key].ManifestPath)
-			return nil
-		})
-	}
-	_ = g.Wait()
-
-	var devices []deviceInfo
-	for i, key := range keys {
-		if errs[i] != nil {
+		if dev.ManifestPath == "" || dev.AliasOf != "" {
 			continue
 		}
-		dev := main.Devices[key]
 		devices = append(devices, deviceInfo{
 			Key:            key,
 			Name:           humanizeDeviceKey(key),
 			LatestVersion:  latest(dev),
 			NightlyVersion: dev.LatestNightly,
 			Stability:      dev.Stability,
-			Manifest:       manifests[i],
+			ManifestPath:   dev.ManifestPath,
 		})
 	}
 	return devices
+}
+
+// loadManifest reads the device's own manifest unless it is already loaded. It
+// returns the cause as is; deviceManifestError words it for someone who named
+// the device on the command line.
+func (d *deviceInfo) loadManifest(ctx context.Context) error {
+	if d.Manifest != nil {
+		return nil
+	}
+	dm, err := fetchDeviceManifestContext(ctx, d.ManifestPath)
+	if err != nil {
+		return err
+	}
+	d.Manifest = dm
+	return nil
+}
+
+// deviceManifestError reports a device whose own manifest could not be read.
+// It keeps the cause, so a network failure is not mistaken for a device that
+// was never published.
+func deviceManifestError(name string, cause error) error {
+	return fmt.Errorf("could not load the WendyOS versions for %s: %w; check your network connection and try again", name, cause)
+}
+
+// deviceManifestFetchLimit caps how many device manifests loadDeviceManifests
+// downloads at once.
+const deviceManifestFetchLimit = 8
+
+// loadDeviceManifests reads the manifest of every device in devices, for a
+// caller that needs them all before it lists anything. The downloads run in
+// parallel: fetched one after another they took seconds, and minutes on a slow
+// network. A device whose manifest can't be fetched keeps a nil Manifest.
+func loadDeviceManifests(devices []deviceInfo, fetch func(path string) (*deviceManifest, error)) {
+	var g errgroup.Group
+	g.SetLimit(deviceManifestFetchLimit)
+	for i := range devices {
+		g.Go(func() error {
+			if dm, err := fetch(devices[i].ManifestPath); err == nil {
+				devices[i].Manifest = dm
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
 }
 
 // prBasePath returns the GCS path prefix under which a PR build's manifests
@@ -347,8 +419,14 @@ func fetchPRMainManifest(pr int) (*mainManifest, error) {
 }
 
 func fetchPRMainManifestContext(ctx context.Context, pr int) (*mainManifest, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
 	url := gcsBaseURL + "/" + prBasePath(pr) + "manifests/master.json"
+	return memoizedMainManifest(ctx, url, func() (*mainManifest, error) {
+		return downloadPRMainManifest(ctx, pr, url)
+	})
+}
+
+func downloadPRMainManifest(ctx context.Context, pr int, url string) (*mainManifest, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -389,14 +467,14 @@ func prDeviceVersion(dev manifestDevice) string {
 
 // getAvailablePRDevices mirrors getAvailableDevices for a per-PR manifest.
 // The master entries' ManifestPath values are already "pr/<N>/manifests/<device>.json"
-// (written by the publish-pr job), so fetchDeviceManifest works unchanged.
-func getAvailablePRDevices(pr int) ([]deviceInfo, error) {
-	main, err := fetchPRMainManifest(pr)
+// (written by the publish-pr job), so loadManifest works unchanged.
+func getAvailablePRDevices(ctx context.Context, pr int) ([]deviceInfo, error) {
+	main, err := fetchPRMainManifestContext(ctx, pr)
 	if err != nil {
 		return nil, err
 	}
 
-	devices := fetchDeviceInfos(main, prDeviceVersion, fetchDeviceManifest)
+	devices := deviceInfos(main, prDeviceVersion)
 
 	sort.Slice(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })
 
@@ -695,7 +773,7 @@ func resolveDeviceArtifactContext(ctx context.Context, deviceType, version strin
 	var main *mainManifest
 	var err error
 	if pr > 0 {
-		main, err = fetchPRMainManifest(pr)
+		main, err = fetchPRMainManifestContext(ctx, pr)
 	} else {
 		main, err = fetchMainManifestContext(ctx)
 	}

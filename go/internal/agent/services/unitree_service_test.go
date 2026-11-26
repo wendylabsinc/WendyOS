@@ -259,6 +259,40 @@ func TestUnitreePairValidatesBeforeSavingAndRetainsSession(t *testing.T) {
 	}
 }
 
+func TestUnitreeFailedPairReportsConnectionFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"unreachable", errors.New("Unitree signaling is unreachable on ports 9991 and 8081; check the IP address and LAN connection"), "unreachable on ports 9991 and 8081"},
+		{"encrypted service unavailable", errors.New("keyed Unitree robots require authenticated encrypted signaling; legacy fallback is refused"), "unavailable on port 9991"},
+		{"busy", errors.New("Unitree is busy; arrange an explicit handoff with the current robot operator before retrying"), "already connected to another controller"},
+		{"missing key", errors.New("this Unitree firmware requires its encryption key; sign in to the robot's Unitree account"), "requires a robot encryption key"},
+		{"rejected key", errors.New("Unitree rejected the encryption key; select the account robot that matches this IP address"), "rejected the robot encryption key"},
+		{"timeout", fmt.Errorf("validate Unitree connection: %w", context.DeadlineExceeded), "connection setup timed out"},
+		{"disconnected", errors.New("Unitree WebRTC connection closed before validation"), "disconnected before setup finished"},
+		{"unsupported firmware", errors.New("Unitree uses an unsupported signaling encryption version"), "unsupported connection protocol"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testUnitreeService(t)
+			s.dial = func(context.Context, string, string, string) (unitreeLink, error) {
+				return nil, tc.err
+			}
+			_, err := s.PairUnitree(unitreeTestContext(), unitreeTestRequest())
+			if status.Code(err) != codes.Unavailable || !strings.Contains(status.Convert(err).Message(), tc.want) {
+				t.Fatalf("pairing error = %v, want Unavailable with %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "Mac") {
+				t.Fatalf("agent pairing error refers to the client computer: %v", err)
+			}
+			if saved, err := s.store.List(); err != nil || len(saved) != 0 {
+				t.Fatalf("failed pairing changed saved pairings: %v, %v", saved, err)
+			}
+		})
+	}
+}
+
 func TestUnitreeFailedPairDoesNotSaveOrExposeSecrets(t *testing.T) {
 	s := testUnitreeService(t)
 	s.dial = func(context.Context, string, string, string) (unitreeLink, error) {

@@ -28,10 +28,21 @@ func enrolledStatus(enrolled bool) cloudStatus {
 	return cloudNotEnrolled
 }
 
-// printProvisioningSummary shows what first boot will apply, before anything is
-// erased. Never prints a password.
+// printProvisioningSummary shows on one line what first boot will apply,
+// before anything is erased. Never prints a password.
 func printProvisioningSummary(w io.Writer, name string, creds []wendyconf.WifiCredential, cloud cloudStatus) {
-	fmt.Fprint(w, provisioningSummary(name, creds, cloud, tui.Dim))
+	if name == "" {
+		name = "auto-generated"
+	}
+	wifi := "none (Ethernet or USB)"
+	if len(creds) > 0 {
+		wifi = strings.Join(wifiSummaryNames(creds), ", ")
+	}
+	parts := []string{"name " + tui.Value(tui.StripControl(name)), "Wi-Fi " + tui.Value(wifi)}
+	if cloud != "" {
+		parts = append(parts, "Cloud "+tui.Value(string(cloud)))
+	}
+	fmt.Fprintln(w, installInfoStyle.Render("›")+tui.Dim(" First boot: ")+strings.Join(parts, tui.Dim(" · ")))
 }
 
 // alsoOnPromptTerminal adds the prompt terminal to w while prompts are drawn
@@ -118,20 +129,10 @@ func wifiSummaryNames(creds []wendyconf.WifiCredential) []string {
 	return names
 }
 
-// provisioningWrittenLine says what landed on the config partition.
-func provisioningWrittenLine(name string, creds []wendyconf.WifiCredential, enrollment bool) string {
-	parts := []string{"auto-generated name"}
-	if name != "" {
-		parts[0] = "name " + tui.StripControl(name)
+// firstBootWrittenDetail names the agent seeded with the first-boot settings.
+func firstBootWrittenDetail(agentVersion string) string {
+	if agentVersion == "" {
+		return ""
 	}
-	if len(creds) == 0 {
-		parts = append(parts, "no Wi-Fi")
-	} else {
-		parts = append(parts, "Wi-Fi "+strings.Join(wifiSummaryNames(creds), ", "))
-	}
-	parts = append(parts, "agent seed")
-	if enrollment {
-		parts = append(parts, "Cloud enrollment")
-	}
-	return "Config partition written: " + strings.Join(parts, " · ")
+	return "· agent " + agentVersion
 }

@@ -130,7 +130,9 @@ func (c *Client) tryReuseLayerSnapshot(
 		return false
 	}
 	defer func() {
-		if err := sn.Remove(cleanupCtx, viewKey); err != nil && !errdefs.IsNotFound(err) {
+		ctx, cancel := context.WithTimeout(cleanupCtx, unpackCleanupTimeout)
+		defer cancel()
+		if err := sn.Remove(ctx, viewKey); err != nil && !errdefs.IsNotFound(err) {
 			c.logger.Debug("Failed to remove layer-reuse view", zap.String("key", viewKey), zap.Error(err))
 		}
 	}()
@@ -147,7 +149,9 @@ func (c *Client) tryReuseLayerSnapshot(
 	committed := false
 	defer func() {
 		if !committed {
-			if err := sn.Remove(cleanupCtx, activeKey); err != nil && !errdefs.IsNotFound(err) {
+			ctx, cancel := context.WithTimeout(cleanupCtx, unpackCleanupTimeout)
+			defer cancel()
+			if err := sn.Remove(ctx, activeKey); err != nil && !errdefs.IsNotFound(err) {
 				c.logger.Warn("Failed to remove active layer-reuse snapshot",
 					zap.String("active_key", activeKey), zap.Int("layer", layer), zap.Error(err))
 			}

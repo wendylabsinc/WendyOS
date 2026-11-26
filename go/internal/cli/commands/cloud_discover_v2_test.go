@@ -252,7 +252,7 @@ func testCloudDiscoveryV2Port(t *testing.T, udp bool, port uint32) {
 	if udp {
 		_, err = d.openDatagram(ctx, nil, auth, port)
 	} else {
-		_, err = d.openTunnel(ctx, nil, auth, port)
+		_, err = d.openTunnel(ctx, nil, auth, port, false)
 	}
 	if err == nil {
 		t.Fatal("expected the tunnel dial to fail against the stub cloud endpoint")

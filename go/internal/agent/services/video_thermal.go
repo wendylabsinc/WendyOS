@@ -13,18 +13,8 @@ import (
 // thermalUSBIdentity walks the resolved video interface's sysfs parents to the
 // USB device. Generic UVC display names are not enough to identify a TC001.
 var thermalUSBIdentity = func(path string) (vendor, product string) {
-	dir, err := filepath.EvalSymlinks(filepath.Join("/sys/class/video4linux", filepath.Base(path), "device"))
-	if err != nil {
-		return "", ""
-	}
-	for ; dir != "/" && dir != "."; dir = filepath.Dir(dir) {
-		v, ve := os.ReadFile(filepath.Join(dir, "idVendor"))
-		p, pe := os.ReadFile(filepath.Join(dir, "idProduct"))
-		if ve == nil && pe == nil {
-			return strings.TrimSpace(string(v)), strings.TrimSpace(string(p))
-		}
-	}
-	return "", ""
+	_, vendor, product, _ = usbDeviceOf(v4lSysDir, filepath.Base(path))
+	return vendor, product
 }
 
 // Probe both identity and exact capture modes. USB bridge IDs can be shared

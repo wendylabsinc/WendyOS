@@ -191,15 +191,15 @@ func TestInstallLocalAgentProvisioningRetry(t *testing.T) {
 			agent := &localInstallAgent{data: installTestELF(elf.EM_AARCH64), arch: "arm64"}
 			failure := errors.New("config write failed")
 			calls := 0
-			provisionConfigPartitionFn = func(_ drive, _ []wendyconf.WifiCredential, _ string, _ []byte, got agentSeed) error {
+			provisionConfigPartitionFn = func(_ drive, _ []wendyconf.WifiCredential, _ string, _ []byte, got agentSeed) (string, error) {
 				calls++
 				if got.local != agent {
 					t.Fatal("retry lost the local agent")
 				}
 				if succeeds && calls == 2 {
-					return nil
+					return "local", nil
 				}
-				return failure
+				return "", failure
 			}
 			_, _, err := provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, true, agentSeed{local: agent})
 			if calls != 2 || succeeds && err != nil || !succeeds && !errors.Is(err, failure) {

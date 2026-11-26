@@ -828,7 +828,7 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 		return err
 	}
 	defer local.Close()
-	done := make(chan error, 1)
+	done := make(chan error, 2)
 	go func() {
 		buf := make([]byte, 65536)
 		for {
@@ -841,53 +841,50 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 			}
 			if e != nil {
 				if e == io.EOF {
-					e = session.Send(nil, true)
+					if e = session.Send(nil, true); e == nil {
+						// The caller closes the join after receiving the response.
+						// Closing here could discard frames still queued at the broker.
+						return
+					}
 				}
 				done <- e
 				return
 			}
 		}
 	}()
-	incoming := make(chan error, 1)
 	go func() {
 		for {
 			b, half, e := session.Recv()
 			if e != nil {
-				incoming <- e
+				if e == io.EOF {
+					e = nil
+				}
+				done <- e
 				return
 			}
 			if half {
 				if tcp, ok := local.(*net.TCPConn); ok {
-					_ = tcp.CloseWrite()
+					if e = tcp.CloseWrite(); e != nil {
+						done <- e
+						return
+					}
 				}
-				incoming <- nil
-				return
+				// Keep watching the join so a caller disconnect still closes
+				// the local socket if the service never ends its response.
+				continue
 			}
 			if _, e = local.Write(b); e != nil {
-				incoming <- e
+				done <- e
 				return
 			}
 		}
 	}()
-	// Both half-closes finish independently. Errors or cancellation close the
-	// connection and unblock both pumps.
-	for i := 0; i < 2; i++ {
-		select {
-		case e := <-done:
-			if e != nil {
-				return e
-			}
-			done = nil
-		case e := <-incoming:
-			if e != nil {
-				return e
-			}
-			incoming = nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	select {
+	case e := <-done:
+		return e
+	case <-session.ctx.Done():
+		return session.ctx.Err()
 	}
-	return nil
 }
 
 // Admission lasts at most 60 seconds. Files older than the maximum relay

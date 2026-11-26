@@ -119,7 +119,7 @@ func (s *ROS2Service) resolveSidecars(ctx context.Context, override *int32) ([]r
 		}
 	}
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+		return nil, ros2PreparationError(ctx, err)
 	}
 	out := make([]ros2SC, 0, len(sidecars))
 	for _, sc := range sidecars {
@@ -136,6 +136,16 @@ func (s *ROS2Service) resolveSidecars(ctx context.Context, override *int32) ([]r
 	// RMW deterministically wins" claim held by accident rather than by contract.
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out, nil
+}
+
+func ros2PreparationError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return status.FromContextError(ctx.Err()).Err()
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
+	return status.Error(codes.FailedPrecondition, err.Error())
 }
 
 // runIn executes `ros2 <args>` in a specific sidecar and returns its stdout. A

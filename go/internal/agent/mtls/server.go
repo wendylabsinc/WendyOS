@@ -222,25 +222,34 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
 
-	return newServerWithTLSConfig(tlsConfig, chainPEM, logger, expected, orgMode, extraOpts...)
+	return newServerWithTLSConfig(tlsConfig, chainPEM, nil, logger, expected, orgMode, extraOpts...)
 }
 
 func NewServerWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
+	return NewMeshServer(certPEM, chainPEM, keyPEM, logger, policy, expected, orgMode, nil, extraOpts...)
+}
+
+// NewMeshServer admits peers using the enrolled trust anchors and the same
+// provisioned intermediate candidates as the mesh carrier.
+func NewMeshServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy, expected certs.Scope, orgMode interceptor.OrgMode, configureIssuers func(*tls.Config), extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
 	cfg, err := NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
 	if err != nil {
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
-	return newServerWithTLSConfig(cfg, chainPEM, logger, expected, orgMode, extraOpts...)
+	return newServerWithTLSConfig(cfg, chainPEM, configureIssuers, logger, expected, orgMode, extraOpts...)
 }
 
-func newServerWithTLSConfig(tlsConfig *tls.Config, chainPEM string, logger *zap.Logger, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
-
-	known, err := parseCertsFromPEM([]byte(chainPEM))
-	if err != nil {
-		return nil, fmt.Errorf("parsing agent issuer material: %w", err)
-	}
+func newServerWithTLSConfig(tlsConfig *tls.Config, chainPEM string, configureIssuers func(*tls.Config), logger *zap.Logger, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
 	tlsConfig.NextProtos = []string{"h2"}
-	meshalpn.NewCertificates(tlsConfig.Certificates[0], known).ConfigureServer(tlsConfig)
+	if configureIssuers != nil {
+		configureIssuers(tlsConfig)
+	} else {
+		known, err := parseCertsFromPEM([]byte(chainPEM))
+		if err != nil {
+			return nil, fmt.Errorf("parsing agent issuer material: %w", err)
+		}
+		meshalpn.NewCertificates(tlsConfig.Certificates[0], known).ConfigureServer(tlsConfig)
+	}
 
 	creds := meshoperatorlink.AgentTransportCredentials(credentials.NewTLS(tlsConfig))
 	opts := []grpc.ServerOption{

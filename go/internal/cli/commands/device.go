@@ -743,6 +743,7 @@ func newDeviceEnrollCmd() *cobra.Command {
 	cmd.Flags().StringVar(&liteOptions.csrURL, "csr-url", "", "CSR enrollment base URL override for Wendy Lite on self-hosted PKI")
 	cmd.Flags().StringVar(&liteOptions.timeURL, "time-url", "", "RFC 3161 signed-time endpoint for Wendy Lite (defaults to Sigstore)")
 	cmd.Flags().StringVar(&liteOptions.caCertsURL, "ca-certs-url", "", "HTTPS CA-discovery URL for Wendy Lite (defaults to the selected PKI instance's EST endpoint)")
+	cmd.Flags().StringVar(&liteOptions.estURL, "est-url", "", "HTTPS EST cacerts URL for Wendy Lite peer CA refresh and automatic discovery unless --ca-certs-url or explicit root bundles are supplied")
 	cmd.Flags().StringVar(&liteOptions.deviceRoots, "device-roots", "", "Provision this device identity PEM CA bundle over USB (also requires --https-roots)")
 	cmd.Flags().StringVar(&liteOptions.tsaRoots, "tsa-roots", "", "Signed-time PEM CA bundle (Sigstore's TSA root is bundled for the default endpoint)")
 	cmd.Flags().StringVar(&liteOptions.httpsRoots, "https-roots", "", "Provision this HTTPS/broker PEM CA bundle over USB")

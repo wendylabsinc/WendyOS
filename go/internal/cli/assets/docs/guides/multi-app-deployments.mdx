@@ -153,8 +153,8 @@ For a WendyOS device target, Wendy:
 For ROS 2, set `network_mode: host` on every service that needs DDS discovery, multicast, or direct host-network communication. Wendy converts that field into a host-network entitlement for the generated service app.
 </Callout>
 
-<Callout type="warning">
-Multi-service projects target Linux/WendyOS devices. Headless Mac does not run multi-container stacks; `wendy run` rejects them before any build when the selected target is a Mac.
+<Callout type="info">
+Multi-service projects target Linux/WendyOS devices and Headless Mac. On a Mac target the services run as Linux containers through the Mac agent's container runtime (Apple `container` or Docker); hardware entitlements are not available there. See [Headless Mac — supported project types](/docs/advanced/clients/wendy-cli/commands/run#headless-mac--supported-project-types).
 </Callout>
 
 ## Alternative: a companion `wendy.json` over `docker-compose.yml`

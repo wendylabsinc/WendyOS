@@ -29,6 +29,7 @@ type tunnelGeneration struct {
 	entries       map[[32]byte]*tunnelAuthorization
 	devices       grpcclient.ConnectionPool
 	deviceAliases map[string]string
+	tcpFeatures   map[string]*cloudTCPFeatures
 }
 type tunnelContextKey struct{}
 type tunnelAuthorization struct {
@@ -53,6 +54,7 @@ func (s *TunnelSession) SetActive(active bool) {
 			entry.conn.Close()
 		}
 		g.entries = nil
+		g.tcpFeatures = nil
 		g.mu.Unlock()
 		g.devices.Close()
 		s.current = nil
@@ -147,7 +149,7 @@ func tunnelAuthorizationFor(ctx context.Context, auth *config.AuthConfig) (*tunn
 	return entry, func() { entry.conn.Close() }, nil
 }
 
-func openAuthorizedTunnel(ctx context.Context, auth *config.AuthConfig, assetID, service string) (net.Conn, error) {
+func openAuthorizedTunnel(ctx context.Context, auth *config.AuthConfig, assetID, service string, halfClose bool) (net.Conn, error) {
 	entry, release, err := tunnelAuthorizationFor(ctx, auth)
 	if err != nil {
 		return nil, err
@@ -158,5 +160,9 @@ func openAuthorizedTunnel(ctx context.Context, auth *config.AuthConfig, assetID,
 	if err != nil {
 		return nil, err
 	}
-	return cloudrelay.OpenTCP(ctx, cloudCtx, entry.conn, entry.verifier, assetID, service, entry.sign)
+	open := cloudrelay.OpenTCP
+	if halfClose {
+		open = cloudrelay.OpenTCPWithHalfClose
+	}
+	return open(ctx, cloudCtx, entry.conn, entry.verifier, assetID, service, entry.sign)
 }

@@ -244,8 +244,16 @@ type OrganizationMember struct {
 	// unresolved realm membership, or a viewer without device-access:list or full fleet access.
 	// Uses the caller's token groups for self; current auth directory groups for other members.
 	DeviceAccessCount *int32 `protobuf:"varint,10,opt,name=device_access_count,json=deviceAccessCount,proto3,oneof" json:"device_access_count,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// ListMembers only: the member's display name and email, as User.name and User.email, so one
+	// ListMembers call renders the member list without a GetUser per member. Read-only, filled by
+	// the server. Present empty means the server filled the field and has no value to give the
+	// caller: either the directory cannot name the member, or the caller may not read that
+	// member's profile (the same rule as UserService.GetUser). Absent means not filled, including
+	// older servers, and the client falls back to GetUser.
+	Name          *string `protobuf:"bytes,11,opt,name=name,proto3,oneof" json:"name,omitempty"`
+	Email         *string `protobuf:"bytes,12,opt,name=email,proto3,oneof" json:"email,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *OrganizationMember) Reset() {
@@ -347,6 +355,20 @@ func (x *OrganizationMember) GetDeviceAccessCount() int32 {
 		return *x.DeviceAccessCount
 	}
 	return 0
+}
+
+func (x *OrganizationMember) GetName() string {
+	if x != nil && x.Name != nil {
+		return *x.Name
+	}
+	return ""
+}
+
+func (x *OrganizationMember) GetEmail() string {
+	if x != nil && x.Email != nil {
+		return *x.Email
+	}
+	return ""
 }
 
 type CreateOrganizationRequest struct {
@@ -930,8 +952,9 @@ func (x *RemoveMemberRequest) GetUserId() string {
 }
 
 type RemoveMemberResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Never true: RemoveMember is always refused (WDY-4301).
+	Success       bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1574,11 +1597,194 @@ func (x *TransferOwnershipResponse) GetPreviousOwner() *OrganizationMember {
 	return nil
 }
 
+type GetLifecycleSettingsRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *GetLifecycleSettingsRequest) Reset() {
+	*x = GetLifecycleSettingsRequest{}
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetLifecycleSettingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetLifecycleSettingsRequest) ProtoMessage() {}
+
+func (x *GetLifecycleSettingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetLifecycleSettingsRequest.ProtoReflect.Descriptor instead.
+func (*GetLifecycleSettingsRequest) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_organizations_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *GetLifecycleSettingsRequest) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+type SetLifecycleSettingsRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	// The organization's default for apps without an override. A field unset
+	// inherits the platform default.
+	DefaultPolicy *LifecyclePolicy `protobuf:"bytes,2,opt,name=default_policy,json=defaultPolicy,proto3" json:"default_policy,omitempty"`
+	// The most an app override may set. A field unset means only the plan
+	// limit applies.
+	PerAppLimit   *LifecyclePolicy `protobuf:"bytes,3,opt,name=per_app_limit,json=perAppLimit,proto3" json:"per_app_limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetLifecycleSettingsRequest) Reset() {
+	*x = SetLifecycleSettingsRequest{}
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetLifecycleSettingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetLifecycleSettingsRequest) ProtoMessage() {}
+
+func (x *SetLifecycleSettingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetLifecycleSettingsRequest.ProtoReflect.Descriptor instead.
+func (*SetLifecycleSettingsRequest) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_organizations_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *SetLifecycleSettingsRequest) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *SetLifecycleSettingsRequest) GetDefaultPolicy() *LifecyclePolicy {
+	if x != nil {
+		return x.DefaultPolicy
+	}
+	return nil
+}
+
+func (x *SetLifecycleSettingsRequest) GetPerAppLimit() *LifecyclePolicy {
+	if x != nil {
+		return x.PerAppLimit
+	}
+	return nil
+}
+
+type LifecycleSettings struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The plan's limit, every field set. Read-only: set by the platform and the
+	// subscription (the lower wins), never by the organization.
+	PlanLimit *LifecyclePolicy `protobuf:"bytes,1,opt,name=plan_limit,json=planLimit,proto3" json:"plan_limit,omitempty"`
+	// The organization's own stored default. A field unset follows
+	// platform_default.
+	DefaultPolicy *LifecyclePolicy `protobuf:"bytes,2,opt,name=default_policy,json=defaultPolicy,proto3" json:"default_policy,omitempty"`
+	PerAppLimit   *LifecyclePolicy `protobuf:"bytes,3,opt,name=per_app_limit,json=perAppLimit,proto3" json:"per_app_limit,omitempty"`
+	// The platform's default policy, every field set. Applies to each field
+	// left unset in default_policy. Read-only: set by the platform, never by
+	// the organization; for display only.
+	PlatformDefault *LifecyclePolicy `protobuf:"bytes,4,opt,name=platform_default,json=platformDefault,proto3" json:"platform_default,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *LifecycleSettings) Reset() {
+	*x = LifecycleSettings{}
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LifecycleSettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LifecycleSettings) ProtoMessage() {}
+
+func (x *LifecycleSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LifecycleSettings.ProtoReflect.Descriptor instead.
+func (*LifecycleSettings) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_organizations_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *LifecycleSettings) GetPlanLimit() *LifecyclePolicy {
+	if x != nil {
+		return x.PlanLimit
+	}
+	return nil
+}
+
+func (x *LifecycleSettings) GetDefaultPolicy() *LifecyclePolicy {
+	if x != nil {
+		return x.DefaultPolicy
+	}
+	return nil
+}
+
+func (x *LifecycleSettings) GetPerAppLimit() *LifecyclePolicy {
+	if x != nil {
+		return x.PerAppLimit
+	}
+	return nil
+}
+
+func (x *LifecycleSettings) GetPlatformDefault() *LifecyclePolicy {
+	if x != nil {
+		return x.PlatformDefault
+	}
+	return nil
+}
+
 var File_wendycloud_v2_organizations_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\n" +
-	"!wendycloud/v2/organizations.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xd7\x03\n" +
+	"!wendycloud/v2/organizations.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\x18wendycloud/v2/apps.proto\x1a\"wendycloud/v2/signed_request.proto\"\xd7\x03\n" +
 	"\fOrganization\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -1597,7 +1803,7 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\a_domainB\n" +
 	"\n" +
 	"\b_user_idB\a\n" +
-	"\x05_slug\"\xb6\x03\n" +
+	"\x05_slug\"\xfd\x03\n" +
 	"\x12OrganizationMember\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12\x17\n" +
@@ -1612,8 +1818,12 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\vrole_source\x18\t \x01(\tR\n" +
 	"roleSource\x123\n" +
 	"\x13device_access_count\x18\n" +
-	" \x01(\x05H\x00R\x11deviceAccessCount\x88\x01\x01B\x16\n" +
-	"\x14_device_access_count\"q\n" +
+	" \x01(\x05H\x00R\x11deviceAccessCount\x88\x01\x01\x12\x17\n" +
+	"\x04name\x18\v \x01(\tH\x01R\x04name\x88\x01\x01\x12\x19\n" +
+	"\x05email\x18\f \x01(\tH\x02R\x05email\x88\x01\x01B\x16\n" +
+	"\x14_device_access_countB\a\n" +
+	"\x05_nameB\b\n" +
+	"\x06_email\"q\n" +
 	"\x19CreateOrganizationRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x12\x1b\n" +
@@ -1703,14 +1913,26 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\x11new_owner_user_id\x18\x02 \x01(\tR\x0enewOwnerUserId\"\xa5\x01\n" +
 	"\x19TransferOwnershipResponse\x12>\n" +
 	"\tnew_owner\x18\x01 \x01(\v2!.wendycloud.v2.OrganizationMemberR\bnewOwner\x12H\n" +
-	"\x0eprevious_owner\x18\x02 \x01(\v2!.wendycloud.v2.OrganizationMemberR\rpreviousOwner*\xd6\x01\n" +
+	"\x0eprevious_owner\x18\x02 \x01(\v2!.wendycloud.v2.OrganizationMemberR\rpreviousOwner\"F\n" +
+	"\x1bGetLifecycleSettingsRequest\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\"\xd1\x01\n" +
+	"\x1bSetLifecycleSettingsRequest\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12E\n" +
+	"\x0edefault_policy\x18\x02 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\rdefaultPolicy\x12B\n" +
+	"\rper_app_limit\x18\x03 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\vperAppLimit\"\xa8\x02\n" +
+	"\x11LifecycleSettings\x12=\n" +
+	"\n" +
+	"plan_limit\x18\x01 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\tplanLimit\x12E\n" +
+	"\x0edefault_policy\x18\x02 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\rdefaultPolicy\x12B\n" +
+	"\rper_app_limit\x18\x03 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\vperAppLimit\x12I\n" +
+	"\x10platform_default\x18\x04 \x01(\v2\x1e.wendycloud.v2.LifecyclePolicyR\x0fplatformDefault*\xd6\x01\n" +
 	"\x10OrganizationRole\x12!\n" +
 	"\x1dORGANIZATION_ROLE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17ORGANIZATION_ROLE_OWNER\x10\x01\x12\x1b\n" +
 	"\x17ORGANIZATION_ROLE_ADMIN\x10\x02\x12%\n" +
 	"!ORGANIZATION_ROLE_BILLING_MANAGER\x10\x03\x12\x1c\n" +
 	"\x18ORGANIZATION_ROLE_MEMBER\x10\x04\x12\x1c\n" +
-	"\x18ORGANIZATION_ROLE_VIEWER\x10\x05\x1a\x02\x18\x012\xda\t\n" +
+	"\x18ORGANIZATION_ROLE_VIEWER\x10\x05\x1a\x02\x18\x012\x9e\v\n" +
 	"\x13OrganizationService\x12[\n" +
 	"\x12CreateOrganization\x12(.wendycloud.v2.CreateOrganizationRequest\x1a\x1b.wendycloud.v2.Organization\x12U\n" +
 	"\x0fGetOrganization\x12%.wendycloud.v2.GetOrganizationRequest\x1a\x1b.wendycloud.v2.Organization\x12U\n" +
@@ -1724,7 +1946,9 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\x14RevokeAllCredentials\x12\x1c.wendycloud.v2.SignedRequest\x1a+.wendycloud.v2.RevokeAllCredentialsResponse\"\x04\x88\xb5\x18\x01\x12T\n" +
 	"\vListMembers\x12!.wendycloud.v2.ListMembersRequest\x1a\".wendycloud.v2.ListMembersResponse\x12a\n" +
 	"\x11TransferOwnership\x12\x1c.wendycloud.v2.SignedRequest\x1a(.wendycloud.v2.TransferOwnershipResponse\"\x04\x88\xb5\x18\x01\x12T\n" +
-	"\x11SetMemberDefaults\x12\x1c.wendycloud.v2.SignedRequest\x1a\x1b.wendycloud.v2.Organization\"\x04\x88\xb5\x18\x01b\x06proto3"
+	"\x11SetMemberDefaults\x12\x1c.wendycloud.v2.SignedRequest\x1a\x1b.wendycloud.v2.Organization\"\x04\x88\xb5\x18\x01\x12d\n" +
+	"\x14GetLifecycleSettings\x12*.wendycloud.v2.GetLifecycleSettingsRequest\x1a .wendycloud.v2.LifecycleSettings\x12\\\n" +
+	"\x14SetLifecycleSettings\x12\x1c.wendycloud.v2.SignedRequest\x1a .wendycloud.v2.LifecycleSettings\"\x04\x88\xb5\x18\x01b\x06proto3"
 
 var (
 	file_wendycloud_v2_organizations_proto_rawDescOnce sync.Once
@@ -1739,7 +1963,7 @@ func file_wendycloud_v2_organizations_proto_rawDescGZIP() []byte {
 }
 
 var file_wendycloud_v2_organizations_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wendycloud_v2_organizations_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_wendycloud_v2_organizations_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_wendycloud_v2_organizations_proto_goTypes = []any{
 	(OrganizationRole)(0),                // 0: wendycloud.v2.OrganizationRole
 	(*Organization)(nil),                 // 1: wendycloud.v2.Organization
@@ -1766,15 +1990,19 @@ var file_wendycloud_v2_organizations_proto_goTypes = []any{
 	(*SetMemberDefaultsRequest)(nil),     // 22: wendycloud.v2.SetMemberDefaultsRequest
 	(*TransferOwnershipRequest)(nil),     // 23: wendycloud.v2.TransferOwnershipRequest
 	(*TransferOwnershipResponse)(nil),    // 24: wendycloud.v2.TransferOwnershipResponse
-	(*timestamppb.Timestamp)(nil),        // 25: google.protobuf.Timestamp
-	(*SignedRequest)(nil),                // 26: wendycloud.v2.SignedRequest
+	(*GetLifecycleSettingsRequest)(nil),  // 25: wendycloud.v2.GetLifecycleSettingsRequest
+	(*SetLifecycleSettingsRequest)(nil),  // 26: wendycloud.v2.SetLifecycleSettingsRequest
+	(*LifecycleSettings)(nil),            // 27: wendycloud.v2.LifecycleSettings
+	(*timestamppb.Timestamp)(nil),        // 28: google.protobuf.Timestamp
+	(*LifecyclePolicy)(nil),              // 29: wendycloud.v2.LifecyclePolicy
+	(*SignedRequest)(nil),                // 30: wendycloud.v2.SignedRequest
 }
 var file_wendycloud_v2_organizations_proto_depIdxs = []int32{
-	25, // 0: wendycloud.v2.Organization.created_at:type_name -> google.protobuf.Timestamp
-	25, // 1: wendycloud.v2.Organization.updated_at:type_name -> google.protobuf.Timestamp
+	28, // 0: wendycloud.v2.Organization.created_at:type_name -> google.protobuf.Timestamp
+	28, // 1: wendycloud.v2.Organization.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 2: wendycloud.v2.OrganizationMember.role:type_name -> wendycloud.v2.OrganizationRole
-	25, // 3: wendycloud.v2.OrganizationMember.created_at:type_name -> google.protobuf.Timestamp
-	25, // 4: wendycloud.v2.OrganizationMember.updated_at:type_name -> google.protobuf.Timestamp
+	28, // 3: wendycloud.v2.OrganizationMember.created_at:type_name -> google.protobuf.Timestamp
+	28, // 4: wendycloud.v2.OrganizationMember.updated_at:type_name -> google.protobuf.Timestamp
 	1,  // 5: wendycloud.v2.ListOrganizationsResponse.organization:type_name -> wendycloud.v2.Organization
 	0,  // 6: wendycloud.v2.AddMemberRequest.role:type_name -> wendycloud.v2.OrganizationRole
 	0,  // 7: wendycloud.v2.UpdateMemberRoleRequest.role:type_name -> wendycloud.v2.OrganizationRole
@@ -1785,37 +2013,47 @@ var file_wendycloud_v2_organizations_proto_depIdxs = []int32{
 	20, // 12: wendycloud.v2.AddMembersByEmailsResponse.results:type_name -> wendycloud.v2.AddMemberResult
 	2,  // 13: wendycloud.v2.TransferOwnershipResponse.new_owner:type_name -> wendycloud.v2.OrganizationMember
 	2,  // 14: wendycloud.v2.TransferOwnershipResponse.previous_owner:type_name -> wendycloud.v2.OrganizationMember
-	3,  // 15: wendycloud.v2.OrganizationService.CreateOrganization:input_type -> wendycloud.v2.CreateOrganizationRequest
-	4,  // 16: wendycloud.v2.OrganizationService.GetOrganization:input_type -> wendycloud.v2.GetOrganizationRequest
-	26, // 17: wendycloud.v2.OrganizationService.UpdateOrganization:input_type -> wendycloud.v2.SignedRequest
-	6,  // 18: wendycloud.v2.OrganizationService.DeleteOrganization:input_type -> wendycloud.v2.DeleteOrganizationRequest
-	8,  // 19: wendycloud.v2.OrganizationService.ListOrganizations:input_type -> wendycloud.v2.ListOrganizationsRequest
-	26, // 20: wendycloud.v2.OrganizationService.AddMember:input_type -> wendycloud.v2.SignedRequest
-	26, // 21: wendycloud.v2.OrganizationService.AddMembersByEmails:input_type -> wendycloud.v2.SignedRequest
-	26, // 22: wendycloud.v2.OrganizationService.UpdateMemberRole:input_type -> wendycloud.v2.SignedRequest
-	26, // 23: wendycloud.v2.OrganizationService.RemoveMember:input_type -> wendycloud.v2.SignedRequest
-	26, // 24: wendycloud.v2.OrganizationService.RevokeAllCredentials:input_type -> wendycloud.v2.SignedRequest
-	16, // 25: wendycloud.v2.OrganizationService.ListMembers:input_type -> wendycloud.v2.ListMembersRequest
-	26, // 26: wendycloud.v2.OrganizationService.TransferOwnership:input_type -> wendycloud.v2.SignedRequest
-	26, // 27: wendycloud.v2.OrganizationService.SetMemberDefaults:input_type -> wendycloud.v2.SignedRequest
-	1,  // 28: wendycloud.v2.OrganizationService.CreateOrganization:output_type -> wendycloud.v2.Organization
-	1,  // 29: wendycloud.v2.OrganizationService.GetOrganization:output_type -> wendycloud.v2.Organization
-	1,  // 30: wendycloud.v2.OrganizationService.UpdateOrganization:output_type -> wendycloud.v2.Organization
-	7,  // 31: wendycloud.v2.OrganizationService.DeleteOrganization:output_type -> wendycloud.v2.DeleteOrganizationResponse
-	9,  // 32: wendycloud.v2.OrganizationService.ListOrganizations:output_type -> wendycloud.v2.ListOrganizationsResponse
-	2,  // 33: wendycloud.v2.OrganizationService.AddMember:output_type -> wendycloud.v2.OrganizationMember
-	21, // 34: wendycloud.v2.OrganizationService.AddMembersByEmails:output_type -> wendycloud.v2.AddMembersByEmailsResponse
-	2,  // 35: wendycloud.v2.OrganizationService.UpdateMemberRole:output_type -> wendycloud.v2.OrganizationMember
-	13, // 36: wendycloud.v2.OrganizationService.RemoveMember:output_type -> wendycloud.v2.RemoveMemberResponse
-	15, // 37: wendycloud.v2.OrganizationService.RevokeAllCredentials:output_type -> wendycloud.v2.RevokeAllCredentialsResponse
-	17, // 38: wendycloud.v2.OrganizationService.ListMembers:output_type -> wendycloud.v2.ListMembersResponse
-	24, // 39: wendycloud.v2.OrganizationService.TransferOwnership:output_type -> wendycloud.v2.TransferOwnershipResponse
-	1,  // 40: wendycloud.v2.OrganizationService.SetMemberDefaults:output_type -> wendycloud.v2.Organization
-	28, // [28:41] is the sub-list for method output_type
-	15, // [15:28] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	29, // 15: wendycloud.v2.SetLifecycleSettingsRequest.default_policy:type_name -> wendycloud.v2.LifecyclePolicy
+	29, // 16: wendycloud.v2.SetLifecycleSettingsRequest.per_app_limit:type_name -> wendycloud.v2.LifecyclePolicy
+	29, // 17: wendycloud.v2.LifecycleSettings.plan_limit:type_name -> wendycloud.v2.LifecyclePolicy
+	29, // 18: wendycloud.v2.LifecycleSettings.default_policy:type_name -> wendycloud.v2.LifecyclePolicy
+	29, // 19: wendycloud.v2.LifecycleSettings.per_app_limit:type_name -> wendycloud.v2.LifecyclePolicy
+	29, // 20: wendycloud.v2.LifecycleSettings.platform_default:type_name -> wendycloud.v2.LifecyclePolicy
+	3,  // 21: wendycloud.v2.OrganizationService.CreateOrganization:input_type -> wendycloud.v2.CreateOrganizationRequest
+	4,  // 22: wendycloud.v2.OrganizationService.GetOrganization:input_type -> wendycloud.v2.GetOrganizationRequest
+	30, // 23: wendycloud.v2.OrganizationService.UpdateOrganization:input_type -> wendycloud.v2.SignedRequest
+	6,  // 24: wendycloud.v2.OrganizationService.DeleteOrganization:input_type -> wendycloud.v2.DeleteOrganizationRequest
+	8,  // 25: wendycloud.v2.OrganizationService.ListOrganizations:input_type -> wendycloud.v2.ListOrganizationsRequest
+	30, // 26: wendycloud.v2.OrganizationService.AddMember:input_type -> wendycloud.v2.SignedRequest
+	30, // 27: wendycloud.v2.OrganizationService.AddMembersByEmails:input_type -> wendycloud.v2.SignedRequest
+	30, // 28: wendycloud.v2.OrganizationService.UpdateMemberRole:input_type -> wendycloud.v2.SignedRequest
+	30, // 29: wendycloud.v2.OrganizationService.RemoveMember:input_type -> wendycloud.v2.SignedRequest
+	30, // 30: wendycloud.v2.OrganizationService.RevokeAllCredentials:input_type -> wendycloud.v2.SignedRequest
+	16, // 31: wendycloud.v2.OrganizationService.ListMembers:input_type -> wendycloud.v2.ListMembersRequest
+	30, // 32: wendycloud.v2.OrganizationService.TransferOwnership:input_type -> wendycloud.v2.SignedRequest
+	30, // 33: wendycloud.v2.OrganizationService.SetMemberDefaults:input_type -> wendycloud.v2.SignedRequest
+	25, // 34: wendycloud.v2.OrganizationService.GetLifecycleSettings:input_type -> wendycloud.v2.GetLifecycleSettingsRequest
+	30, // 35: wendycloud.v2.OrganizationService.SetLifecycleSettings:input_type -> wendycloud.v2.SignedRequest
+	1,  // 36: wendycloud.v2.OrganizationService.CreateOrganization:output_type -> wendycloud.v2.Organization
+	1,  // 37: wendycloud.v2.OrganizationService.GetOrganization:output_type -> wendycloud.v2.Organization
+	1,  // 38: wendycloud.v2.OrganizationService.UpdateOrganization:output_type -> wendycloud.v2.Organization
+	7,  // 39: wendycloud.v2.OrganizationService.DeleteOrganization:output_type -> wendycloud.v2.DeleteOrganizationResponse
+	9,  // 40: wendycloud.v2.OrganizationService.ListOrganizations:output_type -> wendycloud.v2.ListOrganizationsResponse
+	2,  // 41: wendycloud.v2.OrganizationService.AddMember:output_type -> wendycloud.v2.OrganizationMember
+	21, // 42: wendycloud.v2.OrganizationService.AddMembersByEmails:output_type -> wendycloud.v2.AddMembersByEmailsResponse
+	2,  // 43: wendycloud.v2.OrganizationService.UpdateMemberRole:output_type -> wendycloud.v2.OrganizationMember
+	13, // 44: wendycloud.v2.OrganizationService.RemoveMember:output_type -> wendycloud.v2.RemoveMemberResponse
+	15, // 45: wendycloud.v2.OrganizationService.RevokeAllCredentials:output_type -> wendycloud.v2.RevokeAllCredentialsResponse
+	17, // 46: wendycloud.v2.OrganizationService.ListMembers:output_type -> wendycloud.v2.ListMembersResponse
+	24, // 47: wendycloud.v2.OrganizationService.TransferOwnership:output_type -> wendycloud.v2.TransferOwnershipResponse
+	1,  // 48: wendycloud.v2.OrganizationService.SetMemberDefaults:output_type -> wendycloud.v2.Organization
+	27, // 49: wendycloud.v2.OrganizationService.GetLifecycleSettings:output_type -> wendycloud.v2.LifecycleSettings
+	27, // 50: wendycloud.v2.OrganizationService.SetLifecycleSettings:output_type -> wendycloud.v2.LifecycleSettings
+	36, // [36:51] is the sub-list for method output_type
+	21, // [21:36] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_organizations_proto_init() }
@@ -1824,6 +2062,7 @@ func file_wendycloud_v2_organizations_proto_init() {
 		return
 	}
 	file_wendy_options_proto_init()
+	file_wendycloud_v2_apps_proto_init()
 	file_wendycloud_v2_signed_request_proto_init()
 	file_wendycloud_v2_organizations_proto_msgTypes[0].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[1].OneofWrappers = []any{}
@@ -1840,7 +2079,7 @@ func file_wendycloud_v2_organizations_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_v2_organizations_proto_rawDesc), len(file_wendycloud_v2_organizations_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   24,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
