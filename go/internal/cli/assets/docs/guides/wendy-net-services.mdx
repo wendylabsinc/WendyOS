@@ -186,7 +186,8 @@ The calling host allocates virtual IPs from the app's `serviceCIDR`, the
 The connection still needs a usable local mesh or Cloud route, must authenticate
 the exact tenant/device principal, and must pass the destination's running-app
 port authorization. Keep the hostname in configuration because the virtual IP
-belongs to the calling host.
+belongs to the calling host. Follow the
+[Wendy Net setup guide](/docs/guides/wendy-net) to establish a local mesh route.
 
 For Cloud fallback, both agents need `wendy-app` support and the source
 device needs a `tunnel:request` grant scoped to the destination. See the
@@ -310,6 +311,10 @@ check its logs for Wendy Net identity or native TLS ingress startup errors,
 `Cloud application admission unavailable`, and
 `Cloud application admission stopped`. These indicate problems preparing or
 serving the app listener. Use the accompanying error to diagnose the cause.
+The destination agent's relay dial can also fail with
+`application relay admission is unavailable` when the app listener is not
+configured. Check that Wendy Net and app relay admission started on the
+destination.
 
 Cloud relay sessions last at most one hour. Applications that keep a TCP
 stream open longer must reconnect when the session expires.
