@@ -10,6 +10,8 @@ struct HTTPAppFixture: Sendable {
     let port = Int.random(in: 30_000...49_999)
     let device: String
     let mode: ProjectMode
+    let configDirectory: String?
+    let allowKeylessInventoryWarning: Bool
 
     enum ProjectMode: Sendable { case sourceBuild, prebuiltCompose }
 
@@ -19,9 +21,16 @@ struct HTTPAppFixture: Sendable {
         }
     }
 
-    init(device: String, mode: ProjectMode) throws {
+    init(
+        device: String,
+        mode: ProjectMode,
+        configDirectory: String? = nil,
+        allowKeylessInventoryWarning: Bool = false
+    ) throws {
         self.device = try Self.requireLANDevice(device)
         self.mode = mode
+        self.configDirectory = configDirectory
+        self.allowKeylessInventoryWarning = allowKeylessInventoryWarning
     }
 
     static func requireLANDevice(_ device: String?) throws -> String {
@@ -49,7 +58,9 @@ struct HTTPAppFixture: Sendable {
         "docker.io/library/python@sha256:303398d5c9f110790bce60d64f902e51e1a061e33292985c72bf6cd07960bf09"
 
     var command: String {
-        "env WENDY_RUN_NO_CLOUD_FALLBACK=1 wendy --json --device \(Self.quote(device))"
+        let config = configDirectory.map { " WENDY_CONFIG_DIR=\(Self.quote($0))" } ?? ""
+        return
+            "env WENDY_RUN_NO_CLOUD_FALLBACK=1\(config) wendy --json --device \(Self.quote(device))"
     }
     var buildHostArgument: String { "--build-host=\(Self.quote(device))" }
     var url: String { "http://\(device):\(port)/ready" }
@@ -130,11 +141,21 @@ struct HTTPAppFixture: Sendable {
 
     static func withComposeApp(
         cli: WendyE2ESession,
+        configDirectory: String? = nil,
+        allowKeylessInventoryWarning: Bool = false,
+        recordApp: (@Sendable (String) async throws -> Void)? = nil,
         body: @Sendable (HTTPAppFixture) async throws -> Void
     ) async throws {
         // The immutable public image is shared cache content, not an app-owned
         // image tag. Remove the exact owned app; never delete that shared image.
-        try await withProject(cli: cli, imageMayBeImported: false, mode: .prebuiltCompose) {
+        try await withProject(
+            cli: cli,
+            imageMayBeImported: false,
+            mode: .prebuiltCompose,
+            configDirectory: configDirectory,
+            allowKeylessInventoryWarning: allowKeylessInventoryWarning,
+            recordApp: recordApp
+        ) {
             fixture in
             try await fixture.deploy(cli, waitReady: false)
             try await body(fixture)
@@ -145,6 +166,9 @@ struct HTTPAppFixture: Sendable {
         cli: WendyE2ESession,
         imageMayBeImported: Bool = true,
         mode: ProjectMode = .sourceBuild,
+        configDirectory: String? = nil,
+        allowKeylessInventoryWarning: Bool = false,
+        recordApp: (@Sendable (String) async throws -> Void)? = nil,
         body: @Sendable (HTTPAppFixture) async throws -> Void
     ) async throws {
         let device = try requireLANDevice(WendyE2EEnvironment.deviceAddress)
@@ -152,9 +176,15 @@ struct HTTPAppFixture: Sendable {
             cli.machine.isLocal && cli.machine.os != .windows,
             "Fixture requires a local POSIX CLI host"
         )
-        let fixture = try HTTPAppFixture(device: device, mode: mode)
+        let fixture = try HTTPAppFixture(
+            device: device,
+            mode: mode,
+            configDirectory: configDirectory,
+            allowKeylessInventoryWarning: allowKeylessInventoryWarning
+        )
         let before = try await fixture.inventory(cli)
         try #require(!before.contains { $0.name == fixture.app })
+        if let recordApp { try await recordApp(fixture.app) }
         // A pre-existing listener must never be mistaken for this service's readiness.
         try await cli.sh(
             "python3 -c \(quote("import socket; s=socket.socket(); s.settimeout(2); assert s.connect_ex((\(String(reflecting: device)), \(fixture.port))) != 0, 'fixture port already in use'"))"
@@ -194,10 +224,18 @@ struct HTTPAppFixture: Sendable {
     func inventory(_ cli: WendyE2ESession) async throws -> [App] {
         let result = try await cli.sh("\(command) device apps list") { result in
             try result.requireSuccess()
-            #expect(result.stderr.isEmpty)
+            #expect(inventoryDiagnosticIsAllowed(result.stderr))
             return result
         }
         return try JSONDecoder().decode([App].self, from: Data(result.stdout.utf8))
+    }
+
+    func inventoryDiagnosticIsAllowed(_ stderr: String) -> Bool {
+        if stderr.isEmpty { return true }
+        guard allowKeylessInventoryWarning else { return false }
+        let notice =
+            "\(device) is not enrolled: its identity was not verified against a saved device binding, and this connection is not encrypted.\n"
+        return stderr == notice
     }
 
     func requireState(

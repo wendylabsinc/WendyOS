@@ -218,6 +218,18 @@ func TestAuthModesA05Untrusted(t *testing.T) {
 		if err == nil || !strings.Contains(out, s.fingerprint) || !strings.Contains(out, "owner") || strings.Contains(out, owner.fingerprint) {
 			t.Fatalf("untrusted diagnostic: %v %q", err, out)
 		}
+
+		structured, err := s.run(t, d.Addr, "device", "access", "--json")
+		var envelope struct {
+			Error struct {
+				Code      string `json:"code"`
+				Retryable bool   `json:"retryable"`
+				Message   string `json:"message"`
+			} `json:"error"`
+		}
+		if err == nil || json.Unmarshal([]byte(structured), &envelope) != nil || envelope.Error.Code != "device_auth_required" || envelope.Error.Retryable || !strings.Contains(envelope.Error.Message, "does not trust this computer's key") {
+			t.Fatalf("structured key refusal must not be retryable transport: %v %s", err, structured)
+		}
 		authUnchanged(t, d, b)
 	}
 }
