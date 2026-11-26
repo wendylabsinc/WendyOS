@@ -79,7 +79,7 @@ performing tests or other required checks.
 
 AI reviews run only when requested. Apply the corresponding PR labels:
 
-- `review: security` for the security review. Dependabot PRs still run the
+- `review: security` for the security review. Renovate PRs still run the
   dependency policy check without a label.
 - `review: api` for API and compatibility review, including a risk recommendation.
 - `review: docs` for documentation coverage suggestions.

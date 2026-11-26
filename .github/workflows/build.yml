@@ -25,7 +25,7 @@ on:
       - 'web-client/**'
       - '.github/ci-tests/**'
       - '.github/regression-coverage/**'
-      - '.github/dependabot.yml'
+      - 'renovate.json5'
       - '.gitattributes'
       - 'Examples/G1CokeDemo/**'
       - 'Examples/ThermalNotify/**'

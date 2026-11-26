@@ -17,7 +17,7 @@ base aggregator reads the PR's attempt artifacts, so a change to their format
 must stay readable by the previous aggregator, or that PR's analysis fails until
 it merges. Artifact identifiers must be a single bounded path component.
 
-Actions use full commit SHAs, and Dependabot proposes their updates. The Arch
+Actions use full commit SHAs, and Renovate proposes their updates. The Arch
 Linux release container is pinned by digest. Dependabot does not update
 `docker://` references, so refresh that digest by hand. The AUR job runs a full
 `pacman -Syu` so the aging image cannot fail as a partial upgrade. Version tags
@@ -74,7 +74,7 @@ including the nested Babel module. Race tests and platform fixtures stay at
 pre-release. Swift
 lint, documentation previews, and the offline agent-evaluation harness retain
 their own relevant path filters. The AI security review runs when a PR carries
-the `review: security` label; Dependabot PRs still run the secretless dependency
+the `review: security` label; Renovate PRs still run the secretless dependency
 policy on every push. The other AI review triggers are unchanged.
 
 The full Go suite (including race tests, cross-platform regressions, plugin

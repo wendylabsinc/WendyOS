@@ -1,7 +1,7 @@
 ---
 # Self-hosted Renovate, the same shape as wendy-auth's, pki-core's and cloud's.
-# Dependabot (.github/dependabot.yml) keeps the action, Go, npm and pip updates;
-# renovate.json5 limits Renovate to what Dependabot cannot update. Nothing here
+# It replaced Dependabot: renovate.json5 carries Dependabot's directories, labels
+# and limits, plus versions and images written inside the workflows. Nothing here
 # automerges.
 #
 # Schedule and manual dispatch only: no pull_request trigger, so PR code never runs

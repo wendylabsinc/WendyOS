@@ -2,14 +2,33 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended"],
 
-  // Dependabot stays the owner of action pins, Go modules, screencast npm and the simulator
-  // pip files (.github/dependabot.yml), plus repo-wide security updates. Renovate only takes
-  // what Dependabot cannot update: versions and images written inside the workflows.
-  // Self-hosted: .github/workflows/renovate.yml decides when this runs, so there is no `schedule:`.
-  // No automerge: main's ruleset needs no approving review and auto-merge is on, so an
-  // automerged PR would land with no human looking at it.
-  enabledManagers: ["github-actions", "custom.regex"],
+  // Replaces Dependabot (sem, 2026-11-26): the same directories, labels and limits as the
+  // .github/dependabot.yml it replaces, plus versions and images written inside the workflows.
+  // Self-hosted: .github/workflows/renovate.yml decides when this runs (Monday, as Dependabot
+  // did), so there is no `schedule:`.
+  // No automerge: Dependabot PRs were never automerged here. main's ruleset needs no approving
+  // review and auto-merge is on, so an automerged PR would land with no human looking at it.
+  enabledManagers: ["gomod", "npm", "github-actions", "pip_requirements", "custom.regex"],
+  // Dependabot's directories and nothing else. Examples/, web-client/, docs, fixtures and
+  // .github/actions/ were never updated; ci_execution_test.py checks every go.mod is listed.
+  includePaths: [
+    "go.mod",
+    "go/babel/go.mod",
+    "screencast/package.json",
+    "go/simulator/go2/*requirements*.txt",
+    "go/simulator/g1/*requirements*.txt",
+    ".github/workflows/*.yml",
+  ],
   labels: ["dependencies"],
+  // Dependabot capped open PRs at 5 per ecosystem with no hourly cap. Renovate's cap is
+  // repo-wide, so: three ecosystems with version updates times 5.
+  prConcurrentLimit: 15,
+  prHourlyLimit: 0,
+  // Dependabot's security updates: OSV advisories need no extra app permission. `enabled`
+  // is forced onto every advisory fix, so it also reaches the pip files below, which are
+  // otherwise disabled.
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: { enabled: true },
 
   customManagers: [
     {
@@ -31,16 +50,38 @@
   ],
 
   packageRules: [
+    // Labels as Dependabot set them: "dependencies" plus the ecosystem.
+    { matchManagers: ["gomod"], addLabels: ["go"] },
+    { matchManagers: ["npm"], addLabels: ["javascript"] },
+    { matchManagers: ["github-actions"], addLabels: ["github_actions"] },
+    { matchManagers: ["pip_requirements"], addLabels: ["python"] },
     {
-      description: "Workflow tool versions and images: one PR.",
-      matchManagers: ["github-actions", "custom.regex"],
+      description: "Workflow tool versions and images: one PR. Action pins stay one PR each, as with Dependabot, so the security review's dependency policy can verify them.",
+      matchManagers: ["custom.regex"],
       groupName: "workflow tools and images",
     },
     {
-      description: "Action and reusable-workflow pins belong to Dependabot (github-actions ecosystem). Renovate taking them too would open duplicate PRs.",
+      description: "Workflow tool versions and images: one PR. Action pins stay one PR each, as with Dependabot, so the security review's dependency policy can verify them.",
       matchManagers: ["github-actions"],
-      matchDepTypes: ["action", "workflow"],
+      matchDepTypes: ["docker", "container", "service", "uses-with"],
+      groupName: "workflow tools and images",
+    },
+    {
+      description: "Dependabot never moved the go and toolchain lines of a go.mod; those stay by hand.",
+      matchManagers: ["gomod"],
+      matchDepTypes: ["golang", "toolchain"],
       enabled: false,
+    },
+    {
+      description: "Simulator pip files: security updates only (Dependabot's open-pull-requests-limit: 0). Advisory fixes still open, see vulnerabilityAlerts.",
+      matchManagers: ["pip_requirements"],
+      enabled: false,
+    },
+    {
+      description: "ROS Humble uses Python 3.10; Pillow 13 requires Python 3.11+. Revisit when Pillow is removed or the runtimes upgrade Python. Background: https://github.com/wendylabsinc/WendyOS/pull/2756",
+      matchManagers: ["pip_requirements"],
+      matchPackageNames: ["pillow"],
+      allowedVersions: "<13",
     },
     // Deliberate pins. Each rule carries the reason; drop a rule only when its reason is gone.
     {

@@ -10,4 +10,4 @@ rules, and hook safety.
 
 The `Screencast` GitHub Actions workflow (`.github/workflows/screencast.yml`)
 runs on pull requests to `main` that touch `screencast/**`, the workflow file, or
-Dependabot configuration.
+Renovate configuration.

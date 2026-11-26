@@ -6,7 +6,7 @@ on:
     paths:
       - 'screencast/**'
       - '.github/workflows/screencast.yml'
-      - '.github/dependabot.yml'
+      - 'renovate.json5'
 
 permissions:
   contents: read
