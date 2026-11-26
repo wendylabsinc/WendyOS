@@ -1,12 +1,17 @@
 package twin
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 )
+
+var roomGzipWriters = sync.Pool{New: func() any { writer, _ := gzip.NewWriterLevel(io.Discard, gzip.BestSpeed); return writer }}
 
 // Room snapshots contain dense point clouds and repeated floor vertices. Keep
 // these transfers small over the authenticated container-exec connection.
@@ -32,8 +37,9 @@ func respondRoom(w http.ResponseWriter, r *http.Request, value any, err error) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Encoding", "gzip")
-	compressed, _ := gzip.NewWriterLevel(w, gzip.BestSpeed)
-	defer compressed.Close()
+	compressed := roomGzipWriters.Get().(*gzip.Writer)
+	compressed.Reset(w)
+	defer func() { _ = compressed.Close(); compressed.Reset(io.Discard); roomGzipWriters.Put(compressed) }()
 	json.NewEncoder(compressed).Encode(value)
 }
 
@@ -63,4 +69,57 @@ func acceptsGzip(header string) bool {
 		wildcard = quality > 0
 	}
 	return wildcard
+}
+
+// A room revision is immutable between Store writes. Reuse its gzip wire image
+// for dashboard polling; it shares the same entry and byte budget as decoded
+// snapshots, and every update or external file replacement invalidates both.
+func (s *Store) respondState(w http.ResponseWriter, r *http.Request, id string) {
+	if !acceptsGzip(strings.Join(r.Header.Values("Accept-Encoding"), ",")) {
+		state, err := s.State(id)
+		respondRoom(w, r, state, err)
+		return
+	}
+	s.mu.Lock()
+	entry, err := s.roomSnapshot(id)
+	if err != nil {
+		s.mu.Unlock()
+		respondRoom(w, r, nil, err)
+		return
+	}
+	payload := entry.gzipState
+	if payload == nil {
+		room := entry.room
+		room.FloorTiles = s.roomFloor(id, entry)
+		room.LocalizationGeometry = nil
+		var buffer bytes.Buffer
+		writer := roomGzipWriters.Get().(*gzip.Writer)
+		writer.Reset(&buffer)
+		err = json.NewEncoder(writer).Encode(room)
+		closeErr := writer.Close()
+		writer.Reset(io.Discard)
+		roomGzipWriters.Put(writer)
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			s.mu.Unlock()
+			respondRoom(w, r, nil, err)
+			return
+		}
+		payload = buffer.Bytes()
+		// Avoid retaining a huge response even when this request is allowed to
+		// transmit it. Oversized rooms/derived floors were already evicted.
+		if int64(cap(payload)) <= roomCacheMaxBytes/4 && s.rooms[strings.ToLower(id)] == entry {
+			entry.gzipState = payload
+			entry.bytes += int64(cap(payload))
+			s.roomBytes += int64(cap(payload))
+			s.trimRooms()
+		}
+	}
+	s.mu.Unlock()
+	w.Header().Add("Vary", "Accept-Encoding")
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Encoding", "gzip")
+	_, _ = w.Write(payload)
 }

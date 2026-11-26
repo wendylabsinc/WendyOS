@@ -85,8 +85,7 @@ func (s *Server) Handler() http.Handler {
 		respondRoom(w, r, v, e)
 	})
 	mux.HandleFunc("GET /v1/rooms/{id}/state", func(w http.ResponseWriter, r *http.Request) {
-		v, e := s.Store.State(r.PathValue("id"))
-		respondRoom(w, r, v, e)
+		s.Store.respondState(w, r, r.PathValue("id"))
 	})
 	mux.HandleFunc("PUT /v1/rooms/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var v Room

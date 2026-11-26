@@ -88,6 +88,9 @@ func (s *Store) SaveObject(frame, name string, object RoomObject) error {
 type Store struct {
 	mu        sync.Mutex
 	directory string
+	rooms     map[string]*cachedRoom
+	roomBytes int64
+	roomTick  uint64
 }
 
 func NewStore(directory string) (*Store, error) {
@@ -112,26 +115,23 @@ func (s *Store) path(id, suffix string) (string, error) {
 	return filepath.Join(s.directory, name), nil
 }
 func (s *Store) read(id string) (Room, error) {
-	var r Room
-	path, e := s.path(id, ".json")
-	if e != nil {
-		return r, e
+	entry, err := s.roomSnapshot(id)
+	if err != nil {
+		return Room{}, err
 	}
-	b, e := os.ReadFile(path)
-	if e != nil {
-		return r, e
-	}
-	e = json.Unmarshal(b, &r)
-	return r, e
+	return cloneRoom(entry.room), nil
 }
 func (s *Store) State(id string) (Room, error) {
 	s.mu.Lock()
-	r, e := s.read(id)
-	s.mu.Unlock()
-	if e == nil {
-		r.FloorTiles = FloorTiles(r.Points)
+	defer s.mu.Unlock()
+	entry, err := s.roomSnapshot(id)
+	if err != nil {
+		return Room{}, err
 	}
-	return r, e
+	floor := s.roomFloor(id, entry)
+	room := cloneRoom(entry.room)
+	room.FloorTiles = append([]Point{}, floor...)
+	return room, nil
 }
 func (s *Store) assets(r Room) (Room, error) {
 	if !validID(r.Site.ID) {
@@ -207,19 +207,11 @@ func (s *Store) List() ([]Room, error) {
 		if !validID(id) {
 			continue
 		}
-		r, e := s.read(id)
+		entry, e := s.roomSnapshot(id)
 		if e != nil {
 			return nil, e
 		}
-		r.Model = nil
-		r.VisualMap = nil
-		r.Points = nil
-		r.PointLayers = nil
-		r.LegacyPoints = nil
-		r.References = nil
-		r.LocalizationGeometry = nil
-		r.Sources = nil
-		result = append(result, r)
+		result = append(result, roomListItem(entry.room))
 	}
 	return result, nil
 }
@@ -256,6 +248,7 @@ func (s *Store) write(r Room) error {
 	if e = os.Rename(f.Name(), path); e != nil {
 		return e
 	}
+	s.forgetRoom(r.Site.ID)
 	d, e := os.Open(s.directory)
 	if e != nil {
 		return e
@@ -528,11 +521,11 @@ func (s *Store) withFrame(frame string, commit func() error) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, err := s.read(parts[0])
+	entry, err := s.roomSnapshot(parts[0])
 	if err != nil {
 		return err
 	}
-	if r.Removed || !strings.EqualFold(r.Site.ModelRevision, parts[1]) {
+	if entry.room.Removed || !strings.EqualFold(entry.room.Site.ModelRevision, parts[1]) {
 		return errors.New("room frame changed")
 	}
 	return commit()
