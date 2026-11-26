@@ -16,13 +16,31 @@ struct `'wendy app publish'` {
         .enabled(
             if: appsDeploymentTestsEnabled
                 && ProcessInfo.processInfo.environment["WENDY_E2E_APPS_BUILDER"] == "true"
-        ),
-        arguments: [true, false]
+        )
     )
-    func `publishes scripted new and existing small Dockerfile projects without deploying`(
-        newProject: Bool
+    func `publishes a new small project under its untagged branch digest`() async throws {
+        try await publishScriptedProject(newProject: true)
+    }
+
+    /** Explicitly registers and publishes the existing project with its chosen tag. */
+    @Test(
+        .enabled(
+            if: appsDeploymentTestsEnabled
+                && ProcessInfo.processInfo.environment["WENDY_E2E_APPS_BUILDER"] == "true"
+        )
+    )
+    func `publishes an existing small project with its chosen tag`() async throws {
+        try await publishScriptedProject(newProject: false)
+    }
+
+    private func publishScriptedProject(
+        newProject: Bool,
+        filePath: String = #filePath,
+        function: String = #function,
+        line: Int = #line
     ) async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await AppsDeploymentFixture.withApp(filePath: filePath, function: function, line: line)
+        { cli, app in
             try await AppsBuilderFixture.withBuilder(cli) {
                 let directory = newProject ? app.app.uppercased() : "."
                 let prefix = "cd \(AppsDeploymentFixture.quote(directory)) && "

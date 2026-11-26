@@ -83,23 +83,37 @@ struct `'wendy app rotate'` {
         }
     }
 
-    /**
-     Rotation requires a deployment UUID and an explicit list of device UUIDs.
-     Invalid input refuses before key lookup or service calls. A working cached
-     app alone is insufficient proof of successful key rotation.
-     */
-    @Test(
-        .enabled(if: appsDeploymentLocalTestsEnabled),
-        arguments: [
-            ("", "--deployment"),
-            ("--deployment 11111111-1111-4111-8111-111111111111", "--device"),
-        ]
-    )
-    func `requires the deployment and target device ids`(input: (String, String)) async throws {
-        try await CLIAndAgentScenario().run(authenticated: false) { cli, _ in
-            try await cli.sh("wendy app rotate \(input.0) </dev/null") { result in
+    /** A key rotation needs a deployment UUID before key lookup. */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `requires a deployment id for key rotation`() async throws {
+        try await refuseRotateInput("", guidance: "--deployment")
+    }
+
+    /** A key rotation needs explicit target UUIDs before key lookup. */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `requires target device ids for key rotation`() async throws {
+        try await refuseRotateInput(
+            "--deployment 11111111-1111-4111-8111-111111111111",
+            guidance: "--device"
+        )
+    }
+
+    private func refuseRotateInput(
+        _ flags: String,
+        guidance: String,
+        filePath: String = #filePath,
+        function: String = #function,
+        line: Int = #line
+    ) async throws {
+        try await CLIAndAgentScenario().run(
+            authenticated: false,
+            filePath: filePath,
+            function: function,
+            line: line
+        ) { cli, _ in
+            try await cli.sh("wendy app rotate \(flags) </dev/null") { result in
                 #expect(result.status.isFailure)
-                #expect(result.readableStderr.contains(input.1))
+                #expect(result.readableStderr.contains(guidance))
             }
         }
     }

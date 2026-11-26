@@ -86,9 +86,25 @@ struct `'wendy app deploy'` {
      A script must explicitly choose a target and confirm the rollout.
      Refusal leaves the named deployment absent and the Pi without the app.
      */
-    @Test(.enabled(if: appsDeploymentTestsEnabled), arguments: [true, false])
-    func `requires a target and confirmation in scripts`(omitTarget: Bool) async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+    @Test(.enabled(if: appsDeploymentTestsEnabled))
+    func `requires an explicit target in scripted deployment`() async throws {
+        try await refuseScriptedDeployment(omitTarget: true)
+    }
+
+    /** A scripted deployment without confirmation creates no deployment. */
+    @Test(.enabled(if: appsDeploymentTestsEnabled))
+    func `requires confirmation in scripted deployment`() async throws {
+        try await refuseScriptedDeployment(omitTarget: false)
+    }
+
+    private func refuseScriptedDeployment(
+        omitTarget: Bool,
+        filePath: String = #filePath,
+        function: String = #function,
+        line: Int = #line
+    ) async throws {
+        try await AppsDeploymentFixture.withApp(filePath: filePath, function: function, line: line)
+        { cli, app in
             try await app.create(cli)
             let release = try await app.publish(cli)
             try await app.refuse(

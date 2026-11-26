@@ -76,23 +76,40 @@ struct `'wendy app create'` {
         }
     }
 
-    /**
-     Without a terminal, missing name, id or confirmation names the required
-     flag and refuses creation. This command validation needs no credentials.
-     */
-    @Test(
-        .enabled(if: appsDeploymentLocalTestsEnabled),
-        arguments: [
-            ("--app sh.wendy.e2e.missing --yes", "--name"),
-            ("--name Example --yes", "--app"),
-            ("--name Example --app sh.wendy.e2e.missing", "--yes"),
-        ]
-    )
-    func `explains missing scripted input`(flags: (String, String)) async throws {
-        try await CLIAndAgentScenario().run(authenticated: false) { cli, _ in
-            try await cli.sh("wendy app create \(flags.0) </dev/null") { result in
+    /** Without a terminal, missing name refuses before authentication. */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `requires a name for scripted app creation`() async throws {
+        try await refuseCreateInput("--app sh.wendy.e2e.missing --yes", guidance: "--name")
+    }
+
+    /** Without a terminal, missing app id refuses before authentication. */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `requires an app id for scripted app creation`() async throws {
+        try await refuseCreateInput("--name Example --yes", guidance: "--app")
+    }
+
+    /** Without a terminal, missing confirmation refuses before authentication. */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `requires confirmation for scripted app creation`() async throws {
+        try await refuseCreateInput("--name Example --app sh.wendy.e2e.missing", guidance: "--yes")
+    }
+
+    private func refuseCreateInput(
+        _ flags: String,
+        guidance: String,
+        filePath: String = #filePath,
+        function: String = #function,
+        line: Int = #line
+    ) async throws {
+        try await CLIAndAgentScenario().run(
+            authenticated: false,
+            filePath: filePath,
+            function: function,
+            line: line
+        ) { cli, _ in
+            try await cli.sh("wendy app create \(flags) </dev/null") { result in
                 #expect(result.status.isFailure)
-                #expect(result.readableStderr.contains(flags.1))
+                #expect(result.readableStderr.contains(guidance))
             }
         }
     }

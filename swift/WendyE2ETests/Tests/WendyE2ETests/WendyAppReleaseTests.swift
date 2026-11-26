@@ -31,21 +31,34 @@ struct `'wendy app release'` {
         }
     }
 
-    /**
-     A catalog reference always names a version and a valid sha256 digest.
-     Missing or malformed values cannot fall back to an implicit latest image.
-     */
-    @Test(
-        .enabled(if: appsDeploymentLocalTestsEnabled),
-        arguments: [
-            ("", "--tag"), ("--tag example --digest bad", "--digest"),
-        ]
-    )
-    func `requires a tag and valid digest`(input: (String, String)) async throws {
-        try await CLIAndAgentScenario().run(authenticated: false) { cli, _ in
-            try await cli.sh("wendy app release \(input.0) </dev/null") { result in
+    /** A catalog reference requires an explicit tag before authentication. */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `requires a tag for a catalog release`() async throws {
+        try await refuseReleaseInput("", guidance: "--tag")
+    }
+
+    /** A malformed digest cannot fall back to an implicit latest image. */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `requires a valid digest for a catalog release`() async throws {
+        try await refuseReleaseInput("--tag example --digest bad", guidance: "--digest")
+    }
+
+    private func refuseReleaseInput(
+        _ flags: String,
+        guidance: String,
+        filePath: String = #filePath,
+        function: String = #function,
+        line: Int = #line
+    ) async throws {
+        try await CLIAndAgentScenario().run(
+            authenticated: false,
+            filePath: filePath,
+            function: function,
+            line: line
+        ) { cli, _ in
+            try await cli.sh("wendy app release \(flags) </dev/null") { result in
                 #expect(result.status.isFailure)
-                #expect(result.readableStderr.contains(input.1))
+                #expect(result.readableStderr.contains(guidance))
             }
         }
     }

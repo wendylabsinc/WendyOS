@@ -8,23 +8,23 @@ device authorization; opt-in flags alone do not provide it.
 
 ## Coverage and counts
 
-There are **77 Swift test declarations in 15 command/Console suites**. All have
+There are **83 Swift test declarations in 15 command/Console suites**. All have
 actual logic and explicit opt-in gates. There are no disabled or empty stubs.
 The two excluded scenarios are interactive publish/registration prompts and the
 interactive deploy review. Their scripted counterparts remain covered.
 
 | Tier | Declarations | What the bodies exercise |
 | --- | ---: | --- |
-| Local CLI validation | 7 | Missing input/confirmation, invalid project/required names/services, exact deployment syntax and rotate identifiers |
-| Cloud/CLI/device | 59 | Public operations, actual catalog/registry/history/report reads, authenticated uncached promotion, scripted first builds and independent HTTP responses; includes additional dedicated fleet, service-control, reboot, second-operator and natural-sweep opt-ins |
+| Local CLI validation | 11 | Missing input/confirmation, invalid project/required names/services, exact deployment syntax and rotate identifiers |
+| Cloud/CLI/device | 61 | Public operations, actual catalog/registry/history/report reads, authenticated uncached promotion, scripted first builds and independent HTTP responses; includes additional dedicated fleet, service-control, reboot, second-operator and natural-sweep opt-ins |
 | Real browser DOM | 7 | Rendered catalog/access/settings/releases, rollout and history, waiting/failed states, removal/deletion/detach and pending device work |
 | Isolated protocol/signing | 4 | Real Agent/CLI logic with synthetic in-process peers and deterministic test-only barriers; **not live Cloud/containerd coverage** |
 
-Parameterization expands these to 83 Swift invocations before filtering: 11
-local, 61 Cloud/device, 7 browser and 4 isolation. These are source counts, not
-runtime discovery or passing results. Four Go top-level isolation cases underlie
-the four Swift isolation wrappers and are counted once, not added again. The
-bad-data Go case contains six synthetic subcases.
+All eleven former argument variants now have independently named Swift
+functions. Each declaration owns one recording/coverage interval; none of the
+former inputs or assertions was removed. These are source counts, not runtime
+passing results. The four Go top-level isolation cases remain counted once;
+the bad-data wrapper retains all six existing subcases.
 
 The earlier 69-declaration measured baseline remains separate. Two of its cases
 read Cloud rollback history and removal/release retention without waiting for a
