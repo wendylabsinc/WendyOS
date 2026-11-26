@@ -267,9 +267,10 @@ destination's published port in [Troubleshoot discovery](#troubleshoot-discovery
 
 Cloud app relay requires the source and destination apps to use network mode
 `mesh` in their `wendy.json`. The destination app must publish its incoming port.
-The device's Wendy Net participation setting controls local peer routes
-independently of the app's network mode. With participation disabled, the
-source app can still use its `mesh` network and virtual IP to reach Cloud.
+The device's [Wendy Net participation setting](/docs/guides/wendy-net#2-enable-the-connections-you-want)
+controls local peer routes independently of the app's network mode. With
+participation disabled, the source app can still use its `mesh` network and
+virtual IP to reach Cloud.
 
 Wendy Net tries Cloud for TCP or UDP when the source has no active local mesh
 route to the destination. Local connection failures such as an identity or
@@ -316,8 +317,8 @@ The destination agent's relay dial can also fail with
 configured. Check that Wendy Net and app relay admission started on the
 destination.
 
-Cloud relay sessions last at most one hour. Applications that keep a TCP
-stream open longer must reconnect when the session expires.
+Cloud relay sessions last at most one hour. When Cloud closes an expired
+TCP stream, open a new connection to the same hostname and published port.
 
 The app connects through its device's relay grant. The `wendy cloud tunnel`
 command opens an operator session with separate permissions.
