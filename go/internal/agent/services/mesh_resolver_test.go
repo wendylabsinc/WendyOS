@@ -164,3 +164,20 @@ func TestResolverBrowseErrorFallsBackToRoster(t *testing.T) {
 		t.Fatalf("browse failure fallback = %v,%v want roster entry", got, ok)
 	}
 }
+
+func TestLegacyResolverKeepsConfirmedLANNamesAtDeadline(t *testing.T) {
+	roster := provisionedRoster(t)
+	r := NewMeshResolver(zaptest.NewLogger(t), roster, func(context.Context) ([]models.LANDevice, error) {
+		return []models.LANDevice{{
+			MeshName:     "install-name",
+			CloudName:    "cloud-name",
+			PrincipalURI: certs.DeviceSPIFFEURI(rosterTenant, rosterDeviceB),
+		}}, context.DeadlineExceeded
+	})
+	if got, ok := r.Resolve("install-name"); !ok || got != mustDevice(t, rosterTenant, rosterDeviceB) {
+		t.Fatalf("legacy LAN lookup at browse deadline = %v,%v", got, ok)
+	}
+	if _, ok := r.Resolve("cloud-name"); ok {
+		t.Fatal("the new Cloud TXT field displaced the local legacy name")
+	}
+}
