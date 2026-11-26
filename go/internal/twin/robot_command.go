@@ -20,6 +20,8 @@ type robotCommander interface {
 }
 
 type robotCommandRequest struct {
+	Query          string  `json:"query,omitempty"`
+	Model          string  `json:"model,omitempty"`
 	EvidenceID     string  `json:"evidence_id,omitempty"`
 	Serial         string  `json:"serial"`
 	Action         string  `json:"action"`
@@ -68,7 +70,7 @@ func (s *Server) robotCommandUsingSearch(w http.ResponseWriter, r *http.Request,
 	if q.Action == "stop" {
 		s.cancelCommandSetups(q.Serial)
 	}
-	autoEligible := q.Action == "turn" || q.Action == "forward" || q.Action == "go_to" || q.Action == "localize" || q.Action == "localize_active"
+	autoEligible := q.Action == "turn" || q.Action == "forward" || q.Action == "go_to" || q.Action == "localize" || q.Action == "localize_active" || q.Action == "find_active"
 	if autoEligible {
 		// Register before checking observations so Stop orders setup and dispatch
 		// cancellation consistently, even when requests arrive together.
@@ -136,7 +138,9 @@ func (s *Server) robotCommandUsingSearch(w http.ResponseWriter, r *http.Request,
 				places = room.Waypoints
 			}
 		}
-		respond(w, map[string]any{"snapshot": state, "destinations": places}, nil)
+		out := robotSearchStatus(session)
+		out["snapshot"], out["destinations"] = state, places
+		respond(w, out, nil)
 		return
 	}
 	controller, ok := session.robot.(robotCommander)
@@ -153,6 +157,7 @@ func (s *Server) robotCommandUsingSearch(w http.ResponseWriter, r *http.Request,
 		}
 		session.searchMu.Unlock()
 		session.cancelFind()
+		session.cancelActiveObject()
 		respond(w, controller.ExecuteCommand(r.Context(), twinrobot.Command{Action: "stop"}), nil)
 		return
 	}
@@ -235,6 +240,14 @@ func (s *Server) robotCommandUsingSearch(w http.ResponseWriter, r *http.Request,
 		finish(s.localizeCommand(r.Context(), session, q, controller))
 		return
 	}
+	if q.Action == "find_active" {
+		initial, launch := s.prepareActiveObjectSearch(r.Context(), session, q)
+		finish(initial)
+		if launch != nil {
+			launch()
+		}
+		return
+	}
 	if q.Action == "localize_active" {
 		initial, launch := s.prepareActiveLocalization(r.Context(), session, q, controller, begin)
 		finish(initial)
@@ -314,12 +327,15 @@ func validateRobotCommand(q robotCommandRequest) error {
 	switch q.Action {
 	case "connect", "status":
 		return nil
-	case "stop", "turn", "forward", "go_to", "remember", "go_to_object", "receipt", "localize", "localize_active":
+	case "stop", "turn", "forward", "go_to", "remember", "go_to_object", "receipt", "localize", "localize_active", "find_active":
 	default:
-		return errors.New("choose connect, status, stop, turn, forward, go_to, go_to_object, remember, localize, or localize_active")
+		return errors.New("choose connect, status, stop, turn, forward, go_to, go_to_object, remember, localize, localize_active, or find_active")
 	}
 	if len(q.RequestID) < 8 || len(q.RequestID) > 80 {
 		return errors.New("request_id must contain 8 to 80 characters; reuse it for retries")
+	}
+	if q.Action == "find_active" && (strings.TrimSpace(q.Query) == "" || len(q.Query) > 160 || strings.ContainsFunc(q.Query, unicode.IsControl) || len(q.Model) > 128 || strings.ContainsFunc(q.Model, unicode.IsControl)) {
+		return errors.New("describe one object with 1 to 160 printable characters and an optional installed local model")
 	}
 	if q.Action == "turn" && (q.Degrees == 0 || q.Degrees < -180 || q.Degrees > 180) {
 		return errors.New("turn by 1 to 180 degrees; positive is left, negative is right")

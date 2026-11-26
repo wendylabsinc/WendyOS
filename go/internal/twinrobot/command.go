@@ -22,9 +22,10 @@ type Command struct {
 }
 
 type CommandResult struct {
-	State    string            `json:"state"`
-	Message  string            `json:"message"`
-	Snapshot SiteRobotSnapshot `json:"snapshot"`
+	ObjectSearch *ObjectSearchProgress `json:"object_search,omitempty"`
+	State        string                `json:"state"`
+	Message      string                `json:"message"`
+	Snapshot     SiteRobotSnapshot     `json:"snapshot"`
 }
 
 var errChatLocalizationBusy = errors.New("Localization deferred while a chat movement is active. Stop the robot first to change its alignment.")
