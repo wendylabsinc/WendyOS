@@ -244,8 +244,16 @@ type OrganizationMember struct {
 	// unresolved realm membership, or a viewer without device-access:list or full fleet access.
 	// Uses the caller's token groups for self; current auth directory groups for other members.
 	DeviceAccessCount *int32 `protobuf:"varint,10,opt,name=device_access_count,json=deviceAccessCount,proto3,oneof" json:"device_access_count,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// ListMembers only: the member's display name and email, as User.name and User.email, so one
+	// ListMembers call renders the member list without a GetUser per member. Read-only, filled by
+	// the server. Present empty means the server filled the field and has no value to give the
+	// caller: either the directory cannot name the member, or the caller may not read that
+	// member's profile (the same rule as UserService.GetUser). Absent means not filled, including
+	// older servers, and the client falls back to GetUser.
+	Name          *string `protobuf:"bytes,11,opt,name=name,proto3,oneof" json:"name,omitempty"`
+	Email         *string `protobuf:"bytes,12,opt,name=email,proto3,oneof" json:"email,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *OrganizationMember) Reset() {
@@ -347,6 +355,20 @@ func (x *OrganizationMember) GetDeviceAccessCount() int32 {
 		return *x.DeviceAccessCount
 	}
 	return 0
+}
+
+func (x *OrganizationMember) GetName() string {
+	if x != nil && x.Name != nil {
+		return *x.Name
+	}
+	return ""
+}
+
+func (x *OrganizationMember) GetEmail() string {
+	if x != nil && x.Email != nil {
+		return *x.Email
+	}
+	return ""
 }
 
 type CreateOrganizationRequest struct {
@@ -930,8 +952,9 @@ func (x *RemoveMemberRequest) GetUserId() string {
 }
 
 type RemoveMemberResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Never true: RemoveMember is always refused (WDY-4301).
+	Success       bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1780,7 +1803,7 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\a_domainB\n" +
 	"\n" +
 	"\b_user_idB\a\n" +
-	"\x05_slug\"\xb6\x03\n" +
+	"\x05_slug\"\xfd\x03\n" +
 	"\x12OrganizationMember\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12\x17\n" +
@@ -1795,8 +1818,12 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\vrole_source\x18\t \x01(\tR\n" +
 	"roleSource\x123\n" +
 	"\x13device_access_count\x18\n" +
-	" \x01(\x05H\x00R\x11deviceAccessCount\x88\x01\x01B\x16\n" +
-	"\x14_device_access_count\"q\n" +
+	" \x01(\x05H\x00R\x11deviceAccessCount\x88\x01\x01\x12\x17\n" +
+	"\x04name\x18\v \x01(\tH\x01R\x04name\x88\x01\x01\x12\x19\n" +
+	"\x05email\x18\f \x01(\tH\x02R\x05email\x88\x01\x01B\x16\n" +
+	"\x14_device_access_countB\a\n" +
+	"\x05_nameB\b\n" +
+	"\x06_email\"q\n" +
 	"\x19CreateOrganizationRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x12\x1b\n" +

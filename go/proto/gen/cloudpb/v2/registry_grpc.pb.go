@@ -20,6 +20,8 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName   = "/wendycloud.v2.KeyDirectoryService/RegisterUserEncryptionKey"
+	KeyDirectoryService_ApproveSession_FullMethodName              = "/wendycloud.v2.KeyDirectoryService/ApproveSession"
+	KeyDirectoryService_RevokeUserEncryptionKey_FullMethodName     = "/wendycloud.v2.KeyDirectoryService/RevokeUserEncryptionKey"
 	KeyDirectoryService_RegisterDeviceEncryptionKey_FullMethodName = "/wendycloud.v2.KeyDirectoryService/RegisterDeviceEncryptionKey"
 	KeyDirectoryService_GetRecipientKeys_FullMethodName            = "/wendycloud.v2.KeyDirectoryService/GetRecipientKeys"
 )
@@ -43,8 +45,49 @@ type KeyDirectoryServiceClient interface {
 	// never replaces another device's key. Replacement applies to one device's
 	// own key only. TODO(ruling): how a device's old key is retired when that
 	// device rotates (no wire field ties two key ids to one device yet).
+	// A client may keep its key across a logout and a later login of the SAME
+	// account (WDY-4375 default D): registering the same public_key again is
+	// not a new session, and keeps its approval and its wraps. Registering it
+	// with an approval_public_key other than the one stored is refused
+	// (ALREADY_EXISTS); a key stored without one (a client that predates
+	// WDY-4375) takes one once. A revoked key_id is never accepted again
+	// (FAILED_PRECONDITION).
 	// Signed; payload_type "wendycloud.v2.RegisterEncryptionKeyRequest".
 	RegisterUserEncryptionKey(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*RegisterEncryptionKeyResponse, error)
+	// Records one session of the caller as approved (WDY-4375). The approval is
+	// made and signed by the approving session (SignedSessionApproval); Cloud
+	// only stores it, then serves it in RecipientKey.approval. Cloud checks,
+	// refusing with FAILED_PRECONDITION: approval.user is the caller;
+	// approval.key_id is a live key of the caller that has an
+	// approval_public_key and no approval yet (ALREADY_EXISTS if approved);
+	// the signature verifies with the approver's approval_public_key; and
+	// either approver_key_id is another live, approved key of the caller (a
+	// session that approves must itself be approved), or approver_key_id equals
+	// key_id (the root) and the caller has never had an approved key in this
+	// organization since the member was last added (revoked keys count, so
+	// revoking every approved session never opens a new root; removing and
+	// re-adding the member resets it). Cloud's checks are a courtesy; clients
+	// check the same chain themselves (RecipientKey). The approving client then
+	// passes on its wraps with AddWraps, and the newly approved client passes on
+	// its own to the user's other approved sessions.
+	// Signed; payload_type "wendycloud.v2.ApproveSessionRequest".
+	ApproveSession(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*ApproveSessionResponse, error)
+	// Ends one session of the caller (WDY-4375): the key stops being live, and
+	// every wrap addressed to it, at every scope, is deleted. A lost machine,
+	// or a sign-out that does not keep the key. Only the key's own user
+	// (FAILED_PRECONDITION for another user's key). A waiting key may be
+	// revoked from any session of the user. An approved key is revoked only
+	// with `revocation`, signed by an approved session of the same user (the
+	// key itself or another one), so a stolen login cannot clear the real
+	// sessions away (PERMISSION_DENIED without one, or when it does not verify
+	// with a live approved key's approval_public_key). Revoking the user's last
+	// approved session leaves the member without one: no new root is possible
+	// (ApproveSession), and the way back is an admin removing and re-adding the
+	// member. Approvals the key made earlier stay valid; it makes no new ones.
+	// Cloud does the same, with no revocation needed, for every key of a user
+	// whose membership of the organization ends.
+	// Signed; payload_type "wendycloud.v2.RevokeUserEncryptionKeyRequest".
+	RevokeUserEncryptionKey(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*RevokeUserEncryptionKeyResponse, error)
 	// A device registers the encryption key it generated at enrollment, over its
 	// own mTLS. Device-signed (wendy.device_signed_request): `x5c` = the device
 	// leaf, which must be the mTLS peer.
@@ -68,6 +111,26 @@ func (c *keyDirectoryServiceClient) RegisterUserEncryptionKey(ctx context.Contex
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterEncryptionKeyResponse)
 	err := c.cc.Invoke(ctx, KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keyDirectoryServiceClient) ApproveSession(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*ApproveSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApproveSessionResponse)
+	err := c.cc.Invoke(ctx, KeyDirectoryService_ApproveSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keyDirectoryServiceClient) RevokeUserEncryptionKey(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*RevokeUserEncryptionKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeUserEncryptionKeyResponse)
+	err := c.cc.Invoke(ctx, KeyDirectoryService_RevokeUserEncryptionKey_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -113,8 +176,49 @@ type KeyDirectoryServiceServer interface {
 	// never replaces another device's key. Replacement applies to one device's
 	// own key only. TODO(ruling): how a device's old key is retired when that
 	// device rotates (no wire field ties two key ids to one device yet).
+	// A client may keep its key across a logout and a later login of the SAME
+	// account (WDY-4375 default D): registering the same public_key again is
+	// not a new session, and keeps its approval and its wraps. Registering it
+	// with an approval_public_key other than the one stored is refused
+	// (ALREADY_EXISTS); a key stored without one (a client that predates
+	// WDY-4375) takes one once. A revoked key_id is never accepted again
+	// (FAILED_PRECONDITION).
 	// Signed; payload_type "wendycloud.v2.RegisterEncryptionKeyRequest".
 	RegisterUserEncryptionKey(context.Context, *SignedRequest) (*RegisterEncryptionKeyResponse, error)
+	// Records one session of the caller as approved (WDY-4375). The approval is
+	// made and signed by the approving session (SignedSessionApproval); Cloud
+	// only stores it, then serves it in RecipientKey.approval. Cloud checks,
+	// refusing with FAILED_PRECONDITION: approval.user is the caller;
+	// approval.key_id is a live key of the caller that has an
+	// approval_public_key and no approval yet (ALREADY_EXISTS if approved);
+	// the signature verifies with the approver's approval_public_key; and
+	// either approver_key_id is another live, approved key of the caller (a
+	// session that approves must itself be approved), or approver_key_id equals
+	// key_id (the root) and the caller has never had an approved key in this
+	// organization since the member was last added (revoked keys count, so
+	// revoking every approved session never opens a new root; removing and
+	// re-adding the member resets it). Cloud's checks are a courtesy; clients
+	// check the same chain themselves (RecipientKey). The approving client then
+	// passes on its wraps with AddWraps, and the newly approved client passes on
+	// its own to the user's other approved sessions.
+	// Signed; payload_type "wendycloud.v2.ApproveSessionRequest".
+	ApproveSession(context.Context, *SignedRequest) (*ApproveSessionResponse, error)
+	// Ends one session of the caller (WDY-4375): the key stops being live, and
+	// every wrap addressed to it, at every scope, is deleted. A lost machine,
+	// or a sign-out that does not keep the key. Only the key's own user
+	// (FAILED_PRECONDITION for another user's key). A waiting key may be
+	// revoked from any session of the user. An approved key is revoked only
+	// with `revocation`, signed by an approved session of the same user (the
+	// key itself or another one), so a stolen login cannot clear the real
+	// sessions away (PERMISSION_DENIED without one, or when it does not verify
+	// with a live approved key's approval_public_key). Revoking the user's last
+	// approved session leaves the member without one: no new root is possible
+	// (ApproveSession), and the way back is an admin removing and re-adding the
+	// member. Approvals the key made earlier stay valid; it makes no new ones.
+	// Cloud does the same, with no revocation needed, for every key of a user
+	// whose membership of the organization ends.
+	// Signed; payload_type "wendycloud.v2.RevokeUserEncryptionKeyRequest".
+	RevokeUserEncryptionKey(context.Context, *SignedRequest) (*RevokeUserEncryptionKeyResponse, error)
 	// A device registers the encryption key it generated at enrollment, over its
 	// own mTLS. Device-signed (wendy.device_signed_request): `x5c` = the device
 	// leaf, which must be the mTLS peer.
@@ -136,6 +240,12 @@ type UnimplementedKeyDirectoryServiceServer struct{}
 
 func (UnimplementedKeyDirectoryServiceServer) RegisterUserEncryptionKey(context.Context, *SignedRequest) (*RegisterEncryptionKeyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterUserEncryptionKey not implemented")
+}
+func (UnimplementedKeyDirectoryServiceServer) ApproveSession(context.Context, *SignedRequest) (*ApproveSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApproveSession not implemented")
+}
+func (UnimplementedKeyDirectoryServiceServer) RevokeUserEncryptionKey(context.Context, *SignedRequest) (*RevokeUserEncryptionKeyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeUserEncryptionKey not implemented")
 }
 func (UnimplementedKeyDirectoryServiceServer) RegisterDeviceEncryptionKey(context.Context, *SignedRequest) (*RegisterEncryptionKeyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterDeviceEncryptionKey not implemented")
@@ -178,6 +288,42 @@ func _KeyDirectoryService_RegisterUserEncryptionKey_Handler(srv interface{}, ctx
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(KeyDirectoryServiceServer).RegisterUserEncryptionKey(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeyDirectoryService_ApproveSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeyDirectoryServiceServer).ApproveSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeyDirectoryService_ApproveSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeyDirectoryServiceServer).ApproveSession(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeyDirectoryService_RevokeUserEncryptionKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeyDirectoryServiceServer).RevokeUserEncryptionKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeyDirectoryService_RevokeUserEncryptionKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeyDirectoryServiceServer).RevokeUserEncryptionKey(ctx, req.(*SignedRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -230,6 +376,14 @@ var KeyDirectoryService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _KeyDirectoryService_RegisterUserEncryptionKey_Handler,
 		},
 		{
+			MethodName: "ApproveSession",
+			Handler:    _KeyDirectoryService_ApproveSession_Handler,
+		},
+		{
+			MethodName: "RevokeUserEncryptionKey",
+			Handler:    _KeyDirectoryService_RevokeUserEncryptionKey_Handler,
+		},
+		{
 			MethodName: "RegisterDeviceEncryptionKey",
 			Handler:    _KeyDirectoryService_RegisterDeviceEncryptionKey_Handler,
 		},
@@ -250,6 +404,9 @@ const (
 	ArtifactRegistryService_GetArtifact_FullMethodName     = "/wendycloud.v2.ArtifactRegistryService/GetArtifact"
 	ArtifactRegistryService_GetMyWraps_FullMethodName      = "/wendycloud.v2.ArtifactRegistryService/GetMyWraps"
 	ArtifactRegistryService_ListArtifacts_FullMethodName   = "/wendycloud.v2.ArtifactRegistryService/ListArtifacts"
+	ArtifactRegistryService_SetSecret_FullMethodName       = "/wendycloud.v2.ArtifactRegistryService/SetSecret"
+	ArtifactRegistryService_RemoveSecret_FullMethodName    = "/wendycloud.v2.ArtifactRegistryService/RemoveSecret"
+	ArtifactRegistryService_ListSecrets_FullMethodName     = "/wendycloud.v2.ArtifactRegistryService/ListSecrets"
 	ArtifactRegistryService_AssignDevice_FullMethodName    = "/wendycloud.v2.ArtifactRegistryService/AssignDevice"
 	ArtifactRegistryService_UnassignDevice_FullMethodName  = "/wendycloud.v2.ArtifactRegistryService/UnassignDevice"
 )
@@ -275,11 +432,26 @@ type ArtifactRegistryServiceClient interface {
 	PutBlob(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PutBlobRequest, PutBlobResponse], error)
 	// Attaches wraps and sealed content keys made client-side: release scope at
 	// publish (publisher, pre-granted users, custodian), deployment scope at
-	// deployment create, operator invite and rotation. Device wraps travel in
+	// deployment create, operator invite and rotation; secret scope after
+	// SetSecret and whenever access passes on (same path and gate as the
+	// release scope; no client makes a CUSTODIAN wrap there, and AddWraps
+	// refuses one as a tripwire). Device wraps travel in
 	// DeviceAssignment instead.
+	// Passing on (WDY-4375): a USER wrap is also accepted from a caller
+	// without the scope's write gate when, for each such wrap, the caller holds
+	// a live wrap at the same scope and key_id on one of its own keys, the
+	// recipient key is a live approved session (RecipientKey.approval), and the
+	// recipient may read the item (artifact:read in the app for a release or a
+	// secret; GetDeployment's gate for a deployment). This is how a session
+	// passes its wraps to a newly approved session of its user, and how a
+	// member unlocks an item, or every item of an app it holds, for another
+	// member. Refused with PERMISSION_DENIED otherwise. A client wraps only to
+	// recipients its operator saw: the approved session, or the member named
+	// in the unlock.
 	// Signed; payload_type "wendycloud.v2.AddWrapsRequest".
 	AddWraps(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*AddWrapsResponse, error)
-	// Deletes wrap rows; needs no key. Operator removal.
+	// Deletes wrap rows; needs no key. Operator removal. A whole session's
+	// wraps go with KeyDirectoryService.RevokeUserEncryptionKey.
 	// Signed; payload_type "wendycloud.v2.RemoveWrapsRequest".
 	RemoveWraps(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*RemoveWrapsResponse, error)
 	GetArtifact(ctx context.Context, in *GetArtifactRequest, opts ...grpc.CallOption) (*GetArtifactResponse, error)
@@ -287,6 +459,9 @@ type ArtifactRegistryServiceClient interface {
 	// authenticated principal, never from the request), so an operator client
 	// can unwrap a key to wrap it onward. A user has one key per device; each
 	// device opens the wraps at its own recipient_key_id.
+	// With scope unset it lists every wrap the caller holds, paged, optionally
+	// narrowed to one app: what a session passes on when it approves another
+	// session, or when its member unlocks a whole app for someone (WDY-4375).
 	GetMyWraps(ctx context.Context, in *GetMyWrapsRequest, opts ...grpc.CallOption) (*GetMyWrapsResponse, error)
 	// What the registry stores for one organization (apps and deployments spec
 	// 6.8, G7): each release's artifact with its size, who published it and
@@ -299,6 +474,37 @@ type ArtifactRegistryServiceClient interface {
 	// registry directly; the dashboard calls cloud, which forwards this same
 	// call with the operator's identity.
 	ListArtifacts(ctx context.Context, in *ListArtifactsRequest, opts ...grpc.CallOption) (*ListArtifactsResponse, error)
+	// Sets a NEW version of one secret: creating a name (version 1) and
+	// replacing its value (current version + 1) are the same call. Refused with
+	// ABORTED unless value.version is the current version + 1 (1 for a new
+	// name). A version never changes. Replacing a value does not touch any
+	// deployment: a new deployment revision picks the new version (SecretRef).
+	// Same gate as PublishArtifact for the app. Refused with FAILED_PRECONDITION
+	// while the app is being deleted. Order (WDY-4375 round 2): the client
+	// first calls GetRecipientKeys(app_id), keeps the approved sessions and
+	// shows their members in the review; only after its operator confirms does
+	// it sign and send SetSecret, then wrap the secret key with AddWraps to
+	// exactly the reviewed sessions and its own key. A version whose wraps
+	// never arrive has no Cloud rule: the client retries AddWraps, or the
+	// operator sets the secret again.
+	// Signed with `x5c` only (`kid` is refused): Cloud stores the request
+	// verbatim and serves it back as SignedSecretVersion.set_request, which is
+	// what lets a later client check who set the value.
+	// Signed; payload_type "wendycloud.v2.SetSecretRequest".
+	SetSecret(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*SetSecretResponse, error)
+	// Removes one secret name: every version, its sealed value and every wrap.
+	// Refused with FAILED_PRECONDITION, naming the deployments, while the
+	// current revision of a live deployment carries it: update those first.
+	// Devices keep what they last applied until a new revision reaches them. A
+	// rollback to a revision that carried a removed secret is refused
+	// (RollbackDeployment). Deleting the app removes its secrets. Same gate as
+	// SetSecret.
+	// Signed; payload_type "wendycloud.v2.RemoveSecretRequest".
+	RemoveSecret(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*RemoveSecretResponse, error)
+	// The app's secrets at their current version, by name. Metadata only. Same
+	// gate as ListArtifacts (`artifact:read`). A read: not signed. There is no
+	// per-name history read.
+	ListSecrets(ctx context.Context, in *ListSecretsRequest, opts ...grpc.CallOption) (*ListSecretsResponse, error)
 	// One signed statement per target device (Q7, sem 2026-10-19 01:15: one
 	// signature per device, not per deployment), postbox-relayed verbatim to that
 	// device. It is the device's authority to apply AND its pull authorization.
@@ -400,6 +606,36 @@ func (c *artifactRegistryServiceClient) ListArtifacts(ctx context.Context, in *L
 	return out, nil
 }
 
+func (c *artifactRegistryServiceClient) SetSecret(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*SetSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetSecretResponse)
+	err := c.cc.Invoke(ctx, ArtifactRegistryService_SetSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *artifactRegistryServiceClient) RemoveSecret(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*RemoveSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveSecretResponse)
+	err := c.cc.Invoke(ctx, ArtifactRegistryService_RemoveSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *artifactRegistryServiceClient) ListSecrets(ctx context.Context, in *ListSecretsRequest, opts ...grpc.CallOption) (*ListSecretsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSecretsResponse)
+	err := c.cc.Invoke(ctx, ArtifactRegistryService_ListSecrets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *artifactRegistryServiceClient) AssignDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*AssignDeviceResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AssignDeviceResponse)
@@ -441,11 +677,26 @@ type ArtifactRegistryServiceServer interface {
 	PutBlob(grpc.ClientStreamingServer[PutBlobRequest, PutBlobResponse]) error
 	// Attaches wraps and sealed content keys made client-side: release scope at
 	// publish (publisher, pre-granted users, custodian), deployment scope at
-	// deployment create, operator invite and rotation. Device wraps travel in
+	// deployment create, operator invite and rotation; secret scope after
+	// SetSecret and whenever access passes on (same path and gate as the
+	// release scope; no client makes a CUSTODIAN wrap there, and AddWraps
+	// refuses one as a tripwire). Device wraps travel in
 	// DeviceAssignment instead.
+	// Passing on (WDY-4375): a USER wrap is also accepted from a caller
+	// without the scope's write gate when, for each such wrap, the caller holds
+	// a live wrap at the same scope and key_id on one of its own keys, the
+	// recipient key is a live approved session (RecipientKey.approval), and the
+	// recipient may read the item (artifact:read in the app for a release or a
+	// secret; GetDeployment's gate for a deployment). This is how a session
+	// passes its wraps to a newly approved session of its user, and how a
+	// member unlocks an item, or every item of an app it holds, for another
+	// member. Refused with PERMISSION_DENIED otherwise. A client wraps only to
+	// recipients its operator saw: the approved session, or the member named
+	// in the unlock.
 	// Signed; payload_type "wendycloud.v2.AddWrapsRequest".
 	AddWraps(context.Context, *SignedRequest) (*AddWrapsResponse, error)
-	// Deletes wrap rows; needs no key. Operator removal.
+	// Deletes wrap rows; needs no key. Operator removal. A whole session's
+	// wraps go with KeyDirectoryService.RevokeUserEncryptionKey.
 	// Signed; payload_type "wendycloud.v2.RemoveWrapsRequest".
 	RemoveWraps(context.Context, *SignedRequest) (*RemoveWrapsResponse, error)
 	GetArtifact(context.Context, *GetArtifactRequest) (*GetArtifactResponse, error)
@@ -453,6 +704,9 @@ type ArtifactRegistryServiceServer interface {
 	// authenticated principal, never from the request), so an operator client
 	// can unwrap a key to wrap it onward. A user has one key per device; each
 	// device opens the wraps at its own recipient_key_id.
+	// With scope unset it lists every wrap the caller holds, paged, optionally
+	// narrowed to one app: what a session passes on when it approves another
+	// session, or when its member unlocks a whole app for someone (WDY-4375).
 	GetMyWraps(context.Context, *GetMyWrapsRequest) (*GetMyWrapsResponse, error)
 	// What the registry stores for one organization (apps and deployments spec
 	// 6.8, G7): each release's artifact with its size, who published it and
@@ -465,6 +719,37 @@ type ArtifactRegistryServiceServer interface {
 	// registry directly; the dashboard calls cloud, which forwards this same
 	// call with the operator's identity.
 	ListArtifacts(context.Context, *ListArtifactsRequest) (*ListArtifactsResponse, error)
+	// Sets a NEW version of one secret: creating a name (version 1) and
+	// replacing its value (current version + 1) are the same call. Refused with
+	// ABORTED unless value.version is the current version + 1 (1 for a new
+	// name). A version never changes. Replacing a value does not touch any
+	// deployment: a new deployment revision picks the new version (SecretRef).
+	// Same gate as PublishArtifact for the app. Refused with FAILED_PRECONDITION
+	// while the app is being deleted. Order (WDY-4375 round 2): the client
+	// first calls GetRecipientKeys(app_id), keeps the approved sessions and
+	// shows their members in the review; only after its operator confirms does
+	// it sign and send SetSecret, then wrap the secret key with AddWraps to
+	// exactly the reviewed sessions and its own key. A version whose wraps
+	// never arrive has no Cloud rule: the client retries AddWraps, or the
+	// operator sets the secret again.
+	// Signed with `x5c` only (`kid` is refused): Cloud stores the request
+	// verbatim and serves it back as SignedSecretVersion.set_request, which is
+	// what lets a later client check who set the value.
+	// Signed; payload_type "wendycloud.v2.SetSecretRequest".
+	SetSecret(context.Context, *SignedRequest) (*SetSecretResponse, error)
+	// Removes one secret name: every version, its sealed value and every wrap.
+	// Refused with FAILED_PRECONDITION, naming the deployments, while the
+	// current revision of a live deployment carries it: update those first.
+	// Devices keep what they last applied until a new revision reaches them. A
+	// rollback to a revision that carried a removed secret is refused
+	// (RollbackDeployment). Deleting the app removes its secrets. Same gate as
+	// SetSecret.
+	// Signed; payload_type "wendycloud.v2.RemoveSecretRequest".
+	RemoveSecret(context.Context, *SignedRequest) (*RemoveSecretResponse, error)
+	// The app's secrets at their current version, by name. Metadata only. Same
+	// gate as ListArtifacts (`artifact:read`). A read: not signed. There is no
+	// per-name history read.
+	ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error)
 	// One signed statement per target device (Q7, sem 2026-10-19 01:15: one
 	// signature per device, not per deployment), postbox-relayed verbatim to that
 	// device. It is the device's authority to apply AND its pull authorization.
@@ -513,6 +798,15 @@ func (UnimplementedArtifactRegistryServiceServer) GetMyWraps(context.Context, *G
 }
 func (UnimplementedArtifactRegistryServiceServer) ListArtifacts(context.Context, *ListArtifactsRequest) (*ListArtifactsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListArtifacts not implemented")
+}
+func (UnimplementedArtifactRegistryServiceServer) SetSecret(context.Context, *SignedRequest) (*SetSecretResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetSecret not implemented")
+}
+func (UnimplementedArtifactRegistryServiceServer) RemoveSecret(context.Context, *SignedRequest) (*RemoveSecretResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveSecret not implemented")
+}
+func (UnimplementedArtifactRegistryServiceServer) ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSecrets not implemented")
 }
 func (UnimplementedArtifactRegistryServiceServer) AssignDevice(context.Context, *SignedRequest) (*AssignDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AssignDevice not implemented")
@@ -657,6 +951,60 @@ func _ArtifactRegistryService_ListArtifacts_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ArtifactRegistryService_SetSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ArtifactRegistryServiceServer).SetSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ArtifactRegistryService_SetSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ArtifactRegistryServiceServer).SetSecret(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ArtifactRegistryService_RemoveSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ArtifactRegistryServiceServer).RemoveSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ArtifactRegistryService_RemoveSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ArtifactRegistryServiceServer).RemoveSecret(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ArtifactRegistryService_ListSecrets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSecretsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ArtifactRegistryServiceServer).ListSecrets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ArtifactRegistryService_ListSecrets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ArtifactRegistryServiceServer).ListSecrets(ctx, req.(*ListSecretsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ArtifactRegistryService_AssignDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SignedRequest)
 	if err := dec(in); err != nil {
@@ -723,6 +1071,18 @@ var ArtifactRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListArtifacts",
 			Handler:    _ArtifactRegistryService_ListArtifacts_Handler,
+		},
+		{
+			MethodName: "SetSecret",
+			Handler:    _ArtifactRegistryService_SetSecret_Handler,
+		},
+		{
+			MethodName: "RemoveSecret",
+			Handler:    _ArtifactRegistryService_RemoveSecret_Handler,
+		},
+		{
+			MethodName: "ListSecrets",
+			Handler:    _ArtifactRegistryService_ListSecrets_Handler,
 		},
 		{
 			MethodName: "AssignDevice",

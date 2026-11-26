@@ -201,8 +201,18 @@ type PullChangesRequest struct {
 	// back an entry whose operation the pull does not list (a detach: see
 	// AssetApp.detach_state) and delivers it once a pull lists it.
 	AcceptedOperations []string `protobuf:"bytes,3,rep,name=accepted_operations,json=acceptedOperations,proto3" json:"accepted_operations,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Payload fields this agent applies that an older agent would silently
+	// ignore (fully-qualified field names). Empty from an agent that predates
+	// this field. Device-asserted and descriptive, like accepted_operations.
+	// Cloud holds back an entry whose payload sets a field defined here until a
+	// pull lists that field. Defined: "wendycloud.v2.DeviceAssignment.secrets"
+	// (WDY-4374), so no agent runs an app without the secrets its assignment
+	// carries. Advertising this field requires the read-only tmpfs file
+	// delivery defined on DeviceAssignment.secrets, not environment injection.
+	// Until delivery the device keeps what it last applied.
+	AcceptedFields []string `protobuf:"bytes,4,rep,name=accepted_fields,json=acceptedFields,proto3" json:"accepted_fields,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PullChangesRequest) Reset() {
@@ -252,6 +262,13 @@ func (x *PullChangesRequest) GetLimit() uint32 {
 func (x *PullChangesRequest) GetAcceptedOperations() []string {
 	if x != nil {
 		return x.AcceptedOperations
+	}
+	return nil
+}
+
+func (x *PullChangesRequest) GetAcceptedFields() []string {
+	if x != nil {
+		return x.AcceptedFields
 	}
 	return nil
 }
@@ -629,11 +646,12 @@ const file_wendycloud_v2_postbox_proto_rawDesc = "" +
 	"\x10acked_entry_hash\x18\x05 \x01(\fH\x00R\x0eackedEntryHash\x88\x01\x01\x12:\n" +
 	"\x17postbox_head_entry_hash\x18\x06 \x01(\fH\x01R\x14postboxHeadEntryHash\x88\x01\x01B\x13\n" +
 	"\x11_acked_entry_hashB\x1a\n" +
-	"\x18_postbox_head_entry_hash\"\x81\x01\n" +
+	"\x18_postbox_head_entry_hash\"\xaa\x01\n" +
 	"\x12PullChangesRequest\x12$\n" +
 	"\x0eafter_entry_id\x18\x01 \x01(\x03R\fafterEntryId\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\rR\x05limit\x12/\n" +
-	"\x13accepted_operations\x18\x03 \x03(\tR\x12acceptedOperations\"\x87\x01\n" +
+	"\x13accepted_operations\x18\x03 \x03(\tR\x12acceptedOperations\x12'\n" +
+	"\x0faccepted_fields\x18\x04 \x03(\tR\x0eacceptedFields\"\x87\x01\n" +
 	"\x13PullChangesResponse\x125\n" +
 	"\aentries\x18\x01 \x03(\v2\x1b.wendycloud.v2.PostboxEntryR\aentries\x12\x1e\n" +
 	"\n" +

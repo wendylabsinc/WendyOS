@@ -145,7 +145,8 @@ const (
 	// service account, so no service and no CI can open a custodian wrap; every
 	// call is audit-logged and alerts (sem 2026-10-23, WDY-4007). The accepted
 	// custodian key ids are config, not wire. The registry refuses a release or
-	// deployment with no CUSTODIAN wrap.
+	// deployment with no CUSTODIAN wrap. At secret scope no client ever makes a
+	// CUSTODIAN wrap (WrapScope); the registry's refusal there is a tripwire.
 	RecipientKind_RECIPIENT_KIND_CUSTODIAN RecipientKind = 3
 )
 
@@ -199,8 +200,19 @@ type RegisterEncryptionKeyRequest struct {
 	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"` // tenant UUID
 	Suite          KemSuite               `protobuf:"varint,2,opt,name=suite,proto3,enum=wendycloud.v2.KemSuite" json:"suite,omitempty"`
 	PublicKey      []byte                 `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// User keys only (WDY-4375); a device key leaves both empty. The session's
+	// approval key: an ML-DSA-65 public key (FIPS 204 encoding) the session
+	// generates with public_key and keeps with it. It signs SessionApprovals
+	// and SessionRevocations, nothing else. A key registered without one can
+	// never be approved.
+	ApprovalPublicKey []byte `protobuf:"bytes,4,opt,name=approval_public_key,json=approvalPublicKey,proto3" json:"approval_public_key,omitempty"`
+	// What the user sees when asked to approve this session: the machine name
+	// (host name) or the browser, at most 64 UTF-8 bytes. Under the user's
+	// signature, so Cloud cannot change it. The registration's JWS iat is the
+	// time the session was registered.
+	MachineName   string `protobuf:"bytes,5,opt,name=machine_name,json=machineName,proto3" json:"machine_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterEncryptionKeyRequest) Reset() {
@@ -254,6 +266,20 @@ func (x *RegisterEncryptionKeyRequest) GetPublicKey() []byte {
 	return nil
 }
 
+func (x *RegisterEncryptionKeyRequest) GetApprovalPublicKey() []byte {
+	if x != nil {
+		return x.ApprovalPublicKey
+	}
+	return nil
+}
+
+func (x *RegisterEncryptionKeyRequest) GetMachineName() string {
+	if x != nil {
+		return x.MachineName
+	}
+	return ""
+}
+
 type RegisterEncryptionKeyResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	KeyId         string                 `protobuf:"bytes,1,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"` // SHA-256 (hex) of public_key
@@ -302,8 +328,16 @@ type GetRecipientKeysRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
 	Principals     []string               `protobuf:"bytes,2,rep,name=principals,proto3" json:"principals,omitempty"` // device or user SPIFFE URIs
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Instead of principals (WDY-4375 G): every current member whose
+	// permissions reach this app, the same set as
+	// PublishArtifactResponse.auto_grant_keys. Cloud supplies these candidates
+	// only: the client verifies each key, wraps only to approved sessions, and
+	// shows the members' names in the review its operator confirms, all before
+	// it signs the publish, SetSecret or deployment that needs them. Setting
+	// both principals and app_id is INVALID_ARGUMENT.
+	AppId         string `protobuf:"bytes,3,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetRecipientKeysRequest) Reset() {
@@ -350,6 +384,13 @@ func (x *GetRecipientKeysRequest) GetPrincipals() []string {
 	return nil
 }
 
+func (x *GetRecipientKeysRequest) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
 // The client trusts `registration` and `chain_der` only as far as they chain
 // to its own pinned platform root; cloud serves them and is untrusted. It
 // verifies the JWS over the payload bytes with the `x5c` leaf, chains that
@@ -363,13 +404,31 @@ func (x *GetRecipientKeysRequest) GetPrincipals() []string {
 // issuing CA fixes the algorithm: a leaf under the Device Identity CA signs
 // ML-DSA-65 only, a leaf under the Lite Device CA ES256 only; anything else is
 // refused (conformance/reqsig/README.md, device-signer profile).
+//
+// A user key is an APPROVED session (WDY-4375) only when its approval chain
+// verifies, checked by the client, never taken from Cloud: approval names
+// this organization, principal and key_id; its signature verifies with the
+// approval_public_key in the approver's verified registration (one of this
+// response's keys or approvers, same principal); and the approver is itself
+// approved, until a root (approver_key_id = key_id). All of one user's
+// approved keys chain to ONE root; a client that finds two refuses every key
+// of that user and tells its operator. A client that has wrapped to a member
+// before remembers that member's root key_id; when it changes (an admin
+// removed and re-added the member, the only way to a new root), it says so in
+// the review before it wraps. A waiting session (no approval, or one that
+// does not verify) is never wrapped to.
 type RecipientKey struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	Principal    string                 `protobuf:"bytes,1,opt,name=principal,proto3" json:"principal,omitempty"`
 	Registration *SignedRequest         `protobuf:"bytes,2,opt,name=registration,proto3" json:"registration,omitempty"` // verbatim as registered
 	// Intermediates from the signing leaf up to and including the tenant CA,
 	// DER. The leaf itself is the `x5c` in `registration`.
-	ChainDer      [][]byte `protobuf:"bytes,3,rep,name=chain_der,json=chainDer,proto3" json:"chain_der,omitempty"`
+	ChainDer [][]byte `protobuf:"bytes,3,rep,name=chain_der,json=chainDer,proto3" json:"chain_der,omitempty"`
+	// User keys only: this session's approval, verbatim as recorded by
+	// ApproveSession. Empty = waiting. After login, a client whose own key is
+	// waiting while another key of its user is approved asks the user to
+	// approve this session from that one.
+	Approval      *SignedSessionApproval `protobuf:"bytes,4,opt,name=approval,proto3" json:"approval,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -425,14 +484,26 @@ func (x *RecipientKey) GetChainDer() [][]byte {
 	return nil
 }
 
+func (x *RecipientKey) GetApproval() *SignedSessionApproval {
+	if x != nil {
+		return x.Approval
+	}
+	return nil
+}
+
 type GetRecipientKeysResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// One entry per live key. A user principal appears once per registered
-	// operator device key; the client wraps to each of them.
+	// operator device key, waiting sessions included (each with an empty
+	// approval). The client wraps only to devices and approved sessions.
 	Keys []*RecipientKey `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
 	// Principals with no live registration (never registered, revoked, deleted):
 	// the client refuses to target them.
-	Unbound       []string `protobuf:"bytes,2,rep,name=unbound,proto3" json:"unbound,omitempty"`
+	Unbound []string `protobuf:"bytes,2,rep,name=unbound,proto3" json:"unbound,omitempty"`
+	// Keys that are no longer live but approved a key in `keys`, directly or
+	// through another approver: served only so the client can verify approval
+	// chains. Never wrapped to.
+	Approvers     []*RecipientKey `protobuf:"bytes,3,rep,name=approvers,proto3" json:"approvers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -481,6 +552,468 @@ func (x *GetRecipientKeysResponse) GetUnbound() []string {
 	return nil
 }
 
+func (x *GetRecipientKeysResponse) GetApprovers() []*RecipientKey {
+	if x != nil {
+		return x.Approvers
+	}
+	return nil
+}
+
+// One session approving another session of the same user, or itself as the
+// root (WDY-4375). Signed with the approver's approval key, never by Cloud.
+// Signature layout: conformance/registry/README.md, session approval.
+type SessionApproval struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	// The user's SPIFFE URI: approver and approved session belong to it.
+	User string `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
+	// The approved session's key (RegisterEncryptionKeyResponse.key_id).
+	KeyId string `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	// The approving session's key; equal to key_id for the root.
+	ApproverKeyId string `protobuf:"bytes,4,opt,name=approver_key_id,json=approverKeyId,proto3" json:"approver_key_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionApproval) Reset() {
+	*x = SessionApproval{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionApproval) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionApproval) ProtoMessage() {}
+
+func (x *SessionApproval) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionApproval.ProtoReflect.Descriptor instead.
+func (*SessionApproval) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SessionApproval) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *SessionApproval) GetUser() string {
+	if x != nil {
+		return x.User
+	}
+	return ""
+}
+
+func (x *SessionApproval) GetKeyId() string {
+	if x != nil {
+		return x.KeyId
+	}
+	return ""
+}
+
+func (x *SessionApproval) GetApproverKeyId() string {
+	if x != nil {
+		return x.ApproverKeyId
+	}
+	return ""
+}
+
+type SignedSessionApproval struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A serialized SessionApproval: the exact bytes signed. Verify, then decode.
+	Statement []byte `protobuf:"bytes,1,opt,name=statement,proto3" json:"statement,omitempty"`
+	// ML-DSA-65 over the statement (conformance/registry/README.md).
+	Signature     []byte `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SignedSessionApproval) Reset() {
+	*x = SignedSessionApproval{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignedSessionApproval) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignedSessionApproval) ProtoMessage() {}
+
+func (x *SignedSessionApproval) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignedSessionApproval.ProtoReflect.Descriptor instead.
+func (*SignedSessionApproval) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *SignedSessionApproval) GetStatement() []byte {
+	if x != nil {
+		return x.Statement
+	}
+	return nil
+}
+
+func (x *SignedSessionApproval) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+type ApproveSessionRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	Approval       *SignedSessionApproval `protobuf:"bytes,2,opt,name=approval,proto3" json:"approval,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ApproveSessionRequest) Reset() {
+	*x = ApproveSessionRequest{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApproveSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApproveSessionRequest) ProtoMessage() {}
+
+func (x *ApproveSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApproveSessionRequest.ProtoReflect.Descriptor instead.
+func (*ApproveSessionRequest) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ApproveSessionRequest) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *ApproveSessionRequest) GetApproval() *SignedSessionApproval {
+	if x != nil {
+		return x.Approval
+	}
+	return nil
+}
+
+type ApproveSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApproveSessionResponse) Reset() {
+	*x = ApproveSessionResponse{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApproveSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApproveSessionResponse) ProtoMessage() {}
+
+func (x *ApproveSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApproveSessionResponse.ProtoReflect.Descriptor instead.
+func (*ApproveSessionResponse) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{8}
+}
+
+type RevokeUserEncryptionKeyRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	KeyId          string                 `protobuf:"bytes,2,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	// Required when key_id is an approved session (WDY-4375 round 2); unset for
+	// a waiting one. Its statement names this organization, the caller and
+	// key_id.
+	Revocation    *SignedSessionRevocation `protobuf:"bytes,3,opt,name=revocation,proto3" json:"revocation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeUserEncryptionKeyRequest) Reset() {
+	*x = RevokeUserEncryptionKeyRequest{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeUserEncryptionKeyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeUserEncryptionKeyRequest) ProtoMessage() {}
+
+func (x *RevokeUserEncryptionKeyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeUserEncryptionKeyRequest.ProtoReflect.Descriptor instead.
+func (*RevokeUserEncryptionKeyRequest) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RevokeUserEncryptionKeyRequest) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *RevokeUserEncryptionKeyRequest) GetKeyId() string {
+	if x != nil {
+		return x.KeyId
+	}
+	return ""
+}
+
+func (x *RevokeUserEncryptionKeyRequest) GetRevocation() *SignedSessionRevocation {
+	if x != nil {
+		return x.Revocation
+	}
+	return nil
+}
+
+// One approved session of a user ending an approved session of the same
+// user, itself included. Signed with the revoking session's approval key,
+// never by Cloud. Signature layout: conformance/registry/README.md, session
+// revocation.
+type SessionRevocation struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	// The user's SPIFFE URI: both sessions belong to it.
+	User string `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
+	// The revoked session's key.
+	KeyId string `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	// The revoking session's key, approved and live; equal to key_id when a
+	// session ends itself.
+	RevokerKeyId  string `protobuf:"bytes,4,opt,name=revoker_key_id,json=revokerKeyId,proto3" json:"revoker_key_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionRevocation) Reset() {
+	*x = SessionRevocation{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionRevocation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionRevocation) ProtoMessage() {}
+
+func (x *SessionRevocation) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionRevocation.ProtoReflect.Descriptor instead.
+func (*SessionRevocation) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SessionRevocation) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *SessionRevocation) GetUser() string {
+	if x != nil {
+		return x.User
+	}
+	return ""
+}
+
+func (x *SessionRevocation) GetKeyId() string {
+	if x != nil {
+		return x.KeyId
+	}
+	return ""
+}
+
+func (x *SessionRevocation) GetRevokerKeyId() string {
+	if x != nil {
+		return x.RevokerKeyId
+	}
+	return ""
+}
+
+type SignedSessionRevocation struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A serialized SessionRevocation: the exact bytes signed. Verify, then
+	// decode.
+	Statement []byte `protobuf:"bytes,1,opt,name=statement,proto3" json:"statement,omitempty"`
+	// ML-DSA-65 over the statement (conformance/registry/README.md).
+	Signature     []byte `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SignedSessionRevocation) Reset() {
+	*x = SignedSessionRevocation{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignedSessionRevocation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignedSessionRevocation) ProtoMessage() {}
+
+func (x *SignedSessionRevocation) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignedSessionRevocation.ProtoReflect.Descriptor instead.
+func (*SignedSessionRevocation) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SignedSessionRevocation) GetStatement() []byte {
+	if x != nil {
+		return x.Statement
+	}
+	return nil
+}
+
+func (x *SignedSessionRevocation) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+type RevokeUserEncryptionKeyResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Wraps deleted with the key.
+	RemovedWraps  uint32 `protobuf:"varint,1,opt,name=removed_wraps,json=removedWraps,proto3" json:"removed_wraps,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeUserEncryptionKeyResponse) Reset() {
+	*x = RevokeUserEncryptionKeyResponse{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeUserEncryptionKeyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeUserEncryptionKeyResponse) ProtoMessage() {}
+
+func (x *RevokeUserEncryptionKeyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeUserEncryptionKeyResponse.ProtoReflect.Descriptor instead.
+func (*RevokeUserEncryptionKeyResponse) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RevokeUserEncryptionKeyResponse) GetRemovedWraps() uint32 {
+	if x != nil {
+		return x.RemovedWraps
+	}
+	return 0
+}
+
 // Everything the device checks comes from here, under the operator signature:
 // it targets this one device, pins the release digest and the deployment key,
 // and carries the device's own wrap of that key. Rotation = a new assignment
@@ -498,8 +1031,9 @@ func (x *GetRecipientKeysResponse) GetUnbound() []string {
 //     every assignment for that deployment_id is refused: none can be above it,
 //     and the equal-revision rule below applies only to an assignment's mark.
 //   - At a revision equal to an assignment's mark, it accepts only identical
-//     app_release_id, manifest_digest, config_json, desired_state and replaces_*
-//     (deployment_key_id, device_wrap and expires_at may differ: key rotation),
+//     app_release_id, manifest_digest, config_json, desired_state, replaces_*
+//     and each secret's value (deployment_key_id, device_wrap, expires_at and each
+//     secret's device_wrap may differ: key rotation),
 //     and does not apply replaces_* again: the move was applied with the first
 //     copy. The replaces_* checks below apply only above the mark.
 //   - One instance per app: it refuses an assignment for app_id while it holds
@@ -561,13 +1095,65 @@ type DeviceAssignment struct {
 	// replaced deployment's removal for this device.
 	ReplacesDeploymentId string `protobuf:"bytes,13,opt,name=replaces_deployment_id,json=replacesDeploymentId,proto3" json:"replaces_deployment_id,omitempty"`
 	ReplacesRevision     int32  `protobuf:"varint,14,opt,name=replaces_revision,json=replacesRevision,proto3" json:"replaces_revision,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// The app's secrets for this device (WDY-4374): for each secret the
+	// revision carries (DeploymentRevision.secrets), the sealed value and the
+	// secret key wrapped to THIS device's registered encryption key. Nothing
+	// about secrets is sealed under the deployment key, whose custodian wrap
+	// stays as it is. Under the operator's signature like every other field.
+	// The signing client copies each value byte for byte from a
+	// SignedSecretVersion it has verified (GetMyWraps), never from anything
+	// unsigned: a value without a valid signed SetSecret request is never placed
+	// here.
+	// Cloud refuses the statement unless its (name, version) set equals the
+	// revision's, each value is byte-equal to the stored SealedSecret, and each
+	// device_wrap is to this device's live key at that secret's scope.
+	// The device opens each wrap (scope kind 3, conformance/registry/README.md)
+	// and each value, and refuses the whole assignment (REJECTED_UNWRAP) if one
+	// does not open, a name repeats, a name breaks the name rule
+	// (ArtifactRegistryService, app secrets), a name is also a key of
+	// config_json, or it is above the limits: at most 64 secrets and 64 KiB of
+	// values in total. REJECTED_UNWRAP covers every one of these; there is no
+	// new ApplyOutcome value.
+	// Container delivery: the agent writes each decrypted value to a private
+	// tmpfs for this app instance and mounts it read-only at /run/secrets.
+	// Each name is one regular file, /run/secrets/<name>, containing the exact
+	// plaintext bytes: preserve CR, LF and whitespace; never append a newline.
+	// Files are mode 0400, owned by the container's configured runtime UID;
+	// the directory is mode 0500 with the same owner. The agent accounts for
+	// user-namespace mappings. No other app receives this mount. A conflicting
+	// mount at /run/secrets or below it is refused, never allowed to hide or
+	// replace these files. The tmpfs mount uses nodev,nosuid,noexec and must
+	// not spill plaintext to unencrypted swap.
+	// Prepare every file and its permissions before starting the container;
+	// if preparation or mounting fails, report APPLY_FAILED and do not start
+	// the new instance. Never fall back to environment injection or disk.
+	// A revision changing the selected secrets recreates the mount and
+	// restarts the app; files are not updated in place. Stop the old instance
+	// before releasing its mount. Unmount and discard the tmpfs on stop,
+	// removal and failed startup; recreate it from the sealed assignment on
+	// restart. A detach that keeps the instance running keeps its mount until
+	// that instance stops. Empty = no secret files or secret mount.
+	// The postbox copy keeps the sealed form. Plaintext is never stored in the
+	// image, writable container layer, runtime config, logs or persisted
+	// environment. The agent does not create NAME or NAME_FILE variables.
+	// Apps read the files directly, or the operator supplies a non-secret path
+	// setting such as DATABASE_PASSWORD_FILE=/run/secrets/DATABASE_PASSWORD.
+	// NAME_FILE is an application convention. An app requiring NAME=VALUE may
+	// explicitly opt in through its own entrypoint adapter, reading the file
+	// into its process environment without persisting or logging the value.
+	// An agent that predates this field would ignore it and run the app without
+	// its secrets, so cloud holds back an assignment that carries secrets until
+	// the device's pull lists "wendycloud.v2.DeviceAssignment.secrets" in
+	// PullChangesRequest.accepted_fields (postbox.proto). Advertising this
+	// field means the agent implements these file-mount delivery rules.
+	Secrets       []*DeviceSecret `protobuf:"bytes,15,rep,name=secrets,proto3" json:"secrets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeviceAssignment) Reset() {
 	*x = DeviceAssignment{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[5]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -579,7 +1165,7 @@ func (x *DeviceAssignment) String() string {
 func (*DeviceAssignment) ProtoMessage() {}
 
 func (x *DeviceAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[5]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -592,7 +1178,7 @@ func (x *DeviceAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeviceAssignment.ProtoReflect.Descriptor instead.
 func (*DeviceAssignment) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{5}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DeviceAssignment) GetOrganizationId() string {
@@ -693,6 +1279,68 @@ func (x *DeviceAssignment) GetReplacesRevision() int32 {
 	return 0
 }
 
+func (x *DeviceAssignment) GetSecrets() []*DeviceSecret {
+	if x != nil {
+		return x.Secrets
+	}
+	return nil
+}
+
+// One secret in one DeviceAssignment.
+type DeviceSecret struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Value *SealedSecret          `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
+	// recipient_kind DEVICE, recipient = the assignment's device, scope =
+	// value's secret_version, key_id = value.secret_key_id.
+	DeviceWrap    *KeyWrap `protobuf:"bytes,2,opt,name=device_wrap,json=deviceWrap,proto3" json:"device_wrap,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceSecret) Reset() {
+	*x = DeviceSecret{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceSecret) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceSecret) ProtoMessage() {}
+
+func (x *DeviceSecret) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceSecret.ProtoReflect.Descriptor instead.
+func (*DeviceSecret) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *DeviceSecret) GetValue() *SealedSecret {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *DeviceSecret) GetDeviceWrap() *KeyWrap {
+	if x != nil {
+		return x.DeviceWrap
+	}
+	return nil
+}
+
 type AssignDeviceResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	PostboxEntryId int64                  `protobuf:"varint,1,opt,name=postbox_entry_id,json=postboxEntryId,proto3" json:"postbox_entry_id,omitempty"`
@@ -702,7 +1350,7 @@ type AssignDeviceResponse struct {
 
 func (x *AssignDeviceResponse) Reset() {
 	*x = AssignDeviceResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[6]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -714,7 +1362,7 @@ func (x *AssignDeviceResponse) String() string {
 func (*AssignDeviceResponse) ProtoMessage() {}
 
 func (x *AssignDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[6]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -727,7 +1375,7 @@ func (x *AssignDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignDeviceResponse.ProtoReflect.Descriptor instead.
 func (*AssignDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{6}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AssignDeviceResponse) GetPostboxEntryId() int64 {
@@ -777,7 +1425,7 @@ type UnassignDeviceRequest struct {
 
 func (x *UnassignDeviceRequest) Reset() {
 	*x = UnassignDeviceRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[7]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -789,7 +1437,7 @@ func (x *UnassignDeviceRequest) String() string {
 func (*UnassignDeviceRequest) ProtoMessage() {}
 
 func (x *UnassignDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[7]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -802,7 +1450,7 @@ func (x *UnassignDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnassignDeviceRequest.ProtoReflect.Descriptor instead.
 func (*UnassignDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{7}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *UnassignDeviceRequest) GetOrganizationId() string {
@@ -849,7 +1497,7 @@ type UnassignDeviceResponse struct {
 
 func (x *UnassignDeviceResponse) Reset() {
 	*x = UnassignDeviceResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[8]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -861,7 +1509,7 @@ func (x *UnassignDeviceResponse) String() string {
 func (*UnassignDeviceResponse) ProtoMessage() {}
 
 func (x *UnassignDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[8]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -874,7 +1522,7 @@ func (x *UnassignDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnassignDeviceResponse.ProtoReflect.Descriptor instead.
 func (*UnassignDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{8}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *UnassignDeviceResponse) GetPostboxEntryId() int64 {
@@ -935,7 +1583,7 @@ type DetachDeviceRequest struct {
 
 func (x *DetachDeviceRequest) Reset() {
 	*x = DetachDeviceRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[9]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -947,7 +1595,7 @@ func (x *DetachDeviceRequest) String() string {
 func (*DetachDeviceRequest) ProtoMessage() {}
 
 func (x *DetachDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[9]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -960,7 +1608,7 @@ func (x *DetachDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetachDeviceRequest.ProtoReflect.Descriptor instead.
 func (*DetachDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{9}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DetachDeviceRequest) GetOrganizationId() string {
@@ -1009,7 +1657,7 @@ type PublishArtifactRequest struct {
 
 func (x *PublishArtifactRequest) Reset() {
 	*x = PublishArtifactRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[10]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1021,7 +1669,7 @@ func (x *PublishArtifactRequest) String() string {
 func (*PublishArtifactRequest) ProtoMessage() {}
 
 func (x *PublishArtifactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[10]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1034,7 +1682,7 @@ func (x *PublishArtifactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishArtifactRequest.ProtoReflect.Descriptor instead.
 func (*PublishArtifactRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{10}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *PublishArtifactRequest) GetOrganizationId() string {
@@ -1069,6 +1717,14 @@ type PublishArtifactResponse struct {
 	// Users whose current permissions already reach every release of this app.
 	// The publishing client wraps the content key to each of them at release
 	// scope at publish, not on request (Q1 amendment, sem 2026-10-18 16:37).
+	// Kept for clients that predate WDY-4375, which behave as today: every
+	// live key is listed with its approval. A WDY-4375 client does not wait for
+	// this list: it calls GetRecipientKeys(app_id) (the same set) before it
+	// signs PublishArtifact, verifies each key, keeps the approved sessions
+	// (RecipientKey), shows their members in the publish review its operator
+	// confirms, and wraps to nobody else. Deploy follows the same order: the
+	// recipients of a new deployment key come from GetRecipientKeys(app_id),
+	// reviewed before the deployment is signed.
 	AutoGrantKeys []*RecipientKey `protobuf:"bytes,4,rep,name=auto_grant_keys,json=autoGrantKeys,proto3" json:"auto_grant_keys,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1076,7 +1732,7 @@ type PublishArtifactResponse struct {
 
 func (x *PublishArtifactResponse) Reset() {
 	*x = PublishArtifactResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[11]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1088,7 +1744,7 @@ func (x *PublishArtifactResponse) String() string {
 func (*PublishArtifactResponse) ProtoMessage() {}
 
 func (x *PublishArtifactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[11]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1101,7 +1757,7 @@ func (x *PublishArtifactResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishArtifactResponse.ProtoReflect.Descriptor instead.
 func (*PublishArtifactResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{11}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *PublishArtifactResponse) GetUploadId() string {
@@ -1145,7 +1801,7 @@ type PutBlobRequest struct {
 
 func (x *PutBlobRequest) Reset() {
 	*x = PutBlobRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[12]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1157,7 +1813,7 @@ func (x *PutBlobRequest) String() string {
 func (*PutBlobRequest) ProtoMessage() {}
 
 func (x *PutBlobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[12]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1170,7 +1826,7 @@ func (x *PutBlobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutBlobRequest.ProtoReflect.Descriptor instead.
 func (*PutBlobRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{12}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *PutBlobRequest) GetPart() isPutBlobRequest_Part {
@@ -1225,7 +1881,7 @@ type PutBlobHeader struct {
 
 func (x *PutBlobHeader) Reset() {
 	*x = PutBlobHeader{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[13]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1237,7 +1893,7 @@ func (x *PutBlobHeader) String() string {
 func (*PutBlobHeader) ProtoMessage() {}
 
 func (x *PutBlobHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[13]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1250,7 +1906,7 @@ func (x *PutBlobHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutBlobHeader.ProtoReflect.Descriptor instead.
 func (*PutBlobHeader) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{13}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *PutBlobHeader) GetUploadId() string {
@@ -1283,7 +1939,7 @@ type PutBlobResponse struct {
 
 func (x *PutBlobResponse) Reset() {
 	*x = PutBlobResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[14]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1295,7 +1951,7 @@ func (x *PutBlobResponse) String() string {
 func (*PutBlobResponse) ProtoMessage() {}
 
 func (x *PutBlobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[14]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1308,7 +1964,7 @@ func (x *PutBlobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutBlobResponse.ProtoReflect.Descriptor instead.
 func (*PutBlobResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{14}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *PutBlobResponse) GetCiphertextDigest() string {
@@ -1328,7 +1984,7 @@ type GetArtifactRequest struct {
 
 func (x *GetArtifactRequest) Reset() {
 	*x = GetArtifactRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[15]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1340,7 +1996,7 @@ func (x *GetArtifactRequest) String() string {
 func (*GetArtifactRequest) ProtoMessage() {}
 
 func (x *GetArtifactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[15]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1353,7 +2009,7 @@ func (x *GetArtifactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetArtifactRequest.ProtoReflect.Descriptor instead.
 func (*GetArtifactRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{15}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GetArtifactRequest) GetOrganizationId() string {
@@ -1379,7 +2035,7 @@ type GetArtifactResponse struct {
 
 func (x *GetArtifactResponse) Reset() {
 	*x = GetArtifactResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[16]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1391,7 +2047,7 @@ func (x *GetArtifactResponse) String() string {
 func (*GetArtifactResponse) ProtoMessage() {}
 
 func (x *GetArtifactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[16]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1404,7 +2060,7 @@ func (x *GetArtifactResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetArtifactResponse.ProtoReflect.Descriptor instead.
 func (*GetArtifactResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{16}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetArtifactResponse) GetManifest() *ArtifactManifest {
@@ -1430,7 +2086,7 @@ type ListArtifactsRequest struct {
 
 func (x *ListArtifactsRequest) Reset() {
 	*x = ListArtifactsRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[17]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1442,7 +2098,7 @@ func (x *ListArtifactsRequest) String() string {
 func (*ListArtifactsRequest) ProtoMessage() {}
 
 func (x *ListArtifactsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[17]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1455,7 +2111,7 @@ func (x *ListArtifactsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArtifactsRequest.ProtoReflect.Descriptor instead.
 func (*ListArtifactsRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{17}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ListArtifactsRequest) GetOrganizationId() string {
@@ -1516,7 +2172,7 @@ type StoredArtifact struct {
 
 func (x *StoredArtifact) Reset() {
 	*x = StoredArtifact{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[18]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1528,7 +2184,7 @@ func (x *StoredArtifact) String() string {
 func (*StoredArtifact) ProtoMessage() {}
 
 func (x *StoredArtifact) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[18]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1541,7 +2197,7 @@ func (x *StoredArtifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StoredArtifact.ProtoReflect.Descriptor instead.
 func (*StoredArtifact) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{18}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *StoredArtifact) GetAppReleaseId() string {
@@ -1632,7 +2288,7 @@ type ListArtifactsResponse struct {
 
 func (x *ListArtifactsResponse) Reset() {
 	*x = ListArtifactsResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[19]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1644,7 +2300,7 @@ func (x *ListArtifactsResponse) String() string {
 func (*ListArtifactsResponse) ProtoMessage() {}
 
 func (x *ListArtifactsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[19]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1657,7 +2313,7 @@ func (x *ListArtifactsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArtifactsResponse.ProtoReflect.Descriptor instead.
 func (*ListArtifactsResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{19}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ListArtifactsResponse) GetArtifacts() []*StoredArtifact {
@@ -1677,14 +2333,27 @@ func (x *ListArtifactsResponse) GetNextPageToken() string {
 type GetMyWrapsRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	Scope          *WrapScope             `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// One item's scope. Unset = list every wrap the caller holds (paged).
+	Scope *WrapScope `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
+	// The calling session's key (WDY-4375): only wraps to it are returned,
+	// and `missing` speaks about it. INVALID_ARGUMENT when it is not a live key
+	// of the caller. Empty = every one of the caller's keys, with no `missing`
+	// (a client that predates WDY-4375).
+	RecipientKeyId string `protobuf:"bytes,3,opt,name=recipient_key_id,json=recipientKeyId,proto3" json:"recipient_key_id,omitempty"`
+	// Listing only (scope unset): only scopes of this app (its releases,
+	// deployments and secrets). Empty = every app.
+	AppId string `protobuf:"bytes,4,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	// Listing only. 0 or less = 100. The server caps it at 500 wraps.
+	PageSize int32 `protobuf:"varint,5,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// next_page_token of the previous page; empty = the first page.
+	PageToken     string `protobuf:"bytes,6,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetMyWrapsRequest) Reset() {
 	*x = GetMyWrapsRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[20]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1696,7 +2365,7 @@ func (x *GetMyWrapsRequest) String() string {
 func (*GetMyWrapsRequest) ProtoMessage() {}
 
 func (x *GetMyWrapsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[20]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1709,7 +2378,7 @@ func (x *GetMyWrapsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMyWrapsRequest.ProtoReflect.Descriptor instead.
 func (*GetMyWrapsRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{20}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetMyWrapsRequest) GetOrganizationId() string {
@@ -1726,17 +2395,140 @@ func (x *GetMyWrapsRequest) GetScope() *WrapScope {
 	return nil
 }
 
+func (x *GetMyWrapsRequest) GetRecipientKeyId() string {
+	if x != nil {
+		return x.RecipientKeyId
+	}
+	return ""
+}
+
+func (x *GetMyWrapsRequest) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
+func (x *GetMyWrapsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *GetMyWrapsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+// Why the calling session holds no wrap for one item (WDY-4375), so the
+// client shows the right text. Cloud-asserted and for display only. The
+// client picks:
+//   - session_approved false: "You cannot access <item> because this session
+//     has not been approved from your trusted device."
+//   - else item_created_at before member_since: "<Item> has been
+//     uploaded/created before you joined <org> and is encrypted. Ask someone
+//     else with access to <item> to unlock it for you."
+//   - else: "<Item> is encrypted and has not been unlocked for you. Ask
+//     someone with access to <item> to unlock it for you."
+//
+// Before it shows the first text, the client makes one more GetMyWraps call
+// for the same scope with recipient_key_id empty: wraps held by the user's
+// other sessions. If none come back, nothing of the user's holds the item, and
+// it shows the second or third text instead.
+type MissingAccess struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The calling session (GetMyWrapsRequest.recipient_key_id) has a recorded
+	// approval.
+	SessionApproved bool `protobuf:"varint,1,opt,name=session_approved,json=sessionApproved,proto3" json:"session_approved,omitempty"`
+	// When the item's key at this scope's key_id was made: the release's
+	// publish, the deployment key's creation or rotation, the secret version's
+	// SetSecret.
+	ItemCreatedAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=item_created_at,json=itemCreatedAt,proto3" json:"item_created_at,omitempty"`
+	// When the caller joined the organization (OrganizationMember.created_at).
+	MemberSince   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=member_since,json=memberSince,proto3" json:"member_since,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MissingAccess) Reset() {
+	*x = MissingAccess{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MissingAccess) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MissingAccess) ProtoMessage() {}
+
+func (x *MissingAccess) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MissingAccess.ProtoReflect.Descriptor instead.
+func (*MissingAccess) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *MissingAccess) GetSessionApproved() bool {
+	if x != nil {
+		return x.SessionApproved
+	}
+	return false
+}
+
+func (x *MissingAccess) GetItemCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ItemCreatedAt
+	}
+	return nil
+}
+
+func (x *MissingAccess) GetMemberSince() *timestamppb.Timestamp {
+	if x != nil {
+		return x.MemberSince
+	}
+	return nil
+}
+
 type GetMyWrapsResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Wraps             []*KeyWrap             `protobuf:"bytes,1,rep,name=wraps,proto3" json:"wraps,omitempty"`
 	SealedContentKeys []*SealedContentKey    `protobuf:"bytes,2,rep,name=sealed_content_keys,json=sealedContentKeys,proto3" json:"sealed_content_keys,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Secret scope only: the setter's signed SetSecret request for that
+	// version, returned with the caller's wraps so it can wrap the secret key
+	// onward (another operator key, a device) and copy the sealed value into
+	// DeviceAssignment.secrets unchanged. The value exists only inside the
+	// signed request, never as a bare SealedSecret. Empty when the caller holds
+	// no wrap at that scope.
+	SecretVersions []*SignedSecretVersion `protobuf:"bytes,3,rep,name=secret_versions,json=secretVersions,proto3" json:"secret_versions,omitempty"`
+	// Set only when scope and recipient_key_id are set, that key holds no wrap
+	// at the scope, and the caller may read the item (the gate of AddWraps'
+	// passing on). For an item the caller may not read, or that does not
+	// exist, the response is empty and unset alike: nothing is said about it.
+	Missing *MissingAccess `protobuf:"bytes,4,opt,name=missing,proto3" json:"missing,omitempty"`
+	// Listing only. Empty = the last page.
+	NextPageToken string `protobuf:"bytes,5,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetMyWrapsResponse) Reset() {
 	*x = GetMyWrapsResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[21]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1748,7 +2540,7 @@ func (x *GetMyWrapsResponse) String() string {
 func (*GetMyWrapsResponse) ProtoMessage() {}
 
 func (x *GetMyWrapsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[21]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1761,7 +2553,7 @@ func (x *GetMyWrapsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMyWrapsResponse.ProtoReflect.Descriptor instead.
 func (*GetMyWrapsResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{21}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GetMyWrapsResponse) GetWraps() []*KeyWrap {
@@ -1774,6 +2566,618 @@ func (x *GetMyWrapsResponse) GetWraps() []*KeyWrap {
 func (x *GetMyWrapsResponse) GetSealedContentKeys() []*SealedContentKey {
 	if x != nil {
 		return x.SealedContentKeys
+	}
+	return nil
+}
+
+func (x *GetMyWrapsResponse) GetSecretVersions() []*SignedSecretVersion {
+	if x != nil {
+		return x.SecretVersions
+	}
+	return nil
+}
+
+func (x *GetMyWrapsResponse) GetMissing() *MissingAccess {
+	if x != nil {
+		return x.Missing
+	}
+	return nil
+}
+
+func (x *GetMyWrapsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+// One secret version as its setter signed it, the way RecipientKey returns a
+// signed key registration: Cloud is an untrusted courier and can withhold a
+// version, never plant one. HPKE base mode does not authenticate who made a
+// wrap, so the client trusts a secret version only through this signature.
+// Before it wraps the key onward or copies the value into a
+// DeviceAssignment, the client checks, refusing the version at the first
+// failure:
+//   - The JWS over set_request verifies with its `x5c` leaf (`kid` is refused),
+//     payload_type is "wendycloud.v2.SetSecretRequest", the JWS operation is
+//     "wendycloud.v2.ArtifactRegistryService/SetSecret", and body_sha256 matches
+//     the payload. Its nonce, iat window and expiry bound the call to Cloud and
+//     are not checked again here.
+//   - The leaf is an operator certificate in the caller's own tenant chain: it
+//     chains through chain_der to the tenant CA, valid at the JWS iat, and that
+//     CA is anchored to the client-pinned platform root, never to the served
+//     chain alone (as for RecipientKey). The CA's tenant, the JWS
+//     target.tenant and SetSecretRequest.organization_id all equal the caller's
+//     organization.
+//   - The signed SealedSecret names this app, secret name, version and
+//     secret_key_id: app_id, name and version equal the requested scope
+//     (WrapScope.secret_version), and secret_key_id equals the scope's key_id
+//     and SHA-256 of the key the caller's own wrap opens to.
+//   - The ciphertext matches: the signed nonce and ciphertext open under that
+//     key with the secret seal AAD, and the SealedSecret the client places in a
+//     DeviceAssignment is byte-equal to the signed one.
+//
+// A version that fails any check is never wrapped onward and never placed in
+// a DeviceAssignment; the client reports it to its operator.
+// The setter need not still be a member (WDY-4375 round 2): a secret outlives
+// its setter's membership and is never retyped for it. The chain check at the
+// signed iat is the whole check on the signer.
+// Vectors: conformance/postbox-entry, secret_readback_vectors.
+type SignedSecretVersion struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	SetRequest *SignedRequest         `protobuf:"bytes,1,opt,name=set_request,json=setRequest,proto3" json:"set_request,omitempty"` // verbatim as Cloud received it
+	// Intermediates from the signing leaf up to and including the tenant CA,
+	// DER. The leaf itself is the `x5c` in set_request.
+	ChainDer      [][]byte `protobuf:"bytes,2,rep,name=chain_der,json=chainDer,proto3" json:"chain_der,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SignedSecretVersion) Reset() {
+	*x = SignedSecretVersion{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignedSecretVersion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignedSecretVersion) ProtoMessage() {}
+
+func (x *SignedSecretVersion) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignedSecretVersion.ProtoReflect.Descriptor instead.
+func (*SignedSecretVersion) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *SignedSecretVersion) GetSetRequest() *SignedRequest {
+	if x != nil {
+		return x.SetRequest
+	}
+	return nil
+}
+
+func (x *SignedSecretVersion) GetChainDer() [][]byte {
+	if x != nil {
+		return x.ChainDer
+	}
+	return nil
+}
+
+type SetSecretRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	// Its app_id, name and version say which secret version this sets.
+	Value         *SealedSecret `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetSecretRequest) Reset() {
+	*x = SetSecretRequest{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSecretRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSecretRequest) ProtoMessage() {}
+
+func (x *SetSecretRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSecretRequest.ProtoReflect.Descriptor instead.
+func (*SetSecretRequest) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *SetSecretRequest) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *SetSecretRequest) GetValue() *SealedSecret {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+type SetSecretResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Secret        *SecretInfo            `protobuf:"bytes,1,opt,name=secret,proto3" json:"secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetSecretResponse) Reset() {
+	*x = SetSecretResponse{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSecretResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSecretResponse) ProtoMessage() {}
+
+func (x *SetSecretResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSecretResponse.ProtoReflect.Descriptor instead.
+func (*SetSecretResponse) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *SetSecretResponse) GetSecret() *SecretInfo {
+	if x != nil {
+		return x.Secret
+	}
+	return nil
+}
+
+type RemoveSecretRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	AppId          string                 `protobuf:"bytes,2,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	Name           string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RemoveSecretRequest) Reset() {
+	*x = RemoveSecretRequest{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveSecretRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveSecretRequest) ProtoMessage() {}
+
+func (x *RemoveSecretRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveSecretRequest.ProtoReflect.Descriptor instead.
+func (*RemoveSecretRequest) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *RemoveSecretRequest) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *RemoveSecretRequest) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
+func (x *RemoveSecretRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type RemoveSecretResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveSecretResponse) Reset() {
+	*x = RemoveSecretResponse{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveSecretResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveSecretResponse) ProtoMessage() {}
+
+func (x *RemoveSecretResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveSecretResponse.ProtoReflect.Descriptor instead.
+func (*RemoveSecretResponse) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{36}
+}
+
+type ListSecretsRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	AppId          string                 `protobuf:"bytes,2,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	// 0 or less = 100. The server caps it at 500.
+	PageSize int32 `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// next_page_token of the previous page; empty = the first page.
+	PageToken     string `protobuf:"bytes,4,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSecretsRequest) Reset() {
+	*x = ListSecretsRequest{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSecretsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSecretsRequest) ProtoMessage() {}
+
+func (x *ListSecretsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSecretsRequest.ProtoReflect.Descriptor instead.
+func (*ListSecretsRequest) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *ListSecretsRequest) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *ListSecretsRequest) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
+func (x *ListSecretsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListSecretsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListSecretsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Ordered by name.
+	Secrets []*SecretInfo `protobuf:"bytes,1,rep,name=secrets,proto3" json:"secrets,omitempty"`
+	// Empty = the last page.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSecretsResponse) Reset() {
+	*x = ListSecretsResponse{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSecretsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSecretsResponse) ProtoMessage() {}
+
+func (x *ListSecretsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSecretsResponse.ProtoReflect.Descriptor instead.
+func (*ListSecretsResponse) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ListSecretsResponse) GetSecrets() []*SecretInfo {
+	if x != nil {
+		return x.Secrets
+	}
+	return nil
+}
+
+func (x *ListSecretsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+// What anyone may read about a secret version: never its value.
+type SecretInfo struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	AppId       string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	Name        string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Version     int32                  `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
+	SecretKeyId string                 `protobuf:"bytes,4,opt,name=secret_key_id,json=secretKeyId,proto3" json:"secret_key_id,omitempty"`
+	// The verified signer's SPIFFE URI on the SetSecret that made this version.
+	SetBy string `protobuf:"bytes,5,opt,name=set_by,json=setBy,proto3" json:"set_by,omitempty"`
+	// Empty once that user is deleted.
+	SetByUserId   string                 `protobuf:"bytes,6,opt,name=set_by_user_id,json=setByUserId,proto3" json:"set_by_user_id,omitempty"`
+	SetAt         *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=set_at,json=setAt,proto3" json:"set_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SecretInfo) Reset() {
+	*x = SecretInfo{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecretInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecretInfo) ProtoMessage() {}
+
+func (x *SecretInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecretInfo.ProtoReflect.Descriptor instead.
+func (*SecretInfo) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *SecretInfo) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
+func (x *SecretInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SecretInfo) GetVersion() int32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *SecretInfo) GetSecretKeyId() string {
+	if x != nil {
+		return x.SecretKeyId
+	}
+	return ""
+}
+
+func (x *SecretInfo) GetSetBy() string {
+	if x != nil {
+		return x.SetBy
+	}
+	return ""
+}
+
+func (x *SecretInfo) GetSetByUserId() string {
+	if x != nil {
+		return x.SetByUserId
+	}
+	return ""
+}
+
+func (x *SecretInfo) GetSetAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.SetAt
+	}
+	return nil
+}
+
+// One secret version's value, encrypted on the client under that version's
+// own 32-byte secret key (fresh from a CSPRNG for every version, never
+// reused): AES-256-GCM, 12-byte random nonce, AAD length-prefixed over
+// tenant, app_id, name, version and secret_key_id
+// (conformance/registry/README.md, secret seal). Plaintext = the value,
+// UTF-8 without NUL, at most 16 KiB. CR and LF are allowed, including in PEM
+// values; DeviceAssignment.secrets delivers the exact bytes as a file.
+// Cloud stores it as sent and cannot open it.
+type SealedSecret struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	AppId string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	Name  string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// From 1.
+	Version       int32  `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
+	SecretKeyId   string `protobuf:"bytes,4,opt,name=secret_key_id,json=secretKeyId,proto3" json:"secret_key_id,omitempty"` // SHA-256 (hex) of the secret key
+	Nonce         []byte `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Ciphertext    []byte `protobuf:"bytes,6,opt,name=ciphertext,proto3" json:"ciphertext,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SealedSecret) Reset() {
+	*x = SealedSecret{}
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SealedSecret) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SealedSecret) ProtoMessage() {}
+
+func (x *SealedSecret) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SealedSecret.ProtoReflect.Descriptor instead.
+func (*SealedSecret) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *SealedSecret) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
+func (x *SealedSecret) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SealedSecret) GetVersion() int32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *SealedSecret) GetSecretKeyId() string {
+	if x != nil {
+		return x.SecretKeyId
+	}
+	return ""
+}
+
+func (x *SealedSecret) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *SealedSecret) GetCiphertext() []byte {
+	if x != nil {
+		return x.Ciphertext
 	}
 	return nil
 }
@@ -1798,7 +3202,7 @@ type ArtifactManifest struct {
 
 func (x *ArtifactManifest) Reset() {
 	*x = ArtifactManifest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[22]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1810,7 +3214,7 @@ func (x *ArtifactManifest) String() string {
 func (*ArtifactManifest) ProtoMessage() {}
 
 func (x *ArtifactManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[22]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1823,7 +3227,7 @@ func (x *ArtifactManifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactManifest.ProtoReflect.Descriptor instead.
 func (*ArtifactManifest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{22}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ArtifactManifest) GetManifestDigest() string {
@@ -1890,7 +3294,7 @@ type EncryptedBlob struct {
 
 func (x *EncryptedBlob) Reset() {
 	*x = EncryptedBlob{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[23]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1902,7 +3306,7 @@ func (x *EncryptedBlob) String() string {
 func (*EncryptedBlob) ProtoMessage() {}
 
 func (x *EncryptedBlob) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[23]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1915,7 +3319,7 @@ func (x *EncryptedBlob) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EncryptedBlob.ProtoReflect.Descriptor instead.
 func (*EncryptedBlob) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{23}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *EncryptedBlob) GetPlaintextDigest() string {
@@ -1948,12 +3352,20 @@ func (x *EncryptedBlob) GetCiphertextSize() uint64 {
 
 // What a wrap opens. Deployment scope: the deployment key. Release scope: the
 // content key itself, for release holders before any deployment exists (Q1).
+// Secret scope: one secret version's key (WDY-4374). A client NEVER makes a
+// CUSTODIAN wrap at the secret scope, whatever list of recipients it is given
+// (a wrap helper that adds the custodian for releases and deployments must
+// not add it here). AddWraps refusing one is a tripwire, not the guarantee. A
+// client that finds a CUSTODIAN wrap at a secret scope treats that secret
+// version as compromised: it refuses to use it (no wrap onward, never in a
+// DeviceAssignment) and reports it to its operator.
 type WrapScope struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Scope:
 	//
 	//	*WrapScope_DeploymentId
 	//	*WrapScope_AppReleaseId
+	//	*WrapScope_SecretVersion
 	Scope isWrapScope_Scope `protobuf_oneof:"scope"`
 	// SHA-256 (hex) of the wrapped key; tells a stale wrap after rotation.
 	KeyId         string `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
@@ -1963,7 +3375,7 @@ type WrapScope struct {
 
 func (x *WrapScope) Reset() {
 	*x = WrapScope{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[24]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1975,7 +3387,7 @@ func (x *WrapScope) String() string {
 func (*WrapScope) ProtoMessage() {}
 
 func (x *WrapScope) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[24]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1988,7 +3400,7 @@ func (x *WrapScope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WrapScope.ProtoReflect.Descriptor instead.
 func (*WrapScope) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{24}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *WrapScope) GetScope() isWrapScope_Scope {
@@ -2016,6 +3428,15 @@ func (x *WrapScope) GetAppReleaseId() string {
 	return ""
 }
 
+func (x *WrapScope) GetSecretVersion() string {
+	if x != nil {
+		if x, ok := x.Scope.(*WrapScope_SecretVersion); ok {
+			return x.SecretVersion
+		}
+	}
+	return ""
+}
+
 func (x *WrapScope) GetKeyId() string {
 	if x != nil {
 		return x.KeyId
@@ -2035,9 +3456,16 @@ type WrapScope_AppReleaseId struct {
 	AppReleaseId string `protobuf:"bytes,2,opt,name=app_release_id,json=appReleaseId,proto3,oneof"`
 }
 
+type WrapScope_SecretVersion struct {
+	// "<app_id>/<name>/<version>", version in decimal from 1.
+	SecretVersion string `protobuf:"bytes,4,opt,name=secret_version,json=secretVersion,proto3,oneof"`
+}
+
 func (*WrapScope_DeploymentId) isWrapScope_Scope() {}
 
 func (*WrapScope_AppReleaseId) isWrapScope_Scope() {}
+
+func (*WrapScope_SecretVersion) isWrapScope_Scope() {}
 
 // One key sealed to one recipient public key (HPKE base mode). The HPKE info
 // binds tenant, scope, key_id and recipient_key_id, so a wrap moved to another
@@ -2058,7 +3486,7 @@ type KeyWrap struct {
 
 func (x *KeyWrap) Reset() {
 	*x = KeyWrap{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[25]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2070,7 +3498,7 @@ func (x *KeyWrap) String() string {
 func (*KeyWrap) ProtoMessage() {}
 
 func (x *KeyWrap) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[25]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2083,7 +3511,7 @@ func (x *KeyWrap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyWrap.ProtoReflect.Descriptor instead.
 func (*KeyWrap) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{25}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *KeyWrap) GetScope() *WrapScope {
@@ -2157,7 +3585,7 @@ type SealedContentKey struct {
 
 func (x *SealedContentKey) Reset() {
 	*x = SealedContentKey{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[26]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2169,7 +3597,7 @@ func (x *SealedContentKey) String() string {
 func (*SealedContentKey) ProtoMessage() {}
 
 func (x *SealedContentKey) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[26]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2182,7 +3610,7 @@ func (x *SealedContentKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SealedContentKey.ProtoReflect.Descriptor instead.
 func (*SealedContentKey) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{26}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *SealedContentKey) GetDeploymentId() string {
@@ -2238,7 +3666,7 @@ type AddWrapsRequest struct {
 
 func (x *AddWrapsRequest) Reset() {
 	*x = AddWrapsRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[27]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2250,7 +3678,7 @@ func (x *AddWrapsRequest) String() string {
 func (*AddWrapsRequest) ProtoMessage() {}
 
 func (x *AddWrapsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[27]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2263,7 +3691,7 @@ func (x *AddWrapsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddWrapsRequest.ProtoReflect.Descriptor instead.
 func (*AddWrapsRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{27}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *AddWrapsRequest) GetOrganizationId() string {
@@ -2296,7 +3724,7 @@ type AddWrapsResponse struct {
 
 func (x *AddWrapsResponse) Reset() {
 	*x = AddWrapsResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[28]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2308,7 +3736,7 @@ func (x *AddWrapsResponse) String() string {
 func (*AddWrapsResponse) ProtoMessage() {}
 
 func (x *AddWrapsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[28]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2321,7 +3749,7 @@ func (x *AddWrapsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddWrapsResponse.ProtoReflect.Descriptor instead.
 func (*AddWrapsResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{28}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *AddWrapsResponse) GetStored() uint32 {
@@ -2342,7 +3770,7 @@ type RemoveWrapsRequest struct {
 
 func (x *RemoveWrapsRequest) Reset() {
 	*x = RemoveWrapsRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[29]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2354,7 +3782,7 @@ func (x *RemoveWrapsRequest) String() string {
 func (*RemoveWrapsRequest) ProtoMessage() {}
 
 func (x *RemoveWrapsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[29]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2367,7 +3795,7 @@ func (x *RemoveWrapsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveWrapsRequest.ProtoReflect.Descriptor instead.
 func (*RemoveWrapsRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{29}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *RemoveWrapsRequest) GetOrganizationId() string {
@@ -2400,7 +3828,7 @@ type RemoveWrapsResponse struct {
 
 func (x *RemoveWrapsResponse) Reset() {
 	*x = RemoveWrapsResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[30]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2412,7 +3840,7 @@ func (x *RemoveWrapsResponse) String() string {
 func (*RemoveWrapsResponse) ProtoMessage() {}
 
 func (x *RemoveWrapsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[30]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2425,7 +3853,7 @@ func (x *RemoveWrapsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveWrapsResponse.ProtoReflect.Descriptor instead.
 func (*RemoveWrapsResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{30}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *RemoveWrapsResponse) GetRemoved() uint32 {
@@ -2444,7 +3872,7 @@ type GetDeploymentMaterialRequest struct {
 
 func (x *GetDeploymentMaterialRequest) Reset() {
 	*x = GetDeploymentMaterialRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[31]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2456,7 +3884,7 @@ func (x *GetDeploymentMaterialRequest) String() string {
 func (*GetDeploymentMaterialRequest) ProtoMessage() {}
 
 func (x *GetDeploymentMaterialRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[31]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2469,7 +3897,7 @@ func (x *GetDeploymentMaterialRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeploymentMaterialRequest.ProtoReflect.Descriptor instead.
 func (*GetDeploymentMaterialRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{31}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *GetDeploymentMaterialRequest) GetDeploymentId() string {
@@ -2490,7 +3918,7 @@ type GetDeploymentMaterialResponse struct {
 
 func (x *GetDeploymentMaterialResponse) Reset() {
 	*x = GetDeploymentMaterialResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[32]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2502,7 +3930,7 @@ func (x *GetDeploymentMaterialResponse) String() string {
 func (*GetDeploymentMaterialResponse) ProtoMessage() {}
 
 func (x *GetDeploymentMaterialResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[32]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2515,7 +3943,7 @@ func (x *GetDeploymentMaterialResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeploymentMaterialResponse.ProtoReflect.Descriptor instead.
 func (*GetDeploymentMaterialResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{32}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *GetDeploymentMaterialResponse) GetManifest() *ArtifactManifest {
@@ -2543,7 +3971,7 @@ type GetBlobRequest struct {
 
 func (x *GetBlobRequest) Reset() {
 	*x = GetBlobRequest{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[33]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2555,7 +3983,7 @@ func (x *GetBlobRequest) String() string {
 func (*GetBlobRequest) ProtoMessage() {}
 
 func (x *GetBlobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[33]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2568,7 +3996,7 @@ func (x *GetBlobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlobRequest.ProtoReflect.Descriptor instead.
 func (*GetBlobRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{33}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *GetBlobRequest) GetDeploymentId() string {
@@ -2601,7 +4029,7 @@ type GetBlobResponse struct {
 
 func (x *GetBlobResponse) Reset() {
 	*x = GetBlobResponse{}
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[34]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2613,7 +4041,7 @@ func (x *GetBlobResponse) String() string {
 func (*GetBlobResponse) ProtoMessage() {}
 
 func (x *GetBlobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_registry_proto_msgTypes[34]
+	mi := &file_wendycloud_v2_registry_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2626,7 +4054,7 @@ func (x *GetBlobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlobResponse.ProtoReflect.Descriptor instead.
 func (*GetBlobResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{34}
+	return file_wendycloud_v2_registry_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *GetBlobResponse) GetData() []byte {
@@ -2640,26 +4068,59 @@ var File_wendycloud_v2_registry_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_registry_proto_rawDesc = "" +
 	"\n" +
-	"\x1cwendycloud/v2/registry.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\x1fwendycloud/v2/deployments.proto\x1a\"wendycloud/v2/signed_request.proto\"\x95\x01\n" +
+	"\x1cwendycloud/v2/registry.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\x1fwendycloud/v2/deployments.proto\x1a\"wendycloud/v2/signed_request.proto\"\xe8\x01\n" +
 	"\x1cRegisterEncryptionKeyRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12-\n" +
 	"\x05suite\x18\x02 \x01(\x0e2\x17.wendycloud.v2.KemSuiteR\x05suite\x12\x1d\n" +
 	"\n" +
-	"public_key\x18\x03 \x01(\fR\tpublicKey\"6\n" +
+	"public_key\x18\x03 \x01(\fR\tpublicKey\x12.\n" +
+	"\x13approval_public_key\x18\x04 \x01(\fR\x11approvalPublicKey\x12!\n" +
+	"\fmachine_name\x18\x05 \x01(\tR\vmachineName\"6\n" +
 	"\x1dRegisterEncryptionKeyResponse\x12\x15\n" +
-	"\x06key_id\x18\x01 \x01(\tR\x05keyId\"b\n" +
+	"\x06key_id\x18\x01 \x01(\tR\x05keyId\"y\n" +
 	"\x17GetRecipientKeysRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x1e\n" +
 	"\n" +
 	"principals\x18\x02 \x03(\tR\n" +
-	"principals\"\x8b\x01\n" +
+	"principals\x12\x15\n" +
+	"\x06app_id\x18\x03 \x01(\tR\x05appId\"\xcd\x01\n" +
 	"\fRecipientKey\x12\x1c\n" +
 	"\tprincipal\x18\x01 \x01(\tR\tprincipal\x12@\n" +
 	"\fregistration\x18\x02 \x01(\v2\x1c.wendycloud.v2.SignedRequestR\fregistration\x12\x1b\n" +
-	"\tchain_der\x18\x03 \x03(\fR\bchainDer\"e\n" +
+	"\tchain_der\x18\x03 \x03(\fR\bchainDer\x12@\n" +
+	"\bapproval\x18\x04 \x01(\v2$.wendycloud.v2.SignedSessionApprovalR\bapproval\"\xa0\x01\n" +
 	"\x18GetRecipientKeysResponse\x12/\n" +
 	"\x04keys\x18\x01 \x03(\v2\x1b.wendycloud.v2.RecipientKeyR\x04keys\x12\x18\n" +
-	"\aunbound\x18\x02 \x03(\tR\aunbound\"\xdb\x04\n" +
+	"\aunbound\x18\x02 \x03(\tR\aunbound\x129\n" +
+	"\tapprovers\x18\x03 \x03(\v2\x1b.wendycloud.v2.RecipientKeyR\tapprovers\"\x8d\x01\n" +
+	"\x0fSessionApproval\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x12\n" +
+	"\x04user\x18\x02 \x01(\tR\x04user\x12\x15\n" +
+	"\x06key_id\x18\x03 \x01(\tR\x05keyId\x12&\n" +
+	"\x0fapprover_key_id\x18\x04 \x01(\tR\rapproverKeyId\"S\n" +
+	"\x15SignedSessionApproval\x12\x1c\n" +
+	"\tstatement\x18\x01 \x01(\fR\tstatement\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\"\x82\x01\n" +
+	"\x15ApproveSessionRequest\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12@\n" +
+	"\bapproval\x18\x02 \x01(\v2$.wendycloud.v2.SignedSessionApprovalR\bapproval\"\x18\n" +
+	"\x16ApproveSessionResponse\"\xa8\x01\n" +
+	"\x1eRevokeUserEncryptionKeyRequest\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x15\n" +
+	"\x06key_id\x18\x02 \x01(\tR\x05keyId\x12F\n" +
+	"\n" +
+	"revocation\x18\x03 \x01(\v2&.wendycloud.v2.SignedSessionRevocationR\n" +
+	"revocation\"\x8d\x01\n" +
+	"\x11SessionRevocation\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x12\n" +
+	"\x04user\x18\x02 \x01(\tR\x04user\x12\x15\n" +
+	"\x06key_id\x18\x03 \x01(\tR\x05keyId\x12$\n" +
+	"\x0erevoker_key_id\x18\x04 \x01(\tR\frevokerKeyId\"U\n" +
+	"\x17SignedSessionRevocation\x12\x1c\n" +
+	"\tstatement\x18\x01 \x01(\fR\tstatement\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\"F\n" +
+	"\x1fRevokeUserEncryptionKeyResponse\x12#\n" +
+	"\rremoved_wraps\x18\x01 \x01(\rR\fremovedWraps\"\x92\x05\n" +
 	"\x10DeviceAssignment\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12#\n" +
 	"\rdeployment_id\x18\x02 \x01(\tR\fdeploymentId\x12\x16\n" +
@@ -2678,7 +4139,12 @@ const file_wendycloud_v2_registry_proto_rawDesc = "" +
 	"configJson\x12\x1a\n" +
 	"\brevision\x18\f \x01(\x05R\brevision\x124\n" +
 	"\x16replaces_deployment_id\x18\r \x01(\tR\x14replacesDeploymentId\x12+\n" +
-	"\x11replaces_revision\x18\x0e \x01(\x05R\x10replacesRevision\"@\n" +
+	"\x11replaces_revision\x18\x0e \x01(\x05R\x10replacesRevision\x125\n" +
+	"\asecrets\x18\x0f \x03(\v2\x1b.wendycloud.v2.DeviceSecretR\asecrets\"z\n" +
+	"\fDeviceSecret\x121\n" +
+	"\x05value\x18\x01 \x01(\v2\x1b.wendycloud.v2.SealedSecretR\x05value\x127\n" +
+	"\vdevice_wrap\x18\x02 \x01(\v2\x16.wendycloud.v2.KeyWrapR\n" +
+	"deviceWrap\"@\n" +
 	"\x14AssignDeviceResponse\x12(\n" +
 	"\x10postbox_entry_id\x18\x01 \x01(\x03R\x0epostboxEntryId\"\xd6\x01\n" +
 	"\x15UnassignDeviceRequest\x12'\n" +
@@ -2744,13 +4210,66 @@ const file_wendycloud_v2_registry_proto_rawDesc = "" +
 	"\x10deployment_count\x18\v \x01(\rR\x0fdeploymentCount\"|\n" +
 	"\x15ListArtifactsResponse\x12;\n" +
 	"\tartifacts\x18\x01 \x03(\v2\x1d.wendycloud.v2.StoredArtifactR\tartifacts\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"l\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xe9\x01\n" +
 	"\x11GetMyWrapsRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12.\n" +
-	"\x05scope\x18\x02 \x01(\v2\x18.wendycloud.v2.WrapScopeR\x05scope\"\x93\x01\n" +
+	"\x05scope\x18\x02 \x01(\v2\x18.wendycloud.v2.WrapScopeR\x05scope\x12(\n" +
+	"\x10recipient_key_id\x18\x03 \x01(\tR\x0erecipientKeyId\x12\x15\n" +
+	"\x06app_id\x18\x04 \x01(\tR\x05appId\x12\x1b\n" +
+	"\tpage_size\x18\x05 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x06 \x01(\tR\tpageToken\"\xbd\x01\n" +
+	"\rMissingAccess\x12)\n" +
+	"\x10session_approved\x18\x01 \x01(\bR\x0fsessionApproved\x12B\n" +
+	"\x0fitem_created_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ritemCreatedAt\x12=\n" +
+	"\fmember_since\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vmemberSince\"\xc0\x02\n" +
 	"\x12GetMyWrapsResponse\x12,\n" +
 	"\x05wraps\x18\x01 \x03(\v2\x16.wendycloud.v2.KeyWrapR\x05wraps\x12O\n" +
-	"\x13sealed_content_keys\x18\x02 \x03(\v2\x1f.wendycloud.v2.SealedContentKeyR\x11sealedContentKeys\"\xb5\x02\n" +
+	"\x13sealed_content_keys\x18\x02 \x03(\v2\x1f.wendycloud.v2.SealedContentKeyR\x11sealedContentKeys\x12K\n" +
+	"\x0fsecret_versions\x18\x03 \x03(\v2\".wendycloud.v2.SignedSecretVersionR\x0esecretVersions\x126\n" +
+	"\amissing\x18\x04 \x01(\v2\x1c.wendycloud.v2.MissingAccessR\amissing\x12&\n" +
+	"\x0fnext_page_token\x18\x05 \x01(\tR\rnextPageToken\"q\n" +
+	"\x13SignedSecretVersion\x12=\n" +
+	"\vset_request\x18\x01 \x01(\v2\x1c.wendycloud.v2.SignedRequestR\n" +
+	"setRequest\x12\x1b\n" +
+	"\tchain_der\x18\x02 \x03(\fR\bchainDer\"n\n" +
+	"\x10SetSecretRequest\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x121\n" +
+	"\x05value\x18\x02 \x01(\v2\x1b.wendycloud.v2.SealedSecretR\x05value\"F\n" +
+	"\x11SetSecretResponse\x121\n" +
+	"\x06secret\x18\x01 \x01(\v2\x19.wendycloud.v2.SecretInfoR\x06secret\"i\n" +
+	"\x13RemoveSecretRequest\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x15\n" +
+	"\x06app_id\x18\x02 \x01(\tR\x05appId\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"\x16\n" +
+	"\x14RemoveSecretResponse\"\x90\x01\n" +
+	"\x12ListSecretsRequest\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x15\n" +
+	"\x06app_id\x18\x02 \x01(\tR\x05appId\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x04 \x01(\tR\tpageToken\"r\n" +
+	"\x13ListSecretsResponse\x123\n" +
+	"\asecrets\x18\x01 \x03(\v2\x19.wendycloud.v2.SecretInfoR\asecrets\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xe4\x01\n" +
+	"\n" +
+	"SecretInfo\x12\x15\n" +
+	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\x05R\aversion\x12\"\n" +
+	"\rsecret_key_id\x18\x04 \x01(\tR\vsecretKeyId\x12\x15\n" +
+	"\x06set_by\x18\x05 \x01(\tR\x05setBy\x12#\n" +
+	"\x0eset_by_user_id\x18\x06 \x01(\tR\vsetByUserId\x121\n" +
+	"\x06set_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x05setAt\"\xad\x01\n" +
+	"\fSealedSecret\x12\x15\n" +
+	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\x05R\aversion\x12\"\n" +
+	"\rsecret_key_id\x18\x04 \x01(\tR\vsecretKeyId\x12\x14\n" +
+	"\x05nonce\x18\x05 \x01(\fR\x05nonce\x12\x1e\n" +
+	"\n" +
+	"ciphertext\x18\x06 \x01(\fR\n" +
+	"ciphertext\"\xb5\x02\n" +
 	"\x10ArtifactManifest\x12'\n" +
 	"\x0fmanifest_digest\x18\x01 \x01(\tR\x0emanifestDigest\x12!\n" +
 	"\foci_manifest\x18\x02 \x01(\fR\vociManifest\x12.\n" +
@@ -2764,10 +4283,11 @@ const file_wendycloud_v2_registry_proto_rawDesc = "" +
 	"\x10plaintext_digest\x18\x01 \x01(\tR\x0fplaintextDigest\x12+\n" +
 	"\x11ciphertext_digest\x18\x02 \x01(\tR\x10ciphertextDigest\x12%\n" +
 	"\x0eplaintext_size\x18\x03 \x01(\x04R\rplaintextSize\x12'\n" +
-	"\x0fciphertext_size\x18\x04 \x01(\x04R\x0eciphertextSize\"z\n" +
+	"\x0fciphertext_size\x18\x04 \x01(\x04R\x0eciphertextSize\"\xa3\x01\n" +
 	"\tWrapScope\x12%\n" +
 	"\rdeployment_id\x18\x01 \x01(\tH\x00R\fdeploymentId\x12&\n" +
-	"\x0eapp_release_id\x18\x02 \x01(\tH\x00R\fappReleaseId\x12\x15\n" +
+	"\x0eapp_release_id\x18\x02 \x01(\tH\x00R\fappReleaseId\x12'\n" +
+	"\x0esecret_version\x18\x04 \x01(\tH\x00R\rsecretVersion\x12\x15\n" +
 	"\x06key_id\x18\x03 \x01(\tR\x05keyIdB\a\n" +
 	"\x05scope\"\xa7\x02\n" +
 	"\aKeyWrap\x12.\n" +
@@ -2822,11 +4342,13 @@ const file_wendycloud_v2_registry_proto_rawDesc = "" +
 	"\x1aRECIPIENT_KIND_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15RECIPIENT_KIND_DEVICE\x10\x01\x12\x17\n" +
 	"\x13RECIPIENT_KIND_USER\x10\x02\x12\x1c\n" +
-	"\x18RECIPIENT_KIND_CUSTODIAN\x10\x032\xda\x02\n" +
+	"\x18RECIPIENT_KIND_CUSTODIAN\x10\x032\xa6\x04\n" +
 	"\x13KeyDirectoryService\x12m\n" +
-	"\x19RegisterUserEncryptionKey\x12\x1c.wendycloud.v2.SignedRequest\x1a,.wendycloud.v2.RegisterEncryptionKeyResponse\"\x04\x88\xb5\x18\x01\x12o\n" +
+	"\x19RegisterUserEncryptionKey\x12\x1c.wendycloud.v2.SignedRequest\x1a,.wendycloud.v2.RegisterEncryptionKeyResponse\"\x04\x88\xb5\x18\x01\x12[\n" +
+	"\x0eApproveSession\x12\x1c.wendycloud.v2.SignedRequest\x1a%.wendycloud.v2.ApproveSessionResponse\"\x04\x88\xb5\x18\x01\x12m\n" +
+	"\x17RevokeUserEncryptionKey\x12\x1c.wendycloud.v2.SignedRequest\x1a..wendycloud.v2.RevokeUserEncryptionKeyResponse\"\x04\x88\xb5\x18\x01\x12o\n" +
 	"\x1bRegisterDeviceEncryptionKey\x12\x1c.wendycloud.v2.SignedRequest\x1a,.wendycloud.v2.RegisterEncryptionKeyResponse\"\x04\x90\xb5\x18\x01\x12c\n" +
-	"\x10GetRecipientKeys\x12&.wendycloud.v2.GetRecipientKeysRequest\x1a'.wendycloud.v2.GetRecipientKeysResponse2\xa7\x06\n" +
+	"\x10GetRecipientKeys\x12&.wendycloud.v2.GetRecipientKeysRequest\x1a'.wendycloud.v2.GetRecipientKeysResponse2\xa9\b\n" +
 	"\x17ArtifactRegistryService\x12]\n" +
 	"\x0fPublishArtifact\x12\x1c.wendycloud.v2.SignedRequest\x1a&.wendycloud.v2.PublishArtifactResponse\"\x04\x88\xb5\x18\x01\x12J\n" +
 	"\aPutBlob\x12\x1d.wendycloud.v2.PutBlobRequest\x1a\x1e.wendycloud.v2.PutBlobResponse(\x01\x12O\n" +
@@ -2835,7 +4357,10 @@ const file_wendycloud_v2_registry_proto_rawDesc = "" +
 	"\vGetArtifact\x12!.wendycloud.v2.GetArtifactRequest\x1a\".wendycloud.v2.GetArtifactResponse\x12Q\n" +
 	"\n" +
 	"GetMyWraps\x12 .wendycloud.v2.GetMyWrapsRequest\x1a!.wendycloud.v2.GetMyWrapsResponse\x12Z\n" +
-	"\rListArtifacts\x12#.wendycloud.v2.ListArtifactsRequest\x1a$.wendycloud.v2.ListArtifactsResponse\x12W\n" +
+	"\rListArtifacts\x12#.wendycloud.v2.ListArtifactsRequest\x1a$.wendycloud.v2.ListArtifactsResponse\x12Q\n" +
+	"\tSetSecret\x12\x1c.wendycloud.v2.SignedRequest\x1a .wendycloud.v2.SetSecretResponse\"\x04\x88\xb5\x18\x01\x12W\n" +
+	"\fRemoveSecret\x12\x1c.wendycloud.v2.SignedRequest\x1a#.wendycloud.v2.RemoveSecretResponse\"\x04\x88\xb5\x18\x01\x12T\n" +
+	"\vListSecrets\x12!.wendycloud.v2.ListSecretsRequest\x1a\".wendycloud.v2.ListSecretsResponse\x12W\n" +
 	"\fAssignDevice\x12\x1c.wendycloud.v2.SignedRequest\x1a#.wendycloud.v2.AssignDeviceResponse\"\x04\x88\xb5\x18\x01\x12[\n" +
 	"\x0eUnassignDevice\x12\x1c.wendycloud.v2.SignedRequest\x1a%.wendycloud.v2.UnassignDeviceResponse\"\x04\x88\xb5\x18\x012\xd7\x01\n" +
 	"\x15DeviceArtifactService\x12r\n" +
@@ -2855,114 +4380,159 @@ func file_wendycloud_v2_registry_proto_rawDescGZIP() []byte {
 }
 
 var file_wendycloud_v2_registry_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_wendycloud_v2_registry_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_wendycloud_v2_registry_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
 var file_wendycloud_v2_registry_proto_goTypes = []any{
-	(AeadSuite)(0),                        // 0: wendycloud.v2.AeadSuite
-	(KemSuite)(0),                         // 1: wendycloud.v2.KemSuite
-	(RecipientKind)(0),                    // 2: wendycloud.v2.RecipientKind
-	(*RegisterEncryptionKeyRequest)(nil),  // 3: wendycloud.v2.RegisterEncryptionKeyRequest
-	(*RegisterEncryptionKeyResponse)(nil), // 4: wendycloud.v2.RegisterEncryptionKeyResponse
-	(*GetRecipientKeysRequest)(nil),       // 5: wendycloud.v2.GetRecipientKeysRequest
-	(*RecipientKey)(nil),                  // 6: wendycloud.v2.RecipientKey
-	(*GetRecipientKeysResponse)(nil),      // 7: wendycloud.v2.GetRecipientKeysResponse
-	(*DeviceAssignment)(nil),              // 8: wendycloud.v2.DeviceAssignment
-	(*AssignDeviceResponse)(nil),          // 9: wendycloud.v2.AssignDeviceResponse
-	(*UnassignDeviceRequest)(nil),         // 10: wendycloud.v2.UnassignDeviceRequest
-	(*UnassignDeviceResponse)(nil),        // 11: wendycloud.v2.UnassignDeviceResponse
-	(*DetachDeviceRequest)(nil),           // 12: wendycloud.v2.DetachDeviceRequest
-	(*PublishArtifactRequest)(nil),        // 13: wendycloud.v2.PublishArtifactRequest
-	(*PublishArtifactResponse)(nil),       // 14: wendycloud.v2.PublishArtifactResponse
-	(*PutBlobRequest)(nil),                // 15: wendycloud.v2.PutBlobRequest
-	(*PutBlobHeader)(nil),                 // 16: wendycloud.v2.PutBlobHeader
-	(*PutBlobResponse)(nil),               // 17: wendycloud.v2.PutBlobResponse
-	(*GetArtifactRequest)(nil),            // 18: wendycloud.v2.GetArtifactRequest
-	(*GetArtifactResponse)(nil),           // 19: wendycloud.v2.GetArtifactResponse
-	(*ListArtifactsRequest)(nil),          // 20: wendycloud.v2.ListArtifactsRequest
-	(*StoredArtifact)(nil),                // 21: wendycloud.v2.StoredArtifact
-	(*ListArtifactsResponse)(nil),         // 22: wendycloud.v2.ListArtifactsResponse
-	(*GetMyWrapsRequest)(nil),             // 23: wendycloud.v2.GetMyWrapsRequest
-	(*GetMyWrapsResponse)(nil),            // 24: wendycloud.v2.GetMyWrapsResponse
-	(*ArtifactManifest)(nil),              // 25: wendycloud.v2.ArtifactManifest
-	(*EncryptedBlob)(nil),                 // 26: wendycloud.v2.EncryptedBlob
-	(*WrapScope)(nil),                     // 27: wendycloud.v2.WrapScope
-	(*KeyWrap)(nil),                       // 28: wendycloud.v2.KeyWrap
-	(*SealedContentKey)(nil),              // 29: wendycloud.v2.SealedContentKey
-	(*AddWrapsRequest)(nil),               // 30: wendycloud.v2.AddWrapsRequest
-	(*AddWrapsResponse)(nil),              // 31: wendycloud.v2.AddWrapsResponse
-	(*RemoveWrapsRequest)(nil),            // 32: wendycloud.v2.RemoveWrapsRequest
-	(*RemoveWrapsResponse)(nil),           // 33: wendycloud.v2.RemoveWrapsResponse
-	(*GetDeploymentMaterialRequest)(nil),  // 34: wendycloud.v2.GetDeploymentMaterialRequest
-	(*GetDeploymentMaterialResponse)(nil), // 35: wendycloud.v2.GetDeploymentMaterialResponse
-	(*GetBlobRequest)(nil),                // 36: wendycloud.v2.GetBlobRequest
-	(*GetBlobResponse)(nil),               // 37: wendycloud.v2.GetBlobResponse
-	(*SignedRequest)(nil),                 // 38: wendycloud.v2.SignedRequest
-	(Running)(0),                          // 39: wendycloud.v2.Running
-	(*timestamppb.Timestamp)(nil),         // 40: google.protobuf.Timestamp
-	(ReleaseType)(0),                      // 41: wendycloud.v2.ReleaseType
+	(AeadSuite)(0),                          // 0: wendycloud.v2.AeadSuite
+	(KemSuite)(0),                           // 1: wendycloud.v2.KemSuite
+	(RecipientKind)(0),                      // 2: wendycloud.v2.RecipientKind
+	(*RegisterEncryptionKeyRequest)(nil),    // 3: wendycloud.v2.RegisterEncryptionKeyRequest
+	(*RegisterEncryptionKeyResponse)(nil),   // 4: wendycloud.v2.RegisterEncryptionKeyResponse
+	(*GetRecipientKeysRequest)(nil),         // 5: wendycloud.v2.GetRecipientKeysRequest
+	(*RecipientKey)(nil),                    // 6: wendycloud.v2.RecipientKey
+	(*GetRecipientKeysResponse)(nil),        // 7: wendycloud.v2.GetRecipientKeysResponse
+	(*SessionApproval)(nil),                 // 8: wendycloud.v2.SessionApproval
+	(*SignedSessionApproval)(nil),           // 9: wendycloud.v2.SignedSessionApproval
+	(*ApproveSessionRequest)(nil),           // 10: wendycloud.v2.ApproveSessionRequest
+	(*ApproveSessionResponse)(nil),          // 11: wendycloud.v2.ApproveSessionResponse
+	(*RevokeUserEncryptionKeyRequest)(nil),  // 12: wendycloud.v2.RevokeUserEncryptionKeyRequest
+	(*SessionRevocation)(nil),               // 13: wendycloud.v2.SessionRevocation
+	(*SignedSessionRevocation)(nil),         // 14: wendycloud.v2.SignedSessionRevocation
+	(*RevokeUserEncryptionKeyResponse)(nil), // 15: wendycloud.v2.RevokeUserEncryptionKeyResponse
+	(*DeviceAssignment)(nil),                // 16: wendycloud.v2.DeviceAssignment
+	(*DeviceSecret)(nil),                    // 17: wendycloud.v2.DeviceSecret
+	(*AssignDeviceResponse)(nil),            // 18: wendycloud.v2.AssignDeviceResponse
+	(*UnassignDeviceRequest)(nil),           // 19: wendycloud.v2.UnassignDeviceRequest
+	(*UnassignDeviceResponse)(nil),          // 20: wendycloud.v2.UnassignDeviceResponse
+	(*DetachDeviceRequest)(nil),             // 21: wendycloud.v2.DetachDeviceRequest
+	(*PublishArtifactRequest)(nil),          // 22: wendycloud.v2.PublishArtifactRequest
+	(*PublishArtifactResponse)(nil),         // 23: wendycloud.v2.PublishArtifactResponse
+	(*PutBlobRequest)(nil),                  // 24: wendycloud.v2.PutBlobRequest
+	(*PutBlobHeader)(nil),                   // 25: wendycloud.v2.PutBlobHeader
+	(*PutBlobResponse)(nil),                 // 26: wendycloud.v2.PutBlobResponse
+	(*GetArtifactRequest)(nil),              // 27: wendycloud.v2.GetArtifactRequest
+	(*GetArtifactResponse)(nil),             // 28: wendycloud.v2.GetArtifactResponse
+	(*ListArtifactsRequest)(nil),            // 29: wendycloud.v2.ListArtifactsRequest
+	(*StoredArtifact)(nil),                  // 30: wendycloud.v2.StoredArtifact
+	(*ListArtifactsResponse)(nil),           // 31: wendycloud.v2.ListArtifactsResponse
+	(*GetMyWrapsRequest)(nil),               // 32: wendycloud.v2.GetMyWrapsRequest
+	(*MissingAccess)(nil),                   // 33: wendycloud.v2.MissingAccess
+	(*GetMyWrapsResponse)(nil),              // 34: wendycloud.v2.GetMyWrapsResponse
+	(*SignedSecretVersion)(nil),             // 35: wendycloud.v2.SignedSecretVersion
+	(*SetSecretRequest)(nil),                // 36: wendycloud.v2.SetSecretRequest
+	(*SetSecretResponse)(nil),               // 37: wendycloud.v2.SetSecretResponse
+	(*RemoveSecretRequest)(nil),             // 38: wendycloud.v2.RemoveSecretRequest
+	(*RemoveSecretResponse)(nil),            // 39: wendycloud.v2.RemoveSecretResponse
+	(*ListSecretsRequest)(nil),              // 40: wendycloud.v2.ListSecretsRequest
+	(*ListSecretsResponse)(nil),             // 41: wendycloud.v2.ListSecretsResponse
+	(*SecretInfo)(nil),                      // 42: wendycloud.v2.SecretInfo
+	(*SealedSecret)(nil),                    // 43: wendycloud.v2.SealedSecret
+	(*ArtifactManifest)(nil),                // 44: wendycloud.v2.ArtifactManifest
+	(*EncryptedBlob)(nil),                   // 45: wendycloud.v2.EncryptedBlob
+	(*WrapScope)(nil),                       // 46: wendycloud.v2.WrapScope
+	(*KeyWrap)(nil),                         // 47: wendycloud.v2.KeyWrap
+	(*SealedContentKey)(nil),                // 48: wendycloud.v2.SealedContentKey
+	(*AddWrapsRequest)(nil),                 // 49: wendycloud.v2.AddWrapsRequest
+	(*AddWrapsResponse)(nil),                // 50: wendycloud.v2.AddWrapsResponse
+	(*RemoveWrapsRequest)(nil),              // 51: wendycloud.v2.RemoveWrapsRequest
+	(*RemoveWrapsResponse)(nil),             // 52: wendycloud.v2.RemoveWrapsResponse
+	(*GetDeploymentMaterialRequest)(nil),    // 53: wendycloud.v2.GetDeploymentMaterialRequest
+	(*GetDeploymentMaterialResponse)(nil),   // 54: wendycloud.v2.GetDeploymentMaterialResponse
+	(*GetBlobRequest)(nil),                  // 55: wendycloud.v2.GetBlobRequest
+	(*GetBlobResponse)(nil),                 // 56: wendycloud.v2.GetBlobResponse
+	(*SignedRequest)(nil),                   // 57: wendycloud.v2.SignedRequest
+	(Running)(0),                            // 58: wendycloud.v2.Running
+	(*timestamppb.Timestamp)(nil),           // 59: google.protobuf.Timestamp
+	(ReleaseType)(0),                        // 60: wendycloud.v2.ReleaseType
 }
 var file_wendycloud_v2_registry_proto_depIdxs = []int32{
 	1,  // 0: wendycloud.v2.RegisterEncryptionKeyRequest.suite:type_name -> wendycloud.v2.KemSuite
-	38, // 1: wendycloud.v2.RecipientKey.registration:type_name -> wendycloud.v2.SignedRequest
-	6,  // 2: wendycloud.v2.GetRecipientKeysResponse.keys:type_name -> wendycloud.v2.RecipientKey
-	39, // 3: wendycloud.v2.DeviceAssignment.desired_state:type_name -> wendycloud.v2.Running
-	28, // 4: wendycloud.v2.DeviceAssignment.device_wrap:type_name -> wendycloud.v2.KeyWrap
-	40, // 5: wendycloud.v2.DeviceAssignment.expires_at:type_name -> google.protobuf.Timestamp
-	40, // 6: wendycloud.v2.UnassignDeviceRequest.valid_until:type_name -> google.protobuf.Timestamp
-	40, // 7: wendycloud.v2.DetachDeviceRequest.valid_until:type_name -> google.protobuf.Timestamp
-	25, // 8: wendycloud.v2.PublishArtifactRequest.manifest:type_name -> wendycloud.v2.ArtifactManifest
-	40, // 9: wendycloud.v2.PublishArtifactResponse.expires_at:type_name -> google.protobuf.Timestamp
-	6,  // 10: wendycloud.v2.PublishArtifactResponse.auto_grant_keys:type_name -> wendycloud.v2.RecipientKey
-	16, // 11: wendycloud.v2.PutBlobRequest.header:type_name -> wendycloud.v2.PutBlobHeader
-	25, // 12: wendycloud.v2.GetArtifactResponse.manifest:type_name -> wendycloud.v2.ArtifactManifest
-	40, // 13: wendycloud.v2.StoredArtifact.published_at:type_name -> google.protobuf.Timestamp
-	21, // 14: wendycloud.v2.ListArtifactsResponse.artifacts:type_name -> wendycloud.v2.StoredArtifact
-	27, // 15: wendycloud.v2.GetMyWrapsRequest.scope:type_name -> wendycloud.v2.WrapScope
-	28, // 16: wendycloud.v2.GetMyWrapsResponse.wraps:type_name -> wendycloud.v2.KeyWrap
-	29, // 17: wendycloud.v2.GetMyWrapsResponse.sealed_content_keys:type_name -> wendycloud.v2.SealedContentKey
-	41, // 18: wendycloud.v2.ArtifactManifest.kind:type_name -> wendycloud.v2.ReleaseType
-	26, // 19: wendycloud.v2.ArtifactManifest.blobs:type_name -> wendycloud.v2.EncryptedBlob
-	0,  // 20: wendycloud.v2.ArtifactManifest.aead:type_name -> wendycloud.v2.AeadSuite
-	27, // 21: wendycloud.v2.KeyWrap.scope:type_name -> wendycloud.v2.WrapScope
-	2,  // 22: wendycloud.v2.KeyWrap.recipient_kind:type_name -> wendycloud.v2.RecipientKind
-	1,  // 23: wendycloud.v2.KeyWrap.suite:type_name -> wendycloud.v2.KemSuite
-	28, // 24: wendycloud.v2.AddWrapsRequest.wraps:type_name -> wendycloud.v2.KeyWrap
-	29, // 25: wendycloud.v2.AddWrapsRequest.sealed_content_keys:type_name -> wendycloud.v2.SealedContentKey
-	27, // 26: wendycloud.v2.RemoveWrapsRequest.scope:type_name -> wendycloud.v2.WrapScope
-	25, // 27: wendycloud.v2.GetDeploymentMaterialResponse.manifest:type_name -> wendycloud.v2.ArtifactManifest
-	29, // 28: wendycloud.v2.GetDeploymentMaterialResponse.sealed_content_key:type_name -> wendycloud.v2.SealedContentKey
-	38, // 29: wendycloud.v2.KeyDirectoryService.RegisterUserEncryptionKey:input_type -> wendycloud.v2.SignedRequest
-	38, // 30: wendycloud.v2.KeyDirectoryService.RegisterDeviceEncryptionKey:input_type -> wendycloud.v2.SignedRequest
-	5,  // 31: wendycloud.v2.KeyDirectoryService.GetRecipientKeys:input_type -> wendycloud.v2.GetRecipientKeysRequest
-	38, // 32: wendycloud.v2.ArtifactRegistryService.PublishArtifact:input_type -> wendycloud.v2.SignedRequest
-	15, // 33: wendycloud.v2.ArtifactRegistryService.PutBlob:input_type -> wendycloud.v2.PutBlobRequest
-	38, // 34: wendycloud.v2.ArtifactRegistryService.AddWraps:input_type -> wendycloud.v2.SignedRequest
-	38, // 35: wendycloud.v2.ArtifactRegistryService.RemoveWraps:input_type -> wendycloud.v2.SignedRequest
-	18, // 36: wendycloud.v2.ArtifactRegistryService.GetArtifact:input_type -> wendycloud.v2.GetArtifactRequest
-	23, // 37: wendycloud.v2.ArtifactRegistryService.GetMyWraps:input_type -> wendycloud.v2.GetMyWrapsRequest
-	20, // 38: wendycloud.v2.ArtifactRegistryService.ListArtifacts:input_type -> wendycloud.v2.ListArtifactsRequest
-	38, // 39: wendycloud.v2.ArtifactRegistryService.AssignDevice:input_type -> wendycloud.v2.SignedRequest
-	38, // 40: wendycloud.v2.ArtifactRegistryService.UnassignDevice:input_type -> wendycloud.v2.SignedRequest
-	34, // 41: wendycloud.v2.DeviceArtifactService.GetDeploymentMaterial:input_type -> wendycloud.v2.GetDeploymentMaterialRequest
-	36, // 42: wendycloud.v2.DeviceArtifactService.GetBlob:input_type -> wendycloud.v2.GetBlobRequest
-	4,  // 43: wendycloud.v2.KeyDirectoryService.RegisterUserEncryptionKey:output_type -> wendycloud.v2.RegisterEncryptionKeyResponse
-	4,  // 44: wendycloud.v2.KeyDirectoryService.RegisterDeviceEncryptionKey:output_type -> wendycloud.v2.RegisterEncryptionKeyResponse
-	7,  // 45: wendycloud.v2.KeyDirectoryService.GetRecipientKeys:output_type -> wendycloud.v2.GetRecipientKeysResponse
-	14, // 46: wendycloud.v2.ArtifactRegistryService.PublishArtifact:output_type -> wendycloud.v2.PublishArtifactResponse
-	17, // 47: wendycloud.v2.ArtifactRegistryService.PutBlob:output_type -> wendycloud.v2.PutBlobResponse
-	31, // 48: wendycloud.v2.ArtifactRegistryService.AddWraps:output_type -> wendycloud.v2.AddWrapsResponse
-	33, // 49: wendycloud.v2.ArtifactRegistryService.RemoveWraps:output_type -> wendycloud.v2.RemoveWrapsResponse
-	19, // 50: wendycloud.v2.ArtifactRegistryService.GetArtifact:output_type -> wendycloud.v2.GetArtifactResponse
-	24, // 51: wendycloud.v2.ArtifactRegistryService.GetMyWraps:output_type -> wendycloud.v2.GetMyWrapsResponse
-	22, // 52: wendycloud.v2.ArtifactRegistryService.ListArtifacts:output_type -> wendycloud.v2.ListArtifactsResponse
-	9,  // 53: wendycloud.v2.ArtifactRegistryService.AssignDevice:output_type -> wendycloud.v2.AssignDeviceResponse
-	11, // 54: wendycloud.v2.ArtifactRegistryService.UnassignDevice:output_type -> wendycloud.v2.UnassignDeviceResponse
-	35, // 55: wendycloud.v2.DeviceArtifactService.GetDeploymentMaterial:output_type -> wendycloud.v2.GetDeploymentMaterialResponse
-	37, // 56: wendycloud.v2.DeviceArtifactService.GetBlob:output_type -> wendycloud.v2.GetBlobResponse
-	43, // [43:57] is the sub-list for method output_type
-	29, // [29:43] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	57, // 1: wendycloud.v2.RecipientKey.registration:type_name -> wendycloud.v2.SignedRequest
+	9,  // 2: wendycloud.v2.RecipientKey.approval:type_name -> wendycloud.v2.SignedSessionApproval
+	6,  // 3: wendycloud.v2.GetRecipientKeysResponse.keys:type_name -> wendycloud.v2.RecipientKey
+	6,  // 4: wendycloud.v2.GetRecipientKeysResponse.approvers:type_name -> wendycloud.v2.RecipientKey
+	9,  // 5: wendycloud.v2.ApproveSessionRequest.approval:type_name -> wendycloud.v2.SignedSessionApproval
+	14, // 6: wendycloud.v2.RevokeUserEncryptionKeyRequest.revocation:type_name -> wendycloud.v2.SignedSessionRevocation
+	58, // 7: wendycloud.v2.DeviceAssignment.desired_state:type_name -> wendycloud.v2.Running
+	47, // 8: wendycloud.v2.DeviceAssignment.device_wrap:type_name -> wendycloud.v2.KeyWrap
+	59, // 9: wendycloud.v2.DeviceAssignment.expires_at:type_name -> google.protobuf.Timestamp
+	17, // 10: wendycloud.v2.DeviceAssignment.secrets:type_name -> wendycloud.v2.DeviceSecret
+	43, // 11: wendycloud.v2.DeviceSecret.value:type_name -> wendycloud.v2.SealedSecret
+	47, // 12: wendycloud.v2.DeviceSecret.device_wrap:type_name -> wendycloud.v2.KeyWrap
+	59, // 13: wendycloud.v2.UnassignDeviceRequest.valid_until:type_name -> google.protobuf.Timestamp
+	59, // 14: wendycloud.v2.DetachDeviceRequest.valid_until:type_name -> google.protobuf.Timestamp
+	44, // 15: wendycloud.v2.PublishArtifactRequest.manifest:type_name -> wendycloud.v2.ArtifactManifest
+	59, // 16: wendycloud.v2.PublishArtifactResponse.expires_at:type_name -> google.protobuf.Timestamp
+	6,  // 17: wendycloud.v2.PublishArtifactResponse.auto_grant_keys:type_name -> wendycloud.v2.RecipientKey
+	25, // 18: wendycloud.v2.PutBlobRequest.header:type_name -> wendycloud.v2.PutBlobHeader
+	44, // 19: wendycloud.v2.GetArtifactResponse.manifest:type_name -> wendycloud.v2.ArtifactManifest
+	59, // 20: wendycloud.v2.StoredArtifact.published_at:type_name -> google.protobuf.Timestamp
+	30, // 21: wendycloud.v2.ListArtifactsResponse.artifacts:type_name -> wendycloud.v2.StoredArtifact
+	46, // 22: wendycloud.v2.GetMyWrapsRequest.scope:type_name -> wendycloud.v2.WrapScope
+	59, // 23: wendycloud.v2.MissingAccess.item_created_at:type_name -> google.protobuf.Timestamp
+	59, // 24: wendycloud.v2.MissingAccess.member_since:type_name -> google.protobuf.Timestamp
+	47, // 25: wendycloud.v2.GetMyWrapsResponse.wraps:type_name -> wendycloud.v2.KeyWrap
+	48, // 26: wendycloud.v2.GetMyWrapsResponse.sealed_content_keys:type_name -> wendycloud.v2.SealedContentKey
+	35, // 27: wendycloud.v2.GetMyWrapsResponse.secret_versions:type_name -> wendycloud.v2.SignedSecretVersion
+	33, // 28: wendycloud.v2.GetMyWrapsResponse.missing:type_name -> wendycloud.v2.MissingAccess
+	57, // 29: wendycloud.v2.SignedSecretVersion.set_request:type_name -> wendycloud.v2.SignedRequest
+	43, // 30: wendycloud.v2.SetSecretRequest.value:type_name -> wendycloud.v2.SealedSecret
+	42, // 31: wendycloud.v2.SetSecretResponse.secret:type_name -> wendycloud.v2.SecretInfo
+	42, // 32: wendycloud.v2.ListSecretsResponse.secrets:type_name -> wendycloud.v2.SecretInfo
+	59, // 33: wendycloud.v2.SecretInfo.set_at:type_name -> google.protobuf.Timestamp
+	60, // 34: wendycloud.v2.ArtifactManifest.kind:type_name -> wendycloud.v2.ReleaseType
+	45, // 35: wendycloud.v2.ArtifactManifest.blobs:type_name -> wendycloud.v2.EncryptedBlob
+	0,  // 36: wendycloud.v2.ArtifactManifest.aead:type_name -> wendycloud.v2.AeadSuite
+	46, // 37: wendycloud.v2.KeyWrap.scope:type_name -> wendycloud.v2.WrapScope
+	2,  // 38: wendycloud.v2.KeyWrap.recipient_kind:type_name -> wendycloud.v2.RecipientKind
+	1,  // 39: wendycloud.v2.KeyWrap.suite:type_name -> wendycloud.v2.KemSuite
+	47, // 40: wendycloud.v2.AddWrapsRequest.wraps:type_name -> wendycloud.v2.KeyWrap
+	48, // 41: wendycloud.v2.AddWrapsRequest.sealed_content_keys:type_name -> wendycloud.v2.SealedContentKey
+	46, // 42: wendycloud.v2.RemoveWrapsRequest.scope:type_name -> wendycloud.v2.WrapScope
+	44, // 43: wendycloud.v2.GetDeploymentMaterialResponse.manifest:type_name -> wendycloud.v2.ArtifactManifest
+	48, // 44: wendycloud.v2.GetDeploymentMaterialResponse.sealed_content_key:type_name -> wendycloud.v2.SealedContentKey
+	57, // 45: wendycloud.v2.KeyDirectoryService.RegisterUserEncryptionKey:input_type -> wendycloud.v2.SignedRequest
+	57, // 46: wendycloud.v2.KeyDirectoryService.ApproveSession:input_type -> wendycloud.v2.SignedRequest
+	57, // 47: wendycloud.v2.KeyDirectoryService.RevokeUserEncryptionKey:input_type -> wendycloud.v2.SignedRequest
+	57, // 48: wendycloud.v2.KeyDirectoryService.RegisterDeviceEncryptionKey:input_type -> wendycloud.v2.SignedRequest
+	5,  // 49: wendycloud.v2.KeyDirectoryService.GetRecipientKeys:input_type -> wendycloud.v2.GetRecipientKeysRequest
+	57, // 50: wendycloud.v2.ArtifactRegistryService.PublishArtifact:input_type -> wendycloud.v2.SignedRequest
+	24, // 51: wendycloud.v2.ArtifactRegistryService.PutBlob:input_type -> wendycloud.v2.PutBlobRequest
+	57, // 52: wendycloud.v2.ArtifactRegistryService.AddWraps:input_type -> wendycloud.v2.SignedRequest
+	57, // 53: wendycloud.v2.ArtifactRegistryService.RemoveWraps:input_type -> wendycloud.v2.SignedRequest
+	27, // 54: wendycloud.v2.ArtifactRegistryService.GetArtifact:input_type -> wendycloud.v2.GetArtifactRequest
+	32, // 55: wendycloud.v2.ArtifactRegistryService.GetMyWraps:input_type -> wendycloud.v2.GetMyWrapsRequest
+	29, // 56: wendycloud.v2.ArtifactRegistryService.ListArtifacts:input_type -> wendycloud.v2.ListArtifactsRequest
+	57, // 57: wendycloud.v2.ArtifactRegistryService.SetSecret:input_type -> wendycloud.v2.SignedRequest
+	57, // 58: wendycloud.v2.ArtifactRegistryService.RemoveSecret:input_type -> wendycloud.v2.SignedRequest
+	40, // 59: wendycloud.v2.ArtifactRegistryService.ListSecrets:input_type -> wendycloud.v2.ListSecretsRequest
+	57, // 60: wendycloud.v2.ArtifactRegistryService.AssignDevice:input_type -> wendycloud.v2.SignedRequest
+	57, // 61: wendycloud.v2.ArtifactRegistryService.UnassignDevice:input_type -> wendycloud.v2.SignedRequest
+	53, // 62: wendycloud.v2.DeviceArtifactService.GetDeploymentMaterial:input_type -> wendycloud.v2.GetDeploymentMaterialRequest
+	55, // 63: wendycloud.v2.DeviceArtifactService.GetBlob:input_type -> wendycloud.v2.GetBlobRequest
+	4,  // 64: wendycloud.v2.KeyDirectoryService.RegisterUserEncryptionKey:output_type -> wendycloud.v2.RegisterEncryptionKeyResponse
+	11, // 65: wendycloud.v2.KeyDirectoryService.ApproveSession:output_type -> wendycloud.v2.ApproveSessionResponse
+	15, // 66: wendycloud.v2.KeyDirectoryService.RevokeUserEncryptionKey:output_type -> wendycloud.v2.RevokeUserEncryptionKeyResponse
+	4,  // 67: wendycloud.v2.KeyDirectoryService.RegisterDeviceEncryptionKey:output_type -> wendycloud.v2.RegisterEncryptionKeyResponse
+	7,  // 68: wendycloud.v2.KeyDirectoryService.GetRecipientKeys:output_type -> wendycloud.v2.GetRecipientKeysResponse
+	23, // 69: wendycloud.v2.ArtifactRegistryService.PublishArtifact:output_type -> wendycloud.v2.PublishArtifactResponse
+	26, // 70: wendycloud.v2.ArtifactRegistryService.PutBlob:output_type -> wendycloud.v2.PutBlobResponse
+	50, // 71: wendycloud.v2.ArtifactRegistryService.AddWraps:output_type -> wendycloud.v2.AddWrapsResponse
+	52, // 72: wendycloud.v2.ArtifactRegistryService.RemoveWraps:output_type -> wendycloud.v2.RemoveWrapsResponse
+	28, // 73: wendycloud.v2.ArtifactRegistryService.GetArtifact:output_type -> wendycloud.v2.GetArtifactResponse
+	34, // 74: wendycloud.v2.ArtifactRegistryService.GetMyWraps:output_type -> wendycloud.v2.GetMyWrapsResponse
+	31, // 75: wendycloud.v2.ArtifactRegistryService.ListArtifacts:output_type -> wendycloud.v2.ListArtifactsResponse
+	37, // 76: wendycloud.v2.ArtifactRegistryService.SetSecret:output_type -> wendycloud.v2.SetSecretResponse
+	39, // 77: wendycloud.v2.ArtifactRegistryService.RemoveSecret:output_type -> wendycloud.v2.RemoveSecretResponse
+	41, // 78: wendycloud.v2.ArtifactRegistryService.ListSecrets:output_type -> wendycloud.v2.ListSecretsResponse
+	18, // 79: wendycloud.v2.ArtifactRegistryService.AssignDevice:output_type -> wendycloud.v2.AssignDeviceResponse
+	20, // 80: wendycloud.v2.ArtifactRegistryService.UnassignDevice:output_type -> wendycloud.v2.UnassignDeviceResponse
+	54, // 81: wendycloud.v2.DeviceArtifactService.GetDeploymentMaterial:output_type -> wendycloud.v2.GetDeploymentMaterialResponse
+	56, // 82: wendycloud.v2.DeviceArtifactService.GetBlob:output_type -> wendycloud.v2.GetBlobResponse
+	64, // [64:83] is the sub-list for method output_type
+	45, // [45:64] is the sub-list for method input_type
+	45, // [45:45] is the sub-list for extension type_name
+	45, // [45:45] is the sub-list for extension extendee
+	0,  // [0:45] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_registry_proto_init() }
@@ -2973,13 +4543,14 @@ func file_wendycloud_v2_registry_proto_init() {
 	file_wendy_options_proto_init()
 	file_wendycloud_v2_deployments_proto_init()
 	file_wendycloud_v2_signed_request_proto_init()
-	file_wendycloud_v2_registry_proto_msgTypes[12].OneofWrappers = []any{
+	file_wendycloud_v2_registry_proto_msgTypes[21].OneofWrappers = []any{
 		(*PutBlobRequest_Header)(nil),
 		(*PutBlobRequest_Data)(nil),
 	}
-	file_wendycloud_v2_registry_proto_msgTypes[24].OneofWrappers = []any{
+	file_wendycloud_v2_registry_proto_msgTypes[43].OneofWrappers = []any{
 		(*WrapScope_DeploymentId)(nil),
 		(*WrapScope_AppReleaseId)(nil),
+		(*WrapScope_SecretVersion)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2987,7 +4558,7 @@ func file_wendycloud_v2_registry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_v2_registry_proto_rawDesc), len(file_wendycloud_v2_registry_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   35,
+			NumMessages:   54,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

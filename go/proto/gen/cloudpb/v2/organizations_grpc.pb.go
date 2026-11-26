@@ -53,6 +53,10 @@ type OrganizationServiceClient interface {
 	// Signed; payload_type "wendycloud.v2.UpdateMemberRoleRequest".
 	UpdateMemberRole(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*OrganizationMember, error)
 	// Signed; payload_type "wendycloud.v2.RemoveMemberRequest".
+	// Deprecated: cloud removes nobody (WDY-4301). Membership is wendy-auth's, and realm sign-in
+	// adds back anyone still in the realm, so every call is refused with FAILED_PRECONDITION after
+	// the caller's membership check: remove people in wendy-auth's member management. Kept for wire
+	// compatibility until its senders drop it; then it is removed and its name reserved.
 	RemoveMember(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*RemoveMemberResponse, error)
 	// Revokes all of a member's credentials and keeps the membership (WDY-3409):
 	// every live pki-core certificate of the member's operator principal
@@ -275,6 +279,10 @@ type OrganizationServiceServer interface {
 	// Signed; payload_type "wendycloud.v2.UpdateMemberRoleRequest".
 	UpdateMemberRole(context.Context, *SignedRequest) (*OrganizationMember, error)
 	// Signed; payload_type "wendycloud.v2.RemoveMemberRequest".
+	// Deprecated: cloud removes nobody (WDY-4301). Membership is wendy-auth's, and realm sign-in
+	// adds back anyone still in the realm, so every call is refused with FAILED_PRECONDITION after
+	// the caller's membership check: remove people in wendy-auth's member management. Kept for wire
+	// compatibility until its senders drop it; then it is removed and its name reserved.
 	RemoveMember(context.Context, *SignedRequest) (*RemoveMemberResponse, error)
 	// Revokes all of a member's credentials and keeps the membership (WDY-3409):
 	// every live pki-core certificate of the member's operator principal

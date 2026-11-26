@@ -101,8 +101,8 @@ type DeploymentServiceClient interface {
 	// DeploymentChangeResponse.to_sign, and how any operator who may make the
 	// change resumes after an interruption, from any of their keys. Pending is
 	// every device whose last statement cloud has received differs from the
-	// current revision in content (release, configuration, desired state,
-	// membership), not merely in revision number:
+	// current revision in content (release, configuration, secrets, desired
+	// state, membership), not merely in revision number:
 	// - a device in the current set: an Assign at the current revision;
 	// - a device outside the current set that still holds an older revision,
 	//   also one a superseded revision dropped before its removal was sent: an
@@ -487,8 +487,8 @@ type DeploymentServiceServer interface {
 	// DeploymentChangeResponse.to_sign, and how any operator who may make the
 	// change resumes after an interruption, from any of their keys. Pending is
 	// every device whose last statement cloud has received differs from the
-	// current revision in content (release, configuration, desired state,
-	// membership), not merely in revision number:
+	// current revision in content (release, configuration, secrets, desired
+	// state, membership), not merely in revision number:
 	// - a device in the current set: an Assign at the current revision;
 	// - a device outside the current set that still holds an older revision,
 	//   also one a superseded revision dropped before its removal was sent: an
