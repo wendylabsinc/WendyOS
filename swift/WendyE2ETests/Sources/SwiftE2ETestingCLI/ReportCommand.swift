@@ -54,6 +54,11 @@ struct ReportCommand: ParsableCommand {
             throw ValidationError("Report input must be a Swift E2E run directory: \(runURL.path)")
         }
 
+        try validateReportSourceRevisions(
+            in: runURL,
+            directories: [repo, testsDir].compactMap { $0 }
+        )
+
         let outputURL = runURL.appendingPathComponent("index.html")
         let records = try loadRecords(in: runURL)
         let aiReviews = try loadRunAIReviews(in: runURL)
@@ -1149,6 +1154,37 @@ func runAttemptArtifactURLsByTarget(in runURL: URL) throws -> [String: [URL]] {
         urlsByTarget[target] = try directoryChildren(of: targetURL)
     }
     return urlsByTarget
+}
+
+private func validateReportSourceRevisions(in runURL: URL, directories: [String]) throws {
+    guard !directories.isEmpty else { return }
+    let attempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
+    let revisions = try Set(
+        attempts.compactMap { attempt -> String? in
+            let manifest = attempt.appendingPathComponent("attempt.json")
+            guard CoverageIO.exists(manifest) else { return nil }
+            return CoverageIO.recordedRevision(try CoverageIO.read(manifest))
+        }
+    )
+    // Older runs may have no recorded revision to compare.
+    guard !revisions.isEmpty else { return }
+    guard revisions.count == 1, let revision = revisions.first else {
+        throw ValidationError("Explicit report sources require one recorded tested revision")
+    }
+    for directory in directories {
+        let result = try CoverageIO.execute(
+            ["git", "rev-parse", "HEAD"],
+            cwd: URL(fileURLWithPath: directory)
+        )
+        guard result.status == 0,
+            result.text.trimmingCharacters(in: .whitespacesAndNewlines) == revision
+        else {
+            throw ValidationError(
+                "Report source at " + directory + " must match the recorded tested revision "
+                    + revision
+            )
+        }
+    }
 }
 
 private func renderReport(

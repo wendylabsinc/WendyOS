@@ -187,13 +187,17 @@ single-attempt run shares its run artifacts with that attempt and target.
 
 Report reads saved totals and renders `source.html` for complete run and target
 profiles. Hover or focus a target row for the source report and plain-text
-function list. Diff appears in comparison mode. Older runs can display saved
-totals even when the matching source checkout is unavailable.
+function list. To generate a missing function list, reaggregate the attempts.
+If a source refresh fails, report preserves the previous page and omits its link.
+Diff appears in comparison mode. Older runs can display saved totals even when
+the matching source checkout is unavailable.
 
 For split checkouts, pass `--repo TESTED_REPO` to aggregate, review, and report.
 Report uses the measured Go source for source views and
 `TESTED_REPO/swift/WendyE2ETests` to join Swift tests to outcomes and recordings.
-`--tests-dir` can narrow that source selection. Templates, prompts and executed
+`--tests-dir` can narrow that source selection. When attempts record a revision,
+report verifies the checkout for each explicit source selection before joining
+test cards. Templates, prompts and executed
 tools come from the trusted `--package-dir`. The review harness starts in the
 trusted tooling repository. The workflow materializes the tested revision,
 including a synthetic merge, from validated raw Git blobs without running

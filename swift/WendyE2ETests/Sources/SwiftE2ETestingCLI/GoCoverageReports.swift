@@ -34,8 +34,7 @@ struct GoCoverageReports {
                 _ = try CoverageIO.relative(url, to: run)
             }
             guard CoverageIO.exists(profile) else {
-                try CoverageIO.remove(html)
-                try CoverageIO.remove(functions)
+                if stage == .aggregate { try CoverageIO.remove(functions) }
                 continue
             }
             do {
@@ -43,8 +42,7 @@ struct GoCoverageReports {
                 guard let identity = summary["sourceID"] as? String,
                     summary["status"] as? String == "collected"
                 else {
-                    try CoverageIO.remove(html)
-                    try CoverageIO.remove(functions)
+                    if stage == .aggregate { try CoverageIO.remove(functions) }
                     continue
                 }
                 guard let totals = summary["summary"] as? [String: Any],
@@ -86,22 +84,16 @@ struct GoCoverageReports {
                         "Coverage summary revision differs from its source manifest"
                     )
                 }
-                // Older aggregates have only a profile. Backfill their function list on first render.
-                var outputs: [(String, URL)] = []
-                if stage == .aggregate || !CoverageIO.exists(functions) {
-                    outputs.append(("-func", functions))
-                }
-                if stage == .report { outputs.append(("-html", html)) }
+                let output = stage == .aggregate ? functions : html
                 try source.render(
                     profile: profile,
                     statements: statements,
                     covered: covered,
-                    outputs: outputs
+                    option: stage == .aggregate ? "-func" : "-html",
+                    output: output
                 )
-                linked.insert(functions)
-                if stage == .report { linked.insert(html) }
+                linked.insert(output)
             } catch {
-                try CoverageIO.remove(html)
                 if stage == .aggregate { try CoverageIO.remove(functions) }
                 FileHandle.standardError.write(
                     Data(
@@ -211,7 +203,7 @@ private struct GoReportSource {
         self.paths = paths
     }
 
-    func render(profile: URL, statements: Int, covered: Int, outputs: [(String, URL)]) throws {
+    func render(profile: URL, statements: Int, covered: Int, option: String, output: URL) throws {
         let scratch = try CoverageIO.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: scratch) }
         let lines = CoverageIO.lines(try String(contentsOf: profile, encoding: .utf8))
@@ -239,13 +231,11 @@ private struct GoReportSource {
         let input = scratch.appendingPathComponent("coverage.out")
         try local.write(to: input, atomically: true, encoding: .utf8)
         // Generate into scratch first, so a failed tool cannot publish a partial page or list.
-        for (option, output) in outputs {
-            let temporary = scratch.appendingPathComponent(output.lastPathComponent)
-            _ = try CoverageIO.command(
-                ["go", "tool", "cover", option + "=" + input.path, "-o", temporary.path],
-                cwd: repo
-            )
-            try Data(contentsOf: temporary).write(to: output, options: .atomic)
-        }
+        let temporary = scratch.appendingPathComponent(output.lastPathComponent)
+        _ = try CoverageIO.command(
+            ["go", "tool", "cover", option + "=" + input.path, "-o", temporary.path],
+            cwd: repo
+        )
+        try Data(contentsOf: temporary).write(to: output, options: .atomic)
     }
 }

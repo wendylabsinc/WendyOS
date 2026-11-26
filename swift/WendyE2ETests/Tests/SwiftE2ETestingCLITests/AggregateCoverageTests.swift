@@ -146,8 +146,21 @@ struct `aggregate saved coverage` {
             try Data(contentsOf: run.appendingPathComponent("diff.json")) == savedComparison
         )
         try f.write(file, after)
-        // A renderer has no Git access; it displays saved coverage results.
-        try f.write("fake-bin/git", "#!/bin/sh\nexit 99\n")
+        splitReport.repo = f.product.path
+        #expect(throws: ValidationError.self) { try splitReport.run() }
+        #expect(
+            try String(contentsOf: run.appendingPathComponent("index.html"), encoding: .utf8)
+                == splitHTML
+        )
+        // Only the selected checkout identity requires Git. Rendering never recomputes the diff.
+        try f.write(
+            "fake-bin/git",
+            """
+            #!/bin/sh
+            [ "$#" = 2 ] && [ "$1" = rev-parse ] && [ "$2" = HEAD ] || exit 99
+            command -p git "$@"
+            """
+        )
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755],
             ofItemAtPath: f.repo.appendingPathComponent("fake-bin/git").path
@@ -306,12 +319,21 @@ struct `aggregate saved coverage` {
                 #expect(!CoverageIO.exists(directory.appendingPathComponent(name)))
             }
         }
+        let sourcePage = run.appendingPathComponent("coverage/source.html")
+        let archivedPage = try Data(contentsOf: sourcePage)
+        let missingList = run.appendingPathComponent("coverage/targets/a/functions.txt")
+        try CoverageIO.remove(missingList)
+        let legacy = try GoCoverageReports(run: run, package: f.product, repo: f.repo)
+        let legacyLinks = legacy.links(directory: try legacy.directory(for: "a"), icons: true)
+        #expect(legacyLinks.contains("coverage/targets/a/source.html"))
+        #expect(!legacyLinks.contains("coverage/targets/a/functions.txt"))
+        #expect(!CoverageIO.exists(missingList))
         try f.write("go/internal/sample/branch.go", GoCoverageFixture.branch + "// edited\n")
         let mismatch = try GoCoverageReports(run: run, package: f.product, repo: f.repo)
         let offlineLinks = mismatch.links(directory: mismatch.root, icons: false)
         #expect(!offlineLinks.contains("source.html"))
         #expect(offlineLinks.contains("functions.txt"))
-        #expect(!CoverageIO.exists(run.appendingPathComponent("coverage/source.html")))
+        #expect(try Data(contentsOf: sourcePage) == archivedPage)
     }
 
     @Test
