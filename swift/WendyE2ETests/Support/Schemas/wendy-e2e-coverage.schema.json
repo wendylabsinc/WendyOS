@@ -227,6 +227,33 @@
         "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
         "revision": {"type": "string", "pattern": "^[a-fA-F0-9]{40}$"},
         "counterMode": {"const": "atomic"},
+        "capture": {
+          "type": "object",
+          "oneOf": [
+            {
+              "required": ["status"],
+              "additionalProperties": false,
+              "properties": {"status": {"const": "running"}}
+            },
+            {
+              "required": ["status", "cases"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "completed"},
+                "cases": {"type": "integer", "minimum": 0}
+              }
+            },
+            {
+              "required": ["status", "error", "unexecuted"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "incomplete"},
+                "error": {"type": "string"},
+                "unexecuted": {"type": "string"}
+              }
+            }
+          ]
+        },
         "goVersion": {"type": "string"},
         "agent": {"type": "string"},
         "scope": {"type": "string"},

@@ -43,6 +43,28 @@ class CoverageSchemasTests(unittest.TestCase):
                 self.assertFalse(attempt.is_valid({**manifest, "coverageRequested": value}))
         self.assertFalse(attempt.is_valid({**manifest, "unexpected": True}))
 
+    def test_optional_source_capture(self):
+        coverage = validator("coverage")
+        source = {
+            "sourceID": "a" * 64, "revision": "b" * 40, "counterMode": "atomic",
+            "goVersion": "go1.27.4", "agent": "managed", "scope": "linked Go",
+            "nonGo": "excluded", "files": {}, "packages": {},
+        }
+        coverage.validate(source)  # Legacy source manifests omit capture.
+        incomplete = {"status": "incomplete", "error": "suite interrupted", "unexecuted": "unknown"}
+        for capture in ({"status": "running"}, {"status": "completed", "cases": 1009}, incomplete):
+            with self.subTest(capture=capture):
+                coverage.validate({**source, "capture": capture})
+        for capture in (
+            None, {}, {"status": "unknown"}, {"status": "running", "cases": 1},
+            {"status": "completed"}, {"status": "completed", "cases": -1},
+            {"status": "completed", "cases": True}, {"status": "incomplete", "error": "stopped"},
+            {**incomplete, "error": 1}, {**incomplete, "unexecuted": False},
+            {**incomplete, "unexpected": True},
+        ):
+            with self.subTest(capture=capture):
+                self.assertFalse(coverage.is_valid({**source, "capture": capture}))
+
     def test_run_attempt_provenance(self):
         coverage = validator("coverage")
         source = {"sourceID": "a" * 64, "revision": "b" * 40}
