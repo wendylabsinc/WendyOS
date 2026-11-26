@@ -443,7 +443,7 @@ func TestAlsoOnPromptTerminal(t *testing.T) {
 // terminal where the question is answered; stdout keeps them for the log.
 func TestDestructiveConfirmsShowTheSummaryWherePromptsAre(t *testing.T) {
 	creds := []wendyconf.WifiCredential{{SSID: "Home", Password: "hunter2"}}
-	recovery := recoveryFlashConfirm{target: "Jetson AGX Thor (1-2)", warning: []string{"This erases QSPI + internal NVMe on the Thor."}, question: "Flash Jetson AGX Thor (1-2)?"}
+	recovery := recoveryFlashConfirm{target: "Jetson AGX Thor (1-2)", warning: []string{thorEraseWarning}, question: "Flash Jetson AGX Thor (1-2)?"}
 	disk := drive{Name: "SD Card", DevicePath: "/dev/disk4", IsRemovable: true}
 	installers := map[string]func() error{
 		"disk": func() error {
