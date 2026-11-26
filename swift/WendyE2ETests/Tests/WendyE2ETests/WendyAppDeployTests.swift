@@ -6,12 +6,12 @@ import WendyE2ETesting
 struct `'wendy app deploy'` {
     /**
      Delivers the published release through the registry to the explicitly
-     selected Pi. Revision one asks it to run with the confirmed settings.
+     selected approved device. Revision one asks it to run with the confirmed settings.
      A real HTTP response must identify this attempt, version A and celsius;
      CLI success or a cached older app response cannot satisfy the check.
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
-    func `runs the published release on the selected Pi`() async throws {
+    func `runs the published release on the selected device`() async throws {
         try await AppsDeploymentFixture.withApp { cli, app in
             _ = try await app.deployed(cli)
         }
@@ -20,13 +20,18 @@ struct `'wendy app deploy'` {
     /**
      Install-only imports the release and leaves it stopped. The endpoint
      must not serve the owned app until a later start revision is applied.
+     The explicit CLI wait deadline fits inside the fixture's command guard;
+     timing out while pending cannot establish a successful installation.
      */
     @Test(.enabled(if: appsDeploymentTestsEnabled))
     func `installs without starting until explicitly updated`() async throws {
         try await AppsDeploymentFixture.withApp { cli, app in
             try await app.create(cli)
             let release = try await app.publish(cli)
-            _ = try await app.succeed(cli, app.deployCommand(release, run: false, extra: "--wait"))
+            _ = try await app.succeed(
+                cli,
+                app.deployCommand(release, run: false, extra: "--wait --wait-timeout 15s")
+            )
             let status = try await app.show(cli)
             #expect(status.contains("install only, revision 1."))
             #expect(status.contains("1 installed"))
@@ -163,8 +168,10 @@ struct `'wendy app deploy'` {
 
     /**
      Waiting for a release that cannot start reports failure and exits nonzero.
-     This is the desired scripting outcome even though the reviewed CLI can
-     print a failed row and exit zero. No successful application response exists.
+     A terminal failed-device summary is required, not just a nonzero exit.
+     The explicit CLI wait deadline fits inside the fixture's command guard;
+     a pending-device timeout must not pass as an application startup failure.
+     No successful application response exists.
      */
     @Test(
         .enabled(
@@ -180,7 +187,10 @@ struct `'wendy app deploy'` {
                 version: "3.0.0",
                 layoutKey: "WENDY_E2E_APPS_LAYOUT_FAIL"
             )
-            let failed = try await app.command(cli, app.deployCommand(release, extra: "--wait"))
+            let failed = try await app.command(
+                cli,
+                app.deployCommand(release, extra: "--wait --wait-timeout 15s")
+            )
             try #require(
                 !failed.status.description.contains("124"),
                 "Wrapper timeout is not a device failure result"
@@ -261,6 +271,9 @@ struct `'wendy app deploy'` {
             try await app.create(cli)
             let release = try await app.publish(cli)
             let declared = try await app.observe(cli, "unbound-create", as: AppsDeclaredAsset.self)
+            try await cli.sh(
+                "printf '%s\\n' \(AppsDeploymentFixture.quote("unenrolled-asset=\(declared.id)")) >> owned-resources.txt"
+            )
             var primaryError: (any Error)?
             do {
                 let command = app.deployCommand(release).replacingOccurrences(
@@ -276,6 +289,14 @@ struct `'wendy app deploy'` {
                     cli,
                     app.observerCommand("unbound-delete", arguments: "--asset \(declared.id)")
                 )
+                struct AssetState: Decodable { let exists: Bool }
+                let state = try await app.observe(
+                    cli,
+                    "unbound-state",
+                    arguments: "--asset \(declared.id)",
+                    as: AssetState.self
+                )
+                #expect(!state.exists)
             } catch {
                 Issue.record("Declared unbound asset remains: \(declared.id)")
                 primaryError = primaryError ?? error
@@ -286,9 +307,12 @@ struct `'wendy app deploy'` {
 
     /**
      Isolated Agent protocol tier: synthetic invalid signature, target, revision,
-     manifest, blob and wrapped-key data are refused by the real verifier/pull
-     pipeline. No import/start occurs and the prior working runtime-peer state
-     remains. This is not live Cloud or containerd validation.
+     manifest, blob and wrapped-key data cover their respective boundaries.
+     Target binding uses unsigned values at the pure validator, with a valid
+     own-target control. The acceptance wrapper requires all six existing
+     subcases. Any focused benign investigation is separate partial evidence.
+     No import/start occurs and the prior working runtime-peer state remains.
+     This is not live Cloud, cross-target delivery or containerd validation.
      */
     @Test(.enabled(if: appsIsolationTestsEnabled))
     func `refuses instructions and artifacts it cannot verify`() async throws {
