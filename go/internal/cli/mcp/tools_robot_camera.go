@@ -12,6 +12,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -52,7 +53,11 @@ func (s *mcpServer) captureGo2CalibratedSnapshot(ctx context.Context, serial str
 }
 
 func (s *mcpServer) captureGo2SnapshotMode(ctx context.Context, serial string, native720 bool) (string, cameraSnapshot, int64, error) {
-	conn := s.GetConn()
+	return captureGo2SnapshotOnConn(ctx, s.GetConn(), serial, native720)
+}
+
+// Bind capture to the same selected gateway as the active search request.
+func captureGo2SnapshotOnConn(ctx context.Context, conn *grpcclient.AgentConnection, serial string, native720 bool) (string, cameraSnapshot, int64, error) {
 	if conn == nil || conn.UnitreeService == nil || conn.TimeSyncService == nil || conn.Conn == nil {
 		return "", cameraSnapshot{}, 0, errors.New("selected agent does not provide the Unitree camera and clock services")
 	}

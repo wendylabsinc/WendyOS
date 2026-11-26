@@ -43,6 +43,14 @@ func TestRobotLocalizeSchemaPreservesApprovalAndOptionalSelection(t *testing.T) 
 	if !found["localize"] || !found["localize_active"] {
 		t.Fatal("robot command schema does not distinguish passive and active localization")
 	}
+	if !found["find_active"] {
+		t.Fatal("bounded object search action is missing")
+	}
+	for _, field := range []string{"query", "model"} {
+		if _, ok := schema.Properties[field]; !ok {
+			t.Fatalf("object search schema is missing %s", field)
+		}
+	}
 	for _, field := range schema.Required {
 		if field == "serial" || field == "destination" {
 			t.Fatalf("automatic robot/room selection unexpectedly requires %s", field)
