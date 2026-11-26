@@ -130,7 +130,7 @@ struct `aggregate saved coverage` {
             "--tests-dir", package.appendingPathComponent("Tests/WendyE2ETests").path,
             "--run-dir", run.path,
         ])
-        // Rendering has no spec identity or source-hash validation gate.
+        // Verify the selected declarations independently of the saved spec comparison.
         try splitReport.run()
         splitReport.repo = f.repo.path
         try splitReport.run()
@@ -140,11 +140,21 @@ struct `aggregate saved coverage` {
         )
         #expect(!splitHTML.contains("data-spec-change="))
         #expect(!splitHTML.contains("data-comparison-removed"))
-        try f.write(file, after + "\n// source hash for deferred spec annotations is irrelevant\n")
-        try splitReport.run()
+        try f.write(
+            file,
+            after.replacingOccurrences(of: "func `added`", with: "func `never executed`")
+        )
+        #expect(throws: ValidationError.self) { try splitReport.run() }
         #expect(
             try Data(contentsOf: run.appendingPathComponent("diff.json")) == savedComparison
         )
+        try f.write(file, after)
+        let addedFile = "swift/WendyE2ETests/Tests/WendyE2ETests/UnrecordedTests.swift"
+        try f.write(addedFile, after)
+        #expect(throws: ValidationError.self) { try splitReport.run() }
+        try CoverageIO.remove(f.repo.appendingPathComponent(addedFile))
+        try CoverageIO.remove(f.repo.appendingPathComponent(file))
+        #expect(throws: ValidationError.self) { try splitReport.run() }
         try f.write(file, after)
         splitReport.repo = f.product.path
         #expect(throws: ValidationError.self) { try splitReport.run() }
@@ -152,12 +162,15 @@ struct `aggregate saved coverage` {
             try String(contentsOf: run.appendingPathComponent("index.html"), encoding: .utf8)
                 == splitHTML
         )
-        // Only the selected checkout identity requires Git. Rendering never recomputes the diff.
+        // Permit source verification but ensure report never recomputes the diff.
         try f.write(
             "fake-bin/git",
             """
             #!/bin/sh
-            [ "$#" = 2 ] && [ "$1" = rev-parse ] && [ "$2" = HEAD ] || exit 99
+            case "$1 $2" in
+              'rev-parse HEAD'|'--literal-pathspecs ls-tree'|'cat-file --batch') ;;
+              *) exit 99 ;;
+            esac
             command -p git "$@"
             """
         )

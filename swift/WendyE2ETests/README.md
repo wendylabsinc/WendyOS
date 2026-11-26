@@ -196,8 +196,9 @@ For split checkouts, pass `--repo TESTED_REPO` to aggregate, review, and report.
 Report uses the measured Go source for source views and
 `TESTED_REPO/swift/WendyE2ETests` to join Swift tests to outcomes and recordings.
 `--tests-dir` can narrow that source selection. When attempts record a revision,
-report verifies the checkout for each explicit source selection before joining
-test cards. Templates, prompts and executed
+report checks the selected checkout revision and verifies the selected
+`*Tests.swift` files against its Git blobs before joining test cards.
+Changes elsewhere in the checkout do not affect this check. Templates, prompts and executed
 tools come from the trusted `--package-dir`. The review harness starts in the
 trusted tooling repository. The workflow materializes the tested revision,
 including a synthetic merge, from validated raw Git blobs without running

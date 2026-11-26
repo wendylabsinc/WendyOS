@@ -43,7 +43,7 @@ struct ReportCommand: ParsableCommand {
             ?? packageURL
         let testsURL = URL(
             fileURLWithPath: testsDir ?? defaultTestsDir(packageURL: sourcePackageURL).path
-        )
+        ).standardizedFileURL
         let templateURL = URL(
             fileURLWithPath: template
                 ?? packageURL.appendingPathComponent("Support/e2e-report.template.html")
@@ -54,19 +54,23 @@ struct ReportCommand: ParsableCommand {
             throw ValidationError("Report input must be a Swift E2E run directory: \(runURL.path)")
         }
 
-        try validateReportSourceRevisions(
+        let repoURL = repo.map { URL(fileURLWithPath: $0).standardizedFileURL }
+        let selectionRoot =
+            testsURL.hasDirectoryPath ? testsURL : testsURL.deletingLastPathComponent()
+        let revision = try recordedReportSourceRevision(
             in: runURL,
-            directories: [repo, testsDir].compactMap { $0 }
+            directories: [repoURL, testsDir.map { _ in selectionRoot }].compactMap { $0 }
         )
 
+        let sources = try reportTestSources(in: testsURL, repo: repoURL, revision: revision)
         let outputURL = runURL.appendingPathComponent("index.html")
         let records = try loadRecords(in: runURL)
         let aiReviews = try loadRunAIReviews(in: runURL)
         let testResults = try loadRunTestResults(in: runURL)
         // Validate saved Go comparison provenance; spec annotations are not rendered.
         let hasComparison = try E2ERunComparison.load(in: runURL) != nil
-        let files = try parseTests(
-            in: testsURL,
+        let files = parseTests(
+            sources: sources,
             packageURL: sourcePackageURL,
             runURL: runURL,
             records: records,
@@ -76,7 +80,7 @@ struct ReportCommand: ParsableCommand {
         try renderReport(
             templateURL: templateURL,
             packageURL: packageURL,
-            repo: repo.map { URL(fileURLWithPath: $0) },
+            repo: repoURL,
             runURL: runURL,
             files: files,
             aiReviews: aiReviews,
@@ -928,18 +932,15 @@ private func stripBackticks(_ value: String) -> String {
 }
 
 private func parseTests(
-    in testsURL: URL,
+    sources: [(URL, String)],
     packageURL: URL,
     runURL: URL,
     records: [E2ETestIdentityKey: [CommandRun]],
     aiReviews: RunAIReviews,
     testResults: [E2ETestIdentityKey: ReportRunTestResult]
-) throws -> [ReportTestFile] {
-    let sourceURLs = try swiftTestFiles(in: testsURL)
+) -> [ReportTestFile] {
     var files: [ReportTestFile] = []
-
-    for sourceURL in sourceURLs {
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+    for (sourceURL, source) in sources {
         let lines = source.components(separatedBy: .newlines)
         var suite = sourceURL.deletingPathExtension().lastPathComponent
         var pendingTest: (line: Int, disabled: String?)?
@@ -1035,6 +1036,64 @@ private func parseTests(
     }
 
     return files
+}
+
+/// Compare exactly the files used for cards to raw blobs, including the set of selected paths.
+private func reportTestSources(
+    in selected: URL,
+    repo: URL?,
+    revision: String?
+) throws -> [(URL, String)] {
+    let files = try swiftTestFiles(in: selected)
+    guard let revision else {
+        return try files.map { ($0, try String(contentsOf: $0, encoding: .utf8)) }
+    }
+    let directory: URL
+    let selection: String
+    // Anchor the Git selection at the supplied checkout even if a directory below it was replaced.
+    let components = selected.standardizedFileURL.pathComponents
+    if let repo, components.starts(with: repo.pathComponents) {
+        directory = repo
+        let relative = components.dropFirst(repo.pathComponents.count).joined(separator: "/")
+        selection = relative.isEmpty ? "." : relative
+    } else {
+        directory = selected.hasDirectoryPath ? selected : selected.deletingLastPathComponent()
+        selection = selected.hasDirectoryPath ? "." : selected.lastPathComponent
+    }
+    let tree = try CoverageIO.command(
+        ["git", "--literal-pathspecs", "ls-tree", "-rz", revision, "--", selection],
+        cwd: directory
+    )
+    var entries: [(url: URL, hash: String)] = []
+    for row in tree.split(separator: "\0") {
+        let fields = row.split(separator: "\t", maxSplits: 1)
+        guard fields.count == 2 else { throw ValidationError("Invalid tested Git tree entry") }
+        guard fields[1].hasSuffix("Tests.swift") else { continue }
+        let object = fields[0].split(separator: " ")
+        guard object.count == 3, ["100644", "100755"].contains(object[0]), object[1] == "blob"
+        else {
+            throw ValidationError("Expected a regular recorded test source: " + fields[1])
+        }
+        entries.append((directory.appendingPathComponent(String(fields[1])), String(object[2])))
+    }
+    guard Set(entries.map(\.url)) == Set(files) else {
+        throw ValidationError(
+            "Selected test files differ from the recorded tested revision " + revision
+        )
+    }
+    entries.sort { $0.url.path < $1.url.path }
+    var result: [(URL, String)] = []
+    try CoverageIO.readSourceBlobs(entries.map(\.hash), in: directory) { index, blob in
+        let url = entries[index].url
+        let working = try Data(contentsOf: url)
+        guard let source = String(data: blob, encoding: .utf8), working == blob else {
+            throw ValidationError(
+                "Test source differs from the recorded tested revision: " + url.path
+            )
+        }
+        result.append((url, source))
+    }
+    return result
 }
 
 private func swiftTestFiles(in testsURL: URL) throws -> [URL] {
@@ -1156,8 +1215,8 @@ func runAttemptArtifactURLsByTarget(in runURL: URL) throws -> [String: [URL]] {
     return urlsByTarget
 }
 
-private func validateReportSourceRevisions(in runURL: URL, directories: [String]) throws {
-    guard !directories.isEmpty else { return }
+private func recordedReportSourceRevision(in runURL: URL, directories: [URL]) throws -> String? {
+    guard !directories.isEmpty else { return nil }
     let attempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
     let revisions = try Set(
         attempts.compactMap { attempt -> String? in
@@ -1167,24 +1226,25 @@ private func validateReportSourceRevisions(in runURL: URL, directories: [String]
         }
     )
     // Older runs may have no recorded revision to compare.
-    guard !revisions.isEmpty else { return }
+    guard !revisions.isEmpty else { return nil }
     guard revisions.count == 1, let revision = revisions.first else {
         throw ValidationError("Explicit report sources require one recorded tested revision")
     }
     for directory in directories {
         let result = try CoverageIO.execute(
             ["git", "rev-parse", "HEAD"],
-            cwd: URL(fileURLWithPath: directory)
+            cwd: directory
         )
         guard result.status == 0,
             result.text.trimmingCharacters(in: .whitespacesAndNewlines) == revision
         else {
             throw ValidationError(
-                "Report source at " + directory + " must match the recorded tested revision "
+                "Report source at " + directory.path + " must match the recorded tested revision "
                     + revision
             )
         }
     }
+    return revision
 }
 
 private func renderReport(

@@ -71,49 +71,60 @@ extension CoverageIO {
             else { throw ValidationError("Unsupported tested source mode") }
             entries.append((path, String(fields[2]), fields[0] == "100755"))
         }
+        try readSourceBlobs(entries.map(\.hash), in: destination) { index, contents in
+            let entry = entries[index]
+            let file = destination.appendingPathComponent(entry.path)
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try contents.write(to: file)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: entry.executable ? 0o555 : 0o444],
+                ofItemAtPath: file.path
+            )
+        }
+        _ = try command(["chmod", "-R", "a-w", destination.path])
+    }
+
+    static func readSourceBlobs(
+        _ hashes: [String],
+        in repo: URL,
+        consume: (Int, Data) throws -> Void
+    ) throws {
         // Batch raw blobs; neither attributes, checkout filters nor hooks run.
-        for offset in stride(from: 0, to: entries.count, by: 100) {
-            let batch = Array(entries[offset..<min(entries.count, offset + 100)])
+        for offset in stride(from: 0, to: hashes.count, by: 100) {
+            let batch = hashes[offset..<min(hashes.count, offset + 100)]
             let result = try execute(
                 ["git", "cat-file", "--batch"],
-                cwd: destination,
-                input: Data(batch.map { $0.hash + "\n" }.joined().utf8)
+                cwd: repo,
+                input: Data(batch.map { $0 + "\n" }.joined().utf8)
             )
             guard result.status == 0 else {
                 throw ValidationError("Unable to read raw source blobs: " + result.error)
             }
             let bytes = [UInt8](result.data)
             var cursor = 0
-            for entry in batch {
+            for index in batch.indices {
                 guard let end = bytes[cursor...].firstIndex(of: 10) else {
                     throw ValidationError("Invalid raw blob header")
                 }
                 let header = String(decoding: bytes[cursor..<end], as: UTF8.self).split(
                     separator: " "
                 )
-                guard header.count == 3, header[0] == entry.hash, header[1] == "blob",
+                guard header.count == 3, header[0] == hashes[index], header[1] == "blob",
                     let size = Int(header[2]), size >= 0, size < bytes.count - end - 1
                 else { throw ValidationError("Invalid raw source blob") }
                 cursor = end + 1
-                let file = destination.appendingPathComponent(entry.path)
-                try FileManager.default.createDirectory(
-                    at: file.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try Data(bytes[cursor..<(cursor + size)]).write(to: file)
                 guard bytes[cursor + size] == 10 else {
                     throw ValidationError("Invalid raw blob terminator")
                 }
+                try consume(index, Data(bytes[cursor..<(cursor + size)]))
                 cursor += size + 1
-                try FileManager.default.setAttributes(
-                    [.posixPermissions: entry.executable ? 0o555 : 0o444],
-                    ofItemAtPath: file.path
-                )
             }
             guard cursor == bytes.count else {
                 throw ValidationError("Unexpected raw source bytes")
             }
         }
-        _ = try command(["chmod", "-R", "a-w", destination.path])
     }
 }
