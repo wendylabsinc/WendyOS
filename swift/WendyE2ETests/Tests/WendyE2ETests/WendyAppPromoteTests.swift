@@ -57,7 +57,44 @@ struct `'wendy app promote'` {
         )
     )
     func `publishes the last direct-run image rather than rebuilding edited source`() async throws {
-        try await AppsDeploymentFixture.withApp { cli, app in
+        try await promoteCachedImage(requireRuntimeConvergence: true)
+    }
+
+    /**
+     Direct-run A, then edit and compile B without rebuilding its image. The
+     normal promotion command selects the independently rehashed cached A
+     image, preserves its exact layer bytes when adding release metadata, and
+     records the intended deployment. A's actual HTTP response is
+     checked before promotion; device acknowledgment is not claimed here. The
+     original full promotion case retains its terminal version/settings checks.
+     */
+    @Test(
+        .enabled(
+            if: appsDeploymentTestsEnabled
+                && ProcessInfo.processInfo.environment["WENDY_E2E_APPS_BUILDER"] == "true"
+        )
+    )
+    func `publishes cached direct run content and records promotion intent`() async throws {
+        try await promoteCachedImage(requireRuntimeConvergence: false)
+    }
+
+    private struct PromotionImage: Decodable {
+        struct Layer: Decodable, Equatable {
+            let digest: String
+            let size: Int
+        }
+        let digest: String?
+        let layers: [Layer]
+    }
+
+    private func promoteCachedImage(
+        requireRuntimeConvergence: Bool,
+        filePath: String = #filePath,
+        function: String = #function,
+        line: Int = #line
+    ) async throws {
+        try await AppsDeploymentFixture.withApp(filePath: filePath, function: function, line: line)
+        { cli, app in
             try await app.create(cli)
             try await AppsBuilderFixture.withBuilder(cli) {
                 let source = URL(fileURLWithPath: AppsDeploymentFixture.observerPath)
@@ -83,7 +120,50 @@ struct `'wendy app promote'` {
                     "wendy --json --device \(AppsDeploymentFixture.quote(app.device)) run --builder docker --stagefile-backend=dockerfile --build-arg APP_VERSION=1.0.0 --detach"
                 )
                 try await app.requireResponse(cli, version: "1.0.0", unit: "fahrenheit")
-                // Edit source without any subsequent build. Promotion must use A.
+                let cachedLayout = "\(cli.wendyCacheDirectory)/ocilayout/\(app.app)-linux_arm64"
+                let rehash = #"""
+                    import hashlib, json, pathlib, sys
+                    root = pathlib.Path(sys.argv[1])
+                    def blob(digest):
+                        algorithm, value = digest.split(':', 1)
+                        assert algorithm == 'sha256'
+                        data = (root / 'blobs' / algorithm / value).read_bytes()
+                        assert hashlib.sha256(data).hexdigest() == value
+                        return data
+                    matches = {}
+                    def visit(descriptor):
+                        raw = blob(descriptor['digest'])
+                        document = json.loads(raw)
+                        if 'manifests' in document:
+                            for child in document['manifests']: visit(child)
+                        elif 'config' in document:
+                            config = json.loads(blob(document['config']['digest']))
+                            if config.get('architecture') == 'arm64' and config.get('os') == 'linux':
+                                digest = 'sha256:' + hashlib.sha256(raw).hexdigest()
+                                layers = []
+                                for layer in document['layers']:
+                                    assert len(blob(layer['digest'])) == layer['size']
+                                    layers.append({'digest': layer['digest'], 'size': layer['size']})
+                                matches[digest] = {'digest': digest, 'layers': layers}
+                    for descriptor in json.loads((root / 'index.json').read_bytes())['manifests']:
+                        visit(descriptor)
+                    assert len(matches) == 1
+                    print(json.dumps(next(iter(matches.values()))))
+                    """#
+                let cachedJSON = try await cli.sh(
+                    "python3 -c \(AppsDeploymentFixture.quote(rehash)) \(AppsDeploymentFixture.quote(cachedLayout))"
+                ) { $0.stdout.trimmingCharacters(in: .whitespacesAndNewlines) }
+                let cachedA = try JSONDecoder().decode(
+                    PromotionImage.self,
+                    from: Data(cachedJSON.utf8)
+                )
+                try #require(
+                    (cachedA.digest ?? "").hasPrefix("sha256:")
+                        && (cachedA.digest ?? "").count == 71
+                )
+                try #require(!cachedA.layers.isEmpty)
+                let cachedDigest = try #require(cachedA.digest)
+                // Edit source without a subsequent image build. Promotion must use A.
                 let edit =
                     #"from pathlib import Path; p=Path('main.go'); s=p.read_text(); assert 'var imageVersion = \"1.0.0\"' in s; p.write_text(s.replace('var imageVersion = \"1.0.0\"', 'var imageVersion = \"2.0.0\"')); Path('version.txt').write_text('2.0.0\n')"#
                 try await cli.sh("python3 -c \(AppsDeploymentFixture.quote(edit))")
@@ -93,7 +173,7 @@ struct `'wendy app promote'` {
                 try await cli.sh(
                     "shasum -a 256 server > edited-B.sha256 && ! cmp -s cached-A.sha256 edited-B.sha256"
                 )
-                _ = try await app.succeed(
+                let promoted = try await app.succeed(
                     cli,
                     "wendy app promote --tag 1.0.0 --device \(app.asset) --name workshop --config E2E_ATTEMPT=\(app.attempt) --config DISPLAY_UNIT=celsius --run --keep-trying 7d --yes \(app.cloudFlag)"
                 )
@@ -105,14 +185,33 @@ struct `'wendy app promote'` {
                     tag: row.name,
                     digest: digest
                 )
-                try await app.requireArtifact(cli, release: release)
-                try await app.requireRunning(
-                    cli,
-                    release: release,
-                    revision: 1,
-                    version: "1.0.0",
-                    unit: "celsius"
+                let artifact = try await app.requireArtifact(cli, release: release)
+                let receipt = promoted.stdout + "\n" + promoted.readableStderr
+                #expect(
+                    receipt.contains(
+                        "Promoting the image wendy run last built for linux/arm64: \(cachedDigest),"
+                    )
                 )
+                // Publishing adds the app-definition config label, so its OCI
+                // manifest digest can differ. Compare the actual immutable
+                // layer descriptors, not an invented pre-publication digest.
+                let manifestData = try #require(Data(base64Encoded: artifact.manifest.ociManifest))
+                let publishedImage = try JSONDecoder().decode(
+                    PromotionImage.self,
+                    from: manifestData
+                )
+                #expect(publishedImage.layers == cachedA.layers)
+                #expect(artifact.computedDigest == digest)
+                _ = try await app.requireHistory(cli, release: release, revision: 1)
+                if requireRuntimeConvergence {
+                    try await app.requireRunning(
+                        cli,
+                        release: release,
+                        revision: 1,
+                        version: "1.0.0",
+                        unit: "celsius"
+                    )
+                }
             }
         }
     }

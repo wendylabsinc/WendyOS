@@ -8,7 +8,7 @@ device authorization; opt-in flags alone do not provide it.
 
 ## Coverage and counts
 
-There are **92 Swift test declarations in 16 command/Console suites**. All have
+There are **93 Swift test declarations in 16 command/Console suites**. All have
 actual logic and explicit opt-in gates. There are no disabled or empty stubs.
 The two excluded scenarios are interactive publish/registration prompts and the
 interactive deploy review. Their scripted counterparts remain covered.
@@ -16,7 +16,7 @@ interactive deploy review. Their scripted counterparts remain covered.
 | Tier | Declarations | What the bodies exercise |
 | --- | ---: | --- |
 | Local CLI validation | 11 | Missing input/confirmation, invalid project/required names/services, exact deployment syntax and rotate identifiers |
-| Cloud/CLI/device | 70 | Public operations, actual catalog/registry/history/report reads, authenticated uncached promotion, scripted first builds and independent HTTP responses; includes additional dedicated fleet, service-control, reboot, second-operator and natural-sweep opt-ins |
+| Cloud/CLI/device | 71 | Public operations, actual catalog/registry/history/report reads, authenticated uncached promotion, scripted first builds and independent HTTP responses; includes additional dedicated fleet, service-control, reboot, second-operator and natural-sweep opt-ins |
 | Real browser DOM | 7 | Rendered catalog/access/settings/releases, rollout and history, waiting/failed states, removal/deletion/detach and pending device work |
 | Isolated protocol/signing | 4 | Real Agent/CLI logic with synthetic in-process peers and deterministic test-only barriers; **not live Cloud/containerd coverage** |
 
@@ -92,6 +92,14 @@ accepts no expected responses, assertion JSON, alternate executables or opaque
 scripts. Its error output contains only operation, fixed stage and gRPC code, never auth
 structs, keys, tokens or raw signed envelopes. Reads follow every page; a small
 page size exercises history/membership pagination.
+
+The promotion-intent example independently hashes the actual cached ARM64 OCI
+manifest and every layer before source B is edited and compiled. It checks the
+CLI's selected-cache receipt and exact immutable published layer descriptors
+against A. Publication adds the app-definition config label, so the resulting
+manifest digest can legitimately differ; actual registry manifest bytes are
+independently hashed and compared with the catalog receipt. The separate full
+promotion spec still requires the managed version/configuration response.
 
 Common deployment setup verifies the publish receipt and `GetArtifact`, including
 manifest digest and encrypted descriptors. The publication metadata case also

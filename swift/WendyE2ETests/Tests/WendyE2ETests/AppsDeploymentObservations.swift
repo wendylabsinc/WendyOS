@@ -119,6 +119,7 @@ struct AppsArtifact: Decodable, Sendable {
             let ciphertextSize: String
         }
         let manifestDigest: String
+        let ociManifest: String
         let aead: String
         let blobs: [Blob]
         let contentKeyId: String
