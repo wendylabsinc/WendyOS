@@ -8,11 +8,47 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 )
+
+func TestRobotLocalizeSchemaPreservesApprovalAndOptionalSelection(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	srv := server.NewMCPServer("test", "1")
+	s.registerRobotTools(srv)
+	tool := srv.GetTool("robot_command")
+	if tool == nil || boolVal(t, tool.Tool.Annotations.ReadOnlyHint, "ReadOnlyHint") {
+		t.Fatal("localization must preserve the robot command approval requirement")
+	}
+	encoded, err := json.Marshal(tool.Tool.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Enum []string `json:"enum"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(encoded, &schema); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, action := range schema.Properties["action"].Enum {
+		found = found || action == "localize"
+	}
+	if !found {
+		t.Fatal("robot command schema does not offer localize")
+	}
+	for _, field := range schema.Required {
+		if field == "serial" || field == "destination" {
+			t.Fatalf("automatic robot/room selection unexpectedly requires %s", field)
+		}
+	}
+}
 
 type pairingListClient struct {
 	pb.WendyUnitreeServiceClient
@@ -64,6 +100,8 @@ func TestRobotToolsUseSelectedDeviceAndFixedEndpoint(t *testing.T) {
 	for _, args := range []map[string]any{
 		{"action": "forward", "request_id": "forward-once", "distance_meters": 1.25},
 		{"action": "go_to_object", "request_id": "object-once", "evidence_id": "opaque-evidence"},
+		{"action": "localize", "request_id": "localize-auto"},
+		{"action": "localize", "request_id": "localize-room", "destination": "Living Room"},
 	} {
 		result, err = s.handleRobotTool(context.Background(), callToolReq("robot_command", args))
 		if err != nil || result.IsError {

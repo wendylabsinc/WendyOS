@@ -9,7 +9,7 @@ import (
 )
 
 func robotCommandTestTool() Tool {
-	return Tool{Name: "robot_command", Description: "Control robot. Reuse request_id on retries; a running receipt is not completion.", RequiresApproval: true, Parameters: json.RawMessage(`{"type":"object","properties":{"request_id":{"type":"string","minLength":8,"maxLength":80},"receipt_only":{"type":"boolean"},"action":{"type":"string","enum":["turn","stop","connect","forward","go_to","remember","go_to_object"]},"degrees":{"type":"number"},"serial":{"type":"string"},"distance_meters":{"type":"number"},"destination":{"type":"string"},"evidence_id":{"type":"string"}},"required":["action","request_id"],"additionalProperties":false}`)}
+	return Tool{Name: "robot_command", Description: "Control robot. Reuse request_id on retries; a running receipt is not completion.", RequiresApproval: true, Parameters: json.RawMessage(`{"type":"object","properties":{"request_id":{"type":"string","minLength":8,"maxLength":80},"receipt_only":{"type":"boolean"},"action":{"type":"string","enum":["turn","stop","connect","localize","forward","go_to","remember","go_to_object"]},"degrees":{"type":"number"},"serial":{"type":"string"},"distance_meters":{"type":"number"},"destination":{"type":"string"},"evidence_id":{"type":"string"}},"required":["action","request_id"],"additionalProperties":false}`)}
 }
 
 func robotTurnContext() context.Context {
