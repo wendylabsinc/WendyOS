@@ -747,21 +747,20 @@ type UnassignDeviceRequest struct {
 	// postbox. Rules: conformance/postbox-entry/README.md.
 	ValidUntil *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=valid_until,json=validUntil,proto3" json:"valid_until,omitempty"`
 	// Never 0. Two cases:
-	//   - TERMINAL removal: the deployment itself ends (RemoveDeployment, or
-	//     DeleteApp's device_removals). Carries the maximum revision, 2147483647,
-	//     whatever revision cloud records the removal as. The deployment is then
-	//     permanently dead on the device, whatever cloud later claims about
-	//     revisions. Deployment ids are never reused, so nothing is lost.
-	//   - NON-terminal removal: a revision takes this device out of a deployment
-	//     that lives on (an update that shrinks the device set). Carries the
-	//     deployment's current revision when it is signed: the revision that
-	//     dropped the device, or a later one if that removal was not sent before
-	//     another revision followed. The device may legitimately be put back into
-	//     the same deployment by a later revision. Cloud refuses any other
-	//     revision, and the maximum outside RemoveDeployment and DeleteApp.
-	//     (The old side of a move is also non-terminal; it travels as
-	//     DeviceAssignment.replaces_revision, not as an Unassign.)
-	//
+	// - TERMINAL removal: the deployment itself ends (RemoveDeployment, or
+	//   DeleteApp's device_removals). Carries the maximum revision, 2147483647,
+	//   whatever revision cloud records the removal as. The deployment is then
+	//   permanently dead on the device, whatever cloud later claims about
+	//   revisions. Deployment ids are never reused, so nothing is lost.
+	// - NON-terminal removal: a revision takes this device out of a deployment
+	//   that lives on (an update that shrinks the device set). Carries the
+	//   deployment's current revision when it is signed: the revision that
+	//   dropped the device, or a later one if that removal was not sent before
+	//   another revision followed. The device may legitimately be put back into
+	//   the same deployment by a later revision. Cloud refuses any other
+	//   revision, and the maximum outside RemoveDeployment and DeleteApp.
+	//   (The old side of a move is also non-terminal; it travels as
+	//   DeviceAssignment.replaces_revision, not as an Unassign.)
 	// The device applies it when it is above its mark for deployment_id and
 	// records it as a removal mark (DeviceAssignment rules); one equal to a
 	// removal mark is a duplicate, consumed without effect; anything else is

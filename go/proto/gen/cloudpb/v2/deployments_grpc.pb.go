@@ -103,24 +103,22 @@ type DeploymentServiceClient interface {
 	// every device whose last statement cloud has received differs from the
 	// current revision in content (release, configuration, desired state,
 	// membership), not merely in revision number:
-	//   - a device in the current set: an Assign at the current revision;
-	//   - a device outside the current set that still holds an older revision,
-	//     also one a superseded revision dropped before its removal was sent: an
-	//     Unassign at the current revision;
-	//   - a removed deployment: its outstanding terminal removals (maximum
-	//     revision);
-	//   - never a device whose move out of this deployment has been recorded:
-	//     the move statement is its removal;
-	//
+	// - a device in the current set: an Assign at the current revision;
+	// - a device outside the current set that still holds an older revision,
+	//   also one a superseded revision dropped before its removal was sent: an
+	//   Unassign at the current revision;
+	// - a removed deployment: its outstanding terminal removals (maximum
+	//   revision);
+	// - never a device whose move out of this deployment has been recorded:
+	//   the move statement is its removal;
 	// By app_id it is a different list: before an app delete starts and while
 	// it runs, every device in the app's removal set that is not yet covered
 	// by a removal or a detach (DeleteAppRequest). A client reads this before
 	// it sends its first DeleteApp batch. By app_id the read requires the
 	// right to delete the app. The row kind says what the caller may sign:
-	//   - KIND_UNASSIGN (maximum revision): the caller can reach the device.
-	//     Removal is the default; detach is the operator's choice per device.
-	//   - KIND_DETACH: the caller cannot reach the device; detach only.
-	//
+	// - KIND_UNASSIGN (maximum revision): the caller can reach the device.
+	//   Removal is the default; detach is the operator's choice per device.
+	// - KIND_DETACH: the caller cannot reach the device; detach only.
 	// A KIND_DETACH row is the only place a device the caller cannot otherwise
 	// see is listed. It is listed only because the app was sent to it (the
 	// removal set), and it reveals only `device` (its SPIFFE URI) and
@@ -491,24 +489,22 @@ type DeploymentServiceServer interface {
 	// every device whose last statement cloud has received differs from the
 	// current revision in content (release, configuration, desired state,
 	// membership), not merely in revision number:
-	//   - a device in the current set: an Assign at the current revision;
-	//   - a device outside the current set that still holds an older revision,
-	//     also one a superseded revision dropped before its removal was sent: an
-	//     Unassign at the current revision;
-	//   - a removed deployment: its outstanding terminal removals (maximum
-	//     revision);
-	//   - never a device whose move out of this deployment has been recorded:
-	//     the move statement is its removal;
-	//
+	// - a device in the current set: an Assign at the current revision;
+	// - a device outside the current set that still holds an older revision,
+	//   also one a superseded revision dropped before its removal was sent: an
+	//   Unassign at the current revision;
+	// - a removed deployment: its outstanding terminal removals (maximum
+	//   revision);
+	// - never a device whose move out of this deployment has been recorded:
+	//   the move statement is its removal;
 	// By app_id it is a different list: before an app delete starts and while
 	// it runs, every device in the app's removal set that is not yet covered
 	// by a removal or a detach (DeleteAppRequest). A client reads this before
 	// it sends its first DeleteApp batch. By app_id the read requires the
 	// right to delete the app. The row kind says what the caller may sign:
-	//   - KIND_UNASSIGN (maximum revision): the caller can reach the device.
-	//     Removal is the default; detach is the operator's choice per device.
-	//   - KIND_DETACH: the caller cannot reach the device; detach only.
-	//
+	// - KIND_UNASSIGN (maximum revision): the caller can reach the device.
+	//   Removal is the default; detach is the operator's choice per device.
+	// - KIND_DETACH: the caller cannot reach the device; detach only.
 	// A KIND_DETACH row is the only place a device the caller cannot otherwise
 	// see is listed. It is listed only because the app was sent to it (the
 	// removal set), and it reveals only `device` (its SPIFFE URI) and
