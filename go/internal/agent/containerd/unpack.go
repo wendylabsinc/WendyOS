@@ -26,6 +26,8 @@ import (
 // happy path releases the lease on return.
 const unpackLeaseExpiration = 30 * time.Minute
 
+const unpackCleanupTimeout = 5 * time.Second
+
 // UnpackProgress reports progress during the image unpack operation.
 type UnpackProgress struct {
 	// Phase is one of "start", "layer-start", "layer", "complete".
@@ -222,9 +224,8 @@ func (c *Client) imageUnpacked(ctx context.Context, img containerd.Image) (bool,
 func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress func(UnpackProgress)) error {
 	ctx = c.withNamespace(ctx)
 
-	// cleanupCtx is used for best-effort `Remove` calls so a cancelled caller
-	// doesn't also cancel cleanup. The namespace is required by containerd
-	// services even off the happy path.
+	// Best-effort cleanup keeps the namespace when the caller is canceled.
+	// Each cleanup RPC gets its own timeout when the work reaches that RPC.
 	cleanupCtx := c.withNamespace(context.Background())
 
 	ctx, doneLease, err := c.client.WithLease(ctx, leases.WithExpiration(unpackLeaseExpiration))
@@ -232,7 +233,9 @@ func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress
 		return fmt.Errorf("creating unpack lease: %w", err)
 	}
 	defer func() {
-		if err := doneLease(cleanupCtx); err != nil {
+		ctx, cancel := context.WithTimeout(cleanupCtx, unpackCleanupTimeout)
+		defer cancel()
+		if err := doneLease(ctx); err != nil {
 			c.logger.Warn("Failed to release unpack lease; relying on expiration backstop",
 				zap.Duration("expiration", unpackLeaseExpiration),
 				zap.Error(err),
@@ -479,6 +482,8 @@ func (c *Client) applyLayerSnapshotAttempt(
 // logging at Warn for any failure other than NotFound (which is benign — the
 // key was never created or has already been swept).
 func (c *Client) removeActiveSnapshot(ctx context.Context, sn snapshots.Snapshotter, key, reason string, layer int) {
+	ctx, cancel := context.WithTimeout(ctx, unpackCleanupTimeout)
+	defer cancel()
 	if err := sn.Remove(ctx, key); err != nil && !errdefs.IsNotFound(err) {
 		c.logger.Warn("Failed to remove active snapshot",
 			zap.String("active_key", key),
