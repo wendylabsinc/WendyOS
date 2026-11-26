@@ -53,10 +53,8 @@ func (r *Replica) Checkpoint() (Checkpoint, error) {
 		}
 		s.Entries = append(s.Entries, CheckpointEntry{Component: cloneComponent(e.component), ExpiresAt: e.expires.Round(0)})
 	}
-	sort.Slice(s.Entries, func(i, j int) bool {
-		return keyString(s.Entries[i].Component.Key) < keyString(s.Entries[j].Component.Key)
-	})
-	sort.Slice(s.Fences, func(i, j int) bool { return keyString(s.Fences[i].Key) < keyString(s.Fences[j].Key) })
+	sortByKey(s.Entries, func(e CheckpointEntry) Key { return e.Component.Key })
+	sortByKey(s.Fences, func(f CheckpointFence) Key { return f.Key })
 	return s, nil
 }
 
@@ -133,7 +131,13 @@ func (r *Replica) Clone() (*Replica, error) {
 		out.frames[k] = v
 	}
 	for k, v := range r.entries {
-		v.component = cloneComponent(v.component)
+		if v.fenced {
+			// Restored fences bypass record admission and may not have passed
+			// JSON normalization yet. Preserve the transaction clone boundary.
+			v.component = normalizeComponent(v.component)
+		} else {
+			v.component = cloneComponent(v.component)
+		}
 		out.entries[k] = v
 	}
 	return out, nil
@@ -167,7 +171,7 @@ func (r *Replica) Records() ([]Component, error) {
 		}
 		result = append(result, c)
 	}
-	sort.Slice(result, func(i, j int) bool { return keyString(result[i].Key) < keyString(result[j].Key) })
+	sortByKey(result, func(c Component) Key { return c.Key })
 	return result, nil
 }
 

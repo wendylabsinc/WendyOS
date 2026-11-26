@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 )
@@ -218,7 +218,7 @@ func (r *Replica) Apply(authenticated Source, c Component) (Result, error) {
 	} else if len(r.entries) >= r.config.MaxEntries {
 		return "", ErrCapacity
 	}
-	r.entries[c.Key] = entry{component: cloneComponent(c), identity: identity, expires: expires}
+	r.entries[c.Key] = entry{component: normalizeComponent(c), identity: identity, expires: expires}
 	return Applied, nil
 }
 
@@ -271,11 +271,14 @@ func (r *Replica) Snapshot() ([]Component, error) {
 			out = append(out, cloneComponent(e.component))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return keyString(out[i].Key) < keyString(out[j].Key) })
+	sortByKey(out, func(c Component) Key { return c.Key })
 	return out, nil
 }
 func keyString(k Key) string { b, _ := json.Marshal(k); return string(b) }
-func cloneComponent(c Component) Component {
+
+// normalizeComponent owns and normalizes newly admitted input exactly as the
+// persisted JSON format does. Retained records already passed this boundary.
+func normalizeComponent(c Component) Component {
 	b, err := json.Marshal(c)
 	if err != nil {
 		panic(fmt.Sprintf("validated component clone: %v", err))
@@ -285,4 +288,26 @@ func cloneComponent(c Component) Component {
 		panic(err)
 	}
 	return out
+}
+
+// cloneComponent copies an already-normalized retained record without encoding
+// and parsing it again. Every mutable payload and ancestry pointer is owned.
+func cloneComponent(c Component) Component {
+	c.Payload = slices.Clone(c.Payload)
+	c.Provenance.Simulation = cloneValue(c.Provenance.Simulation)
+	c.Provenance.OriginalCaptureTime = cloneValue(c.Provenance.OriginalCaptureTime)
+	c.Provenance.Inputs = slices.Clone(c.Provenance.Inputs)
+	for i := range c.Provenance.Inputs {
+		p := &c.Provenance.Inputs[i]
+		p.Simulation = cloneValue(p.Simulation)
+		p.OriginalCaptureTime = cloneValue(p.OriginalCaptureTime)
+	}
+	return c
+}
+func cloneValue[T any](v *T) *T {
+	if v == nil {
+		return nil
+	}
+	copy := *v
+	return &copy
 }

@@ -177,13 +177,22 @@ func build(entities []spatial.Entity, cfg Config, maps map[spatial.FloorID]*floo
 		byFloor: map[spatial.FloorID]*floorIndex{}, byID: map[string][]int32{},
 	}
 	rows := map[spatial.FloorID][]int32{}
+	// Most IDs identify one row. Give those buckets a shared backing array
+	// instead of allocating a separate one-element slice for every entity.
+	// Cap each slice at one so duplicate IDs cannot overwrite another bucket.
+	ids := make([]int32, len(ix.ents))
 	for i := range ix.ents {
 		e := &ix.ents[i]
 		if err := e.Validate(); err != nil {
 			return nil, invalid("entity %d (%s): %v", i, e.Key(), err)
 		}
 		rows[e.Floor] = append(rows[e.Floor], int32(i))
-		ix.byID[e.ID] = append(ix.byID[e.ID], int32(i))
+		if existing := ix.byID[e.ID]; len(existing) == 0 {
+			ids[i] = int32(i)
+			ix.byID[e.ID] = ids[i : i+1 : i+1]
+		} else {
+			ix.byID[e.ID] = append(existing, int32(i))
+		}
 		if e.Kind == spatial.EntityRegion && len(e.Extent.Polygon) > 0 {
 			ix.regions = append(ix.regions, int32(i))
 		}

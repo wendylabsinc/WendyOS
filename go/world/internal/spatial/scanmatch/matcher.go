@@ -1,8 +1,10 @@
 package scanmatch
 
 import (
+	"cmp"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"sync"
 
@@ -200,18 +202,19 @@ type node struct {
 	k, i, j int32
 }
 
-func nodeLess(a, b node) bool {
+func nodeCompare(a, b node) int {
 	if a.score != b.score {
-		return a.score > b.score
+		return cmp.Compare(b.score, a.score)
 	}
 	if a.k != b.k {
-		return a.k < b.k
+		return cmp.Compare(a.k, b.k)
 	}
 	if a.j != b.j {
-		return a.j < b.j
+		return cmp.Compare(a.j, b.j)
 	}
-	return a.i < b.i
+	return cmp.Compare(a.i, b.i)
 }
+func nodeLess(a, b node) bool { return nodeCompare(a, b) < 0 }
 
 // lattice is one branch-and-bound search over sensor cells and headings.
 // Cell coordinates are raster indices of the pyramid.
@@ -344,12 +347,20 @@ func (c Config) newLattice(pyr *grid.Pyramid, pts []geom.Vec2, far float64, lo, 
 		return nil, fmt.Errorf("%w: search window of %d headings × %d blocks", ErrConfig, len(l.yaws), blocks)
 	}
 	l.offsets = make([][]int32, len(l.yaws))
+	// All headings own a disjoint part of one allocation. The trigonometric
+	// transform is constant for every point at a given heading.
+	if len(pts) > math.MaxInt/2/len(l.yaws) {
+		return nil, fmt.Errorf("%w: scan offset table too large", ErrConfig)
+	}
+	stride := 2 * len(pts)
+	offsets := make([]int32, len(l.yaws)*stride)
 	for k, a := range l.yaws {
-		off := make([]int32, 0, 2*len(pts))
-		for _, q := range pts {
-			r := q.Rotate(a)
+		off := offsets[k*stride : (k+1)*stride : (k+1)*stride]
+		s, c := math.Sincos(a)
+		for i, q := range pts {
+			x, z := c*q.X-s*q.Z, s*q.X+c*q.Z
 			// The sensor sits at a cell centre, hence the half cell.
-			off = append(off, int32(math.Floor(r.X/pyr.CellSize+0.5)), int32(math.Floor(r.Z/pyr.CellSize+0.5)))
+			off[2*i], off[2*i+1] = int32(math.Floor(x/pyr.CellSize+0.5)), int32(math.Floor(z/pyr.CellSize+0.5))
 		}
 		l.offsets[k] = off
 	}
@@ -380,7 +391,7 @@ func (l *lattice) candidates(minScore, ratio float64, maxRivals int) []node {
 			}
 		}
 	}
-	sort.Slice(top, func(a, b int) bool { return nodeLess(top[a], top[b]) })
+	slices.SortFunc(top, nodeCompare)
 	best, ok := l.pass(top, minimum)
 	if !ok {
 		return nil

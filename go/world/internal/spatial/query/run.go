@@ -326,6 +326,18 @@ func (ix *Index) Run(q Query) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	order := q.Order
+	if order == OrderDefault {
+		order = OrderKey
+		if p.origin != nil {
+			order = OrderDistance
+		}
+	}
+	compare := ix.compare(order, q.Descending)
+	keep := 0
+	if q.Nearest == 0 && q.Limit > 0 && q.Limit < len(ix.ents) {
+		keep = q.Limit
+	}
 	var res Result
 	var found []cand
 	nearest := ix.compare(OrderDistance, false)
@@ -335,26 +347,21 @@ func (ix *Index) Run(q Query) (Result, error) {
 		found = ix.nearest(p, f, &res)
 	case p.oneFloor:
 		if f != nil {
-			found = ix.scan(p, f, found, &res)
+			found = ix.scan(p, f, found, &res, keep, compare)
 		}
 	default:
 		for _, f := range ix.floors {
-			found = ix.scan(p, f, found, &res)
+			found = ix.scan(p, f, found, &res, keep, compare)
 		}
 	}
 	if q.Nearest > 0 && len(found) > q.Nearest {
 		slices.SortFunc(found, nearest)
 		found = found[:q.Nearest]
 	}
-	order := q.Order
-	if order == OrderDefault {
-		order = OrderKey
-		if p.origin != nil {
-			order = OrderDistance
-		}
+	slices.SortFunc(found, compare)
+	if q.Nearest > 0 {
+		res.Total = len(found)
 	}
-	slices.SortFunc(found, ix.compare(order, q.Descending))
-	res.Total = len(found)
 	if q.Limit > 0 && len(found) > q.Limit {
 		found = found[:q.Limit]
 	}
@@ -373,7 +380,7 @@ func (ix *Index) Run(q Query) (Result, error) {
 }
 
 // scan evaluates the rows of one floor that lie in the plan's window.
-func (ix *Index) scan(p *plan, f *floorIndex, found []cand, res *Result) []cand {
+func (ix *Index) scan(p *plan, f *floorIndex, found []cand, res *Result, keep int, compare func(cand, cand) int) []cand {
 	w := p.window
 	for _, set := range p.sets {
 		box := rect{math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)}
@@ -393,7 +400,12 @@ func (ix *Index) scan(p *plan, f *floorIndex, found []cand, res *Result) []cand 
 		for _, row := range f.items[f.start[iz*f.cols+ix0]:f.start[iz*f.cols+ix1+1]] {
 			res.Examined++
 			if c, ok := ix.match(p, row, nil); ok {
-				found = append(found, c)
+				res.Total++
+				if keep > 0 {
+					found = retainBest(found, c, keep, compare)
+				} else {
+					found = append(found, c)
+				}
 			}
 		}
 	}
