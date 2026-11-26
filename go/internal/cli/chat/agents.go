@@ -78,9 +78,11 @@ type Session struct {
 	tools  *Tools
 }
 type SessionOptions struct {
-	SystemInstructions                             string
-	DelegationDepth                                int
-	Config                                         Config
+	SystemInstructions string
+	DelegationDepth    int
+	Config             Config
+	// ProviderFactory pins inference to an authenticated local device, including delegates.
+	ProviderFactory                                func(Config) (Provider, error)
 	Profile                                        Profile
 	Executable, Workspace, Device, MemoryDirectory string
 	NoMemory                                       bool
@@ -100,7 +102,7 @@ func NewSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	if err := ValidatePeers(opts.Peers); err != nil {
 		return nil, err
 	}
-	provider, err := NewProvider(opts.Config)
+	provider, err := sessionProvider(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +263,7 @@ func (s *agentSupervisor) child(ctx context.Context, opts SessionOptions, parent
 	if s.factory != nil {
 		return s.factory(ctx, opts, parent)
 	}
-	provider, err := NewProvider(opts.Config)
+	provider, err := sessionProvider(opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -419,4 +421,11 @@ func (s *serializedTools) ExecuteResult(ctx context.Context, c ToolCall) (ToolRe
 	}
 	v, e := s.base.Execute(ctx, c)
 	return ToolResult{Text: v}, e
+}
+
+func sessionProvider(opts SessionOptions) (Provider, error) {
+	if opts.ProviderFactory != nil {
+		return opts.ProviderFactory(opts.Config)
+	}
+	return NewProvider(opts.Config)
 }

@@ -19,7 +19,7 @@ var toolGroups = map[string][]string{
 	"setup": {"device_set_default", "project_validate", "os_install_plan", "os_list_drives", "os_install_start", "os_install_status", "os_install_resume", "os_install_verify", "os_update", "os_update_status", "device_update_agent",
 		"cloud_enroll_device", "provisioning_start", "provisioning_status", "wifi_list", "wifi_connect", "wifi_disconnect", "wifi_status", "wifi_known_networks"},
 	"hardware":      {"bluetooth_scan", "bluetooth_connect", "bluetooth_disconnect", "camera_list", "camera_controls", "camera_set_control", "camera_snapshot"},
-	"robotics":      {"unitree_pairings", "robot_status", "robot_command", "ros2_topics", "ros2_topic_info", "ros2_topic_sample", "ros2_topic_hz", "ros2_lidar_summary"},
+	"robotics":      {"unitree_pairings", "robot_status", "robot_command", "robot_camera_snapshot", "robot_find_object", "ros2_topics", "ros2_topic_info", "ros2_topic_sample", "ros2_topic_hz", "ros2_lidar_summary"},
 	"observability": {"telemetry_metrics", "telemetry_traces", "app_inspect", "device_os_logs", "job_inspect", "job_artifacts_pull", "compute_status", "job_submit", "checkpoint_inspect", "experiment_plan"},
 	"simulator":     {"simulator_list", "simulator_create", "simulator_start", "simulator_stop", "simulator_delete"},
 	"cloud":         {"cloud_discover", "cloud_connect", "cloud_tunnel", "cloud_tunnel_list", "cloud_tunnel_close", "cloud_ping"},

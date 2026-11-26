@@ -17,11 +17,13 @@ type robotCommander interface {
 }
 
 type robotCommandRequest struct {
-	Serial      string `json:"serial"`
-	Action      string `json:"action"`
-	RequestID   string `json:"request_id,omitempty"`
-	Destination string `json:"destination,omitempty"`
-	Degrees     int    `json:"degrees,omitempty"`
+	EvidenceID     string  `json:"evidence_id,omitempty"`
+	Serial         string  `json:"serial"`
+	Action         string  `json:"action"`
+	RequestID      string  `json:"request_id,omitempty"`
+	Destination    string  `json:"destination,omitempty"`
+	Degrees        int     `json:"degrees,omitempty"`
+	DistanceMeters float64 `json:"distance_meters,omitempty"`
 }
 
 // The chat transport reaches this through the selected agent's authenticated
@@ -53,8 +55,8 @@ func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]any{"snapshot": state, "destinations": places}, nil)
 		return
 	}
-	if q.Action != "stop" && q.Action != "turn" && q.Action != "go_to" && q.Action != "remember" {
-		respond(w, nil, errors.New("choose status, stop, turn, go_to, or remember"))
+	if q.Action != "stop" && q.Action != "turn" && q.Action != "go_to" && q.Action != "remember" && q.Action != "forward" && q.Action != "go_to_object" {
+		respond(w, nil, errors.New("choose status, stop, turn, forward, go_to, go_to_object, or remember"))
 		return
 	}
 	if len(q.RequestID) < 8 || len(q.RequestID) > 80 {
@@ -118,7 +120,15 @@ func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
 		reject("A search is active. Stop it before issuing another goal.")
 		return
 	}
-	command := twinrobot.Command{Action: q.Action, Degrees: q.Degrees}
+	command := twinrobot.Command{Action: q.Action, Degrees: q.Degrees, DistanceMeters: q.DistanceMeters}
+	if q.Action == "go_to_object" {
+		var err error
+		command, err = objectEvidenceCommand(session, q.EvidenceID)
+		if err != nil {
+			reject(err.Error())
+			return
+		}
+	}
 	if q.Action == "go_to" || q.Action == "remember" {
 		name := strings.TrimSpace(q.Destination)
 		if name == "" || len(name) > 80 || strings.ContainsFunc(name, unicode.IsControl) {

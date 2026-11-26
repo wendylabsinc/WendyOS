@@ -22,6 +22,8 @@ type discoveryMove struct {
 	origin, target                        sitenav.Point
 	yaw, progress                         float64
 	progressAt                            time.Time
+	epoch                                 uint64
+	relative                              bool
 	turning                               bool
 	startYaw, turnDirection, turnProgress float64
 }
@@ -74,6 +76,7 @@ func (r *SiteRobot) DiscoveryStep(sequence, root uint64) error {
 	r.clearMotionFailureLocked()
 	history.starts++
 	move.progressAt = now
+	move.epoch = r.poseEpoch
 	r.discoveryMove = move
 	r.discoveryState = 1
 	r.departure = departure
@@ -151,8 +154,12 @@ func discoveryClearanceError(grid sitenav.Grid, start, target sitenav.Point, yaw
 func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 	move := r.discoveryMove
 	p := r.observed.Pose
-	if now.Sub(r.started) > 12*time.Second || now.Sub(move.progressAt) > 2*time.Second || r.discoveryHistory.epoch != r.poseEpoch {
-		r.message = "Discovery stopped: no timely progress or odometry changed."
+	operation := "Discovery"
+	if move.relative {
+		operation = "Forward movement"
+	}
+	if now.Sub(r.started) > 12*time.Second || now.Sub(move.progressAt) > 2*time.Second || move.epoch != r.poseEpoch {
+		r.message = operation + " stopped: no timely progress or odometry changed."
 		r.stopLocked()
 		return
 	}
@@ -166,14 +173,18 @@ func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 	lateral := math.Abs(-dx*math.Sin(move.yaw) + dy*math.Cos(move.yaw))
 	if lateral > .06 || math.Abs(math.Remainder(p.Yaw-move.yaw, 2*math.Pi)) > .1 ||
 		progress < -.05 || progress > distance+.1 {
-		r.message = "Discovery stopped: unexpected drift or odometry change."
+		r.message = operation + " stopped: unexpected drift or odometry change."
 		r.stopLocked()
 		return
 	}
 	if progress >= distance-.025 {
 		r.discoveryState = 2
-		r.discoveryHistory.visited = append(r.discoveryHistory.visited, p.Position)
-		r.message = "New viewpoint reached. Gathering fresh observations."
+		if move.relative {
+			r.message = "Forward distance reached."
+		} else {
+			r.discoveryHistory.visited = append(r.discoveryHistory.visited, p.Position)
+			r.message = "New viewpoint reached. Gathering fresh observations."
+		}
 		if r.stopLocked() != nil {
 			r.discoveryState = 3
 		}
@@ -183,12 +194,12 @@ func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 		move.progress, move.progressAt = progress, now
 	}
 	if err := discoveryClearanceError(r.observed.Grid.WithDeparture(r.departure), p.Position, move.target, p.Yaw); err != nil {
-		r.message = "Discovery stopped: " + err.Error()
+		r.message = operation + " stopped: " + err.Error()
 		r.stopForObservationLossLocked()
 		return
 	}
 	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, discoverySpeed, 0); err != nil {
-		r.message = siteCommandFailure("Discovery movement", err)
+		r.message = siteCommandFailure(operation, err)
 		r.stopLocked()
 	}
 }
