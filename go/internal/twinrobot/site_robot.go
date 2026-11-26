@@ -28,25 +28,29 @@ type SiteRobotSnapshot struct {
 	// Message retains the operation's terminal reason for existing search and
 	// UI consumers. These fields distinguish current measurement readiness
 	// from an earlier aborted movement without acknowledging that failure.
-	ReadinessMessage, LastMotionFailure                  string
-	PoseReceivedAgeMS, PoseCaptureAgeMS, ScanAgeMS       *float64
-	LastCloudProcessingMS, LastObservationLockWaitMS     float64
-	LastObservationTopic                                 string
-	LatestObservationFault                               *SiteObservationFault
-	ControlWarning                                       string
-	Pose, Ready, Aligned, Moving                         bool
-	ArrivalTiming, UsingArrivalTiming, TimingUnavailable bool
-	ScanReady, MeasurementsReady                         bool
-	UnderBodyAllowance                                   bool
-	AllowUnobservedFloor                                 bool
-	X, Z, Yaw, FloorY                                    float64
-	ObservationRevision                                  uint64
-	ScanReceivedUnixNanos                                int64
-	MotionRecoveryAllowed                                bool
-	Route                                                []sitenav.Point // site X, -Z
-	Joints                                               []float64
-	Hazards                                              []SiteRobotHazard
-	HazardsReady                                         bool
+	ReadinessMessage, LastMotionFailure                    string
+	IdleMeasurementsReady                                  bool
+	IdleReadinessMessage                                   string
+	PoseReceivedAgeMS, PoseCaptureAgeMS, ScanAgeMS         *float64
+	LastCloudProcessingMS, LastObservationLockWaitMS       float64
+	LastObservationTopic                                   string
+	CoalescedCloudObservations, CoalescedJointObservations uint64
+	ObservationPoseQueuePeak                               int
+	LatestObservationFault                                 *SiteObservationFault
+	ControlWarning                                         string
+	Pose, Ready, Aligned, Moving                           bool
+	ArrivalTiming, UsingArrivalTiming, TimingUnavailable   bool
+	ScanReady, MeasurementsReady                           bool
+	UnderBodyAllowance                                     bool
+	AllowUnobservedFloor                                   bool
+	X, Z, Yaw, FloorY                                      float64
+	ObservationRevision                                    uint64
+	ScanReceivedUnixNanos                                  int64
+	MotionRecoveryAllowed                                  bool
+	Route                                                  []sitenav.Point // site X, -Z
+	Joints                                                 []float64
+	Hazards                                                []SiteRobotHazard
+	HazardsReady                                           bool
 }
 
 type SiteRobotHazard struct {
@@ -99,6 +103,9 @@ type SiteRobot struct {
 	lastCloudProcessingMS           float64
 	lastObservationLockWaitMS       float64
 	lastObservationTopic            string
+	coalescedCloudObservations      uint64
+	coalescedJointObservations      uint64
+	observationPoseQueuePeak        int
 	latestObservationFault          *SiteObservationFault
 	stopUnconfirmed                 bool
 	underBodyAllowance              bool
@@ -174,27 +181,30 @@ func Open(ctx context.Context, conn grpc.ClientConnInterface, serial string) (*S
 func (r *SiteRobot) receiveObservations(stream interface {
 	Recv() (*pb.UnitreeStreamMessage, error)
 }) {
-	defer r.cancel()
+	mailbox := newObservationMailbox()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.processObservationMailbox(mailbox)
+	}()
+	defer func() {
+		mailbox.close("")
+		<-done
+		r.cancel()
+	}()
 	for {
 		m, err := stream.Recv()
 		if err != nil {
-			r.mu.Lock()
-			if r.ctx.Err() == nil {
-				r.disconnectStreamLocked("Go2 observation stream disconnected. Reconnect to receive telemetry.")
-			}
-			r.mu.Unlock()
+			mailbox.close("Go2 observation stream disconnected. Reconnect to receive telemetry.")
 			return
 		}
 		t := m.GetTopic()
 		if t == nil {
 			continue
 		}
-		waiting := time.Now()
-		r.mu.Lock()
-		r.lastObservationLockWaitMS = time.Since(waiting).Seconds() * 1000
-		r.lastObservationTopic = t.Topic
-		r.receiveObservationLocked(t.Topic, t.Data, t.Binary, time.Unix(0, t.ReceivedUnixNanos), time.Now())
-		r.mu.Unlock()
+		if !mailbox.push(t) {
+			return
+		}
 	}
 }
 
@@ -818,6 +828,9 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	s.LastCloudProcessingMS = r.lastCloudProcessingMS
 	s.LastObservationLockWaitMS = r.lastObservationLockWaitMS
 	s.LastObservationTopic = r.lastObservationTopic
+	s.CoalescedCloudObservations = r.coalescedCloudObservations
+	s.CoalescedJointObservations = r.coalescedJointObservations
+	s.ObservationPoseQueuePeak = r.observationPoseQueuePeak
 	if r.latestObservationFault != nil {
 		fault := *r.latestObservationFault
 		fault.PoseAgeMS = copyObservationAge(fault.PoseAgeMS)
@@ -837,6 +850,7 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 			s.Message = "Go2 connection closed."
 		}
 		s.ReadinessMessage = s.Message
+		s.IdleReadinessMessage = s.ReadinessMessage
 		return s
 	}
 	s.LookState = r.lookState
@@ -862,6 +876,21 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 		s.ReadinessMessage = measurementErr.Error()
 	default:
 		s.ReadinessMessage = "Fresh Go2 odometry and LiDAR measurements."
+	}
+	idleErr := r.observed.IdleMeasurementsReady(now)
+	switch {
+	case r.stopUnconfirmed:
+		s.IdleReadinessMessage = stopUnconfirmedMessage
+	case r.moving || r.intentActive:
+		s.IdleReadinessMessage = "Idle observation tolerance is unavailable while a movement goal is active."
+	case idleErr != nil:
+		s.IdleReadinessMessage = idleErr.Error()
+	default:
+		s.IdleMeasurementsReady = true
+		s.IdleReadinessMessage = s.ReadinessMessage
+		if !s.MeasurementsReady {
+			s.IdleReadinessMessage = "Idle observations are available with older odometry; movement still requires fresh odometry."
+		}
 	}
 	s.ScanReady = (r.observed.SurfaceReady(now) == nil || r.observed.LocalizationReady(now) == nil) && !r.closed && !r.stopUnconfirmed
 	if err := r.observed.Ready(now); err == nil {
@@ -896,7 +925,7 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	} else if r.motionFailure != "" && (r.lookState == 3 || r.discoveryState == 3) {
 		s.Message = r.motionFailure
 	}
-	if s.Pose && s.Aligned {
+	if (s.Pose || s.IdleMeasurementsReady) && s.Aligned {
 		p := r.alignment.ToSite(r.observed.Pose.Position)
 		s.X = p.X
 		s.Z = -p.Y

@@ -150,3 +150,34 @@ func TestLatestObservationFaultIsAvailableWithoutDiskOrChangingReadiness(t *test
 		t.Fatalf("cloud processing timing or historical evidence missing: %+v", status)
 	}
 }
+
+func TestIdleReadinessSupportsAcceptedPoseScanPairWithoutPermittingMotion(t *testing.T) {
+	r, commands := readySiteRobot()
+	now := time.Now()
+	// These samples could have passed normal reception together: the pose was
+	// 150ms old when the scan arrived. Later, the pose expires before the scan.
+	r.observed.Pose.Received, r.observed.Pose.Captured = now.Add(-850*time.Millisecond), now.Add(-850*time.Millisecond)
+	r.observed.CloudAt = now.Add(-700 * time.Millisecond)
+	r.observed.Pose.Position.X = .5
+	stamp := r.observed.Pose.Received
+	position := r.alignment.ToSite(r.observed.Pose.Position)
+	status := r.Status()
+	if status.MeasurementsReady || status.Pose || status.Ready || !status.IdleMeasurementsReady || status.X != position.X || status.Z != -position.Y {
+		t.Fatalf("idle location missing or relaxed readiness authorized motion: %+v", status)
+	}
+	if !strings.Contains(status.IdleReadinessMessage, "movement still requires fresh odometry") {
+		t.Fatal("idle tolerance did not explain stricter movement requirements")
+	}
+	if result := r.ExecuteCommand(context.Background(), Command{Action: "turn", Degrees: 60}); result.State != "rejected" || len(commands.commands) != 0 {
+		t.Fatal("idle measurements permitted movement", result)
+	}
+	if r.observed.Pose.Received != stamp {
+		t.Fatal("idle status rewrote freshness timestamps")
+	}
+	for _, active := range []string{"moving", "intent"} {
+		r.moving, r.intentActive = active == "moving", active == "intent"
+		if r.Status().IdleMeasurementsReady {
+			t.Fatalf("idle tolerance remained available during %s", active)
+		}
+	}
+}
