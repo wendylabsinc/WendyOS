@@ -266,8 +266,16 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 			if len(images) > 0 {
 				result = fmt.Sprintf("[%d image(s) attached for visual inspection.]\n%s", len(images), result)
 			}
+			modelResult := result
+			if callFailure == nil && turnErr == nil {
+				var outcome string
+				modelResult, outcome = robotResultEvidence(call, result)
+				if outcome != "" {
+					emit(Event{Type: "robot_outcome", Text: outcome, Call: &call})
+				}
+			}
 			result = truncateOutput(result)
-			e.messages = append(e.messages, Message{Role: "tool", ToolCallID: call.ID, Content: result, Images: images})
+			e.messages = append(e.messages, Message{Role: "tool", ToolCallID: call.ID, Content: truncateOutput(modelResult), Images: images})
 			e.trimImageHistory()
 			emit(Event{Type: "tool_result", Text: result, Call: &call})
 		}
