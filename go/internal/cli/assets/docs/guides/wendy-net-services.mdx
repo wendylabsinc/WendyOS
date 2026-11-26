@@ -159,12 +159,13 @@ jetson.wendy.internal:18080
 device-<device-uuid>.wendy.internal:18080
 ```
 
-The friendly name is scoped to the client's enrolled organization. Current
-device names are DNS labels of up to 63 characters. They start with a
-lowercase letter, use lowercase letters, digits, and hyphens, and end with a
-letter or digit. Hyphens are preserved, so `jetson-a` and `jetson--a` name
-different devices. The `device-<uuid>` form is reserved for identity-based
-lookup.
+The friendly name is scoped to the client's enrolled organization. Device
+names are registered as lowercase DNS labels of up to 63 characters. A label
+starts with a letter, uses ASCII letters, digits, and hyphens, and ends with
+a letter or digit. DNS queries are case-insensitive. Hyphens are preserved,
+so `jetson-a` and `jetson--a` name different devices. The `device-<uuid>` form
+is reserved for UUID lookups. Use it in app configuration that must survive
+a device rename.
 
 The agent checks the signed Wendy Net directory and the organization's
 authenticated Cloud roster for short friendly names. Older agents publish a
@@ -211,7 +212,8 @@ wendy cloud discover --all --json
 Find the destination by its `name` and copy the UUID in `pkiDeviceName`.
 For example, a device entry can contain
 `"pkiDeviceName": "00000000-0000-4000-8000-000000000001"`.
-If the field is missing, choose a destination with UUID-based enrollment.
+If `pkiDeviceName` is missing, use the `id` field if it contains a UUID.
+For a device with only a numeric ID, try the friendly-name check below.
 
 Confirm the enrolled client's `wendy.json` uses network mode `mesh` and
 `serviceCIDR` set to `10.99.0.0/16`. Inside its app container, set
@@ -228,14 +230,15 @@ reachability. If the lookup returns no address, check client enrollment,
 network mode, and short DNS support in the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
 
 For an offline friendly-name check, verify the destination agent's support
-for Cloud-registered name publication before running the next command. Run
-`wendy device info` against the destination to find its **Agent Version**.
-In the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases),
-look for the release that introduced short device DNS and Cloud-registered
-name publication (`cloud-name`) and compare it with the installed version.
+for Cloud-registered name publication before running the next command.
+Run [`wendy device info`](/docs/advanced/clients/wendy-cli/commands/device/info)
+against the destination and read **Agent Version** in the text output.
+Look for short device DNS and the `cloud-name` mDNS record in the
+[WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases)
+at or before that version.
 
-Once the UUID lookup works, check the destination's friendly name. Replace
-`jetson` in the examples with the target's enrolled DNS label.
+To check the destination's friendly name, replace `jetson` in the examples
+with the target's enrolled DNS label.
 
 ```sh
 getent ahostsv4 jetson.wendy.internal

@@ -15,7 +15,7 @@ The name must be a valid DNS label:
 
 - starts with a lowercase letter
 - contains only lowercase letters, digits, and hyphens
-- does not end with a hyphen
+- ends with a letter or digit
 - is at most 63 characters
 
 Device names are unique within a Wendy Cloud organization, compared without
@@ -28,7 +28,7 @@ be set, run the same command again to finish.
 On WendyOS agents with short device DNS support, a successful hostname change
 requests a Cloud roster refresh. After the agent receives the updated name, it
 publishes that name in the signed Wendy Net directory and the LAN mDNS
-`cloud-name` TXT record. The mDNS `name` record follows the local rename.
+`cloud-name` TXT record. The mDNS `name` record updates with the local rename.
 Other devices pick up the new `<name>.wendy.internal` alias as their directories
 or rosters refresh. The old alias can still resolve while a
 peer has an old binding or its app caches the previous DNS answer. Use
