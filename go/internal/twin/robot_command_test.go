@@ -30,7 +30,7 @@ func TestRobotCommandNamedDestinationsAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &commandRobot{state: twinrobot.SiteRobotSnapshot{Frame: room.Site.ID + "/" + room.Site.ModelRevision, Pose: true, Aligned: true, X: 1.25, Z: 2.5}}
+	r := &commandRobot{state: twinrobot.SiteRobotSnapshot{MeasurementsReady: true, Frame: room.Site.ID + "/" + room.Site.ModelRevision, Pose: true, Aligned: true, X: 1.25, Z: 2.5}}
 	s := &Server{Store: store}
 	h := s.Handler()
 	s.observers["go2"] = &robotSession{robot: r, serial: "go2"}
@@ -72,7 +72,7 @@ func TestRobotCommandNamedDestinationsAndRetry(t *testing.T) {
 
 func TestRobotCommandRejectsStaleMapAndSearch(t *testing.T) {
 	store, _ := NewStore(t.TempDir())
-	r := &commandRobot{}
+	r := &commandRobot{state: twinrobot.SiteRobotSnapshot{MeasurementsReady: true}}
 	s := &Server{Store: store}
 	h := s.Handler()
 	s.observers["go2"] = &robotSession{robot: r, serial: "go2"}
@@ -94,7 +94,7 @@ func TestRobotCommandRejectsStaleMapAndSearch(t *testing.T) {
 
 func TestRobotCommandForwardRetryAndObjectEvidence(t *testing.T) {
 	store, _ := NewStore(t.TempDir())
-	robot := &commandRobot{}
+	robot := &commandRobot{state: twinrobot.SiteRobotSnapshot{MeasurementsReady: true}}
 	s := &Server{Store: store}
 	h := s.Handler()
 	s.observers["go2"] = &robotSession{robot: robot, serial: "go2"}

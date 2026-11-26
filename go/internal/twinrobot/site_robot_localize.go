@@ -90,6 +90,10 @@ func sameLocalizationPose(a, b sitenav.Pose) bool {
 func (r *SiteRobot) ConfirmLocalization(sequence, matchSequence uint64, frame string, index int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.confirmLocalizationLocked(sequence, matchSequence, frame, index, false)
+}
+
+func (r *SiteRobot) confirmLocalizationLocked(sequence, matchSequence uint64, frame string, index int, idle bool) error {
 	if sequence <= r.commandSequence || r.commandSequence != matchSequence {
 		return errors.New("This robot order was superseded.")
 	}
@@ -108,7 +112,11 @@ func (r *SiteRobot) ConfirmLocalization(sequence, matchSequence uint64, frame st
 	}
 	ready := r.observed.LocalizationReady(time.Now())
 	if c.surfaceBased {
-		ready = r.observed.SurfaceReady(time.Now())
+		if idle {
+			ready = r.observed.IdleSurfaceReady(time.Now())
+		} else {
+			ready = r.observed.SurfaceReady(time.Now())
+		}
 	}
 	if err := ready; err != nil {
 		return err

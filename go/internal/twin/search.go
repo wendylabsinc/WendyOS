@@ -24,6 +24,9 @@ func (s *Server) startSearch(session *robotSession, q twinrobot.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := s.Store.SaveLocalizationGeometry(input); err != nil {
+		return err
+	}
 	input.Reference = room.References[session.serial]
 	ctx, cancel := context.WithTimeout(s.Context, 5*time.Minute)
 	session.searchMu.Lock()

@@ -32,6 +32,9 @@ type Site struct {
 	Cameras            []json.RawMessage `json:"cameras"`
 }
 type Room struct {
+	HasLocalizationGeometry bool                      `json:"hasLocalizationGeometry"`
+	LocalizationGeometry    *RoomLocalizationGeometry `json:"localizationGeometry,omitempty"`
+
 	HasModel     bool                         `json:"hasModel"`
 	HasVisualMap bool                         `json:"hasVisualMap"`
 	FloorTiles   []Point                      `json:"floorTiles,omitempty"`
@@ -188,6 +191,7 @@ func (s *Store) List() ([]Room, error) {
 		r.PointLayers = nil
 		r.LegacyPoints = nil
 		r.References = nil
+		r.LocalizationGeometry = nil
 		r.Sources = nil
 		result = append(result, r)
 	}
@@ -267,6 +271,8 @@ func (s *Store) Put(r Room) (Room, error) {
 		if !bytes.Equal(r.Model, old.Model) || !bytes.Equal(r.VisualMap, old.VisualMap) || r.Site.MetresPerModelUnit != old.Site.MetresPerModelUnit {
 			return r, errors.New("room geometry and scale are immutable; contribute registered observations or create a new room")
 		}
+		r.LocalizationGeometry = old.LocalizationGeometry
+		r.HasLocalizationGeometry = old.HasLocalizationGeometry
 		r.HasModel = old.HasModel
 		r.HasVisualMap = old.HasVisualMap
 		r.References = old.References
@@ -276,6 +282,8 @@ func (s *Store) Put(r Room) (Room, error) {
 		r.LegacyPoints = old.LegacyPoints
 		r.Sources = old.Sources
 	} else {
+		r.LocalizationGeometry = nil
+		r.HasLocalizationGeometry = false
 		r.HasModel = len(r.Model) > 0
 		r.HasVisualMap = len(r.VisualMap) > 0
 		if r.HasModel {

@@ -62,7 +62,7 @@ func (s *Server) robotCommandUsing(w http.ResponseWriter, r *http.Request, open 
 	if q.Action == "stop" {
 		s.cancelCommandSetups(q.Serial)
 	}
-	autoEligible := q.Action == "turn" || q.Action == "forward" || q.Action == "go_to"
+	autoEligible := q.Action == "turn" || q.Action == "forward" || q.Action == "go_to" || q.Action == "localize"
 	if autoEligible {
 		// Register before checking observations so Stop orders setup and dispatch
 		// cancellation consistently, even when requests arrive together.
@@ -165,8 +165,17 @@ func (s *Server) robotCommandUsing(w http.ResponseWriter, r *http.Request, open 
 	reject := func(message string) {
 		finish(twinrobot.CommandResult{State: "rejected", Message: message, Snapshot: session.robot.Status()})
 	}
-	if autoSetup {
-		if err := waitCommandMeasurements(r.Context(), session.robot); err != nil {
+	idleLocalization := q.Action == "localize"
+	waitForMeasurements := autoSetup
+	if !state.Moving && !controller.CommandActive() {
+		if idleLocalization {
+			waitForMeasurements = waitForMeasurements || !state.IdleMeasurementsReady
+		} else if autoEligible {
+			waitForMeasurements = waitForMeasurements || !state.MeasurementsReady
+		}
+	}
+	if waitForMeasurements {
+		if err := waitCommandMeasurements(r.Context(), session.robot, idleLocalization); err != nil {
 			outcome := "rejected"
 			if r.Context().Err() != nil {
 				outcome = "canceled"
@@ -188,6 +197,10 @@ func (s *Server) robotCommandUsing(w http.ResponseWriter, r *http.Request, open 
 	session.searchMu.Unlock()
 	if searching {
 		reject("A search is active. Stop it before issuing another goal.")
+		return
+	}
+	if q.Action == "localize" {
+		finish(s.localizeCommand(r.Context(), session, q, controller))
 		return
 	}
 	command := twinrobot.Command{Action: q.Action, Degrees: q.Degrees, DistanceMeters: q.DistanceMeters}
@@ -260,9 +273,9 @@ func validateRobotCommand(q robotCommandRequest) error {
 	switch q.Action {
 	case "connect", "status":
 		return nil
-	case "stop", "turn", "forward", "go_to", "remember", "go_to_object", "receipt":
+	case "stop", "turn", "forward", "go_to", "remember", "go_to_object", "receipt", "localize":
 	default:
-		return errors.New("choose connect, status, stop, turn, forward, go_to, go_to_object, or remember")
+		return errors.New("choose connect, status, stop, turn, forward, go_to, go_to_object, remember, or localize")
 	}
 	if len(q.RequestID) < 8 || len(q.RequestID) > 80 {
 		return errors.New("request_id must contain 8 to 80 characters; reuse it for retries")
@@ -272,6 +285,9 @@ func validateRobotCommand(q robotCommandRequest) error {
 	}
 	if q.Action == "forward" && (math.IsNaN(q.DistanceMeters) || math.IsInf(q.DistanceMeters, 0) || q.DistanceMeters < .1 || q.DistanceMeters > 2) {
 		return errors.New("forward distance must be 0.1 to 2 meters")
+	}
+	if q.Action == "localize" && (len(strings.TrimSpace(q.Destination)) > 80 || strings.ContainsFunc(q.Destination, unicode.IsControl)) {
+		return errors.New("room name must contain at most 80 printable characters")
 	}
 	if q.Action == "go_to" || q.Action == "remember" {
 		name := strings.TrimSpace(q.Destination)
@@ -368,7 +384,7 @@ func (s *Server) cancelCommandSetups(serial string) {
 	}
 }
 
-func waitCommandMeasurements(ctx context.Context, robot robotControl) error {
+func waitCommandMeasurements(ctx context.Context, robot robotControl, idle bool) error {
 	deadline := time.NewTimer(3 * time.Second)
 	defer deadline.Stop()
 	poll := time.NewTicker(25 * time.Millisecond)
@@ -381,14 +397,21 @@ func waitCommandMeasurements(ctx context.Context, robot robotControl) error {
 		if state.Disconnected {
 			return errors.New("robot disconnected while starting observations")
 		}
-		if state.MeasurementsReady {
+		ready, reason := state.MeasurementsReady, state.ReadinessMessage
+		if idle {
+			ready, reason = state.IdleMeasurementsReady, state.IdleReadinessMessage
+		}
+		if ready {
 			return nil
+		}
+		if reason == "" {
+			reason = "waiting for fresh odometry and LiDAR"
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("observations started but fresh measurements are not ready: %s", state.Message)
+			return fmt.Errorf("fresh measurements did not arrive within three seconds: %s", reason)
 		case <-poll.C:
 		}
 	}

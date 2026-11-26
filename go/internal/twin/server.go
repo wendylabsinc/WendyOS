@@ -63,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	s.cameraWorker = make(chan struct{}, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/camera-alignment", s.cameraRequest)
+	mux.HandleFunc("PUT /v1/rooms/{id}/localization-geometry", s.localizationGeometry)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /v1/rooms", func(w http.ResponseWriter, r *http.Request) { v, e := s.Store.List(); respondRoom(w, r, v, e) })
 	mux.HandleFunc("GET /v1/rooms/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +295,14 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 			var geometry twinrobot.SiteFusionRequest
 			if err = json.Unmarshal(q.Fusion, &geometry); err == nil {
 				if _, err = s.Store.Frame(q.Frame); err == nil {
-					err = robot.AlignWithGeometry(q.Sequence, q.Frame, q.X, q.Z, q.Floor, q.Yaw, geometry)
+					if geometry.Frame != q.Frame {
+						err = errors.New("room geometry frame mismatch")
+					} else {
+						err = s.Store.SaveLocalizationGeometry(geometry)
+					}
+					if err == nil {
+						err = robot.AlignWithGeometry(q.Sequence, q.Frame, q.X, q.Z, q.Floor, q.Yaw, geometry)
+					}
 				}
 			}
 		}
@@ -327,6 +335,9 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			var room Room
 			room, err = s.Store.Frame(input.Frame)
+			if err == nil {
+				err = s.Store.SaveLocalizationGeometry(input)
+			}
 			if err == nil {
 				input.Reference = room.References[session.serial]
 				var report twinrobot.SiteFusionReport

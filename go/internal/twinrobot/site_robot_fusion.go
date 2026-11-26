@@ -51,6 +51,10 @@ func fusionTriangles(values []float64) ([]sitenav.Triangle, error) {
 // FuseLocalization binds all evidence to the live handle, model revision and
 // odometry epoch. It produces a preview only, never a movement command.
 func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest) (SiteFusionReport, error) {
+	return r.fuseLocalization(sequence, request, nil)
+}
+
+func (r *SiteRobot) fuseLocalization(sequence uint64, request SiteFusionRequest, passive *passiveLocalizationRequest) (SiteFusionReport, error) {
 	var report SiteFusionReport
 	if len(request.Frame) == 0 || len(request.Frame) > 200 || len(request.Reference) > 3000 {
 		return report, errors.New("Invalid localization request.")
@@ -64,6 +68,18 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 		return report, err
 	}
 	r.mu.Lock()
+	if passive != nil {
+		if err := r.passiveLocalizationReadyLocked(passive.ctx); err != nil {
+			r.mu.Unlock()
+			return report, err
+		}
+		if r.commandSequence >= ^uint64(0)-1 {
+			r.mu.Unlock()
+			return report, errors.New("Robot command sequence is exhausted.")
+		}
+		sequence = r.commandSequence + 1
+		passive.sequence, passive.generation, passive.epoch = sequence, r.intentGeneration, r.poseEpoch
+	}
 	if sequence <= r.commandSequence || r.closed || r.ctx.Err() != nil {
 		r.mu.Unlock()
 		return report, errors.New("This localization request is no longer active.")
@@ -81,11 +97,15 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	}
 	r.localizations = nil
 	r.preview = nil
-	if err = r.observed.MeasurementsReady(time.Now()); err != nil {
+	measurementsReady, surfaceReady := r.observed.MeasurementsReady, r.observed.SurfaceReady
+	if passive != nil {
+		measurementsReady, surfaceReady = r.observed.IdleMeasurementsReady, r.observed.IdleSurfaceReady
+	}
+	if err = measurementsReady(time.Now()); err != nil {
 		r.mu.Unlock()
 		return waitingForFusionObservations(err), nil
 	}
-	if err = r.observed.SurfaceReady(time.Now()); err != nil {
+	if err = surfaceReady(time.Now()); err != nil {
 		r.mu.Unlock()
 		return report, err
 	}
@@ -100,24 +120,38 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	if err != nil {
 		return report, err
 	}
-	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Second)
+	parent := r.ctx
+	if passive != nil {
+		parent = passive.ctx
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
+	stopRuntimeCancel := context.AfterFunc(r.ctx, cancel)
+	defer stopRuntimeCancel()
 	fits, err := sitenav.RegisterSurfaces(ctx, model, input)
 	if err != nil {
 		return report, err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if passive != nil {
+		if err := r.passiveLocalizationReadyLocked(passive.ctx); err != nil {
+			return report, err
+		}
+		if r.intentGeneration != passive.generation {
+			return report, errors.New("Passive localization was superseded by another robot command.")
+		}
+	}
 	if r.intentActive {
 		return report, errChatLocalizationBusy
 	}
 	if r.closed || r.ctx.Err() != nil || r.commandSequence != sequence || r.poseEpoch != epoch {
 		return report, errors.New("This localization request was superseded.")
 	}
-	if err = r.observed.MeasurementsReady(time.Now()); err != nil {
+	if err = measurementsReady(time.Now()); err != nil {
 		return waitingForFusionObservations(err), nil
 	}
-	if err = r.observed.SurfaceReady(time.Now()); err != nil {
+	if err = surfaceReady(time.Now()); err != nil {
 		return report, err
 	}
 	if !sameLocalizationPose(pose, r.observed.Pose) {
