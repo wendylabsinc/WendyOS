@@ -150,3 +150,22 @@ func TestRobotCommandStopCancelsDeadObserverRecoveryBeforePublication(t *testing
 		t.Fatal("canceled replacement published or dispatched")
 	}
 }
+
+func TestRobotCommandExplicitRecoveryWaitsForRunningReceipt(t *testing.T) {
+	old := &robotSession{robot: &setupTestRobot{state: twinrobot.SiteRobotSnapshot{Disconnected: true}}, serial: "go2", commandReceipts: map[string]robotCommandReceipt{"running-id": {result: twinrobot.CommandResult{State: "running"}}}}
+	s := &Server{Context: context.Background(), observers: map[string]*robotSession{"go2": old}}
+	opens := 0
+	open := func(context.Context, string) (robotControl, error) { opens++; return &setupTestRobot{}, nil }
+	w := setupCommandCall(s, context.Background(), open, robotCommandRequest{Serial: "go2", Action: "connect"})
+	if w.Code == 200 || opens != 0 || old.commandRetired {
+		t.Fatal("copied an unfinished receipt", w.Body.String())
+	}
+	// The old handler can finish into its original ledger before a later retry.
+	old.commandMu.Lock()
+	old.commandReceipts["running-id"] = robotCommandReceipt{result: twinrobot.CommandResult{State: "canceled", Message: "Setup canceled"}}
+	old.commandMu.Unlock()
+	w = setupCommandCall(s, context.Background(), open, robotCommandRequest{Serial: "go2", Action: "connect"})
+	if w.Code != 200 || opens != 1 || s.observers["go2"].commandReceipts["running-id"].result.State != "canceled" {
+		t.Fatal(w.Body.String())
+	}
+}
