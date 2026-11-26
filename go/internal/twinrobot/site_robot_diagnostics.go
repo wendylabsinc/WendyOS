@@ -9,6 +9,35 @@ import (
 	"time"
 )
 
+// The most recently rejected packet is historical diagnostic evidence, not
+// current readiness. Ages use the same clock-adjusted timestamps as the guards;
+// missing timestamps remain null, and negative ages expose future clock skew.
+type SiteObservationFault struct {
+	At            time.Time `json:"at"`
+	Topic         string    `json:"topic"`
+	Error         string    `json:"error"`
+	ClockOffsetMS float64   `json:"clockOffsetMS"`
+	GatewayAgeMS  float64   `json:"gatewayAgeMS"`
+	PoseAgeMS     *float64  `json:"poseAgeMS"`
+	CaptureAgeMS  *float64  `json:"captureAgeMS"`
+}
+
+func observationAgeMS(stamp, now time.Time) *float64 {
+	if stamp.IsZero() {
+		return nil
+	}
+	age := now.Sub(stamp).Seconds() * 1000
+	return &age
+}
+
+func copyObservationAge(age *float64) *float64 {
+	if age == nil {
+		return nil
+	}
+	copy := *age
+	return &copy
+}
+
 // Opt-in, local-only replay of one bounded localization attempt. This contains
 // room geometry, so it is disabled unless explicitly enabled for diagnosis.
 func (r *SiteRobot) recordLocalizationEvidence(request SiteFusionRequest, input sitenav.RegistrationInput, report SiteFusionReport, now time.Time) {
@@ -43,6 +72,13 @@ func (r *SiteRobot) recordLocalizationEvidence(request SiteFusionRequest, input 
 // robot identifier or authentication data is recorded. Limit disk writes to
 // one per second even when a broken stream rejects every packet.
 func (r *SiteRobot) recordObservationFault(topic string, err error, received, now time.Time) {
+	r.latestObservationFault = &SiteObservationFault{
+		At: now, Topic: topic, Error: err.Error(),
+		ClockOffsetMS: r.observed.ClockOffset.Seconds() * 1000,
+		GatewayAgeMS:  now.Sub(received).Seconds() * 1000,
+		PoseAgeMS:     observationAgeMS(r.observed.Pose.Received, now),
+		CaptureAgeMS:  observationAgeMS(r.observed.Pose.Captured, now),
+	}
 	if now.Sub(r.lastObservationLog) < time.Second {
 		return
 	}
@@ -51,15 +87,7 @@ func (r *SiteRobot) recordObservationFault(topic string, err error, received, no
 	if e != nil {
 		return
 	}
-	data, e := json.Marshal(struct {
-		At            time.Time `json:"at"`
-		Topic         string    `json:"topic"`
-		Error         string    `json:"error"`
-		ClockOffsetMS float64   `json:"clockOffsetMS"`
-		GatewayAgeMS  float64   `json:"gatewayAgeMS"`
-		PoseAgeMS     float64   `json:"poseAgeMS"`
-		CaptureAgeMS  float64   `json:"captureAgeMS"`
-	}{now, topic, err.Error(), r.observed.ClockOffset.Seconds() * 1000, now.Sub(received).Seconds() * 1000, now.Sub(r.observed.Pose.Received).Seconds() * 1000, now.Sub(r.observed.Pose.Captured).Seconds() * 1000})
+	data, e := json.Marshal(r.latestObservationFault)
 	if e != nil {
 		return
 	}
