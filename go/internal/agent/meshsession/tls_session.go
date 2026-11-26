@@ -320,6 +320,15 @@ func (s *Server) RunTLS(ctx context.Context, addr string, ready ...func()) error
 // ServeTLS owns a packet-network listener and applies the same bounded TLS and
 // running-app port authorization as the native listener.
 func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...func()) error {
+	return s.serveTLSListener(ctx, listener, 0, 0, ready...)
+}
+
+// ServeCloudTLS lets a short burst wait for the dedicated Cloud app listener.
+func (s *Server) ServeCloudTLS(ctx context.Context, listener *ApplicationListener) error {
+	return s.serveTLSListener(ctx, listener, 8, 2*time.Second)
+}
+
+func (s *Server) serveTLSListener(ctx context.Context, listener net.Listener, queueSize int, queueWait time.Duration, ready ...func()) error {
 	if listener == nil {
 		return errors.New("missing app TLS listener")
 	}
@@ -344,6 +353,7 @@ func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...f
 	config.SessionTicketsDisabled = true
 	connections := make(chan struct{}, 32)
 	handshakes := make(chan struct{}, 4)
+	waiting := make(chan struct{}, queueSize)
 	var workers sync.WaitGroup
 	stop := context.AfterFunc(run, func() {
 		listener.Close()
@@ -393,12 +403,18 @@ func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...f
 			raw.Close()
 			continue
 		}
+		var queued bool
 		select {
 		case handshakes <- struct{}{}:
 		default:
-			<-connections
-			raw.Close()
-			continue
+			select {
+			case waiting <- struct{}{}:
+				queued = true
+			default:
+				<-connections
+				raw.Close()
+				continue
+			}
 		}
 		secure := tls.Server(raw, config)
 		s.mu.Lock()
@@ -410,7 +426,11 @@ func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...f
 		if closed {
 			secure.Close()
 			<-connections
-			<-handshakes
+			if queued {
+				<-waiting
+			} else {
+				<-handshakes
+			}
 			continue
 		}
 		workers.Add(1)
@@ -418,6 +438,21 @@ func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...f
 			defer workers.Done()
 			defer func() { <-connections; s.mu.Lock(); delete(s.tlsConnections, secure); s.mu.Unlock() }()
 			defer secure.Close()
+			if queued {
+				wait, cancelWait := context.WithTimeout(run, queueWait)
+				defer cancelWait()
+				select {
+				case handshakes <- struct{}{}:
+					<-waiting
+					if wait.Err() != nil {
+						<-handshakes
+						return
+					}
+				case <-wait.Done():
+					<-waiting
+					return
+				}
+			}
 			setup, done := context.WithTimeout(run, TLSAppSessionSetupTimeout)
 			deadline, _ := setup.Deadline()
 			_ = secure.SetDeadline(deadline)

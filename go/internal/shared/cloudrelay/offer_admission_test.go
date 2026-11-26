@@ -297,10 +297,14 @@ func TestFullSessionSlotsKeepPresence(t *testing.T) {
 		a.slots <- struct{}{}
 	})
 
-	first := r.sessionOffer("first", nil, nil)
+	app := &pb.DialInstruction{
+		ServiceDescriptor: []byte(ApplicationService), Transport: pb.DialTransport_DIAL_TRANSPORT_TCP,
+		Host: "127.0.0.1", Port: applicationServicePort,
+	}
+	first := r.sessionOffer("first", app, nil)
 	r.queue(t, ctx, done, offerMessage(first))
 	r.queue(t, ctx, done, acknowledgedMessage(r.nextAck(t, ctx, done)))
-	second := r.sessionOffer("second", nil, nil)
+	second := r.sessionOffer("second", app, nil)
 	r.queue(t, ctx, done, offerMessage(second))
 	// The second acknowledgement follows the first confirmation, which the
 	// agent handled with every slot taken.
@@ -320,5 +324,31 @@ func TestFullSessionSlotsKeepPresence(t *testing.T) {
 	case err := <-done:
 		t.Fatalf("presence ended: %v", err)
 	default:
+	}
+}
+
+func TestOperatorRelayReserveIsPerService(t *testing.T) {
+	a := &Agent{
+		slots:        make(chan struct{}, sharedRelayLimit),
+		sshReserve:   make(chan struct{}, operatorRelayReserve),
+		agentReserve: make(chan struct{}, operatorRelayReserve),
+	}
+	for range sharedRelayLimit {
+		if a.takeSessionSlot(ApplicationService) == nil {
+			t.Fatal("app refused within shared capacity")
+		}
+	}
+	if a.takeSessionSlot(ApplicationService) != nil {
+		t.Fatal("app used a reserved slot")
+	}
+	for _, service := range []string{"ssh", "wendy-agent"} {
+		for range operatorRelayReserve {
+			if a.takeSessionSlot(service) == nil {
+				t.Fatalf("%s refused within reserved capacity", service)
+			}
+		}
+		if a.takeSessionSlot(service) != nil {
+			t.Fatalf("%s exceeded reserved capacity", service)
+		}
 	}
 }

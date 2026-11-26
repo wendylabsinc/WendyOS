@@ -97,6 +97,7 @@ type MeshDialer struct {
 	cache    map[meshid.Device]lanCacheEntry
 	cloudURL string
 	appFlows map[*ownedAppConnection]struct{}
+	appCloud *cloudAppClient
 }
 
 // SetLocalMeshDialer supplies the end-to-end QUIC app session toward one
@@ -264,7 +265,7 @@ func (d *MeshDialer) UpdateCloudIdentity(endpoint, certPEM, keyPEM, chainPEM str
 	closeRetiredApplications(retired)
 }
 
-func (d *MeshDialer) replaceIdentityLocked(certPEM, keyPEM, chainPEM, endpoint string) []*ownedAppConnection {
+func (d *MeshDialer) replaceIdentityLocked(certPEM, keyPEM, chainPEM, endpoint string) []io.Closer {
 	changed := d.ident.certPEM != certPEM || d.ident.keyPEM != keyPEM || d.ident.chainPEM != chainPEM || d.cloudURL != endpoint
 	generation := d.ident.generation
 	if changed {
@@ -279,8 +280,12 @@ func (d *MeshDialer) replaceIdentityLocked(certPEM, keyPEM, chainPEM, endpoint s
 	}
 	d.cloudURL = endpoint
 	d.cache = make(map[meshid.Device]lanCacheEntry)
-	var retired []*ownedAppConnection
+	var retired []io.Closer
 	if changed {
+		if d.appCloud != nil {
+			retired = append(retired, d.appCloud)
+			d.appCloud = nil
+		}
 		for flow := range d.appFlows {
 			retired = append(retired, flow)
 		}
@@ -289,7 +294,7 @@ func (d *MeshDialer) replaceIdentityLocked(certPEM, keyPEM, chainPEM, endpoint s
 	return retired
 }
 
-func closeRetiredApplications(retired []*ownedAppConnection) {
+func closeRetiredApplications(retired []io.Closer) {
 	for _, flow := range retired {
 		_ = flow.Close()
 	}

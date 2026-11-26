@@ -21,7 +21,7 @@ func startCloudApplicationEndpoint(ctx context.Context, credentials *localmesh.C
 	listener := meshsession.NewApplicationListener()
 	launch(func() {
 		defer server.Close()
-		if err := server.ServeTLS(ctx, listener); err != nil && ctx.Err() == nil {
+		if err := server.ServeCloudTLS(ctx, listener); err != nil && ctx.Err() == nil {
 			logger.Error("Cloud application admission stopped", zap.Error(err))
 		}
 	})

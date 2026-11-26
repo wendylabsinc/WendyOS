@@ -8,6 +8,8 @@ import (
 	"os"
 	"sync"
 
+	"google.golang.org/grpc"
+
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshsession"
@@ -15,48 +17,93 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-func (d *MeshDialer) cloudAppTransport(peer meshid.Device) (*localmesh.Credentials, func(context.Context, string, string) (net.Conn, error), error) {
-	d.mu.Lock()
+type cloudAppClient struct {
+	credentials *localmesh.Credentials
+	conn        *grpc.ClientConn
+	verifier    *cloudrelay.Verifier
+	sign        func([]byte) ([]byte, error)
+	lifetime    context.Context
+	cancel      context.CancelFunc
+}
+
+func (c *cloudAppClient) Close() error {
+	c.cancel()
+	return c.conn.Close()
+}
+
+func (d *MeshDialer) newCloudAppClientLocked() (*cloudAppClient, error) {
 	identity, endpoint := d.ident, d.cloudURL
-	d.mu.Unlock()
-	if endpoint == "" {
-		return nil, nil, meshsession.ErrNoRoute
-	}
-	credentials, err := localmesh.NewCredentials(identity.certPEM, identity.chainPEM, identity.keyPEM)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !peer.IsValid() || peer.Tenant() != credentials.Device.Tenant() {
-		return nil, nil, errors.New("application relay target is outside the enrolled tenant")
-	}
 	deviceEndpoint, err := cloudrelay.DeviceEndpoint(endpoint, os.Getenv("WENDY_DEVICE_CLOUD_URL"))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	issuer, err := cloudrelay.Issuer(endpoint, os.Getenv("WENDY_CLOUD_GRANT_ISSUER"))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	sign, err := cloudrelay.PrincipalSigner(identity.certPEM, []byte(identity.keyPEM))
+	credentials, err := localmesh.NewCredentials(identity.certPEM, identity.chainPEM, identity.keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	sign, err := cloudrelay.DevicePrincipalSigner(identity.certPEM, []byte(identity.keyPEM))
+	if err != nil {
+		return nil, err
+	}
+	conn, err := cloudrelay.DialCloud(deviceEndpoint, identity.certPEM, identity.chainPEM, []byte(identity.keyPEM))
+	if err != nil {
+		return nil, err
+	}
+	lifetime, cancel := context.WithCancel(context.Background())
+	return &cloudAppClient{
+		credentials: credentials, conn: conn, verifier: &cloudrelay.Verifier{Issuer: issuer},
+		sign: sign, lifetime: lifetime, cancel: cancel,
+	}, nil
+}
+
+func (d *MeshDialer) cloudAppClientFor(peer meshid.Device) (*cloudAppClient, meshIdentity, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	identity := d.ident
+	if d.cloudURL == "" {
+		return nil, identity, meshsession.ErrNoRoute
+	}
+	if !peer.IsValid() || peer.Tenant() != identity.device.Tenant() {
+		return nil, identity, errors.New("application relay target is outside the enrolled tenant")
+	}
+	if d.appCloud == nil {
+		client, err := d.newCloudAppClientLocked()
+		if err != nil {
+			return nil, identity, err
+		}
+		d.appCloud = client
+	}
+	return d.appCloud, identity, nil
+}
+
+func (d *MeshDialer) cloudAppTransport(peer meshid.Device) (*localmesh.Credentials, func(context.Context, string, string) (net.Conn, error), error) {
+	client, identity, err := d.cloudAppClientFor(peer)
 	if err != nil {
 		return nil, nil, err
 	}
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
-		cloud, err := cloudrelay.DialCloud(deviceEndpoint, identity.certPEM, identity.chainPEM, []byte(identity.keyPEM))
-		if err != nil {
-			return nil, err
-		}
-		defer cloud.Close()
 		owner, cancel, established := dialBoundContext(ctx)
-		transport, err := cloudrelay.OpenTCP(owner, ctx, cloud, &cloudrelay.Verifier{Issuer: issuer}, peer.UUID().String(), cloudrelay.ApplicationService, sign)
+		stop := context.AfterFunc(client.lifetime, cancel)
+		closeTransport := func() error { stop(); cancel(); return nil }
+		if client.lifetime.Err() != nil {
+			_ = closeTransport()
+			return nil, net.ErrClosed
+		}
+		// RequestTunnel issues and verifies a fresh grant for each relay.
+		// The shared client carries only this enrollment's transport and public keys.
+		transport, err := cloudrelay.OpenTCP(owner, owner, client.conn, client.verifier, peer.UUID().String(), cloudrelay.ApplicationService, client.sign)
 		if err != nil {
-			cancel()
+			_ = closeTransport()
 			return nil, err
 		}
 		established()
-		return d.ownApplicationConnection(transport, func() error { cancel(); return nil }, identity)
+		return d.ownApplicationConnection(transport, closeTransport, identity)
 	}
-	return credentials, dial, nil
+	return client.credentials, dial, nil
 }
 
 func (d *MeshDialer) meshDialAppCloud(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error) {

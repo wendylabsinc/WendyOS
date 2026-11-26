@@ -284,6 +284,9 @@ Check **Agent Version** for each device against the release that introduces
 `wendy-app` in the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
 Update the destination agent before updating the source. An older destination
 rejects `wendy-app` connections, including requests from an updated source.
+The source device needs an ML-DSA signing certificate. A device with a
+legacy P-256 certificate must renew it with Wendy Cloud before making app
+relay requests.
 
 In Wendy Cloud, grant the **source device** `tunnel:request` permission scoped
 to the **destination device's UUID**. Cloud may return `target device not found`
@@ -303,10 +306,13 @@ Cloud does not offer device-originated application relays; the Cloud backend mus
 ```
 
 If the destination agent version is correct and the connection still fails,
-check its logs for
-`Cloud application admission unavailable`.
-That message means the destination's app listener failed to start. Correct the
-reported error and restart the destination agent.
+check its logs for Wendy Net identity or native TLS ingress startup errors,
+`Cloud application admission unavailable`, and
+`Cloud application admission stopped`. These indicate problems preparing or
+serving the app listener. Use the accompanying error to diagnose the cause.
+
+Cloud relay sessions last at most one hour. Applications that keep a TCP
+stream open longer must reconnect when the session expires.
 
 The app connects through its device's relay grant. The `wendy cloud tunnel`
 command opens an operator session with separate permissions.

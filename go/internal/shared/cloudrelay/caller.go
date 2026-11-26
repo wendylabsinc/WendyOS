@@ -34,9 +34,18 @@ import (
 // TLS-compatible EC operator certificates cannot sign this ML-DSA-only profile;
 // report that capability gap rather than silently downgrade the request.
 func PrincipalSigner(certPEM string, keyPEM []byte) (func([]byte) ([]byte, error), error) {
+	return principalSigner(certPEM, keyPEM, "operator", "Cloud/PKI must issue the tunnel signing credential")
+}
+
+// DevicePrincipalSigner uses the same signed request profile for an enrolled device.
+func DevicePrincipalSigner(certPEM string, keyPEM []byte) (func([]byte) ([]byte, error), error) {
+	return principalSigner(certPEM, keyPEM, "device", "renew the device certificate with Wendy Cloud")
+}
+
+func principalSigner(certPEM string, keyPEM []byte, subject, resolution string) (func([]byte) ([]byte, error), error) {
 	leaves, err := certs.ParseCertsFromPEM([]byte(certPEM))
 	if err != nil || len(leaves) != 1 {
-		return nil, fmt.Errorf("expected one operator signing certificate")
+		return nil, fmt.Errorf("expected one %s signing certificate", subject)
 	}
 	var spki struct {
 		Algorithm pkix.AlgorithmIdentifier
@@ -44,7 +53,7 @@ func PrincipalSigner(certPEM string, keyPEM []byte) (func([]byte) ([]byte, error
 	}
 	rest, err := asn1.Unmarshal(leaves[0].RawSubjectPublicKeyInfo, &spki)
 	if err != nil || len(rest) != 0 {
-		return nil, fmt.Errorf("invalid operator public key")
+		return nil, fmt.Errorf("invalid %s public key", subject)
 	}
 	var scheme sign.Scheme
 	switch spki.Algorithm.Algorithm.String() {
@@ -55,14 +64,14 @@ func PrincipalSigner(certPEM string, keyPEM []byte) (func([]byte) ([]byte, error
 	case "2.16.840.1.101.3.4.3.19":
 		scheme = mldsa87.Scheme()
 	default:
-		return nil, fmt.Errorf("Cloud tunnels require an ML-DSA operator request-signing certificate; this login has a TLS-only certificate (Cloud/PKI must issue the tunnel signing credential)")
+		return nil, fmt.Errorf("Cloud tunnels require an ML-DSA %s request-signing certificate (%s)", subject, resolution)
 	}
 	if len(spki.Algorithm.Parameters.FullBytes) != 0 {
-		return nil, fmt.Errorf("unsupported operator signing-key parameters")
+		return nil, fmt.Errorf("unsupported %s signing-key parameters", subject)
 	}
 	block, restPEM := pem.Decode(keyPEM)
 	if block == nil || block.Type != "PRIVATE KEY" || len(bytes.TrimSpace(restPEM)) != 0 {
-		return nil, fmt.Errorf("expected PKCS#8 operator signing key")
+		return nil, fmt.Errorf("expected PKCS#8 %s signing key", subject)
 	}
 	var p8 struct {
 		Version    int
@@ -71,7 +80,7 @@ func PrincipalSigner(certPEM string, keyPEM []byte) (func([]byte) ([]byte, error
 	}
 	rest, err = asn1.Unmarshal(block.Bytes, &p8)
 	if err != nil || len(rest) != 0 || !p8.Algorithm.Algorithm.Equal(spki.Algorithm.Algorithm) || len(p8.Algorithm.Parameters.FullBytes) != 0 {
-		return nil, fmt.Errorf("operator signing key algorithm mismatch")
+		return nil, fmt.Errorf("%s signing key algorithm mismatch", subject)
 	}
 	// RFC 9881: seed [0] IMPLICIT OCTET STRING, expanded OCTET STRING, or
 	// SEQUENCE {seed, expandedKey}. Verify the derived public key against x5c.
@@ -113,7 +122,7 @@ func PrincipalSigner(certPEM string, keyPEM []byte) (func([]byte) ([]byte, error
 		input := []byte(b64.EncodeToString(header) + "." + b64.EncodeToString(payload))
 		sig := scheme.Sign(sk, input, &sign.SignatureOpts{Context: ""})
 		if !scheme.Verify(pk, input, sig, &sign.SignatureOpts{Context: ""}) {
-			return nil, fmt.Errorf("operator signing key does not match certificate")
+			return nil, fmt.Errorf("%s signing key does not match certificate", subject)
 		}
 		return []byte(string(input) + "." + b64.EncodeToString(sig)), nil
 	}, nil

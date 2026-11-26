@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"syscall"
 	"time"
@@ -50,12 +51,13 @@ func (a *MeshAppDialer) DialDevice(ctx context.Context, device meshid.Device, po
 	}
 	ms := float64(a.mesh.now().Sub(started).Milliseconds())
 	if err != nil {
-		a.mesh.metrics.RecordDial(device, "local-mesh", "error", ms)
 		// Use Cloud only when there is no local mesh route. A mesh denial,
 		// identity failure, or transport failure is returned to the app.
 		if errors.Is(err, meshsession.ErrNoRoute) {
+			a.mesh.metrics.RecordDial(device, "local-mesh", "no_route", ms)
 			return a.dialCloud(ctx, device, port)
 		}
+		a.mesh.metrics.RecordDial(device, "local-mesh", "error", ms)
 		return nil, "local-mesh", err
 	}
 	a.mesh.metrics.RecordDial(device, "local-mesh", "ok", ms)
@@ -77,7 +79,7 @@ func (a *MeshAppDialer) dialCloud(ctx context.Context, device meshid.Device, por
 	}
 	a.mesh.metrics.RecordDial(device, "cloud-app", result, float64(a.mesh.now().Sub(started).Milliseconds()))
 	if err != nil {
-		return nil, "", err
+		return nil, "cloud-app", fmt.Errorf("no authenticated local Wendy Net route; Cloud app relay: %w", err)
 	}
 	return conn, "cloud-app", nil
 }
