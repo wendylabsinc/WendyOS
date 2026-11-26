@@ -5,6 +5,52 @@ import WendyE2ETesting
 @Suite(.serialized)
 struct `'wendy app deployment remove'` {
     /**
+     Deploy a published release, then remove the named deployment with a note.
+     Cloud records a removed revision with no targets and preserves the earlier
+     target history. The catalog app, release and encrypted artifact remain
+     readable with their original manifest digest. Device acknowledgment and
+     eventual runtime removal are verified by the separate device-response spec.
+     */
+    @Test(.enabled(if: appsDeploymentTestsEnabled))
+    func `records removal while retaining the published release in Cloud`() async throws {
+        try await AppsDeploymentFixture.withApp { cli, app in
+            try await app.create(cli)
+            let release = try await app.publish(cli)
+            let artifact = try await app.requireArtifact(cli, release: release)
+            _ = try await app.succeed(cli, app.deployCommand(release))
+            let first = try await app.requireHistory(cli, release: release, revision: 1)
+            _ = try await app.succeed(
+                cli,
+                "wendy app deployment remove \(app.deployment) --note 'Remove workshop' --yes \(app.cloudFlag)"
+            )
+            let removed = try await app.requireHistory(
+                cli,
+                release: release,
+                revision: 2,
+                targets: [],
+                sameDeployment: first.deployment.id
+            )
+            #expect(removed.deployment.removedAt != nil)
+            #expect(removed.history.count == 2)
+            let removal = try #require(removed.history.first { $0.revision.revision == 2 })
+            #expect(removal.revision.removed)
+            #expect(removal.revision.note == "Remove workshop")
+            #expect(removal.devices.isEmpty)
+            #expect(removal.moves.isEmpty)
+            #expect(removed.history.first { $0.revision.revision == 1 }?.devices == [app.asset])
+            let catalog = try await app.catalog(cli)
+            #expect(catalog.app?.id == app.app)
+            let retained = try #require(catalog.releases?.first { $0.id == release.id })
+            #expect(retained.name == release.tag)
+            #expect(retained.imageDigest == release.digest)
+            let retainedArtifact = try await app.requireArtifact(cli, release: release)
+            #expect(retainedArtifact.computedDigest == artifact.computedDigest)
+            #expect(retainedArtifact.manifest.manifestDigest == artifact.manifest.manifestDigest)
+            #expect(retainedArtifact.manifest.contentKeyId == artifact.manifest.contentKeyId)
+        }
+    }
+
+    /**
      Removal ends the owned runtime and endpoint, records removed history and
      keeps the catalog app and release. A second named deployment can reuse the
      retained release and respond with its original content.
@@ -50,7 +96,9 @@ struct `'wendy app deployment remove'` {
     /**
      Isolated Agent protocol tier: block an actual pull at a synthetic blob peer,
      apply terminal removal, and reload durable Agent state. No import or start
-     occurs; a delayed older assignment is rejected. Transport interruption,
+     occurs; the reloaded ordering predicate refuses an ordinary earlier
+     revision without constructing or replaying a signed request. This is not
+     end-to-end delayed delivery evidence. Transport interruption,
      physical cache cleanup and real device reboot are separate live concerns.
      */
     @Test(.enabled(if: appsIsolationTestsEnabled))
