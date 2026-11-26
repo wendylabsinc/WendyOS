@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"sync"
 	"time"
@@ -159,7 +160,9 @@ func (r *MeshResolver) resolveLAN(name string) nameResolution {
 	ctx, cancel := context.WithTimeout(context.Background(), legacyNameLANBrowseBudget)
 	defer cancel()
 	devices, err := r.browse(ctx)
-	if err != nil {
+	// The deadline is the normal end of a complete browse window. Keep
+	// confirmed sightings collected before it expired.
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		r.logger.Warn("wendy net: LAN browse failed for friendly-name resolution", zap.Error(err))
 		return result
 	}

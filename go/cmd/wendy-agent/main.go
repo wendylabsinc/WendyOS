@@ -1450,14 +1450,7 @@ func main() {
 	// fails closed (logged, retried) until the device is provisioned, rather
 	// than never starting at all.
 	meshBrowse := func(ctx context.Context) ([]models.LANDevice, error) {
-		col, err := discovery.Discover(ctx, discovery.DiscoveryOptions{
-			Types:   []models.InterfaceType{models.InterfaceLAN},
-			Timeout: time.Second,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return col.LANDevices, nil
+		return discovery.CollectLANUntilTimeout(ctx, discovery.StreamOptions{}, time.Second)
 	}
 	meshResolver := services.NewMeshResolver(logger, meshRoster, meshBrowse)
 	meshResolver.SetMeshSnapshot(func() localmesh.NodeSnapshot {
