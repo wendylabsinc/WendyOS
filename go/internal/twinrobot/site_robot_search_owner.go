@@ -94,7 +94,7 @@ func (o *LocalizationSearchOwner) Status() SiteRobotSnapshot {
 		if now.Sub(r.heartbeat) > 600*time.Millisecond {
 			r.motionRecoveryAllowed = false
 			if r.moving {
-				r.message = MovementLeaseLostMessage
+				r.message = "Movement stopped because the map is no longer active."
 				_ = r.stopLocked()
 			}
 		}

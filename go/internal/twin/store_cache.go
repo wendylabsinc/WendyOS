@@ -118,7 +118,6 @@ func cloneRoom(room Room) Room {
 		room.References[serial] = slices.Clone(points)
 	}
 	room.Sources = maps.Clone(room.Sources)
-	room.Objects = maps.Clone(room.Objects)
 	room.Waypoints = maps.Clone(room.Waypoints)
 	if geometry := room.LocalizationGeometry; geometry != nil {
 		copy := *geometry
@@ -158,9 +157,6 @@ func roomRetainedBytes(room Room) int64 {
 		n += int64(len(key)+128) + int64(cap(points))*int64(unsafe.Sizeof(points[0]))
 	}
 	for key := range room.Sources {
-		n += int64(len(key) + 128)
-	}
-	for key := range room.Objects {
 		n += int64(len(key) + 128)
 	}
 	for key := range room.Waypoints {

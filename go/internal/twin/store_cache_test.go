@@ -26,8 +26,7 @@ func cacheTestRoom(t *testing.T, store *Store) Room {
 	saved.LegacyPoints = []Point{{X: 3}}
 	saved.References = map[string][]sitenav.Surface{"robot": {{Position: sitenav.Vertex{X: 4}}}}
 	saved.Sources = map[string]uint64{"scan": 5}
-	saved.Objects = map[string]RoomObject{"chair": {X: 6}}
-	saved.Waypoints = map[string]RoomObject{"desk": {X: 7}}
+	saved.Waypoints = map[string]Waypoint{"desk": {X: 7}}
 	saved.LocalizationGeometry = &RoomLocalizationGeometry{Frame: saved.Site.ID + "/" + saved.Site.ModelRevision, Architecture: []float64{8}, Furniture: []float64{9}}
 	if err := store.write(saved); err != nil {
 		t.Fatal(err)
@@ -54,8 +53,7 @@ func TestRoomCacheReturnsDetachedStateAndMetadata(t *testing.T) {
 	original.LegacyPoints[0].X = 99
 	original.References["robot"][0].Position.X = 99
 	original.Sources["scan"] = 99
-	original.Objects["chair"] = RoomObject{X: 99}
-	original.Waypoints["desk"] = RoomObject{X: 99}
+	original.Waypoints["desk"] = Waypoint{X: 99}
 	original.LocalizationGeometry.Architecture[0] = 99
 	original.LocalizationGeometry.Furniture[0] = 99
 	list, err := store.List()
@@ -63,8 +61,7 @@ func TestRoomCacheReturnsDetachedStateAndMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	list[0].Site.Cameras[0][2] = 'Y'
-	list[0].Objects["chair"] = RoomObject{X: 88}
-	list[0].Waypoints["desk"] = RoomObject{X: 88}
+	list[0].Waypoints["desk"] = Waypoint{X: 88}
 	again, _ := store.Frame(frame)
 	after, _ := json.Marshal(again)
 	if !bytes.Equal(before, after) {
@@ -79,7 +76,7 @@ func TestRoomCacheInvalidatesOwnWritesAndExternalAtomicReplacement(t *testing.T)
 	saved := cacheTestRoom(t, store)
 	frame := saved.Site.ID + "/" + saved.Site.ModelRevision
 	_, _ = store.Frame(frame)
-	if err := store.SaveWaypoint(frame, "door", RoomObject{X: 12}); err != nil {
+	if err := store.SaveWaypoint(frame, "door", Waypoint{X: 12}); err != nil {
 		t.Fatal(err)
 	}
 	changed, err := store.Frame(frame)
@@ -237,7 +234,7 @@ func TestRoomStateGzipCacheMatchesDetachedStateAndInvalidates(t *testing.T) {
 	if len(entry.gzipState) == 0 || entry.bytes < int64(cap(entry.gzipState)) {
 		t.Fatal("wire image not charged to bounded cache")
 	}
-	if err := store.SaveWaypoint(saved.Site.ID+"/"+saved.Site.ModelRevision, "new door", RoomObject{X: 12}); err != nil {
+	if err := store.SaveWaypoint(saved.Site.ID+"/"+saved.Site.ModelRevision, "new door", Waypoint{X: 12}); err != nil {
 		t.Fatal(err)
 	}
 	_, got = get()
@@ -275,12 +272,12 @@ func TestRoomStateCacheConcurrentWritersAndReaders(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				room.Waypoints["desk"] = RoomObject{X: -999}
+				room.Waypoints["desk"] = Waypoint{X: -999}
 			}
 		}()
 	}
 	for i := 0; i < 15; i++ {
-		if err := store.SaveWaypoint(frame, "progress", RoomObject{X: float64(i)}); err != nil {
+		if err := store.SaveWaypoint(frame, "progress", Waypoint{X: float64(i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
