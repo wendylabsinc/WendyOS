@@ -157,3 +157,39 @@ func TestEnrollSelectionUsesLocalKeyForClosedDevice(t *testing.T) {
 		})
 	}
 }
+
+// A name whose device key this computer pinned locally (it was Closed when
+// last reached) must not be enrolled over a plaintext endpoint that now
+// answers Open and NotProvisioned: selection ends in the ladder's refusal.
+func TestEnrollSelectionRefusesPlaintextForLocallyPinnedName(t *testing.T) {
+	restoreDeviceGlobals(t)
+	setTempConfig(t, &config.Config{})
+	setPinCache(t)
+	owner := useLocalKey(t)
+	open := closedtest.Start(t, t.TempDir(), func(s *grpc.Server) {
+		agentpbv2.RegisterWendyProvisioningServiceServer(s, &acmeProvisioningServer{})
+	})
+	closed := closedtest.Start(t, closedDir(t, owner))
+	conn, _, err := dialAgentLadderWithCerts(ladderCtx(t), newDialTarget(pinKeyForAddr(open.Addr), closed.Addr), nil)
+	if err != nil {
+		t.Fatalf("pinning dial: %v", err)
+	}
+	conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	target, err := resolveTargetInner(ctx, func(cfg *resolveConfig) {
+		cfg.device = open.Addr
+		cfg.enrollmentTrustRecovery = true
+		cfg.nonInteractive = true
+		cfg.disableSessionBroker = true
+		cfg.suppressUpdateCheck = true
+	})
+	if err == nil {
+		target.Close()
+		t.Fatal("enroll selected the plaintext endpoint of a locally pinned name")
+	}
+	if !strings.Contains(err.Error(), "was Closed when this computer last reached it") {
+		t.Fatalf("err = %v, want the locally pinned refusal", err)
+	}
+}

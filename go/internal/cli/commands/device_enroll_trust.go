@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
@@ -110,6 +111,13 @@ func connectUnboundSetupTarget(ctx context.Context, pinKey, addr string, extraCa
 	}
 	if _, _, pinned := lookupPin(cfg, pinKey); pinned {
 		return nil, false, nil
+	}
+	// A device key pinned locally (Closed when last reached) is a saved
+	// identity too; the ladder refuses to reach it in the clear.
+	if !wifi && pinKey != "" {
+		if store, err := openLocalPinStoreFn(); err == nil && store.Has(devicepin.LocalPinKey(pinKey)) {
+			return nil, false, nil
+		}
 	}
 	if wifi && !hasStoredCLICerts(cfg) {
 		// The ordinary ladder already dials plaintext without certificates.
