@@ -343,7 +343,13 @@ func (s *Server) openCommandRobot(ctx context.Context, serial string) (robotCont
 	if s.Conn == nil {
 		return nil, errors.New("robot gateway is unavailable")
 	}
-	return twinrobot.Open(ctx, s.Conn, serial)
+	robot, err := twinrobot.Open(ctx, s.Conn, serial)
+	if err != nil {
+		// Normalize the concrete nil before converting to robotControl. A typed
+		// nil interface otherwise looks non-nil to failed-open cleanup.
+		return nil, err
+	}
+	return robot, nil
 }
 
 // Connecting starts observations and the same STOP/avoidance preparation used
