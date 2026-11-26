@@ -99,17 +99,25 @@ Agent coverage are currently unsupported. `WENDY_E2E_COVERAGE=true` is equivalen
 to `--coverage`; combining coverage with `--parallel` is an error.
 
 The runner builds dedicated binaries under the attempt's `coverage/bin`, leaving
-ordinary build outputs alone. It builds Swift tests once, then runs each selected
-test in a separate sequential process. This adds process startup overhead per
-test. All scenario sessions belonging to that test accumulate into the same
-recorder identity. Parameterized cases belong to their test's interval.
+ordinary build outputs alone. Both coverage and ordinary mode use one normal
+sequential Swift suite invocation and its native xUnit output. Coverage is owned
+by `CLIAndAgentScenario.run`: the managed Agent resets before scenario setup and
+exports after all scenario-owned hooks, body and teardown, including partial
+setup failure cleanup. All CLI sessions in that scenario share its recorder's
+native coverage directory. The current product suite uses one scenario per
+command-bearing test; overlapping or repeated intervals are rejected.
 
-The managed Agent is started and checked for readiness before measurement. Its
-atomic counters reset once before each test process starts and export after that
-process exits, including its scenario hooks, deferred cleanup and session teardown,
-while the Agent is alive. Background Agent activity during that interval is
-included. Initialization before the interval is excluded. Its private Unix socket
-control and CLI invocation receipts exist only in `e2e_coverage` builds.
+The managed Agent is started and checked for readiness before measurement. It
+stays alive through interval export and attempt finalization. Background Agent
+activity during a scenario interval is included; Swift process startup/discovery,
+Agent initialization and Swift-only work outside scenarios are excluded. Its
+private Unix socket control and CLI invocation receipts exist only in
+`e2e_coverage` builds. Skipped tests and Swift-only controls have no interval and
+retain skipped/no-data labels from native xUnit. A fatal suite-process crash stops
+the remaining suite; the durable active receipt permits best-effort Agent export,
+but interrupted/unexecuted work is explicitly incomplete, never inferred passed.
+Suite capture completeness is retained in the existing `coverage/source.json`;
+no separate runner or test-list/XML assembly is used.
 
 Native files use `observations/<suite>/<test>/coverage/go/`. CI packages these
 paths, plus startup native evidence, losslessly in `coverage/go-native.tar.gz`.
@@ -134,8 +142,8 @@ receipts in `coverage/tests.json`, and native metadata/counters under
 `observations/<suite>/<test>/coverage/go/`. The existing shell/Make entry points
 only coordinate execution; their private `_capture` CLI calls perform collection
 in Swift. There is no separate public coverage command family. The managed Go
-Agent resets once before each test and exports after test-owned cleanup, while
-still alive; all sessions of that test share an interval. Ordinary builds omit
+Agent resets once before each scenario and exports after its cleanup, while
+still alive; all sessions of that scenario share an interval. Ordinary builds omit
 the instrumentation hooks. Missing counters, crashed participants and timeouts
 remain explicit incomplete evidence, without hiding the original test failure.
 
@@ -261,12 +269,13 @@ Likewise, local aggregation requires explicit `--diff RANGE`. The analyzer forwa
 only explicit input requests a comparison. No push/main fallback is selected. Comparison problems remain informational labels;
 there are no coverage thresholds or gates.
 
-Coverage has a measured execution cost: the E2E step took 7.6 minutes on
+The previous process-per-test implementation had a measured execution cost: the E2E step took 7.6 minutes on
 [main, Build run45633937865](https://github.com/wendylabsinc/WendyOS/actions/runs/45633937865)
 and 18.1 minutes in
 [coverage run45386626330, Swift E2E Tests](https://github.com/wendylabsinc/WendyOS/actions/runs/45386626330). These are
 observed runs, not a controlled benchmark. Coverage scheduling/defaults are
-unchanged pending Konstantin’s policy decision.
+unchanged pending Konstantin’s policy decision. These historical timings do not
+measure the current single-suite scenario implementation.
 
 ### Test against a remote device
 

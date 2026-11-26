@@ -305,9 +305,29 @@ func DescribeOperatorTarget(ctx context.Context, selector string) (OperatorTarge
 		return OperatorTargetInfo{}, err
 	}
 	defer client.Close()
+	return describeOperatorTarget(ctx, client.Conn, selector)
+}
+
+// ConnectedOperatorAgentAddress resolves the management endpoint through the
+// connection's existing router and sign-in context, including custom agent ports.
+func ConnectedOperatorAgentAddress(ctx context.Context, client *grpcclient.AgentConnection) (string, error) {
+	if _, matched, err := ParseMeshSelector(client.Addr); err != nil || !matched || !client.IsSessionProxy {
+		return "", errors.New("connection is not a mesh session proxy")
+	}
+	info, err := describeOperatorTarget(ctx, client.Conn, client.Addr)
+	if err != nil {
+		return "", err
+	}
+	if info.Platform != "WendyOS" || info.Transport != "mtls-v1" || info.Address == "" {
+		return "", errors.New("the mesh device has not advertised a WendyOS management endpoint")
+	}
+	return info.Address, nil
+}
+
+func describeOperatorTarget(ctx context.Context, conn grpc.ClientConnInterface, selector string) (OperatorTargetInfo, error) {
 	ctx = metadata.AppendToOutgoingContext(ctx, operatorTargetHeader, selector)
 	request, reply := rawMessage{}, rawMessage{}
-	if err = client.Conn.Invoke(ctx, operatorDescribeMethod, &request, &reply, grpc.ForceCodec(rawCodec{})); err != nil {
+	if err := conn.Invoke(ctx, operatorDescribeMethod, &request, &reply, grpc.ForceCodec(rawCodec{})); err != nil {
 		return OperatorTargetInfo{}, err
 	}
 	var info OperatorTargetInfo

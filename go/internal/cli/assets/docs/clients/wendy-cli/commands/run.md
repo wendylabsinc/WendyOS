@@ -221,19 +221,26 @@ See [ESP32 installation](/docs/installation/wendy-lite-esp32) for setup and a mi
 
 ## Headless Mac — supported project types
 
-Headless Mac (Darwin targets) currently runs native macOS apps only. When the selected agent reports `os: darwin`, `wendy run` rejects Linux/container deployment paths before any build, registry auth, or registry setup.
+Headless Mac (Darwin targets) runs two kinds of apps. Native macOS apps (`platform: "darwin"`) are built on your Mac and delivered by file sync. Linux container apps (`platform: "linux"`, `"linux/<arch>"` or `"wendyos"`) are built as images, pushed to the registry embedded in the Mac agent, and run through a Linux container runtime on the Mac: Apple `container` when it is installed, otherwise Docker (Docker Desktop or OrbStack). The agent picks the runtime when it starts.
 
 | Project type | Mac target support |
 |---|---|
-| Native SwiftPM (`Package.swift`, `platform: "darwin"`) | Supported |
-| Native Xcode (`.xcodeproj`, `platform: "darwin"`) | Supported |
-| Dockerfile / Containerfile / container image | Rejected |
-| Python container path | Rejected |
-| Docker Compose | Rejected |
-| Multi-service `wendy.json` (`services` map) | Rejected |
-| `platform: "linux/..."` or `platform: "wendyos"` | Rejected |
+| Native SwiftPM (`Package.swift`, `platform: "darwin"`) | Native macOS process |
+| Native Xcode (`.xcodeproj`, `platform: "darwin"`) | Native macOS process |
+| Dockerfile / Containerfile / container image | Linux container |
+| Python container path | Linux container |
+| Docker Compose | Linux containers |
+| Multi-service `wendy.json` (`services` map) | Linux containers |
+| Any other `platform` (for example `windows/amd64`) | Rejected |
 
-The error explains the project/target mismatch and tells you to set `platform: "darwin"` with a Mac-compatible native SwiftPM or Xcode project, or to target a Linux/WendyOS device. Linux container support on Mac is planned for a future release.
+When the selected agent reports `os: darwin`, `wendy run` checks the platform before any build, registry auth, or registry setup. A platform that is neither Darwin nor Linux/WendyOS is a project/target mismatch; the error tells you to set `platform: "darwin"` with a native SwiftPM or Xcode project, or to target a Linux/WendyOS device.
+
+Linux containers on a Mac target differ from a WendyOS device in a few ways:
+
+- The Mac agent only serves its registry when it found a Linux container runtime at startup. Without one, the push fails and `wendy run` asks you to install Docker, OrbStack, or Apple's `container` CLI on the Mac, or to set `platform: "darwin"` instead.
+- Every deploy pushes the image to the agent's registry. The build-input fingerprint fast path and chunk-diff (CDC) delivery are not used for Mac targets.
+- Only `network` (ports, `mode: "none"`) and `persist` volume entitlements apply to the container. Hardware entitlements (`gpu`, `npu`, `bluetooth`, `audio`, `video`, `camera`, `usb`, `i2c`, `gpio`) are logged as unavailable and ignored, because the containers run in a Linux VM.
+- `brewfile` is only accepted for native Darwin apps.
 
 ## Image build-args
 
@@ -316,13 +323,13 @@ See [Multi-Service Apps with `wendy.json`](../../../apps/wendy-services.md) for 
 
 > **Note:** Every multi-service run rebuilds and re-pushes each service — the push-skip optimisation is currently inactive for multi-service deployments. See [Push-skip content verification](#push-skip-content-verification) for why.
 
-> **Headless Mac:** Multi-service `wendy.json` projects are not supported when the selected target is Headless Mac. `wendy run` returns an error immediately. Target a Linux/WendyOS device for multi-service workloads.
+> **Headless Mac:** Multi-service `wendy.json` projects run on a Mac target as Linux containers through the Mac agent's container runtime. See [Headless Mac — supported project types](#headless-mac--supported-project-types).
 
 ## Compose projects
 
 If the current directory contains a `docker-compose.yml` (or `compose.yml`) but no `wendy.json`, `wendy run` automatically runs it as a multi-service compose project. Each service is built, pushed, and started on the device in dependency order. See [Multi-Service Apps with Docker Compose](../../../apps/compose.md) for full details.
 
-> **Headless Mac:** Compose projects are not supported when the selected target is Headless Mac. `wendy run` returns an error before performing any registry or Docker setup. To deploy a compose workload, target a Linux/WendyOS device. For Mac targets, use a native SwiftPM or Xcode project with `platform: "darwin"`.
+> **Headless Mac:** Compose projects run on a Mac target as Linux containers through the Mac agent's container runtime. See [Headless Mac — supported project types](#headless-mac--supported-project-types).
 
 ## Swift Package Manager projects (macOS)
 

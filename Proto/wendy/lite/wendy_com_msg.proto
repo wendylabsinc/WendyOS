@@ -229,6 +229,8 @@ message WendyComEnrollmentChallenge {
     string device_id = 10; // configured PKI identity; distinct from the USB hardware ID
     string tenant_id = 11;
     bool uuid_enrollment_supported = 12; // UUID discovery and enrollment identity reporting
+    optional bool mldsa_peer_verification_supported = 13; // peer verification independent of issuance profile
+    bool mesh_trust_supported = 14; // provision tenant mesh trust during enrollment
 }
 
 

@@ -83,7 +83,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		return err
 	}
 
-	creds, err := resolveWiFiCredentialsList(opts.WiFi)
+	creds, err := resolveFirstBootWiFi(opts.WiFi)
 	if err != nil {
 		return err
 	}
@@ -195,8 +195,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			if errors.Is(err, t234.ErrDeviceSideFailed) {
 				finalStatus, _ = massStorage.AwaitFinalStatus(flashCtx)
 				if finalStatus != nil {
-					saveOrinDeviceLogs(out, logPath, finalStatus)
-					return false, fmt.Errorf("device failed before rootfs export: status %q", finalStatus.Status)
+					return false, orinEarlyFailure(out, logPath, finalStatus)
 				}
 			}
 			return false, err
@@ -222,12 +221,17 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		// The console can vanish with the process (UAC-relaunched window), so
 		// the flash log must record why the flash stopped, not just where.
 		fmt.Fprintf(logW, "\nFAILED (step %d): %v\n", failedID, err)
+		var early *orinEarlyFailureError
 		switch {
 		case errors.Is(err, tui.ErrCancelled):
 			if failedID >= orinStepCommands && massStorage != nil && massStorage.HandoffStarted {
 				printOrinBadStateHint(os.Stdout, opts)
 			}
 			return ErrUserCancelled
+		case errors.As(err, &early):
+			// Before the cases that match on the error's words: this error
+			// quotes the Jetson's own log.
+			printOrinEarlyFailureHint(os.Stdout, opts, early, !orinCanAskToStartAgain(opts))
 		case failedID >= orinStepCommands && isMacRawDiskPermissionError(err):
 			// Scoped like the Windows raw-disk case below: only the stage-2
 			// steps touch the Jetson's disk, so a permission error earlier
@@ -249,7 +253,6 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		return err
 	}
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Recovered %s %s with WendyOS %s; the Jetson will reboot after the final LUN is released.", opts.DeviceName, strings.ToUpper(opts.Storage), opts.Version)))
-	printFirstBootVerification(opts.DeviceType, opts.Version)
 	return nil
 }
 
@@ -412,18 +415,20 @@ func t234RCMFiles(fp *flashpack.Flashpack) (order []string, memBCT, blob string,
 	return order, memBCT, blob, nil
 }
 
-func saveOrinDeviceLogs(out io.Writer, logPath string, st *t234.FinalStatus) {
+// saveOrinDeviceLogs writes the logs the Jetson handed back next to the flash
+// log and returns their directory, or "" when nothing was saved.
+func saveOrinDeviceLogs(out io.Writer, logPath string, st *t234.FinalStatus) string {
 	if st == nil || len(st.Logs) == 0 {
-		return
+		return ""
 	}
 	dir := strings.TrimSuffix(logPath, ".log") + "-device-logs"
 	if logPath == "" {
 		var err error
 		if dir, err = os.MkdirTemp("", "orin-device-logs-"); err != nil {
-			return
+			return ""
 		}
 	} else if err := os.MkdirAll(dir, 0o700); err != nil {
-		return
+		return ""
 	}
 	names := make([]string, 0, len(st.Logs))
 	for name := range st.Logs {
@@ -434,6 +439,7 @@ func saveOrinDeviceLogs(out io.Writer, logPath string, st *t234.FinalStatus) {
 		_ = os.WriteFile(filepath.Join(dir, filepath.Base(name)), st.Logs[name], 0o600)
 	}
 	fmt.Fprintf(out, "Device-side logs (%s): %s\n", strings.Join(names, ", "), dir)
+	return dir
 }
 
 func confirmOrinReady(opts t234InstallOptions) error {
@@ -496,6 +502,10 @@ func orinRecoveryHints(opts t234InstallOptions) recoveryWaitHints {
 	return hints
 }
 
+// orinBriefingOS is the host OS whose prompts the briefing warns about; a var
+// so tests can check every platform's notes on any host.
+var orinBriefingOS = runtime.GOOS
+
 func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) string {
 	lines := []string{
 		briefMarker.Render("●") + " " + briefTitle.Render("Destructive full recovery"),
@@ -529,15 +539,19 @@ func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) str
 			)
 		}
 	}
-	if runtime.GOOS == "darwin" {
+	if orinBriefingOS == "darwin" {
 		lines = append(lines,
+			"",
+			briefMarker.Render("●")+" "+briefTitle.Render("macOS accessory prompt"),
+			"  macOS may ask "+briefKey.Render(`"Allow accessory to connect?"`)+" again during the flash, when the Jetson",
+			"  reconnects as its flashing disk. Choose "+briefKey.Render("Allow")+" each time, or it stays disconnected.",
 			"",
 			briefMarker.Render("●")+" "+briefTitle.Render("macOS disk prompts"),
 			"  wendy keeps macOS from asking about the Jetson's flashing disks. If it still says a",
 			"  disk is not readable, choose "+briefKey.Render("Ignore")+"; "+briefKey.Render("Eject")+" interrupts the flash.",
 		)
 	}
-	if runtime.GOOS == "windows" {
+	if orinBriefingOS == "windows" {
 		lines = append(lines,
 			"",
 			briefMarker.Render("●")+" "+briefTitle.Render("Windows disk prompts"),
@@ -631,8 +645,13 @@ func printOrinFullDiskAccessHint(w io.Writer) {
 	fmt.Fprintln(w, "\n"+thorHintBorder.Render(body))
 }
 
+// orinInstallCommand is the command that starts this install again.
+func orinInstallCommand(opts t234InstallOptions) string {
+	return fmt.Sprintf("wendy os install --device-type %s --storage %s", opts.DeviceType, opts.Storage)
+}
+
 func printOrinBadStateHint(w io.Writer, opts t234InstallOptions) {
-	cmd := fmt.Sprintf("wendy os install --device-type %s --storage %s", opts.DeviceType, opts.Storage)
+	cmd := orinInstallCommand(opts)
 	body := strings.Join([]string{
 		thorHintTitle.Render("⚠  Recovery was interrupted — the Jetson may not boot"), "",
 		"QSPI or the rootfs may be partially written. Re-enter Force Recovery mode.",

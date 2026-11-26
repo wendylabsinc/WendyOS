@@ -305,8 +305,13 @@ type WendyConfEnrollment struct {
 	TsaRoots       []byte `protobuf:"bytes,10,opt,name=tsa_roots,json=tsaRoots,proto3" json:"tsa_roots,omitempty"`
 	HttpsRoots     []byte `protobuf:"bytes,11,opt,name=https_roots,json=httpsRoots,proto3" json:"https_roots,omitempty"`
 	ProvisionTrust bool   `protobuf:"varint,12,opt,name=provision_trust,json=provisionTrust,proto3" json:"provision_trust,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Parent-signed Lite Device CA path, excluding the platform root.
+	// Candidate issuers for mesh verification; these are never trust anchors.
+	LiteDeviceIntermediates []byte `protobuf:"bytes,13,opt,name=lite_device_intermediates,json=liteDeviceIntermediates,proto3" json:"lite_device_intermediates,omitempty"`
+	// HTTPS CA discovery URL. The firmware selects the query for its identity.
+	EstUrl        string `protobuf:"bytes,14,opt,name=est_url,json=estUrl,proto3" json:"est_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WendyConfEnrollment) Reset() {
@@ -423,6 +428,20 @@ func (x *WendyConfEnrollment) GetProvisionTrust() bool {
 	return false
 }
 
+func (x *WendyConfEnrollment) GetLiteDeviceIntermediates() []byte {
+	if x != nil {
+		return x.LiteDeviceIntermediates
+	}
+	return nil
+}
+
+func (x *WendyConfEnrollment) GetEstUrl() string {
+	if x != nil {
+		return x.EstUrl
+	}
+	return ""
+}
+
 type WendyConf struct {
 	state         protoimpl.MessageState      `protogen:"open.v1"`
 	DeviceName    *string                     `protobuf:"bytes,1,opt,name=device_name,json=deviceName,proto3,oneof" json:"device_name,omitempty"`
@@ -512,7 +531,7 @@ const file_wendy_conf_proto_rawDesc = "" +
 	"\basset_id\x18\x04 \x01(\x05R\aassetId\x12\x10\n" +
 	"\x03key\x18\x05 \x01(\fR\x03key\x12\x12\n" +
 	"\x04cert\x18\x06 \x01(\fR\x04cert\x12\x14\n" +
-	"\x05chain\x18\a \x01(\fR\x05chain\"\x86\x03\n" +
+	"\x05chain\x18\a \x01(\fR\x05chain\"\xdb\x03\n" +
 	"\x13WendyConfEnrollment\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x14\n" +
@@ -530,7 +549,9 @@ const file_wendy_conf_proto_rawDesc = "" +
 	" \x01(\fR\btsaRoots\x12\x1f\n" +
 	"\vhttps_roots\x18\v \x01(\fR\n" +
 	"httpsRoots\x12'\n" +
-	"\x0fprovision_trust\x18\f \x01(\bR\x0eprovisionTrust\"\xdc\x01\n" +
+	"\x0fprovision_trust\x18\f \x01(\bR\x0eprovisionTrust\x12:\n" +
+	"\x19lite_device_intermediates\x18\r \x01(\fR\x17liteDeviceIntermediates\x12\x17\n" +
+	"\aest_url\x18\x0e \x01(\tR\x06estUrl\"\xdc\x01\n" +
 	"\tWendyConf\x12$\n" +
 	"\vdevice_name\x18\x01 \x01(\tH\x00R\n" +
 	"deviceName\x88\x01\x01\x12\"\n" +

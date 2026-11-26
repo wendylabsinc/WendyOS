@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
@@ -313,7 +314,6 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 // continue unenrolled, which returns nil. A name another device holds is asked
 // again, and the new name is written back to *deviceName.
 func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acmeEnrollmentBake, error) {
-	fmt.Println("Pre-enrolling device with Wendy Cloud...")
 	var state *acmeEnrollmentBake
 	enrollErr := retryTakenDeviceName(deviceName, p.interactive, "--device-name", func(name string) (err error) {
 		state, err = preEnrollACMEFn(ctx, p.auth, name)
@@ -326,7 +326,7 @@ func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acme
 		return nil, enrollErr
 	}
 	if enrollErr == nil {
-		fmt.Println("Cloud enrollment reserved; credential staged for first boot. Automatic ACME enrollment requires an image with a compatible agent; device enrollment and Cloud presence are not yet verified.")
+		installDone(os.Stdout, "Cloud enrollment reserved")
 		return state, nil
 	}
 	if !p.interactive {

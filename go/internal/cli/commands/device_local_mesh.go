@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -218,9 +219,21 @@ func readCLIReporter(parent context.Context) (*pb.LocalMeshTopology, error) {
 }
 
 func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, string, error) {
-	ctx, cancel := context.WithTimeout(parent, localMeshTopologyTimeout)
-	defer cancel()
-	target, err := resolveLocalMeshTopologyTarget(ctx, ReadOnlyMonitoring())
+	_, cloudCommand := cloudDeviceConfigFromContext(parent)
+	pick := deviceFlag == "" && !cloudCommand && os.Getenv("WENDY_AGENT_SOCKET") == "" && !jsonOutput && isInteractiveTerminal()
+	ctx := parent
+	var cancel context.CancelFunc
+	options := []resolveOption{ReadOnlyMonitoring()}
+	if pick {
+		// Start the connection timeout after selection so the user has time to choose.
+		ctx = context.WithValue(parent, monitoringPickerTimeoutKey{}, localMeshTopologyTimeout)
+		// Use the shared picker's enrollment action when the user requests it.
+		options = append(options, func(cfg *resolveConfig) { cfg.disablePickerEnroll = false })
+	} else {
+		ctx, cancel = context.WithTimeout(parent, localMeshTopologyTimeout)
+		defer cancel()
+	}
+	target, err := resolveLocalMeshTopologyTarget(ctx, options...)
 	if err != nil {
 		return nil, "", err
 	}
@@ -246,6 +259,10 @@ func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, strin
 	}
 	if conn.Conn == nil {
 		return nil, "", fmt.Errorf("mesh topology requires a WendyOS agent or a supported Wendy Lite device")
+	}
+	if pick {
+		ctx, cancel = context.WithTimeout(parent, localMeshTopologyTimeout)
+		defer cancel()
 	}
 	client := pb.NewWendyLocalMeshAdminServiceClient(conn.Conn)
 	topology, err := client.GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{})

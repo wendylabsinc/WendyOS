@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -374,13 +375,14 @@ func wendyLiteBoardsWithFirmware(boards []WendyLiteBoard, firmware map[string]ma
 
 // WendyLiteBoardsWithFirmware returns the catalog boards that currently have
 // published firmware, so pickers never offer a board whose flash attempt
-// would fail immediately after selection.
-func WendyLiteBoardsWithFirmware(nightly bool) ([]WendyLiteBoard, error) {
+// would fail immediately after selection. The firmware list is in the master
+// manifest, which a ctx from withMainManifestMemo does not download twice.
+func WendyLiteBoardsWithFirmware(ctx context.Context, nightly bool) ([]WendyLiteBoard, error) {
 	boards, err := WendyLiteBoards()
 	if err != nil {
 		return nil, err
 	}
-	main, err := fetchMainManifest()
+	main, err := fetchMainManifestContext(ctx)
 	if err != nil {
 		return nil, err
 	}

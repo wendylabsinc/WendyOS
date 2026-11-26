@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import WendyE2ETesting
 
 #if canImport(FoundationXML)
     import FoundationXML
@@ -137,27 +138,7 @@ struct GoCoverage {
     }
 
     static func validateNative(_ natives: [URL]) throws {
-        for native in natives {
-            let metadata = Set(
-                try CoverageIO.files(native, prefix: "covmeta.").map {
-                    String($0.lastPathComponent.dropFirst(8))
-                }
-            )
-            let counters = Set(
-                try CoverageIO.files(native, prefix: "covcounters.").map {
-                    $0.lastPathComponent.components(separatedBy: ".")[1]
-                }
-            )
-            guard !metadata.isEmpty && !counters.isEmpty else {
-                throw ValidationError("Missing native Go metadata/counters: " + native.path)
-            }
-            guard counters.isSubset(of: metadata) else {
-                throw ValidationError("Missing native Go metadata for counters: " + native.path)
-            }
-            guard metadata.isSubset(of: counters) else {
-                throw ValidationError("Missing native Go counters for metadata: " + native.path)
-            }
-        }
+        try WendyE2ECoverage.validateNative(natives)
     }
 
     static func profile(
@@ -242,38 +223,18 @@ struct GoCoverage {
     }
 
     static func checkCLICounters(_ native: URL) throws -> Int {
-        let counters = try CoverageIO.files(native, prefix: "covcounters.")
-        let starts = try CoverageIO.files(native, prefix: "invocation.")
-        for start in starts {
-            let fields = start.lastPathComponent.components(separatedBy: ".")
-            guard fields.count == 3, let timestamp = Int64(fields[2]),
-                counters.contains(where: {
-                    let parts = $0.lastPathComponent.components(separatedBy: ".")
-                    return parts.count == 4 && parts[2] == fields[1]
-                        && (Int64(parts[3]) ?? -1) >= timestamp
-                })
-            else {
-                throw ValidationError(
-                    "CLI invocation did not write counters: " + start.lastPathComponent
-                )
-            }
-        }
-        if try !starts.isEmpty
-            && (counters.isEmpty || CoverageIO.files(native, prefix: "covmeta.").isEmpty)
-        {
-            throw ValidationError("Missing native Go counters or metadata")
-        }
-        return starts.count
+        try WendyE2ECoverage.checkCLICounters(native)
     }
 
-    static func runTests(
-        run input: URL,
-        filters: [String],
-        control: String?,
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) throws -> Int32 {
-        let run = input.resolvingSymlinksInPath()
-        let coverage = run.appendingPathComponent("coverage")
+    static func agentControl(
+        _ path: String,
+        operation: String,
+        directory: String = ""
+    ) throws -> Int {
+        try WendyE2ECoverage.agentControl(path, operation: operation, directory: directory)
+    }
+
+    func startCapture(control: String?) throws {
         var source = try CoverageIO.read(coverage.appendingPathComponent("source.json"))
         try Self.validateSource(source)
         if (source["packages"] as? [String: Any])?["wendy-agent"] != nil && control == nil {
@@ -291,112 +252,9 @@ struct GoCoverage {
             binaries[role] = ["sha256": try CoverageIO.sha256(file: binary), "buildInfo": info]
         }
         source["binaries"] = binaries
+        source["capture"] = ["status": "running"]
         try CoverageIO.write(source, to: coverage.appendingPathComponent("source.json"))
-        var records: [[String: Any]] = []
-        try CoverageIO.write(records, to: coverage.appendingPathComponent("tests.json"))
-        let listed = try CoverageIO.execute(["swift", "test", "list"], environment: environment)
-        FileHandle.standardError.write(Data(listed.error.utf8))
-        guard listed.status == 0 else {
-            throw ValidationError("swift test list exited \(listed.status): \(listed.error)")
-        }
-        let patterns = try filters.map { try NSRegularExpression(pattern: $0) }
-        let tests = CoverageIO.lines(listed.text).filter { name in
-            name.contains("/")
-                && patterns.contains {
-                    $0.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil
-                }
-        }
-        let combined = XMLElement(name: "testsuites")
-        func save() throws {
-            try CoverageIO.write(records, to: coverage.appendingPathComponent("tests.json"))
-            let document = XMLDocument(rootElement: (combined.copy() as! XMLElement))
-            document.version = "1.0"
-            document.characterEncoding = "utf-8"
-            try document.xmlData.write(
-                to: run.appendingPathComponent("test-results.xml"),
-                options: .atomic
-            )
-        }
-        try save()
-        var status: Int32 = 0
-        for (index, name) in tests.enumerated() {
-            let receipt = coverage.appendingPathComponent("current-test.txt")
-            try CoverageIO.remove(receipt)
-            let xml = coverage.appendingPathComponent("test-\(index).xml")
-            var record: [String: Any] = [
-                "test": name, "sourceID": source["sourceID"]!, "status": "incomplete",
-            ]
-            records.append(record)
-            try save()
-            do {
-                if let control {
-                    record["agentPID"] = try agentControl(control, operation: "reset")
-                }
-                var env = environment
-                env["WENDY_E2E_COVERAGE_RECEIPT"] = receipt.path
-                let result = try CoverageIO.execute(
-                    [
-                        "swift", "test", "--skip-build", "--no-parallel", "--filter",
-                        "^" + NSRegularExpression.escapedPattern(for: name) + "(/|$)",
-                        "--xunit-output", xml.path,
-                    ],
-                    environment: env,
-                    inheritOutput: true
-                )
-                record["testExitStatus"] = Int(result.status)
-                if status == 0 { status = result.status }
-                var native: URL?
-                if CoverageIO.exists(receipt) {
-                    let test = URL(
-                        fileURLWithPath: try String(contentsOf: receipt, encoding: .utf8)
-                    ).resolvingSymlinksInPath()
-                    native = test.appendingPathComponent("coverage/go")
-                    record["directory"] = try CoverageIO.relative(test, to: run)
-                    if let control {
-                        guard
-                            try agentControl(control, operation: "export", directory: native!.path)
-                                == record["agentPID"] as? Int
-                        else { throw ValidationError("Agent changed between reset and export") }
-                        record["agentExported"] = true
-                    }
-                    records[index] = record
-                    try save()
-                }
-                let swiftPath = coverage.appendingPathComponent("test-\(index)-swift-testing.xml")
-                let xmlData = try Data(contentsOf: CoverageIO.exists(swiftPath) ? swiftPath : xml)
-                let parser = XMLParser(data: xmlData)
-                guard parser.parse(), parser.parserError == nil else {
-                    throw ValidationError("Selected test produced invalid xUnit output")
-                }
-                let document = try XMLDocument(data: xmlData)
-                let cases = try document.nodes(forXPath: "//testcase")
-                guard !cases.isEmpty, let root = document.rootElement() else {
-                    throw ValidationError("Selected test produced no xUnit cases")
-                }
-                let suites =
-                    root.name == "testsuite"
-                    ? [root] : (root.children ?? []).compactMap { $0 as? XMLElement }
-                for suite in suites { combined.addChild(suite.copy() as! XMLNode) }
-                if try cases.allSatisfy({ try !$0.nodes(forXPath: "skipped").isEmpty }) {
-                    record["status"] = "skipped"
-                } else if let native {
-                    let count = try checkCLICounters(native)
-                    record["cliInvocations"] = count
-                    record["status"] = count > 0 || control != nil ? "collected" : "no-data"
-                    record["cli"] = count > 0 ? "collected" : "not invoked"
-                } else {
-                    record["status"] = "no-data"
-                    record["cli"] = "not invoked through the scenario harness"
-                }
-            } catch {
-                record["error"] = String(describing: error)
-                FileHandle.standardError.write(Data("ERROR: E2E coverage: \(name) \(error)\n".utf8))
-                if status == 0 { status = 1 }
-            }
-            records[index] = record
-            try save()
-        }
-        return status
+        try CoverageIO.write([], to: coverage.appendingPathComponent("tests.json"))
     }
 
     func finishCapture(control: String?) throws -> Int32 {
@@ -407,6 +265,7 @@ struct GoCoverage {
         if CoverageIO.exists(run.appendingPathComponent("timeout.json")) {
             errors.append("Test process timed out; coverage intervals may be incomplete")
         }
+        let interrupted = CoverageIO.exists(coverage.appendingPathComponent("current-test.txt"))
         if let index = records.indices.last, records[index]["status"] as? String == "incomplete" {
             let receipt = coverage.appendingPathComponent("current-test.txt")
             if CoverageIO.exists(receipt) {
@@ -416,15 +275,83 @@ struct GoCoverage {
                     ).resolvingSymlinksInPath()
                     records[index]["directory"] = try CoverageIO.relative(test, to: run)
                     if let control, records[index]["agentExported"] as? Bool != true {
-                        _ = try Self.agentControl(
+                        let pid = try Self.agentControl(
                             control,
                             operation: "export",
                             directory: test.appendingPathComponent("coverage/go").path
                         )
+                        guard pid == records[index]["agentPID"] as? Int else {
+                            throw ValidationError("Agent changed during interrupted scenario")
+                        }
                         records[index]["agentExported"] = true
                     }
                 } catch { errors.append(String(describing: error)) }
             }
+        }
+        if source["capture"] != nil {
+            var updatedSource = source
+            do {
+                guard !interrupted else {
+                    throw ValidationError(
+                        "Scenario interrupted; remaining suite tests may be unexecuted"
+                    )
+                }
+                let xml = run.appendingPathComponent("test-results.xml")
+                let data = try Data(contentsOf: xml)
+                let parser = XMLParser(data: data)
+                guard parser.parse(), parser.parserError == nil else {
+                    throw ValidationError(
+                        "Suite interrupted or produced invalid xUnit; remaining tests may be unexecuted"
+                    )
+                }
+                let cases = try XMLDocument(data: data).nodes(forXPath: "//testcase")
+                var seen = Set<Int>()
+                for item in cases {
+                    guard let test = item as? XMLElement,
+                        let classname = test.attribute(forName: "classname")?.stringValue,
+                        let name = test.attribute(forName: "name")?.stringValue
+                    else { throw ValidationError("Suite xUnit case has no test identity") }
+                    let identity =
+                        normalizedClassname(classname) + "/" + normalizedTestName(name) + "()"
+                    let skipped = try !test.nodes(forXPath: "skipped").isEmpty
+                    let failed = try !test.nodes(forXPath: "failure|error").isEmpty
+                    if let i = records.firstIndex(where: { $0["test"] as? String == identity }) {
+                        seen.insert(i)
+                        records[i]["testExitStatus"] = failed ? 1 : 0
+                    } else {
+                        records.append([
+                            "test": identity, "sourceID": source["sourceID"]!,
+                            "status": skipped ? "skipped" : "no-data",
+                            "cli": "not invoked through the scenario harness",
+                            "testExitStatus": failed ? 1 : 0,
+                        ])
+                        seen.insert(records.count - 1)
+                    }
+                }
+                guard records.indices.allSatisfy({ seen.contains($0) }) else {
+                    throw ValidationError(
+                        "Scenario capture missing from suite xUnit; suite may have been interrupted"
+                    )
+                }
+                let info = try CoverageIO.read(run.appendingPathComponent("attempt.json"))
+                let failures = try cases.reduce(0) {
+                    try $0 + ($1.nodes(forXPath: "failure|error").isEmpty ? 0 : 1)
+                }
+                if (info["exitStatus"] as? Int ?? 0) != 0 && failures == 0 {
+                    throw ValidationError(
+                        "Suite exited unsuccessfully without a recorded test failure; remaining tests may be unexecuted"
+                    )
+                }
+                updatedSource["capture"] = ["status": "completed", "cases": cases.count]
+            } catch {
+                let detail = "Suite capture incomplete: \(error)"
+                errors.append(detail)
+                updatedSource["capture"] = [
+                    "status": "incomplete", "error": detail,
+                    "unexecuted": "Unknown after suite interruption; no outcomes inferred",
+                ]
+            }
+            try CoverageIO.write(updatedSource, to: coverage.appendingPathComponent("source.json"))
         }
         for i in records.indices {
             if ["skipped", "no-data"].contains(records[i]["status"] as? String ?? "") { continue }
@@ -478,6 +405,14 @@ struct GoCoverage {
         var records = try CoverageIO.records(coverage.appendingPathComponent("tests.json"))
         var errors: [String] = []
         var natives: [URL] = []
+        if let capture = source["capture"] as? [String: Any],
+            capture["status"] as? String != "completed"
+        {
+            errors.append(
+                capture["error"] as? String
+                    ?? "Suite capture incomplete; remaining tests may be unexecuted"
+            )
+        }
         try CoverageIO.remove(coverage.appendingPathComponent("coverage.out"))
         if CoverageIO.exists(run.appendingPathComponent("timeout.json")) {
             errors.append("Test process timed out; coverage intervals may be incomplete")

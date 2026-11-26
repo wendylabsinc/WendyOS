@@ -9,12 +9,11 @@ struct CaptureCommand: ParsableCommand {
         abstract: "Internal E2ETest.sh counter capture.",
         shouldDisplay: false
     )
-    enum Phase: String, ExpressibleByArgument { case prepare, run, finish }
+    enum Phase: String, ExpressibleByArgument { case prepare, start, finish }
     @Option var phase: Phase
     @Option var runDir: String
     @Option var repo: String?
     @Option var control: String?
-    @Option var filter: [String] = []
     @Flag var managedAgent = false
     mutating func run() throws {
         let root = URL(fileURLWithPath: runDir)
@@ -23,9 +22,10 @@ struct CaptureCommand: ParsableCommand {
             try GoCoverage(repo: CoverageIO.repository(repo), run: root).prepare(
                 managed: managedAgent
             )
-        case .run:
-            let status = try GoCoverage.runTests(run: root, filters: filter, control: control)
-            if status != 0 { throw ExitCode(status) }
+        case .start:
+            try GoCoverage(repo: CoverageIO.repository(repo), run: root).startCapture(
+                control: control
+            )
         case .finish:
             let status = try GoCoverage(repo: CoverageIO.repository(repo), run: root).finishCapture(
                 control: control

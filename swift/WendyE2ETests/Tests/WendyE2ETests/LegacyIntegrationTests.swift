@@ -376,9 +376,17 @@ struct `legacy integration tests` {
     private func runFixture(
         _ name: String,
         extraArguments: [String] = [],
-        requiresGPU: Bool = false
+        requiresGPU: Bool = false,
+        filePath: String = #filePath,
+        function: String = #function,
+        line: Int = #line
     ) async throws {
-        try await self.scenario.run(authenticated: false) { cli, agent in
+        try await self.scenario.run(
+            authenticated: false,
+            filePath: filePath,
+            function: function,
+            line: line
+        ) { cli, agent in
             let device = agent.machine.address
             if requiresGPU {
                 let hasGPU = try await Self.deviceHasGPU(on: cli, device: device)
