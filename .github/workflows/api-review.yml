@@ -1,4 +1,4 @@
-name: AI Compatibility Review
+name: API Review
 
 on:
   pull_request:
@@ -77,9 +77,9 @@ jobs:
         run: |
           set -euo pipefail
           scripts_dir="$GITHUB_WORKSPACE/review-automation/.github/scripts"
-          for filename in api_review.py api_review_comment.py compatibility_review.py compatibility_state.py review_diff.py review_sources.py; do
+          for filename in api_review.py api_review_comment.py review_diff.py review_sources.py; do
             if [[ ! -s "$scripts_dir/$filename" ]]; then
-              echo "::error::AI Compatibility Review is not activated on trusted main; no PR-head automation fallback is permitted."
+              echo "::error::API Review is not activated on trusted main; no PR-head automation fallback is permitted."
               exit 1
             fi
           done
@@ -95,8 +95,6 @@ jobs:
           python3 review-automation/.github/scripts/api_review_test.py
           python3 review-automation/.github/scripts/api_review_comment_test.py
           python3 review-automation/.github/scripts/review_diff_test.py
-          python3 review-automation/.github/scripts/compatibility_review_test.py
-          python3 review-automation/.github/scripts/compatibility_state_test.py
           if [[ -f review-automation/.github/scripts/review_sources_test.py ]]; then
             python3 review-automation/.github/scripts/review_sources_test.py
           fi
@@ -183,7 +181,6 @@ jobs:
             previous_args=(--previous "$RUNNER_TEMP/previous-api-review.json")
           fi
           python3 review-automation/.github/scripts/api_review.py review \
-            --source-repository "$GITHUB_WORKSPACE/review-automation" \
             --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
             --diff "$RUNNER_TEMP/api-review-pr.diff" \
             "${previous_args[@]}" \
@@ -194,13 +191,8 @@ jobs:
             --output "$RUNNER_TEMP/api-review-result.json" \
             --model "$CLAUDE_MODEL"
 
-      - name: Guard result privacy before artifact upload
-        if: always() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
-        id: public-result
-        run: python3 review-automation/.github/scripts/api_review.py guard-public --result "$RUNNER_TEMP/api-review-result.json"
-
       - name: Preserve complete API review result
-        if: always() && steps.public-result.outcome == 'success'
+        if: always() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: api-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
@@ -258,8 +250,6 @@ jobs:
           python3 .github/scripts/api_review_run_test.py
           python3 .github/scripts/review_sources_test.py
           python3 .github/scripts/api_review_workflow_test.py
-          python3 .github/scripts/compatibility_review_test.py
-          python3 .github/scripts/compatibility_state_test.py
 
   validate-candidate:
     name: Validate candidate API review without publication
@@ -326,7 +316,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           python3 .github/scripts/api_review.py review \
-            --source-repository "$GITHUB_WORKSPACE" \
             --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
             --diff "$RUNNER_TEMP/api-review-pr.diff" \
             --previous "$RUNNER_TEMP/previous-api-review.json" \
@@ -348,13 +337,8 @@ jobs:
             --expected-head-sha "$EXPECTED_HEAD_SHA" --expected-base-sha "$EXPECTED_BASE_SHA" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Guard candidate privacy before artifact upload
-        if: always() && (steps.candidate.outcome == 'success' || steps.candidate.outcome == 'failure')
-        id: public-candidate
-        run: python3 .github/scripts/api_review.py guard-public --result "$RUNNER_TEMP/api-review-result.json"
-
       - name: Preserve candidate result
-        if: always() && steps.public-candidate.outcome == 'success'
+        if: always() && (steps.candidate.outcome == 'success' || steps.candidate.outcome == 'failure')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: api-review-validation-${{ github.run_id }}

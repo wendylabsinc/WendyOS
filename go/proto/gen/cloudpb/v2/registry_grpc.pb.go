@@ -249,6 +249,7 @@ const (
 	ArtifactRegistryService_RemoveWraps_FullMethodName     = "/wendycloud.v2.ArtifactRegistryService/RemoveWraps"
 	ArtifactRegistryService_GetArtifact_FullMethodName     = "/wendycloud.v2.ArtifactRegistryService/GetArtifact"
 	ArtifactRegistryService_GetMyWraps_FullMethodName      = "/wendycloud.v2.ArtifactRegistryService/GetMyWraps"
+	ArtifactRegistryService_ListArtifacts_FullMethodName   = "/wendycloud.v2.ArtifactRegistryService/ListArtifacts"
 	ArtifactRegistryService_AssignDevice_FullMethodName    = "/wendycloud.v2.ArtifactRegistryService/AssignDevice"
 	ArtifactRegistryService_UnassignDevice_FullMethodName  = "/wendycloud.v2.ArtifactRegistryService/UnassignDevice"
 )
@@ -287,15 +288,33 @@ type ArtifactRegistryServiceClient interface {
 	// can unwrap a key to wrap it onward. A user has one key per device; each
 	// device opens the wraps at its own recipient_key_id.
 	GetMyWraps(ctx context.Context, in *GetMyWrapsRequest, opts ...grpc.CallOption) (*GetMyWrapsResponse, error)
+	// What the registry stores for one organization (apps and deployments spec
+	// 6.8, G7): each release's artifact with its size, who published it and
+	// when, whether every blob is stored, and the deployments that use it.
+	// Newest first by published_at, then app_release_id. A read: not signed.
+	// Gate: `artifact:read` in organization_id. organization_id must be the
+	// caller's verified organization (PERMISSION_DENIED otherwise), and every
+	// row is bound to it. Metadata only: ciphertext sizes, never keys,
+	// manifests, plaintext sizes or plaintext digests. The CLI calls the
+	// registry directly; the dashboard calls cloud, which forwards this same
+	// call with the operator's identity.
+	ListArtifacts(ctx context.Context, in *ListArtifactsRequest, opts ...grpc.CallOption) (*ListArtifactsResponse, error)
 	// One signed statement per target device (Q7, sem 2026-10-19 01:15: one
 	// signature per device, not per deployment), postbox-relayed verbatim to that
 	// device. It is the device's authority to apply AND its pull authorization.
 	// Cloud refuses it unless the deployment has a SealedContentKey and a
 	// CUSTODIAN wrap at deployment_key_id. For a registry-backed release,
 	// CreateDeployment records the deployment only; devices receive it here.
+	// Deprecated: moved to DeploymentService.AssignDevice (ruling D2); removed
+	// when the registry service splits out. Kept until every client and device
+	// has moved. Refused with FAILED_PRECONDITION while the app is being
+	// deleted, as under the new name.
 	// Signed; payload_type "wendycloud.v2.DeviceAssignment".
 	AssignDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*AssignDeviceResponse, error)
 	// Postbox-relayed to the device; cloud drops the assignment, so pulls stop.
+	// Deprecated: moved to DeploymentService.UnassignDevice (ruling D2); removed
+	// when the registry service splits out. Kept until every client and device
+	// has moved.
 	// Signed; payload_type "wendycloud.v2.UnassignDeviceRequest".
 	UnassignDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*UnassignDeviceResponse, error)
 }
@@ -371,6 +390,16 @@ func (c *artifactRegistryServiceClient) GetMyWraps(ctx context.Context, in *GetM
 	return out, nil
 }
 
+func (c *artifactRegistryServiceClient) ListArtifacts(ctx context.Context, in *ListArtifactsRequest, opts ...grpc.CallOption) (*ListArtifactsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListArtifactsResponse)
+	err := c.cc.Invoke(ctx, ArtifactRegistryService_ListArtifacts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *artifactRegistryServiceClient) AssignDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*AssignDeviceResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AssignDeviceResponse)
@@ -425,15 +454,33 @@ type ArtifactRegistryServiceServer interface {
 	// can unwrap a key to wrap it onward. A user has one key per device; each
 	// device opens the wraps at its own recipient_key_id.
 	GetMyWraps(context.Context, *GetMyWrapsRequest) (*GetMyWrapsResponse, error)
+	// What the registry stores for one organization (apps and deployments spec
+	// 6.8, G7): each release's artifact with its size, who published it and
+	// when, whether every blob is stored, and the deployments that use it.
+	// Newest first by published_at, then app_release_id. A read: not signed.
+	// Gate: `artifact:read` in organization_id. organization_id must be the
+	// caller's verified organization (PERMISSION_DENIED otherwise), and every
+	// row is bound to it. Metadata only: ciphertext sizes, never keys,
+	// manifests, plaintext sizes or plaintext digests. The CLI calls the
+	// registry directly; the dashboard calls cloud, which forwards this same
+	// call with the operator's identity.
+	ListArtifacts(context.Context, *ListArtifactsRequest) (*ListArtifactsResponse, error)
 	// One signed statement per target device (Q7, sem 2026-10-19 01:15: one
 	// signature per device, not per deployment), postbox-relayed verbatim to that
 	// device. It is the device's authority to apply AND its pull authorization.
 	// Cloud refuses it unless the deployment has a SealedContentKey and a
 	// CUSTODIAN wrap at deployment_key_id. For a registry-backed release,
 	// CreateDeployment records the deployment only; devices receive it here.
+	// Deprecated: moved to DeploymentService.AssignDevice (ruling D2); removed
+	// when the registry service splits out. Kept until every client and device
+	// has moved. Refused with FAILED_PRECONDITION while the app is being
+	// deleted, as under the new name.
 	// Signed; payload_type "wendycloud.v2.DeviceAssignment".
 	AssignDevice(context.Context, *SignedRequest) (*AssignDeviceResponse, error)
 	// Postbox-relayed to the device; cloud drops the assignment, so pulls stop.
+	// Deprecated: moved to DeploymentService.UnassignDevice (ruling D2); removed
+	// when the registry service splits out. Kept until every client and device
+	// has moved.
 	// Signed; payload_type "wendycloud.v2.UnassignDeviceRequest".
 	UnassignDevice(context.Context, *SignedRequest) (*UnassignDeviceResponse, error)
 	mustEmbedUnimplementedArtifactRegistryServiceServer()
@@ -463,6 +510,9 @@ func (UnimplementedArtifactRegistryServiceServer) GetArtifact(context.Context, *
 }
 func (UnimplementedArtifactRegistryServiceServer) GetMyWraps(context.Context, *GetMyWrapsRequest) (*GetMyWrapsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMyWraps not implemented")
+}
+func (UnimplementedArtifactRegistryServiceServer) ListArtifacts(context.Context, *ListArtifactsRequest) (*ListArtifactsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListArtifacts not implemented")
 }
 func (UnimplementedArtifactRegistryServiceServer) AssignDevice(context.Context, *SignedRequest) (*AssignDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AssignDevice not implemented")
@@ -589,6 +639,24 @@ func _ArtifactRegistryService_GetMyWraps_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ArtifactRegistryService_ListArtifacts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListArtifactsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ArtifactRegistryServiceServer).ListArtifacts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ArtifactRegistryService_ListArtifacts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ArtifactRegistryServiceServer).ListArtifacts(ctx, req.(*ListArtifactsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ArtifactRegistryService_AssignDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SignedRequest)
 	if err := dec(in); err != nil {
@@ -651,6 +719,10 @@ var ArtifactRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMyWraps",
 			Handler:    _ArtifactRegistryService_GetMyWraps_Handler,
+		},
+		{
+			MethodName: "ListArtifacts",
+			Handler:    _ArtifactRegistryService_ListArtifacts_Handler,
 		},
 		{
 			MethodName: "AssignDevice",

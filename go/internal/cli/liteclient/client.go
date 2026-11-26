@@ -914,6 +914,8 @@ func resultToError(result wendypb.WendyComResult) error {
 		return errors.New("WiFi is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_BLE:
 		return errors.New("BLE is not supported by this device")
+	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_ESPNOW:
+		return errors.New("ESP-NOW is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_NAN:
 		return errors.New("NAN is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_BLE_PROFILE_UNSUPPORTED:
@@ -1377,6 +1379,8 @@ func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, ad
 		c.link = nil
 		if setup.Err() != nil {
 			err = setup.Err()
+		} else if rejection := sourceCertificateRejection(err); rejection != nil {
+			return fmt.Errorf("SensorLink handshake: %w (%s): %w", rejection, describeRejection(leaf, conn.ConnectionState().PeerCertificates), err)
 		}
 		return fmt.Errorf("SensorLink handshake: %w", err)
 	}

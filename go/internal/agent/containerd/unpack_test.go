@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"maps"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/containerd/containerd/v2/core/snapshots"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/errdefs"
+	"go.uber.org/zap"
 )
 
 // mockStatter implements snapshotStatter for testing.
@@ -194,4 +198,35 @@ func TestRemoveLayerSnapshotsReportsSnapshotInUse(t *testing.T) {
 	if _, ok := sn.parents["sha256:c1"]; !ok {
 		t.Error("snapshot in use was removed")
 	}
+}
+
+type stalledSnapshotRemover struct {
+	snapshots.Snapshotter
+	received context.Context
+}
+
+func (s *stalledSnapshotRemover) Remove(ctx context.Context, _ string) error {
+	s.received = ctx
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestRemoveActiveSnapshotBoundsCleanup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &Client{namespace: "wendy-test", logger: zap.NewNop()}
+		cleanupCtx := c.withNamespace(context.Background())
+		sn := &stalledSnapshotRemover{}
+		time.Sleep(time.Minute) // The unpack may take longer than the cleanup timeout.
+		start := time.Now()
+		c.removeActiveSnapshot(cleanupCtx, sn, "active-snapshot", "failed apply", 0)
+		if elapsed := time.Since(start); elapsed != unpackCleanupTimeout {
+			t.Fatalf("snapshot cleanup waited %v, want %v", elapsed, unpackCleanupTimeout)
+		}
+		if ns, _ := namespaces.Namespace(sn.received); ns != "wendy-test" {
+			t.Fatalf("cleanup namespace = %q, want wendy-test", ns)
+		}
+		if !errors.Is(sn.received.Err(), context.DeadlineExceeded) {
+			t.Fatalf("snapshot cleanup error = %v, want deadline exceeded", sn.received.Err())
+		}
+	})
 }
