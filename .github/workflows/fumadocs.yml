@@ -89,7 +89,7 @@ jobs:
       url: ${{ steps.path.outputs.url }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # sitemap.xml dates each page by its source file's last commit, which
           # needs full history; a shallow clone leaves those dates out.
@@ -426,7 +426,7 @@ jobs:
     steps:
       - name: Check out hosted documentation probe
         if: startsWith(needs.build.outputs.deploy_path, 'branch-')
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           path: regression-source
