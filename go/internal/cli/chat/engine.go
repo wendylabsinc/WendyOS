@@ -30,6 +30,9 @@ type Engine struct {
 	maxRounds int
 	nextID    uint64
 	memory    *MemoryTools
+	// Local robot control skips the extra post-turn model request. Recall and
+	// explicit memory tools remain available under the normal memory setting.
+	skipAutomaticLearning bool
 }
 
 func NewEngine(provider Provider, executor Executor, system string) *Engine {
@@ -92,6 +95,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 	}
 	e.messages = append(e.messages, Message{Role: "user", Content: prompt})
 	memoryWarned := false
+	lastFailedTool, consecutiveFailures := "", 0
 	for round := 0; round < e.maxRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -184,6 +188,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		for i, call := range message.ToolCalls {
 			var result string
 			var images []Image
+			var callFailure error
 			emit(Event{Type: "tool_start", Call: &call})
 			switch {
 			case turnErr != nil:
@@ -192,6 +197,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 				turnErr = ctx.Err()
 				result = "Tool was not executed because the turn was canceled."
 			case validation[i] != nil:
+				callFailure = validation[i]
 				result = "Tool error: " + validation[i].Error()
 			default:
 				allowed := !byName[call.Name].RequiresApproval
@@ -224,6 +230,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 						e.memory.observe(call, output, toolErr)
 					}
 					if toolErr != nil {
+						callFailure = toolErr
 						result = "Tool error: " + toolErr.Error()
 						if output.Text != "" {
 							result += "\n" + output.Text
@@ -233,6 +240,18 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 						turnErr = ctx.Err()
 					}
 				}
+			}
+			if callFailure != nil && turnErr == nil {
+				if lastFailedTool == call.Name {
+					consecutiveFailures++
+				} else {
+					lastFailedTool, consecutiveFailures = call.Name, 1
+				}
+				if consecutiveFailures >= 3 {
+					turnErr = fmt.Errorf("stopped after three consecutive %s failures: %w", call.Name, callFailure)
+				}
+			} else if turnErr == nil {
+				lastFailedTool, consecutiveFailures = "", 0
 			}
 			if len(images) > 0 {
 				result = fmt.Sprintf("[%d image(s) attached for visual inspection.]\n%s", len(images), result)
