@@ -1,6 +1,6 @@
 ---
 title: Unitree G1
-description: Install wendy-agent on the Unitree G1's onboard computer to deploy and manage apps with Wendy
+description: Install WendyOS on the Unitree G1 EDU development computer over USB
 ---
 
 <img
@@ -9,182 +9,44 @@ description: Install wendy-agent on the Unitree G1's onboard computer to deploy 
   className="not-prose aspect-video w-full bg-fd-muted object-cover object-center"
 />
 
-## Overview
+## Install WendyOS
 
-The Unitree G1 EDU includes an NVIDIA Jetson development computer known as PC2.
-Install Wendy Agent on PC2 to deploy apps, stream logs, inspect hardware, and
-connect to the G1's DDS and `unitree_sdk2` interfaces.
+WendyOS runs on the G1 EDU's development computer, called PC2. This guide
+covers the Jetson Orin NX 16 GB version with internal NVMe. PC2 shares the
+robot's internal Ethernet network with PC1, the Unitree motion controller.
 
-The Wendy CLI runs on your development machine. Wendy Agent runs on PC2.
+Install the [Wendy CLI](/docs/installation/cli) on an internet-connected
+computer. Save the PC2 system and firmware before starting. Recovery replaces
+the Jetson's QSPI firmware and erases its internal NVMe.
 
-<Callout type="info">
-  This guide supports G1 PC2 images based on Ubuntu 20.04 or Ubuntu 22.04 on
-  arm64.
-</Callout>
-
-## What You Need
-
-- A Unitree G1 EDU with the onboard development computer
-- The [Wendy CLI](/docs/installation/cli) on your
-  development machine
-- An Ethernet cable and, if needed, a USB-to-Ethernet adapter
-- Internet access from PC2
-- Administrator access on your development machine and `sudo` access on PC2
-
-PC2 uses this factory network configuration:
-
-```text
-Address:  192.168.123.164
-Username: unitree
-Password: 123
+```bash
+wendy install --device-type unitree-g1 --no-wifi
 ```
 
-Change the factory password before connecting PC2 to Wi-Fi or another shared
-network.
+Use a USB 2.0 data cable to connect your computer to the PC2 flashing port.
+The CLI walks you through entering recovery and shows progress through the
+firmware and NVMe writes. See the [PC2 recovery steps](/docs/advanced/clients/wendy-cli/commands/os/install/#unitree-g1-edu-pc2)
+for the port and buttons.
 
-## Installation Steps
+## Connect after boot
 
-<Steps>
-  <Step>
-    ### Connect Your Development Machine
+Connect your computer to the robot's Ethernet network. WendyOS assigns PC2
+`192.168.123.164/24`. Give your computer a free address on the same subnet,
+such as `192.168.123.99/24`, and leave its gateway unset for that link.
 
-    Power on the G1 and wait for PC2 to boot. Connect your development machine
-    to the G1 Ethernet port that reaches PC2.
+```bash
+ping 192.168.123.164
+wendy discover
+```
 
-    <Tabs items={['macOS', 'Linux']} groupId="g1-developer-os" persist>
-      <Tab value="macOS">
-        Find the Ethernet network service:
+Use the discovered address to [verify the installation](/docs/advanced/clients/wendy-cli/commands/os/install/#agent-driven-installation).
+To return to the factory system, see [Restore Unitree JetPack on PC2](/docs/installation/unitree-g1-reflash).
 
-        ```bash
-        networksetup -listallhardwareports
-        networksetup -listnetworkserviceorder
-        ```
+## Use the G1 with Wendy
 
-        Assign an address on the G1 network. Replace
-        `<robot-link-service>` with the network service from the previous
-        command:
-
-        ```bash
-        sudo networksetup -setmanual "<robot-link-service>" \
-          192.168.123.99 255.255.255.0 ""
-        ```
-      </Tab>
-
-      <Tab value="Linux">
-        Find the Ethernet interface:
-
-        ```bash
-        ip -br link
-        ```
-
-        Assign an address on the G1 network. Replace
-        `<robot-link-interface>` with the interface from the previous command:
-
-        ```bash
-        sudo ip addr replace 192.168.123.99/24 dev <robot-link-interface>
-        sudo ip link set <robot-link-interface> up
-        ```
-      </Tab>
-    </Tabs>
-
-    Verify the connection:
-
-    ```bash
-    ping 192.168.123.164
-    ```
-  </Step>
-
-  <Step>
-    ### Connect to PC2
-
-    Connect to the G1's development computer over SSH:
-
-    ```bash
-    ssh unitree@192.168.123.164
-    ```
-
-    Sign in with the factory password, then change it:
-
-    ```bash
-    passwd
-    ```
-
-    Commands in the next two steps run on PC2.
-  </Step>
-
-  <Step>
-    ### Check Internet Access
-
-    Check whether PC2 can reach the Wendy Agent installer:
-
-    ```bash
-    wget --spider https://install.wendy.dev/agent.sh
-    ```
-
-    Continue when the command reports `200 OK` and `Remote file exists`. If it
-    fails, connect PC2 to Wi-Fi using Unitree's networking instructions. On
-    macOS, you can also [temporarily share your development machine's internet
-    connection](#temporary-macos-internet-sharing).
-  </Step>
-
-  <Step>
-    ### Install Wendy Agent
-
-    Download and run the installer on PC2. `--network-access network` lets
-    your development machine discover and manage the robot; without it a fresh
-    install is reachable only from PC2 itself:
-
-    ```bash
-    wget -O /tmp/wendy-agent.sh https://install.wendy.dev/agent.sh
-    less /tmp/wendy-agent.sh
-    bash /tmp/wendy-agent.sh --network-access network
-    ```
-
-    <Callout type="warning">
-      Stop if APT says it will remove Docker or replace Docker's
-      `containerd.io` package. Resolve the package conflict before continuing.
-    </Callout>
-
-    Verify the installation:
-
-    ```bash
-    sudo systemctl is-active wendy-agent
-    ```
-
-    The command should report `active`.
-  </Step>
-
-  <Step>
-    ### Discover the G1
-
-    Return to your development machine and run:
-
-    ```bash
-    wendy discover
-    ```
-
-    PC2 may appear under its Ubuntu hostname or as **Unitree G1 Nx**. Use the
-    address shown by `wendy discover` when deploying an app:
-
-    ```bash
-    cd <your-wendy-project>
-    wendy run --device <address-from-wendy-discover>
-    ```
-
-    PC2 is now ready for Wendy app development. You can use the app, device,
-    debugging, and robotics guides throughout these docs. WendyOS installation
-    guides do not apply because PC2 continues to run Unitree's Ubuntu image.
-  </Step>
-</Steps>
-
-## Wendy Cloud Enrollment
-
-Cloud enrollment is optional. On your development machine, run `wendy install`
-and select **Linux Desktop** to generate an enrollment command for PC2. The
-enrollment token expires after about an hour.
-
-Run the generated command on PC2. The G1 will then appear in Wendy Cloud when
-it is online.
+Start with a [non-motion app](/docs/guides/tutorials/python/hello-world).
+The browser control and camera examples below were tested on the factory PC2
+image. Check DDS and camera access on WendyOS before using those examples.
 
 ## Drive the G1 from your browser
 
@@ -305,114 +167,12 @@ guide. Wendy can introspect the live ROS 2 graph without a separate SSH
 session.
 
 <Callout type="warning">
-  Installing the agent does not move the robot, but a deployed app can. A
+  A deployed app can move the robot. A
   software Stop button is not a safety-rated E-stop. For every first motion
   test, support the G1 on its gantry, keep the Unitree physical remote and
   E-stop with the operator, require an explicit actuation gate, use short
   command leases and live FSM readback, and ensure only one app owns motion.
 </Callout>
-
-## Troubleshooting
-
-### Temporary macOS Internet Sharing
-
-Use these steps if PC2 cannot connect to Wi-Fi. They share your Mac's internet
-connection with PC2 over the Ethernet cable.
-
-<Accordions>
-  <Accordion title="Share your Mac's internet connection">
-    On your Mac, open a terminal and run:
-
-    ```bash
-    UPLINK=$(route -n get default | awk '/interface:/{print $2}')
-    ORIGINAL_FORWARDING=$(sysctl -n net.inet.ip.forwarding)
-    PF_TOKEN=$(sudo pfctl -E 2>&1 | awk '/Token :/ {print $3}')
-
-    printf 'nat on %s from 192.168.123.0/24 to any -> (%s)\n' \
-      "$UPLINK" "$UPLINK" | \
-      sudo pfctl -a com.apple/wendy-g1 -f -
-    sudo sysctl -w net.inet.ip.forwarding=1
-    ```
-
-    Keep this terminal open. You will use the saved values to restore the Mac
-    after installing Wendy Agent.
-
-    On PC2, run:
-
-    ```bash
-    PC2_ETHERNET=$(ip -br address | \
-      awk '$3 ~ /^192\.168\.123\.164\// {print $1; exit}')
-    test -n "$PC2_ETHERNET"
-    sudo ip route replace default via 192.168.123.99 \
-      dev "$PC2_ETHERNET" metric 100
-    sudo resolvectl dns "$PC2_ETHERNET" 1.1.1.1
-    wget --spider https://install.wendy.dev/agent.sh
-    ```
-
-    After installing Wendy Agent, remove the temporary settings from PC2:
-
-    ```bash
-    sudo ip route del default via 192.168.123.99 dev "$PC2_ETHERNET"
-    sudo resolvectl revert "$PC2_ETHERNET"
-    ```
-
-    Return to the same terminal on your Mac and run:
-
-    ```bash
-    sudo pfctl -a com.apple/wendy-g1 -F all
-    if [ -n "${PF_TOKEN:-}" ]; then sudo pfctl -X "$PF_TOKEN"; fi
-    sudo sysctl -w net.inet.ip.forwarding="$ORIGINAL_FORWARDING"
-    ```
-  </Accordion>
-</Accordions>
-
-- **`wendy discover` shows nothing on macOS:** Check System Settings → Privacy
-  & Security → Local Network and make sure the terminal has access. Verify the
-  advertisement with `dns-sd -B _wendyos._udp`.
-- **Agent unreachable:** Read the address and port from `wendy discover`, then
-  test that exact pair with `nc -zv <address> <advertised-port>`. Do not assume
-  every agent uses `50051` or `50052`.
-- **Installer reports `/dev/tty: No such device or address`:** Use the
-  downloaded script with `bash /tmp/wendy-agent.sh -y --network-access network`.
-- **The service is enabled but inactive after an upgrade:** Run
-  `sudo systemctl start wendy-agent`, inspect the journal, and record the agent
-  package version with `dpkg-query -W wendy-agent` when contacting support.
-- **`wendy run` reports `wendy.json not found`:** Change into a Wendy project
-  or create one with `wendy init` before deploying.
-- **Installer download fails:** Re-run the `wget --spider` internet check in
-  Step 3. Inspect both PC2's default route and the developer machine's default
-  route before changing either system.
-- **SSH warns that the remote host identification changed:** This is expected
-  after reflashing PC2, but it can also indicate the wrong device or a
-  man-in-the-middle attack. Verify the new ED25519 fingerprint from a local PC2
-  terminal with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. Only after
-  it matches, remove the single stale developer-machine entry with
-  `ssh-keygen -R 192.168.123.164` and reconnect. Do not bypass host-key checking.
-- **PC2 does not answer ping:** Recheck the physical G1 port, Ethernet link,
-  interface name, `192.168.123.99/24` address, and absence of a gateway on the
-  developer machine's robot-link service.
-
-## Remove the agent
-
-To remove Wendy from PC2 without removing the shared container runtime:
-
-```bash
-sudo apt-get purge -y wendy-agent
-sudo rm -f /etc/apt/sources.list.d/wendy.list
-sudo rm -f /usr/share/keyrings/wendy-archive-keyring.gpg
-sudo apt-get update
-```
-
-This intentionally leaves `/var/lib/wendy-agent` and deployed app data in
-place. Review and remove those directories separately only when their data is
-no longer needed. Do not remove `containerd` automatically because Docker,
-Unitree software, or other workloads may use it.
-
-## Reflash PC2
-
-Reflashing PC2 is a separate recovery procedure and is not required to install
-Wendy Agent. See [Reflash Unitree G1 PC2](/docs/installation/unitree-g1-reflash)
-to replace the PC2 operating system and module firmware.
 
 ## Next steps
 

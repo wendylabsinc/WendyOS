@@ -156,7 +156,7 @@
                 return [
                     "For Wendy Lite, connect the board with a USB data cable and select its exact board and serial port in the installer.",
                     "For an existing Linux machine or headless Mac, choose that option in the installer and follow its target-host instructions.",
-                    "Unitree G1 PC2 keeps vendor Ubuntu. Use the Unitree agent guide instead of a generic Jetson image.",
+                    "For a Unitree G1 EDU, use the G1 guide to run the Wendy CLI's PC2 USB recovery installer.",
                 ]
             default: return []
             }

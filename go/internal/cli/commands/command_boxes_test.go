@@ -79,6 +79,9 @@ func TestOrinRetryCommandsBelowBox(t *testing.T) {
 			assertCommandBelowBox(t, output.String(), "wendy os install --device-type "+board+" --storage "+storage)
 		}
 	}
+	var output strings.Builder
+	printOrinBadStateHint(&output, t234InstallOptions{DeviceType: g1PC2DeviceType, Storage: "nvme", PRNumber: 380})
+	assertCommandBelowBox(t, output.String(), "wendy os install --device-type unitree-g1-pc2 --storage nvme --pr 380")
 }
 
 func TestTourWelcomeCommandBelowBox(t *testing.T) {

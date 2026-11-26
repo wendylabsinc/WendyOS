@@ -68,7 +68,7 @@ func Verify(ctx context.Context, opts VerifyOptions, connect func(context.Contex
 	out.AgentVersion, out.OSVersion, out.DeviceType, out.PublicKey = v.GetVersion(), v.GetOsVersion(), v.GetDeviceType(), v.GetPublicKey()
 	for _, check := range []struct{ name, want, got string }{
 		{"OS version", osVersionNumber(opts.OSVersion), osVersionNumber(out.OSVersion)},
-		{"device type", opts.DeviceType, out.DeviceType},
+		{"device type", CanonicalDeviceType(opts.DeviceType), out.DeviceType},
 		{"public key", opts.PublicKey, out.PublicKey},
 	} {
 		if check.want != "" && check.want != check.got {

@@ -138,7 +138,7 @@ WendyOS is already installed, verify that device instead of reinstalling it.
 
 Read [wendy-device-install](../wendy-device-install/SKILL.md) for board-specific
 requirements. Jetson developer-kit images need a confirmed developer-kit carrier.
-Unitree G1 PC2 keeps vendor Ubuntu and receives the Agent.
+Unitree G1 EDU PC2 uses the `unitree-g1` USB recovery target.
 
 For a supported image install through MCP:
 

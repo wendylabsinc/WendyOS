@@ -134,8 +134,7 @@ physical instructions, then `os_install_resume` to probe the target. Obtain expl
 erase authorization for the returned fingerprint before starting the write. Poll
 `os_install_status`; resume with an explicit address to verify first boot, or use
 `os_install_verify` independently. Follow the returned terminal command if elevation
-is required. Unitree G1 PC2 keeps
-vendor Ubuntu and receives the Agent rather than a generic Jetson image.
+is required. Select `unitree-g1` to use the G1 EDU PC2 WendyOS recovery image.
 
 Enable specialist groups with `wendy_tools`: `simulator` manages local VM lifecycle,
 `observability` adds `app_inspect` and kernel logs, `setup` includes OS installs,

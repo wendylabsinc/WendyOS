@@ -16,6 +16,7 @@ const (
 	go2RecoveryPort   = "the Go2 expansion dock's recovery USB-C port beside the BAT and RJ45 connectors"
 	go2RecoveryEntry  = "Power off the Go2 and disconnect the dock's BAT power. Hold the recessed recovery button near RJ45 with a SIM eject tool while reconnecting BAT. Hold it for about two seconds, then release it."
 	go2CarrierCheck   = "Confirm the USB cable is connected to the Go2 EDU expansion dock. USB recovery identifies the Orin NX module only."
+	g1PC2Carrier      = "g1-pc2"
 	g1PC2InstallName  = "Unitree G1 EDU PC2 (Orin NX 16 GB)"
 	g1PC2Port         = "the PC2 flashing USB-C port below the PWR and REC buttons inside the G1's rear compartment"
 	g1PC2Entry        = "Turn on the G1 and wait for three steady PC2 lights. Hold PWR and REC together for two seconds. Let go of PWR first and release REC once two lights remain."
@@ -28,7 +29,7 @@ type unitreeRecoveryProfile struct {
 
 func unitreeRecovery(deviceType string) unitreeRecoveryProfile {
 	if deviceType == g1PC2DeviceType {
-		return unitreeRecoveryProfile{g1PC2InstallName, "g1-pc2", g1PC2Port, g1PC2Entry, g1PC2CarrierCheck, "unitree-g1-edu-pc2"}
+		return unitreeRecoveryProfile{g1PC2InstallName, g1PC2Carrier, g1PC2Port, g1PC2Entry, g1PC2CarrierCheck, "unitree-g1-edu-pc2"}
 	}
 	return unitreeRecoveryProfile{go2InstallName, "go2-edu", go2RecoveryPort, go2RecoveryEntry, go2CarrierCheck, "unitree-go2-edu"}
 }

@@ -8,6 +8,19 @@ import (
 
 var ErrArtifactUnavailable = errors.New("installation artifact unavailable")
 
+const (
+	UnitreeG1    = "unitree-g1"
+	UnitreeG1PC2 = "unitree-g1-pc2"
+)
+
+// CanonicalDeviceType maps the G1 selector to the published PC2 board ID.
+func CanonicalDeviceType(deviceType string) string {
+	if deviceType == UnitreeG1 {
+		return UnitreeG1PC2
+	}
+	return deviceType
+}
+
 type Options struct {
 	DeviceType string `json:"device_type"`
 	Carrier    string `json:"carrier,omitempty"`

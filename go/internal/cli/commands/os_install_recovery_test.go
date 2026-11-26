@@ -36,6 +36,14 @@ func TestRecoveryFlagCombinationsFailBeforeManifestLookup(t *testing.T) {
 	}
 }
 
+func TestG1RecoverySelectorAcceptsLocalFlashpack(t *testing.T) {
+	cmd := newOSInstallCmd()
+	cmd.SetArgs([]string{"--device-type", g1DeviceType, "--flashpack", "g1.tar.zst", "--version", "1", "--no-wifi"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--flashpack cannot be combined") {
+		t.Fatalf("expected the G1 selector to reach local recovery option validation, got %v", err)
+	}
+}
+
 func TestChooseT234RecoveryStorage(t *testing.T) {
 	if got, err := chooseT234RecoveryStorage(orinNanoDeviceType, ""); err != nil || got != "nvme" {
 		t.Fatalf("Nano storage = %q, %v", got, err)

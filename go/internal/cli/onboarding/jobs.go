@@ -287,7 +287,7 @@ func targetInstructions(j *Job) []string {
 		button = "Power off the Go2 and disconnect the dock's BAT power. Hold its recessed recovery button near RJ45 with a SIM eject tool while reconnecting BAT. Hold it for about two seconds, then release it."
 		portCheck = "The Go2 installer pins the Orin NX chip ID and requires the flashing gadget at the same USB path."
 	}
-	if p.DeviceType == "unitree-g1-pc2" {
+	if p.DeviceType == UnitreeG1PC2 {
 		cable = "Disconnect other recovery-mode Jetsons. Use a USB 2.0 data cable at the G1 EDU PC2 flashing port underneath PWR and REC. Keep it attached until the write completes."
 		button = "Power the G1 on and wait for three steady PC2 lights. Hold PWR and REC together for two seconds. Let go of PWR first, wait for two lights, then release REC."
 		portCheck = "The G1 PC2 installer verifies the Orin NX chip ID and checks that the flash disks appear on the selected USB path."
@@ -305,9 +305,9 @@ func targetInstructions(j *Job) []string {
 func bootInstructions(j *Job) []string {
 	steps := []string{"The write finished. First boot and application health are not yet verified."}
 	if j.Plan.Method == "usb-recovery" {
-		if j.Options.DeviceType == "jetson-agx-thor" {
+		if j.Plan.DeviceType == "jetson-agx-thor" {
 			steps = append(steps, "Release Force Recovery, then power-cycle the Thor or press Reset (right button) once to boot WendyOS.")
-		} else if j.Options.DeviceType == "jetson-orin-nano" {
+		} else if j.Plan.DeviceType == "jetson-orin-nano" {
 			steps = append(steps, "Confirm the FC REC-to-GND jumper is removed, then allow the Orin Nano to reboot. Power-cycle normally if it stays in recovery.")
 		} else {
 			steps = append(steps, "Release Force Recovery and allow the Jetson to reboot. Power-cycle normally if it stays in recovery.")

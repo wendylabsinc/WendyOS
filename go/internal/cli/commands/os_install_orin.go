@@ -708,7 +708,11 @@ func orinInstallCommand(opts t234InstallOptions) string {
 	if opts.Flashpack != nil {
 		return "Run your original install command with the same --device-type and --flashpack options."
 	}
-	return fmt.Sprintf("wendy os install --device-type %s --storage %s", opts.DeviceType, opts.Storage)
+	cmd := fmt.Sprintf("wendy os install --device-type %s --storage %s", opts.DeviceType, opts.Storage)
+	if opts.PRNumber > 0 {
+		cmd += fmt.Sprintf(" --pr %d", opts.PRNumber)
+	}
+	return cmd
 }
 
 func printOrinBadStateHint(w io.Writer, opts t234InstallOptions) {

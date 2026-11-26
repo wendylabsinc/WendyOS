@@ -33,7 +33,7 @@ wendy install --device-type jetson-orin-nano
 wendy install --device-type unitree-go2 --no-wifi
 
 # G1 EDU PC2: full QSPI + NVMe recovery over USB
-wendy install --device-type unitree-g1-pc2 --no-wifi
+wendy install --device-type unitree-g1 --no-wifi
 
 # AGX Orin: storage is mandatory non-interactively
 wendy install --device-type jetson-agx-orin --storage nvme
@@ -99,6 +99,7 @@ wendy install --device-type unitree-go2 --no-wifi
 Wendy sends the recovery payload over USB with the Jetson RCM protocol. The
 recovery initrd exports USB mass-storage disks for firmware handoff, NVMe write
 and final status. The CLI shows each step and byte progress during the NVMe write.
+After reboot, the dock uses `192.168.123.18/24` on its robot-facing Ethernet.
 
 For local Builder testing, pass `--flashpack ./go2.flashpack.tar.zst` to use a
 Go2 flashpack from disk.
@@ -112,7 +113,7 @@ Use this procedure for the G1 EDU development computer with an Orin NX 16 GB
 before accepting the erase prompt. From an internet-connected computer, run:
 
 ```sh
-wendy install --device-type unitree-g1-pc2 --no-wifi
+wendy install --device-type unitree-g1 --no-wifi
 ```
 
 1. Locate the PC2 flashing connector below the PWR and REC buttons in the
@@ -127,8 +128,7 @@ wendy install --device-type unitree-g1-pc2 --no-wifi
    collects the final status.
 
 For development, `--flashpack ./g1.flashpack.tar.zst` loads a local G1 PC2
-archive. For agent-only setup on the existing Unitree OS, use the
-[G1 agent guide](/docs/installation/wendy-agent-unitree-g1).
+archive. `--device-type unitree-g1-pc2` is also accepted.
 
 ---
 
@@ -380,15 +380,15 @@ returns the installation method, erase scope, requirements and CLI argument arra
 wendy install plan --device-type raspberry-pi-5 --drive <confirmed-drive>
 wendy install plan --device-type jetson-orin-nano --carrier developer-kit --storage nvme
 wendy install plan --device-type unitree-go2 --carrier go2-edu
-wendy install plan --device-type unitree-g1-pc2 --carrier g1-pc2
 wendy install plan --device-type unitree-g1
 wendy install verify --address <expected-device> --expected-os-version <version> --expected-device-type <board>
 ```
 
 Planning supports Pi 3/4/5, Orin/Thor developer kits, published Go2 EDU and
-G1 EDU PC2 flashpacks, and G1 or Linux agent installs. Jetson developer-kit plans require
+G1 EDU PC2 flashpacks, and agent installs for Linux hosts. Jetson developer-kit plans require
 `--carrier developer-kit`. The explicit `unitree-go2` target selects the Go2 EDU
-carrier. Raw-media plans require a drive from `wendy os list-drives --all --json`
+carrier, and `unitree-g1` selects the G1 EDU development computer. Raw-media
+plans require a drive from `wendy os list-drives --all --json`
 before returning a write command. `--rootfs-only` leaves Orin QSPI unchanged.
 The write still runs through the regular installer in a terminal.
 

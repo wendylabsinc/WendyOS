@@ -29,6 +29,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/devicename"
+	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/flashpack"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -51,6 +52,7 @@ type t234InstallOptions struct {
 	RequestedName string
 	PreEnroll     preEnrollOptions
 	Agent         *localInstallAgent
+	PRNumber      int
 	// Nightly picks the agent seeded on /config from the same channel as the image.
 	Nightly bool
 }
@@ -102,7 +104,7 @@ Download and install WendyOS on a Go2 EDU expansion dock over USB-C:
   wendy install --device-type unitree-go2 --no-wifi
 
 Download and install WendyOS on a G1 EDU PC2 over USB-C:
-  wendy install --device-type unitree-g1-pc2 --no-wifi
+  wendy install --device-type unitree-g1 --no-wifi
 
 Pre-seed multiple WiFi networks (repeatable, highest-priority first):
   wendy os install --device-type raspberry-pi-5 --drive /dev/disk4 --force \
@@ -126,6 +128,9 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			defer startInstallSession(cmd)()
+			// The G1 image targets the EDU development computer. Keep the
+			// carrier-specific name for archive and manifest validation.
+			deviceType = onboarding.CanonicalDeviceType(deviceType)
 			// Alias and driver resolution can fetch manifests before runOSInstall.
 			// Refuse unsupported explicit targets before either path runs.
 			if isESP32Target(deviceType) {
@@ -147,7 +152,7 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 			}
 			if cmd.Flags().Changed("flashpack") {
 				if localFlashpack == "" || !isUnitreeOrinRecovery(deviceType) {
-					return usageErrorf("--flashpack requires a local archive path and --device-type %s or %s", go2DeviceType, g1PC2DeviceType)
+					return usageErrorf("--flashpack requires a local archive path and --device-type %s or %s", go2DeviceType, g1DeviceType)
 				}
 				if len(args) != 0 || nightly || prNumber != 0 || versionFlag != "" || len(drivers) > 0 {
 					return usageErrorf("--flashpack cannot be combined with positional arguments, --version, --nightly, --pr, or --driver")
@@ -890,7 +895,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		return installOrinRestartable(ctx, t234InstallOptions{
 			DeviceType: selected, DeviceName: device.Name, Version: selectedVersion,
 			Storage: storage, Artifact: artifact, Force: force, WiFi: wifi,
-			RequestedName: deviceName, PreEnroll: preOpts, Agent: agent, Nightly: nightly,
+			RequestedName: deviceName, PreEnroll: preOpts, Agent: agent, PRNumber: prNumber, Nightly: nightly,
 		})
 	}
 	if isT234RecoveryDevice(selected) && rootfsOnly {

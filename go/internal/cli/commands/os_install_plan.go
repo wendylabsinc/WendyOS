@@ -40,23 +40,20 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 	if o.DeviceType == "" {
 		return nil, fmt.Errorf("device_type is required; identify the board and carrier before selecting an image")
 	}
+	o.DeviceType = onboarding.CanonicalDeviceType(o.DeviceType)
 	p := &onboarding.Plan{DeviceType: o.DeviceType, HostOS: runtime.GOOS, Requirements: []string{}, NextSteps: []string{
 		"After writing, follow the board's power/recovery instructions and allow first boot to finish.",
 		"Discover the expected device with device_list(scan=true) or wendy discover --json; do not select the first unrelated device.",
 		"Use os_install_verify or wendy install verify with an explicit address and the planned OS version and device type. Record the returned public key for subsequent identity checks.",
 		"Check enrollment if requested, then deploy a non-motion app and verify its health or ROS interface. Flash completion alone does not verify boot or application behavior.",
 	}}
-	if o.DeviceType == "unitree-g1" || o.DeviceType == linuxDesktopValue {
+	if o.DeviceType == linuxDesktopValue {
 		if o.RootfsOnly || o.Drive != "" || o.Storage != "" || o.Version != "" || o.Carrier != "" {
 			return nil, fmt.Errorf("agent installation does not accept WendyOS image, carrier, storage, or drive options")
 		}
 		p.Method, p.EraseScope = "agent", "No OS image write; install the Wendy Agent on the existing Linux system."
 		p.Documentation = "https://docs.wendy.dev/latest/installation/linux"
 		p.Requirements = []string{"Confirm the target Linux host, SSH access, sudo access, and Internet connectivity.", "Run the agent installer on the target host: " + linuxDesktopCommand("", "", linuxDesktopMachineLabel)}
-		if o.DeviceType == "unitree-g1" {
-			p.Documentation = "https://docs.wendy.dev/latest/installation/wendy-agent-unitree-g1"
-			p.Requirements = append(p.Requirements, "Use the G1 PC2's vendor Ubuntu installation. Do not flash a generic Jetson developer-kit image onto its custom carrier.")
-		}
 		p.NextSteps = []string{"Discover and verify the explicit target with install verify; agent-only systems do not report a WendyOS version or device type.", "Verify the robot's existing ROS topics and DDS configuration before deploying an application."}
 		return p, nil
 	}
@@ -230,7 +227,7 @@ func newOSInstallPlanCmd() *cobra.Command {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(p)
 		},
 	}
-	cmd.Flags().StringVar(&o.DeviceType, "device-type", "", "Board type, unitree-go2, unitree-g1-pc2, unitree-g1, or linux-desktop")
+	cmd.Flags().StringVar(&o.DeviceType, "device-type", "", "Board type, unitree-go2, unitree-g1, or linux-desktop")
 	cmd.Flags().StringVar(&o.Carrier, "carrier", "", "Jetson carrier: developer-kit, go2-edu, or g1-pc2")
 	cmd.Flags().StringVar(&o.Version, "version", "", "Exact WendyOS release (default latest stable)")
 	cmd.Flags().StringVar(&o.Storage, "storage", "", "Target storage: sd, nvme, or emmc")
