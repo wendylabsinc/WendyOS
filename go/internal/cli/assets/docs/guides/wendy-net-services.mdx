@@ -286,9 +286,21 @@ Check **Agent Version** for each device against the release that introduces
 `wendy-app` in the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
 Update the destination agent before updating the source. An older destination
 rejects `wendy-app` connections, including requests from an updated source.
-The source device needs an ML-DSA signing certificate. A device with a
-legacy P-256 certificate must renew it with Wendy Cloud before making app
-relay requests.
+
+The source device needs an ML-DSA signing certificate. If the Cloud relay
+error says it requires an ML-DSA device request-signing certificate, check
+the source agent's enrollment and renewal logs:
+
+- A device enrolled through pki-core renews automatically. Keep the source
+  agent online with access to Wendy Cloud. It checks at startup and every
+  six hours, and requests an ML-DSA-65 certificate when less than a third of
+  its current certificate's lifetime remains. Retry after the agent logs
+  `device_cert_renewed` and restarts. If it logs
+  `device_cert_renewal_failed`, use the accompanying error to troubleshoot.
+- For a device enrolled through the older Cloud issuer, arrange enrollment
+  through pki-core with your Wendy Cloud administrator. If a pki-core
+  device's certificate has already expired, ask the administrator for
+  certificate recovery.
 
 In Wendy Cloud, grant the **source device** `tunnel:request` permission scoped
 to the **destination device's UUID**. Cloud may return `target device not found`
@@ -318,7 +330,9 @@ configured. Check that Wendy Net and app relay admission started on the
 destination.
 
 Cloud relay sessions last at most one hour. When Cloud closes an expired
-TCP stream, open a new connection to the same hostname and published port.
+TCP stream, the app opens a new connection to the same hostname and
+published port. Wendy Net selects a route again for that connection and
+opens a fresh relay if Cloud is still needed.
 
 The app connects through its device's relay grant. The `wendy cloud tunnel`
 command opens an operator session with separate permissions.
