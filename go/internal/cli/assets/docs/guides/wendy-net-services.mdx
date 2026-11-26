@@ -195,10 +195,12 @@ When the client's resolver supports all three spellings, they share one VIP
 allocation. Existing apps can keep using the two older spellings or the older
 org-qualified friendly aliases.
 
-An unenrolled client receives NXDOMAIN for short names. A friendly name also
-returns NXDOMAIN when two devices share it in the signed directory, the Cloud
-roster, or across both sources. Use `device-<uuid>.wendy.internal` to select one
-device explicitly.
+An unenrolled client gets NXDOMAIN for both short hostname forms. An enrolled
+client can get a virtual address for a well-formed UUID even when no device
+has that UUID. A friendly-name lookup returns NXDOMAIN if neither the signed
+directory nor the Cloud roster knows the name, or if the sources tie it to
+more than one device. Use `device-<uuid>.wendy.internal` to select one device
+explicitly.
 
 ### Verify short DNS from the client app
 
