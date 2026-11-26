@@ -324,11 +324,16 @@ func (r *MeshRoster) Sync(ctx context.Context) error {
 func (r *MeshRoster) RunSync(ctx context.Context, interval time.Duration, publishName func(principal, name string)) {
 	publish := func() {
 		r.mu.RLock()
-		local := r.localName
+		principal, local := r.identity, r.localName
 		r.mu.RUnlock()
-		if local.Principal != "" && publishName != nil {
-			publishName(local.Principal, local.Name)
+		if principal == "" || publishName == nil {
+			return
 		}
+		name := ""
+		if local.Principal == principal {
+			name = local.Name
+		}
+		publishName(principal, name)
 	}
 	publish()
 	const firstRetry = 5 * time.Second
