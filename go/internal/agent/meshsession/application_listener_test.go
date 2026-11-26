@@ -155,3 +155,82 @@ func TestApplicationListenerCancellationAndClose(t *testing.T) {
 		t.Fatalf("closed admission=%v", err)
 	}
 }
+
+func TestApplicationHandshakesWaitBrieflyForCloudBurst(t *testing.T) {
+	source, receiver := fixtureCredentials(t)
+	server, err := NewServer(receiver, applicationRelayAuthorization{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := NewApplicationListener()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- server.serveTLSListener(ctx, listener, 1, 150*time.Millisecond) }()
+	t.Cleanup(func() {
+		cancel()
+		_ = server.Close()
+		if err := <-done; err != nil {
+			t.Errorf("listener: %v", err)
+		}
+	})
+	open := func() net.Conn {
+		conn, err := listener.Dial(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn
+	}
+	expectRead := func(conn net.Conn, timeout time.Duration, wantTimeout bool) {
+		t.Helper()
+		_ = conn.SetReadDeadline(time.Now().Add(timeout))
+		var one [1]byte
+		_, err := conn.Read(one[:])
+		var timeoutErr net.Error
+		if wantTimeout {
+			if !errors.As(err, &timeoutErr) || !timeoutErr.Timeout() {
+				t.Fatalf("queued connection dropped early: %v", err)
+			}
+		} else if !errors.Is(err, io.EOF) {
+			t.Fatalf("expected close at capacity or timeout, got %v", err)
+		}
+	}
+	busy := make([]net.Conn, 4)
+	for i := range busy {
+		busy[i] = open()
+	}
+	waiting := open()
+	excess := open()
+	expectRead(excess, time.Second, false)
+	expectRead(waiting, 30*time.Millisecond, true)
+	expectRead(waiting, time.Second, false)
+
+	queued := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		address := netip.AddrPortFrom(receiver.Device.MeshAddress(), TLSPort)
+		conn, err := DialTLSWithDialer(ctx, source, receiver.Device, address, 1234, func(ctx context.Context, _, _ string) (net.Conn, error) {
+			conn, err := listener.Dial(ctx)
+			close(queued)
+			return conn, err
+		})
+		if conn != nil {
+			_ = conn.Close()
+		}
+		result <- err
+	}()
+	select {
+	case <-queued:
+	case <-time.After(time.Second):
+		t.Fatal("fifth connection never arrived")
+	}
+	_ = busy[0].Close()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrDenied) {
+			t.Fatalf("queued connection did not reach app port admission: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued handshake did not finish")
+	}
+}
