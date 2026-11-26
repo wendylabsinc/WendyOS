@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/board"
+	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 )
 
 // withStubbedStat points statDeviceNode at a fixed table for the duration of a
@@ -316,13 +319,7 @@ func TestRefreshHostDeviceNumbers_PiLegacyFallback(t *testing.T) {
 	if m, ok := mountForDest(spec, "/dev/vcio"); !ok || m.Source != source {
 		t.Fatal("missing VideoCore mount")
 	}
-	// Reconstruct the old agent's synthetic fallback in an existing container.
-	for _, path := range []string{"/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools", "/dev/nvidia-modeset"} {
-		spec.Linux.Devices = append(spec.Linux.Devices, LinuxDevice{Path: path, Type: "c", Major: 195})
-		RecordPinnedDevice(spec, path, "c", 195, 0)
-	}
-	maj := int64(195)
-	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{Allow: true, Type: "c", Major: &maj, Access: "rw"})
+	addLegacyNVIDIAFallback(spec)
 	result := RefreshHostDeviceNumbers(spec)
 	if len(result.Missing) != 0 || len(result.Removed) != 5 || !result.SpecModified() {
 		t.Fatalf("migration: %+v", result)
@@ -332,6 +329,100 @@ func TestRefreshHostDeviceNumbers_PiLegacyFallback(t *testing.T) {
 	}
 	if again := RefreshHostDeviceNumbers(spec); again.SpecModified() {
 		t.Fatalf("migration not idempotent: %+v", again)
+	}
+}
+
+// addLegacyNVIDIAFallback reconstructs the five synthetic major-195 entries an
+// older agent's gpu entitlement left in an existing container.
+func addLegacyNVIDIAFallback(spec *Spec) {
+	for _, path := range []string{"/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools", "/dev/nvidia-modeset"} {
+		spec.Linux.Devices = append(spec.Linux.Devices, LinuxDevice{Path: path, Type: "c", Major: 195})
+		RecordPinnedDevice(spec, path, "c", 195, 0)
+	}
+	maj := int64(195)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{Allow: true, Type: "c", Major: &maj, Access: "rw"})
+}
+
+func TestRefreshHostDeviceNumbers_MaliLegacyFallback(t *testing.T) {
+	dev := installFakeRenderNodeGPU(t, map[string][2]int64{"renderD128": {226, 128}}, rockchipMaliGPUs...)
+	origGlobs, origBoard := nvidiaDeviceGlobs, boardDetect
+	t.Cleanup(func() { nvidiaDeviceGlobs, boardDetect = origGlobs, origBoard })
+	nvidiaDeviceGlobs = []string{filepath.Join(t.TempDir(), "no-nvidia-*")}
+	boardDetect = func() board.Info { return board.Info{Kind: board.Generic} }
+	render := filepath.Join(dev, "dri", "renderD128")
+	withStubbedStat(t, map[string][2]int64{render: {226, 128}})
+
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	applyGPU(spec)
+	addLegacyNVIDIAFallback(spec)
+	result := RefreshHostDeviceNumbers(spec)
+	if len(result.Missing) != 0 || len(result.Removed) != 5 || !result.SpecModified() {
+		t.Fatalf("migration: %+v", result)
+	}
+	if hasMajorRule(spec, 195) || !hasExactDeviceRule(spec, 226, 128) {
+		t.Fatal("migration changed the wrong grants")
+	}
+	if _, ok := deviceForPath(spec, render); !ok {
+		t.Fatal("migration dropped the render node")
+	}
+	if again := RefreshHostDeviceNumbers(spec); again.SpecModified() {
+		t.Fatalf("migration not idempotent: %+v", again)
+	}
+}
+
+// The legacy entries go only where today's gpu entitlement grants something
+// else, so a fresh deploy and a refreshed container agree.
+func TestRemoveLegacyNVIDIAFallbackFollowsTheGPUGrant(t *testing.T) {
+	for name, tc := range map[string]struct {
+		gpus            []gpudiscovery.Device
+		kfd, liveNVIDIA bool
+		wantRemoved     int
+	}{
+		"mali":                  {gpus: rockchipMaliGPUs, wantRemoved: 5},
+		"amd":                   {kfd: true, wantRemoved: 5},
+		"no gpu":                {wantRemoved: 0},
+		"mali with nvidia node": {gpus: rockchipMaliGPUs, liveNVIDIA: true, wantRemoved: 0},
+		// An AMD APU beside an NVIDIA dGPU whose module has not loaded yet.
+		"amd with nvidia gpu":   {gpus: []gpudiscovery.Device{{Path: "/dev/dri/card1", Vendor: "nvidia"}}, kfd: true, wantRemoved: 0},
+		"jetson, no live nodes": {gpus: []gpudiscovery.Device{{Path: "/dev/nvidia0", Vendor: "nvidia"}}, wantRemoved: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			origGlobs, origStat, origBoard, origKFD := nvidiaDeviceGlobs, statCharDevice, boardDetect, kfdDevicePath
+			t.Cleanup(func() {
+				nvidiaDeviceGlobs, statCharDevice, boardDetect, kfdDevicePath = origGlobs, origStat, origBoard, origKFD
+			})
+			withHostGPUs(t, tc.gpus...)
+			boardDetect = func() board.Info { return board.Info{Kind: board.Generic} }
+			kfdDevicePath = filepath.Join(dir, "kfd")
+			if tc.kfd {
+				if err := os.WriteFile(kfdDevicePath, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			nvidia := filepath.Join(dir, "nvidia0")
+			nvidiaDeviceGlobs = []string{filepath.Join(dir, "nvidia*")}
+			if tc.liveNVIDIA {
+				if err := os.WriteFile(nvidia, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			statCharDevice = func(p string) (int64, int64, error) {
+				if p == nvidia && tc.liveNVIDIA {
+					return 195, 0, nil
+				}
+				return 0, 0, os.ErrNotExist
+			}
+
+			spec := pinnedSpec()
+			addLegacyNVIDIAFallback(spec)
+			if removed := removeLegacyNVIDIAFallback(spec); len(removed) != tc.wantRemoved {
+				t.Fatalf("removed %v, want %d entries", removed, tc.wantRemoved)
+			}
+			if got := hasMajorRule(spec, 195); got != (tc.wantRemoved == 0) {
+				t.Errorf("major-195 rule kept = %v, want %v", got, tc.wantRemoved == 0)
+			}
+		})
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
+	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 )
 
 func withNVIDIAGPUDiscovered(t *testing.T, present bool) {
@@ -128,9 +129,9 @@ func TestAcceleratorAccess_NVIDIAGrantAddsNothing(t *testing.T) {
 
 func withoutQualcommGPU(t *testing.T) {
 	t.Helper()
-	orig := qualcommGPUPresent
-	qualcommGPUPresent = func() bool { return false }
-	t.Cleanup(func() { qualcommGPUPresent = orig })
+	orig := hostGPUs
+	hostGPUs = func() []gpudiscovery.Device { return nil }
+	t.Cleanup(func() { hostGPUs = orig })
 }
 
 func TestAcceleratorAccess_PiGainsVCIO(t *testing.T) {

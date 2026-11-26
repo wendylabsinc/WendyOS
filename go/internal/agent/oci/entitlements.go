@@ -270,7 +270,7 @@ type gpuGrant int
 const (
 	gpuGrantNVIDIA gpuGrant = iota
 	gpuGrantAMD
-	gpuGrantQualcomm
+	gpuGrantRenderNode
 	gpuGrantVCIO
 )
 
@@ -281,10 +281,10 @@ func hostGPUGrant() gpuGrant {
 	if _, err := os.Stat(kfdDevicePath); err == nil {
 		return gpuGrantAMD
 	}
-	// A Qualcomm SoC (Dragonwing) has neither /dev/kfd nor /dev/nvidia*; its GPU
-	// userspace needs the render node instead.
-	if qualcommGPUPresent() {
-		return gpuGrantQualcomm
+	// SoC GPUs (Qualcomm Adreno, Arm Mali) have neither /dev/kfd nor
+	// /dev/nvidia*; their userspace needs the render node instead.
+	if renderNodeGPUPresent(hostGPUs()) {
+		return gpuGrantRenderNode
 	}
 	if boardDetect().IsRaspberryPi() && len(discoverNvidiaDeviceNodes()) == 0 {
 		return gpuGrantVCIO
@@ -295,7 +295,7 @@ func hostGPUGrant() gpuGrant {
 // nvidiaGPUDiscovered reports an NVIDIA GPU that discovery sees even before its
 // module creates the nodes. Behind a var so tests need no sysfs tree.
 var nvidiaGPUDiscovered = func() bool {
-	return slices.ContainsFunc(gpudiscovery.Host(), func(d gpudiscovery.Device) bool {
+	return slices.ContainsFunc(hostGPUs(), func(d gpudiscovery.Device) bool {
 		return d.Vendor == "nvidia"
 	})
 }
@@ -320,8 +320,8 @@ func applyGPUGrant(spec *Spec, grant gpuGrant) {
 	case gpuGrantAMD:
 		applyAMDGPU(spec)
 		return
-	case gpuGrantQualcomm:
-		applyQualcommGPU(spec)
+	case gpuGrantRenderNode:
+		applyRenderNodeGPU(spec)
 		return
 	case gpuGrantVCIO:
 		applyVCIO(spec)
@@ -329,7 +329,6 @@ func applyGPUGrant(spec *Spec, grant gpuGrant) {
 	}
 
 	boardInfo := boardDetect()
-
 	// Add the nvidia group GID for device access.
 	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, nvidiaGroupGID)
 	// Jetson's integrated GPU also requires the host render group. Resolve the
@@ -447,23 +446,31 @@ func applyAMDGPU(spec *Spec) {
 	addExactDeviceNodes(spec, discoverRenderDeviceNodes())
 }
 
-// qualcommGPUPresent reports whether the host GPU is a Qualcomm Adreno behind
-// the msm DRM driver (the Dragonwing IQ-8275 and its kin), using the same
-// discovery device metadata reports from. Behind a var so tests can pin the
-// answer without a Qualcomm sysfs tree.
-var qualcommGPUPresent = func() bool {
-	return slices.ContainsFunc(gpudiscovery.Host(), func(d gpudiscovery.Device) bool {
-		return d.Vendor == "qualcomm"
-	})
+// hostGPUs is the GPU discovery device metadata reports from. Behind a var so
+// tests can supply a host without its sysfs tree.
+var hostGPUs = gpudiscovery.Host
+
+// renderNodeGPUVendors drive their GPU through the DRM render node alone: the
+// Qualcomm Adreno (msm) and the Arm Mali (panfrost, panthor).
+var renderNodeGPUVendors = []string{"qualcomm", "arm"}
+
+// renderNodeGPUPresent reports a render-node GPU on a host with no NVIDIA GPU;
+// an NVIDIA card keeps its CUDA path even beside an integrated GPU.
+func renderNodeGPUPresent(devices []gpudiscovery.Device) bool {
+	found := false
+	for _, d := range devices {
+		if d.Vendor == "nvidia" {
+			return false
+		}
+		found = found || slices.Contains(renderNodeGPUVendors, d.Vendor)
+	}
+	return found
 }
 
-// applyQualcommGPU wires up Adreno GPU access on a Qualcomm SoC. The GPU
-// userspace (mesa freedreno/turnip, OpenCL, Vulkan) opens the DRM render node;
-// there is no vendor control node like /dev/nvidiactl or /dev/kfd. card* stays
-// behind the display entitlement, matching the AMD and Jetson paths. The
-// Hexagon NPU is a separate accelerator reached over FastRPC and belongs to
-// the npu entitlement, not this one.
-func applyQualcommGPU(spec *Spec) {
+// applyRenderNodeGPU grants a SoC GPU's DRM render node, which its Mesa, OpenCL
+// and Vulkan userspace opens. card* stays behind the display entitlement, an NPU
+// behind the npu one.
+func applyRenderNodeGPU(spec *Spec) {
 	// renderD* is group-owned by "render" (and "video" on some images). Add
 	// both; the exact device node and cgroup rule below remain the real access
 	// boundary, so group membership alone reaches nothing.

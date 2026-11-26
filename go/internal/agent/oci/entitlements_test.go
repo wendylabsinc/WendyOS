@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
+	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
@@ -267,6 +268,7 @@ func installFakeVCIO(t *testing.T, major int64) string {
 	})
 
 	vcioDevicePath = p
+	withHostGPUs(t, gpudiscovery.Device{Path: "/dev/dri/renderD128", Vendor: "broadcom", Driver: "v3d"})
 	statMajor = func(q string) (int64, error) {
 		if q == p {
 			return major, nil
@@ -2312,6 +2314,7 @@ func installFakeNvidiaDevTree(t *testing.T, numbers map[string][2]int64) string 
 	// These tests exercise the NVIDIA path; point kfd at a node that cannot
 	// exist so applyGPU never takes the AMD branch even on an AMD test host.
 	kfdDevicePath = filepath.Join(dev, "no-such-kfd")
+	withHostGPUs(t)
 
 	nvidiaDeviceGlobs = []string{
 		filepath.Join(dev, "nvidia*"),
@@ -3071,11 +3074,28 @@ func TestApplyNPU_LeavesFirmwareMasked(t *testing.T) {
 	}
 }
 
+// withHostGPUs pins GPU discovery to the given devices for one test.
+func withHostGPUs(t *testing.T, devices ...gpudiscovery.Device) {
+	t.Helper()
+	orig := hostGPUs
+	t.Cleanup(func() { hostGPUs = orig })
+	hostGPUs = func() []gpudiscovery.Device { return devices }
+}
+
 // installFakeQualcommDevTree stands in for a Qualcomm SoC such as the Dragonwing
 // IQ-8275: an Adreno GPU behind the msm DRM driver, so a render node and no
-// vendor control node (no /dev/kfd, no /dev/nvidia*). It pins the Qualcomm
-// probe so the suite needs no Qualcomm sysfs tree.
+// vendor control node (no /dev/kfd, no /dev/nvidia*). It pins GPU discovery
+// so the suite needs no Qualcomm sysfs tree.
 func installFakeQualcommDevTree(t *testing.T, renderNodes map[string][2]int64) string {
+	t.Helper()
+	return installFakeRenderNodeGPU(t, renderNodes,
+		gpudiscovery.Device{Path: "/dev/dri/card0", Vendor: "qualcomm", Driver: "msm_dpu"},
+		gpudiscovery.Device{Path: "/dev/dri/renderD128", Vendor: "qualcomm", Driver: "msm_dpu"})
+}
+
+// installFakeRenderNodeGPU lays out /dev/dri render nodes for a SoC GPU and
+// pins GPU discovery to the given devices.
+func installFakeRenderNodeGPU(t *testing.T, renderNodes map[string][2]int64, gpus ...gpudiscovery.Device) string {
 	t.Helper()
 	dev := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dev, "dri"), 0o755); err != nil {
@@ -3091,20 +3111,18 @@ func installFakeQualcommDevTree(t *testing.T, renderNodes map[string][2]int64) s
 	}
 
 	origKFD := kfdDevicePath
-	origQualcomm := qualcommGPUPresent
 	origRenderGlobs := renderDeviceGlobs
 	origStatChar := statCharDevice
 	origRender := lookupRenderGID
 	t.Cleanup(func() {
 		kfdDevicePath = origKFD
-		qualcommGPUPresent = origQualcomm
 		renderDeviceGlobs = origRenderGlobs
 		statCharDevice = origStatChar
 		lookupRenderGID = origRender
 	})
 
 	kfdDevicePath = filepath.Join(dev, "absent-kfd")
-	qualcommGPUPresent = func() bool { return true }
+	withHostGPUs(t, gpus...)
 	renderDeviceGlobs = []string{filepath.Join(dev, "dri", "renderD*")}
 	statCharDevice = func(p string) (int64, int64, error) {
 		if nums, ok := renderNums[p]; ok {
@@ -3173,6 +3191,66 @@ func TestApplyGPU_QualcommWithoutRenderNodeAddsNoDevices(t *testing.T) {
 	}
 	if hasMajorRule(spec, 195) {
 		t.Error("Qualcomm host must not get the NVIDIA major-195 fallback rule")
+	}
+}
+
+// rockchipMaliGPUs is the Orange Pi 5 Pro's DRM tree: the display-only
+// rockchip-drm card has no vendor, panthor drives the Mali-G610.
+var rockchipMaliGPUs = []gpudiscovery.Device{
+	{Path: "/dev/dri/card0", Driver: "rockchip-drm"},
+	{Path: "/dev/dri/card1", Vendor: "arm", Driver: "panthor"},
+}
+
+// TestApplyGPU_ArmMaliExposesRenderNodeOnly: a Mali board gets the panthor
+// render node and the render/video groups, never the NVIDIA static fallback.
+func TestApplyGPU_ArmMaliExposesRenderNodeOnly(t *testing.T) {
+	dev := installFakeRenderNodeGPU(t, map[string][2]int64{"renderD128": {226, 128}, "card0": {226, 0}, "card1": {226, 1}}, rockchipMaliGPUs...)
+
+	spec := gpuSpec(t)
+
+	if _, ok := deviceForPath(spec, filepath.Join(dev, "dri", "renderD128")); !ok || !hasExactDeviceRule(spec, 226, 128) {
+		t.Error("Mali GPU entitlement did not grant the DRM render node")
+	}
+	for _, card := range []string{"card0", "card1"} {
+		if _, ok := deviceForPath(spec, filepath.Join(dev, "dri", card)); ok {
+			t.Errorf("Mali GPU entitlement granted the display node %s", card)
+		}
+	}
+	if !hasGID(spec, 107) || !hasGID(spec, videoGroupGID) {
+		t.Error("Mali GPU entitlement did not add the render and video GIDs")
+	}
+	if hasMajorRule(spec, 195) || hasMountDest(spec, "/dev/vcio") {
+		t.Error("Mali host got another vendor's grant")
+	}
+	for _, d := range spec.Linux.Devices {
+		if strings.Contains(d.Path, "nvidia") {
+			t.Errorf("Mali host must not get NVIDIA device nodes, got %q", d.Path)
+		}
+	}
+	for _, e := range spec.Process.Env {
+		if strings.HasPrefix(e, "NVIDIA_") {
+			t.Errorf("Mali host must not get NVIDIA env vars, got %q", e)
+		}
+	}
+}
+
+func TestRenderNodeGPUPresent(t *testing.T) {
+	gpu := func(vendor string) gpudiscovery.Device { return gpudiscovery.Device{Vendor: vendor} }
+	for name, tc := range map[string]struct {
+		devices []gpudiscovery.Device
+		want    bool
+	}{
+		"mali":                      {rockchipMaliGPUs, true},
+		"adreno":                    {[]gpudiscovery.Device{gpu("qualcomm")}, true},
+		"mali beside an nvidia gpu": {append([]gpudiscovery.Device{gpu("nvidia")}, rockchipMaliGPUs...), false},
+		"raspberry pi":              {[]gpudiscovery.Device{gpu("broadcom")}, false},
+		"intel":                     {[]gpudiscovery.Device{gpu("intel")}, false},
+		"display only":              {rockchipMaliGPUs[:1], false},
+		"no gpu":                    {nil, false},
+	} {
+		if got := renderNodeGPUPresent(tc.devices); got != tc.want {
+			t.Errorf("%s: renderNodeGPUPresent = %v, want %v", name, got, tc.want)
+		}
 	}
 }
 
