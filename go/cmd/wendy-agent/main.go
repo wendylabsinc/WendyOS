@@ -1501,13 +1501,17 @@ func main() {
 		startTunnelBroker()
 		configpartition.PersistDeviceUUID(logger, certPEM)
 		advertiseProvisionedMeshIdentity(logger, mtlsPortNum, provisioningSvc)
-		startBLEPeripheral(certPEM, chainPEM, keyPEM)
 	}
+	// Publish after the provisioned Avahi service exists. Roster and DNS
+	// readiness must also survive a slow Bluetooth advertising attempt.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		meshRoster.RunSync(ctx, 5*time.Minute, services.CloudNameAdvertisement(logger))
 	}()
+	if alreadyProvisioned {
+		startBLEPeripheral(certPEM, chainPEM, keyPEM)
+	}
 
 	// Advertise the device's Ethernet addresses so hosts can prefer the cable.
 	wg.Add(1)
