@@ -98,6 +98,13 @@ func (r *SiteRobot) confirmLocalizationLocked(sequence, matchSequence uint64, fr
 		return errors.New("This robot order was superseded.")
 	}
 	r.commandSequence = sequence
+	return r.confirmLocalizationCandidateLocked(matchSequence, frame, index, idle)
+}
+
+// The caller has already acquired command ownership under mu. Keeping the
+// candidate checks separate lets a chat-owned search confirm without changing
+// the desktop's external command sequence.
+func (r *SiteRobot) confirmLocalizationCandidateLocked(matchSequence uint64, frame string, index int, idle bool) error {
 	if r.closed || r.ctx.Err() != nil || matchSequence != r.localizationSequence || index < 0 || index >= len(r.localizations) {
 		return errors.New("This suggested position expired. Locate Go2 again.")
 	}
