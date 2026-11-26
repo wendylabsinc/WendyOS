@@ -162,3 +162,56 @@ func TestRelayTunnelCancellation(t *testing.T) {
 		t.Fatal("cancelled relay did not stop")
 	}
 }
+
+func TestRelayTunnelForwardsClientEOF(t *testing.T) {
+	const response = "response after request EOF"
+	for _, fullClose := range []bool{false, true} {
+		name := "half-close"
+		if fullClose {
+			name = "disconnect"
+		}
+		t.Run(name, func(t *testing.T) {
+			client, local := loopbackConn(t)
+			tunnel, device := loopbackConn(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			deadline := time.Now().Add(3 * time.Second)
+			_ = client.SetDeadline(deadline)
+			_ = device.SetDeadline(deadline)
+			done := make(chan struct{})
+			go func() { relayTunnel(ctx, local, tunnel); close(done) }()
+
+			if _, err := io.WriteString(client, forwardedRequest); err != nil {
+				t.Fatal(err)
+			}
+			if fullClose {
+				if err := client.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := client.(*net.TCPConn).CloseWrite(); err != nil {
+				t.Fatal(err)
+			}
+			request, err := io.ReadAll(device)
+			if err != nil || string(request) != forwardedRequest {
+				t.Fatalf("device read %q, %v, want %q and clean EOF", request, err, forwardedRequest)
+			}
+			if !fullClose {
+				if _, err := io.WriteString(device, response); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = device.Close()
+			if !fullClose {
+				got, err := io.ReadAll(client)
+				if err != nil || string(got) != response {
+					t.Fatalf("client read %q, %v, want %q and clean EOF", got, err, response)
+				}
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("forward did not stop")
+			}
+		})
+	}
+}

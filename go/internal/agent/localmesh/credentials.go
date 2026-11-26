@@ -158,6 +158,7 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		primaryRoots = append(primaryRoots, root)
 	}
 	material := meshalpn.NewCertificates(cert, primaryRoots)
+	material.SetCertificateClock(func() time.Time { return clockPolicy.BaseTime(clockPolicy.WallTime()) })
 	verify := func(chain [][]byte, now time.Time) (Identity, error) {
 		now = certificateWallTime(policy, now)
 		if len(chain) == 0 || len(chain) > 16 {
@@ -201,6 +202,11 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		} else {
 			window, err = verifyChain(chain, now)
 			if err != nil {
+				if completed := material.LiteCandidates(chain, baseNow); len(completed) > len(chain) {
+					window, err = verifyChain(completed, now)
+				}
+			}
+			if err != nil {
 				return Identity{}, err
 			}
 		}
@@ -242,12 +248,23 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		}
 		// Use the same verifier as carrier admission, including locally known
 		// untrusted intermediates. The original anchors remain unchanged.
-		c.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error {
-			_, err := verify(raw, clockPolicy.WallTime())
-			return err
+		// VerifyConnection provides the negotiated ALPN for issuer recovery
+		// and revalidates the exact principal when a ticket restores the leaf.
+		c.VerifyPeerCertificate = nil
+		c.VerifyConnection = func(state tls.ConnectionState) error {
+			raw := make([][]byte, len(state.PeerCertificates))
+			for i, cert := range state.PeerCertificates {
+				raw[i] = cert.Raw
+			}
+			identity, err := verify(raw, clockPolicy.WallTime())
+			if err != nil {
+				return err
+			}
+			if identity.Device.Principal() != peer.Principal() {
+				return errors.New("wendy net peer identity mismatch")
+			}
+			return nil
 		}
-		c.VerifyConnection = nil // pinPeer rechecks the verifier on resumption.
-		pinPeer(c, peer)
 		c.MinVersion = tls.VersionTLS13
 		c.MaxVersion = tls.VersionTLS13
 		c.NextProtos = []string{LinkALPN}
@@ -279,52 +296,6 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		return cfg, nil
 	}
 	return credentials, nil
-}
-
-// pinPeer requires the handshake leaf to carry exactly the configured peer's
-// principal. mtls.NewClientTLSConfig already re-checks chains on resumed
-// sessions; wrapping both hooks keeps that guarantee and adds the pin.
-func pinPeer(config *tls.Config, peer meshid.Device) {
-	chainVerify := config.VerifyPeerCertificate
-	pinned := func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-		if err := chainVerify(rawCerts, verifiedChains); err != nil {
-			return err
-		}
-		if len(rawCerts) == 0 {
-			return errors.New("missing wendy net peer certificate")
-		}
-		leaf, err := x509.ParseCertificate(rawCerts[0])
-		if err != nil {
-			return err
-		}
-		device, err := meshid.PeerFromCert(leaf)
-		if err != nil {
-			return err
-		}
-		if device.Principal() != peer.Principal() {
-			return errors.New("wendy net peer identity mismatch")
-		}
-		return nil
-	}
-	config.VerifyPeerCertificate = pinned
-	resumeVerify := config.VerifyConnection
-	config.VerifyConnection = func(state tls.ConnectionState) error {
-		if resumeVerify != nil {
-			if err := resumeVerify(state); err != nil {
-				return err
-			}
-		}
-		if !state.DidResume {
-			return nil
-		}
-		// A resumed handshake presents no fresh certificates: re-run the pin
-		// against the ones restored from the session ticket.
-		raw := make([][]byte, len(state.PeerCertificates))
-		for i, certificate := range state.PeerCertificates {
-			raw[i] = certificate.Raw
-		}
-		return pinned(raw, nil)
-	}
 }
 
 // PeerTLS builds the client configuration for one configured peer, pinned to

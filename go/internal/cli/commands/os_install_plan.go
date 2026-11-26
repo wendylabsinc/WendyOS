@@ -248,9 +248,3 @@ func newOSInstallVerifyCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&o.Timeout, "timeout", o.Timeout, "RPC deadline, at most one minute")
 	return cmd
 }
-
-func printFirstBootVerification(deviceType, version string) {
-	fmt.Println("First boot has not been verified. Run wendy discover --json and identify the expected device.")
-	fmt.Printf("Then run: wendy install verify --address <expected-name-or-IP> --expected-os-version %q --expected-device-type %q\n", version, deviceType)
-	fmt.Println("Add --require-enrollment if requested. Application readiness needs a separate deployment and health check.")
-}

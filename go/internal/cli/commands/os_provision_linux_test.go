@@ -289,7 +289,7 @@ func TestInstallWithAStillMountedConfigPartitionFailsAsWritten(t *testing.T) {
 		_, _, provErr = provisionConfigWithRetry(context.Background(), disk, nil, "lab-nano", nil, true, agentSeed{})
 		return nil
 	})
-	if retried || tools.ran("mount") != 1 || !strings.Contains(out, "Config partition written: name lab-nano") {
+	if retried || tools.ran("mount") != 1 || !strings.Contains(out, "✓ First-boot settings written") {
 		t.Fatalf("retry offered %v, mounts %d, output %q; want one mount reported as written", retried, tools.ran("mount"), out)
 	}
 

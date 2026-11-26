@@ -23,6 +23,32 @@ type webAgent struct {
 	pb.UnimplementedWendyContainerServiceServer
 }
 
+type appHalfCloseConn struct{ net.Conn }
+
+func (appHalfCloseConn) CloseWrite() error { return nil }
+
+func TestAppForwardClosesTunnelOnCopyError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	local, client := net.Pipe()
+	defer client.Close()
+	_ = local.Close() // A read error on the forwarder side, rather than client EOF.
+	remote, app := net.Pipe()
+	defer app.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		forwardAppConnection(ctx, local, func(context.Context) (net.Conn, error) {
+			return appHalfCloseConn{remote}, nil
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("app forward kept a failed socket open")
+	}
+}
+
 func (webAgent) ListContainers(_ *pb.ListContainersRequest, stream grpc.ServerStreamingServer[pb.ListContainersResponse]) error {
 	for _, app := range []*pb.AppContainer{
 		{AppName: "web", HttpPort: 8080, RunningState: pb.AppRunningState_RUNNING},

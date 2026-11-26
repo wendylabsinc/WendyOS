@@ -3,8 +3,6 @@ package meshalpn
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"strings"
-	"time"
 )
 
 // ClientProtocols offers root-first fingerprints and cached CA availability.
@@ -16,15 +14,21 @@ func (c *Certificates) ClientProtocols(protocols ...string) []string {
 	if c.recoveryState().active() {
 		return append([]string(nil), protocols...)
 	}
-	return c.clientProtocols(c.snapshot(time.Now()), protocols...)
+	known, lite := c.snapshotWithLite(c.certificateNow())
+	return c.clientProtocols(known, lite, protocols...)
 }
-func (c *Certificates) clientProtocols(known []*x509.Certificate, protocols ...string) []string {
+func (c *Certificates) clientProtocols(known []*x509.Certificate, lite bool, protocols ...string) []string {
 	cached := make([]Fingerprint, 0, len(known))
 	for _, cert := range known {
 		cached = append(cached, Hash(cert.Raw))
 	}
 	var result []string
 	for _, protocol := range protocols {
+		if lite {
+			if issuer, ok := certificateIssuer(c.certificate, known); ok {
+				result = append(result, leafOffer(protocol, regularClient, issuer))
+			}
+		}
 		result = append(result, Offer(protocol, c.path, cached)...)
 	}
 	return result
@@ -33,19 +37,19 @@ func (c *Certificates) clientProtocols(known []*x509.Certificate, protocols ...s
 // A connection keeps the exact immutable CA snapshot it advertised/acknowledged.
 // Cache FIFO turnover may drop its metadata but Go references retain the DER
 // until verification has consumed it. No lock is held during TLS or crypto.
-func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.Certificate, hinted bool) {
+func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.Certificate, server bool) {
 	if c == nil {
 		return
 	}
 	loan := &handshakeIssuers{available: available}
 	loan.configureTickets(config)
-	chainVerify := config.VerifyPeerCertificate
-	if chainVerify != nil {
+	if chainVerify := config.VerifyPeerCertificate; chainVerify != nil {
 		config.VerifyPeerCertificate = func(raw [][]byte, verified [][]*x509.Certificate) error {
 			err := chainVerify(c.candidatesFrom(raw, loan.available), verified)
-			if err != nil {
-				c.recoveryState().failed(err, hinted)
-				loan.available = nil
+			// ConfigureServer binds this hook only after selecting the protocol.
+			// Clients need VerifyConnection to observe the negotiated ALPN.
+			if err != nil && server && len(config.NextProtos) == 1 {
+				c.recoveryState().failed(err, negotiatedShortening(config.NextProtos[0]))
 			}
 			return err
 		}
@@ -69,7 +73,7 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 		}
 		if previous != nil {
 			if err := previous(augmented); err != nil {
-				c.recoveryState().failed(err, hinted)
+				c.recoveryState().failed(err, negotiatedShortening(state.NegotiatedProtocol))
 				return err
 			}
 		}
@@ -78,9 +82,15 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 			loan.dependencies = append(loan.dependencies, Hash(der))
 		}
 		loan.protocol = state.NegotiatedProtocol
-		c.Remember(complete, time.Now())
+		c.Remember(complete, c.certificateNow())
 		return nil
 	}
+}
+
+func negotiatedShortening(protocol string) bool {
+	_, prefix := Decode(protocol)
+	_, kind, _ := decodeLeafOffer(protocol)
+	return len(prefix) > 0 || kind != 0
 }
 
 func omitKnownCertificates(certificate tls.Certificate, known map[Fingerprint]bool) *tls.Certificate {
@@ -98,28 +108,20 @@ func omitKnownCertificates(certificate tls.Certificate, known map[Fingerprint]bo
 // selection state must not be shared by cached TLS configs or concurrent dials.
 func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) {
 	if c != nil {
-		available := c.snapshot(time.Now())
-		hinted := !c.recoveryState().active()
-		if hinted {
-			config.NextProtos = resumptionProtocols(config, c.clientProtocols(available, protocols...), available)
-			hinted = false
-			for _, protocol := range config.NextProtos {
-				_, hashes := Decode(protocol)
-				if len(hashes) > 0 || strings.HasPrefix(protocol, inventory) {
-					hinted = true
-					break
-				}
-			}
+		available, lite := c.snapshotWithLite(c.certificateNow())
+		if !c.recoveryState().active() {
+			config.NextProtos = resumptionProtocols(config, c.clientProtocols(available, lite, protocols...), available)
 		} else {
 			config.NextProtos = append([]string(nil), protocols...)
 			fullExchange(config)
 		}
-		c.bindIssuerSnapshot(config, available, hinted)
+		c.bindIssuerSnapshot(config, available, false)
 	} else {
 		config.NextProtos = append([]string(nil), protocols...)
 		return
 	}
 	var acknowledged []Fingerprint
+	var leafOnly bool
 	previous := config.VerifyConnection
 	config.VerifyConnection = func(state tls.ConnectionState) error {
 		if previous != nil {
@@ -128,6 +130,8 @@ func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) 
 			}
 		}
 		_, acknowledged = Decode(state.NegotiatedProtocol)
+		_, kind, _ := decodeLeafOffer(state.NegotiatedProtocol)
+		leafOnly = kind == regularClient
 		return nil
 	}
 	selectCertificate := config.GetClientCertificate
@@ -142,6 +146,9 @@ func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) 
 				return selected, err
 			}
 			certificate = *selected
+		}
+		if leafOnly {
+			return leafCertificate(certificate), nil
 		}
 		known := make(map[Fingerprint]bool, len(acknowledged))
 		for _, hash := range acknowledged {
@@ -183,14 +190,23 @@ func (c *Certificates) ConfigureServer(config *tls.Config) {
 			}
 		}
 		known := make(map[Fingerprint]bool)
-		var available []*x509.Certificate
-		if c != nil {
-			available = c.snapshot(time.Now())
-			for _, cert := range available {
-				known[Hash(cert.Raw)] = true
-			}
+		available, lite := c.snapshotWithLite(c.certificateNow())
+		for _, cert := range available {
+			known[Hash(cert.Raw)] = true
 		}
 		cooldown := c.recoveryState().active()
+		if !cooldown && lite {
+			if protocol := c.liteServerOffer(selected.NextProtos, hello.SupportedProtos, available); protocol != "" {
+				result := selected.Clone()
+				result.GetConfigForClient = nil
+				result.NextProtos = []string{protocol}
+				result.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+					return leafCertificate(c.certificate), nil
+				}
+				c.bindIssuerSnapshot(result, available, true)
+				return result, nil
+			}
+		}
 		protocol := Select(selected.NextProtos, hello.SupportedProtos, func(hash Fingerprint) bool { return !cooldown && known[hash] })
 		if protocol == "" {
 			return selected, nil
@@ -211,7 +227,7 @@ func (c *Certificates) ConfigureServer(config *tls.Config) {
 		if cooldown {
 			fullExchange(result)
 		}
-		c.bindIssuerSnapshot(result, available, len(hashes) > 0)
+		c.bindIssuerSnapshot(result, available, true)
 		return result, nil
 	}
 }

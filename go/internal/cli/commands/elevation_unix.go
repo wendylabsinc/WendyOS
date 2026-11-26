@@ -18,11 +18,18 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
+// sudoNeedsPassword reports whether sudo would ask for a password right now.
+var sudoNeedsPassword = func() bool { return exec.Command("sudo", "-n", "true").Run() != nil }
+
+var sudoValidate = func() error { return exec.Command("sudo", "-v").Run() }
+
 // preAuthElevation pre-authenticates sudo so the password prompt appears
 // on the raw terminal before any TUI takes over.
 func preAuthElevation() error {
-	fmt.Println("You may be prompted for your password (sudo is required).")
-	if err := exec.Command("sudo", "-v").Run(); err != nil {
+	if hint := elevationHint(); hint != "" {
+		installNote(os.Stdout, "%s", hint)
+	}
+	if err := sudoValidate(); err != nil {
 		return fmt.Errorf("sudo authentication failed: %w", err)
 	}
 	return nil
@@ -46,7 +53,11 @@ func keepElevationAlive(ctx context.Context) {
 	}()
 }
 
+// elevationHint is empty when sudo will not ask for a password.
 func elevationHint() string {
+	if !sudoNeedsPassword() {
+		return ""
+	}
 	return "You may be prompted for your password (sudo is required)."
 }
 

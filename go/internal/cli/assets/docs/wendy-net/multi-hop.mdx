@@ -1,0 +1,153 @@
+---
+title: Multi-hop routing
+description: How traffic crosses several devices, and several kinds of connection, to reach a device out of direct range.
+---
+
+Two devices don't need a direct connection to talk over Wendy Net. Every
+participating device is also a router: it forwards traffic for the devices
+around it. If A can reach B and B can reach C, then A can reach C. Each step
+along the way is a hop.
+
+## How a route forms
+
+Each device knows its neighbors, the devices it has a direct link to. Neighbors
+regularly tell each other which devices they can reach and how much it costs to
+get there. A device adds the cost of its own link to the neighbor and keeps,
+for each destination, the neighbor that offers the cheapest total. That
+neighbor is the next hop.
+
+So nobody needs a map of the whole network. A only has to know that, for C, the
+next hop is B. B knows its own next hop for C, and so on until the packet
+arrives.
+
+Routes are tied to identity. A device only accepts a route to C when C's own
+[signed manifest](/docs/wendy-net/how-it-works#learning-about-everyone-else)
+confirms that the address belongs to C. A device in the middle can pass that
+proof along, but it can't make one up, so no device can claim another device's
+address.
+
+## Mixed connections on one route
+
+Each hop can use a different kind of connection, and each device only needs to
+share one kind with its neighbor on either side. Say A reaches B over Bluetooth,
+B reaches C over Ethernet, and C reaches D over Wi-Fi Aware:
+
+<Figure src="/images/wendy-net/three-different-links.webp" alt="Four devices A, B, C and D in a row, joined by Bluetooth, Ethernet and Wi-Fi Aware, with the call fetch http://10.99.0.7 above them" caption="One HTTP call from A to D crosses three hops over three different kinds of connection." />
+
+A and D have nothing in common: A has no Ethernet and D has no Bluetooth. They
+can still talk, because B and C bridge the gaps. When an app on A calls an app
+on D, your Python, Rust, C or JavaScript code makes one ordinary request to D's
+address. Wendy Net carries it across all three hops, and you never touch the
+routing.
+
+## Devices on different networks
+
+The same works across networks that have nothing to do with each other. Say a
+lab has a wired network, the warehouse next door has its own Wi-Fi network that
+isn't connected to the lab's, and a robot in the yard has only Bluetooth.
+
+<NetDiagram
+  label="A lab device on the lab's wired network links over Ethernet to a bridge device, which is also on the warehouse Wi-Fi. The bridge links over Wi-Fi to a warehouse camera, which links over Bluetooth to a robot in the yard."
+  height={200}
+  nodes={[
+    { id: 'lab', x: 70, y: 95, label: 'Lab device', note: 'Lab network' },
+    { id: 'bridge', x: 270, y: 95, label: 'Bridge', note: 'On both networks' },
+    { id: 'cam', x: 470, y: 95, label: 'Camera', note: 'Warehouse Wi-Fi' },
+    { id: 'robot', x: 650, y: 95, label: 'Robot', note: 'Bluetooth only' },
+  ]}
+  links={[
+    { from: 'lab', to: 'bridge', kind: 'ethernet', label: 'Ethernet 64', state: 'active' },
+    { from: 'bridge', to: 'cam', kind: 'wifi', label: 'Wi-Fi 128', state: 'active' },
+    { from: 'cam', to: 'robot', kind: 'bluetooth', label: 'Bluetooth 4096', state: 'active' },
+  ]}
+  caption="Two networks that never route to each other, and a robot on neither, become one Wendy Net."
+/>
+
+Wendy Net joins them into one network, as long as a participating device sits
+on each boundary with both kinds of connection turned on:
+
+- The **bridge** is plugged into the lab's switch and joined to the warehouse
+  Wi-Fi, with Ethernet and Wi-Fi turned on for Wendy Net.
+- The **camera** is on the warehouse Wi-Fi and in Bluetooth range of the yard,
+  with Wi-Fi and Bluetooth turned on.
+
+```sh
+wendy net configure --device <bridge> \
+  --participate=true --ethernet=true --infrastructure-wifi=true
+wendy net configure --device <camera> \
+  --participate=true --infrastructure-wifi=true --ble=true
+wendy net configure --device <robot> --participate=true --ble=true
+```
+
+Now the lab device can call an app on the robot, three hops away, at a cost of
+64 + 128 + 4096 = 4288. There's no new router, VPN or firewall rule between the
+two networks: Wendy Net links ride on each network as ordinary local traffic.
+Each network only has to allow local mDNS and Wendy Net's peer port, as listed
+in the [network requirements](/docs/advanced/wendyos/networking/mdns#network-requirements-and-privacy).
+
+## What a route costs
+
+A route costs the sum of the [link costs](/docs/wendy-net/how-it-works#picking-a-path)
+of its hops:
+
+| Route from A to D | Hops | Cost |
+| --- | --- | ---: |
+| Bluetooth, then Ethernet, then Wi-Fi Aware | 3 | 4096 + 64 + 512 = 4672 |
+| Ethernet, Wi-Fi, Wi-Fi Aware | 3 | 64 + 128 + 512 = 704 |
+| One direct Bluetooth link | 1 | 4096 |
+
+Fewer hops don't always win. In the last two rows, three fast hops cost less
+than one Bluetooth link, so traffic takes the three hops. When two routes cost
+exactly the same, traffic stays on the one it already uses.
+
+The cost is a guide to speed, not a measurement. A route's real throughput is
+set by its slowest hop, and every hop adds a little delay. A route with a
+Bluetooth hop in it moves data at Bluetooth speed, however fast the other hops
+are.
+
+## Who can read the traffic
+
+The devices in the middle forward packets; they are not the destination. App
+connections are encrypted end to end between the two devices, in a session that
+checks the destination device's certificate. A device along the way passes the
+packets on but can't read them, and it can't pretend to be the device you meant
+to reach. Each link is encrypted on its own as well.
+
+Internet traffic that a device borrows through a gateway is different: it isn't
+encrypted from end to end by Wendy Net. See
+[Reach the Internet through another device](/docs/wendy-net/internet-sharing#who-can-see-the-traffic).
+
+## Practical limits
+
+- **Bluetooth hops are slow.** A route through Bluetooth moves data at
+  Bluetooth speed, and setting up a chain of several Bluetooth hops the first
+  time can take a while. Prefer Ethernet, Wi-Fi or Wi-Fi Aware for large
+  transfers. See [Wendy Net over Bluetooth](/docs/wendy-net/bluetooth).
+- **Each radio has a few neighbor slots.** A WendyOS device keeps up to three
+  Bluetooth neighbors and four Wi-Fi Aware neighbors at once. It can still relay
+  for far more devices than that, because they don't all need to be its
+  neighbors.
+- **Not every pair on a network links directly.** On Ethernet and Wi-Fi, each
+  device starts links to at most two others and accepts links from the rest. On
+  a busy network, traffic between two devices can take two cheap hops through a
+  third device on the same network.
+- **There is no hop limit as such,** but a route can cost at most 65,535. That
+  allows up to 15 Bluetooth hops in a row, and far more of the faster kinds.
+- **About a thousand devices.** Each device keeps track of up to 1,024 signed
+  manifests, its own included, so it can reach about a thousand others.
+- **Routes need live neighbors.** A device that drops out takes the routes
+  through it with it. See [Re-routing and path choice](/docs/wendy-net/rerouting)
+  for what happens next.
+
+## Check a route
+
+`wendy net topology` shows the neighbors and routes as one device sees them.
+Check it on the device the traffic starts from, and on the devices along the
+way:
+
+```sh
+wendy net topology --device <device>
+```
+
+One device's view doesn't prove that every other device is reachable. Test the
+real request your app makes.

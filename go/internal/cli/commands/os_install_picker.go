@@ -33,6 +33,9 @@ func newInstallPickerModel(items []tui.PickerItem, detected ...tui.PickerItem) t
 	return newTabbedPickerModel("Select a device", groups)
 }
 
+// pickInstallDeviceFn asks which device to install; a seam for tests.
+var pickInstallDeviceFn = pickInstallDevice
+
 func pickInstallDevice(items []tui.PickerItem) (string, error) {
 	if len(items) == 0 {
 		return "", fmt.Errorf("no devices available")
