@@ -75,7 +75,7 @@ func TestRobotCommandAutomaticallyStartsObservationsOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			frame := room.Site.ID + "/" + room.Site.ModelRevision
-			if err := store.SaveWaypoint(frame, "kitchen", RoomObject{X: 2, Z: 1}); err != nil {
+			if err := store.SaveWaypoint(frame, "kitchen", Waypoint{X: 2, Z: 1}); err != nil {
 				t.Fatal(err)
 			}
 			robot := &setupTestRobot{state: twinrobot.SiteRobotSnapshot{MeasurementsReady: true, Pose: true, Aligned: true, Frame: frame}}
@@ -303,7 +303,7 @@ func TestRobotCommandExistingIdleObserverWaitsForStrictMeasurements(t *testing.T
 			store, _ := NewStore(t.TempDir())
 			saved, _ := store.Put(room())
 			frame := saved.Site.ID + "/" + saved.Site.ModelRevision
-			if err := store.SaveWaypoint(frame, "kitchen", RoomObject{X: 2, Z: 1}); err != nil {
+			if err := store.SaveWaypoint(frame, "kitchen", Waypoint{X: 2, Z: 1}); err != nil {
 				t.Fatal(err)
 			}
 			robot := &setupTestRobot{state: twinrobot.SiteRobotSnapshot{IdleMeasurementsReady: true, MeasurementsReady: false, Pose: true, Aligned: true, Frame: frame}}
