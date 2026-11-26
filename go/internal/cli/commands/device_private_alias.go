@@ -293,13 +293,16 @@ func gatherPrivateAliasSources(ctx context.Context, alias privateDeviceAlias, te
 			}
 			lanFailure, sources.lan = err, nil
 		}
+		// Inventory includes offline assets. Only a Cloud presence hint can
+		// end discovery early while a cold Wendy Net join is still pending.
+		cloudReady := candidate.cloud.GetLastHeartbeat() != nil
 		// Process the initial browse even when its result and the grace
 		// timer become ready together.
-		if alias.uuid != "" && grace == nil && (lan == nil || extendedLAN) && selectionErr == nil && (candidate.mesh != "" || candidate.cloud != nil) {
+		if alias.uuid != "" && grace == nil && (lan == nil || extendedLAN) && selectionErr == nil && (candidate.mesh != "" || cloudReady) {
 			return sources, nil, nil
 		}
 		if alias.uuid == "" && lan == nil && cloud == nil &&
-			(mesh == nil || nameDeadline == nil && selectionErr == nil && (len(candidate.lan) != 0 || candidate.cloud != nil)) {
+			(mesh == nil || nameDeadline == nil && selectionErr == nil && (len(candidate.lan) != 0 || cloudReady)) {
 			return sources, nil, nil
 		}
 		if lan == nil && alias.uuid != "" && !extendedLAN && lanFailure == nil && sources.lanErr == nil {

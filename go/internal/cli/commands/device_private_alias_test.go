@@ -251,6 +251,12 @@ func TestPrivateDeviceAliasFrontDoorLANUsesExplicitIdentity(t *testing.T) {
 	if err != nil || !matched || selected == nil || calls != 1 || selected.PinKey != wantPin || selected.Selector != wantPin {
 		t.Fatalf("selection=%+v matched=%v err=%v calls=%d", selected, matched, err, calls)
 	}
+	if selected.Agent.Reconnect == nil {
+		t.Fatal("private LAN selection lost reconnect")
+	}
+	if reconnected, err := selected.Agent.Reconnect(t.Context()); err != nil || reconnected.DevicePinKey != wantPin || calls != 2 {
+		t.Fatalf("reconnect=%+v calls=%d err=%v", reconnected, calls, err)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -527,7 +533,7 @@ func TestPrivateDeviceAliasUnpinKeepsOtherTenant(t *testing.T) {
 	foreign := config.DevicePin{Principal: certs.DeviceSPIFFEURI(privateAliasOtherTenant, privateAliasOtherDevice)}
 	privateAliasConfig(t, map[string]config.DevicePin{
 		alias.pinKey(tenant): current, alias.pinKey(otherTenant): foreign,
-		host: current, "jetson": foreign,
+		host: current, "jetson": current,
 	})
 	cmd := newDeviceUnpinCmd()
 	cmd.SetArgs([]string{host})
@@ -544,9 +550,9 @@ func TestPrivateDeviceAliasUnpinKeepsOtherTenant(t *testing.T) {
 	if _, found := cfg.DevicePinFor(host); found {
 		t.Fatal("current organization's legacy alias pin survived unpin")
 	}
-	for _, key := range []string{alias.pinKey(otherTenant), "jetson"} {
-		if pin, found := cfg.DevicePinFor(key); !found || pin != foreign {
-			t.Errorf("foreign pin at %q changed", key)
+	for key, want := range map[string]config.DevicePin{alias.pinKey(otherTenant): foreign, "jetson": current} {
+		if pin, found := cfg.DevicePinFor(key); !found || pin != want {
+			t.Errorf("unrelated pin at %q changed", key)
 		}
 	}
 }
@@ -719,5 +725,17 @@ func TestPrivateDeviceAliasMeshReadinessFallback(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPrivateDeviceAliasBarePinCannotEstablishCloudName(t *testing.T) {
+	const host = "jetson.wendy.internal"
+	privateAliasConfig(t, map[string]config.DevicePin{
+		"jetson": {Principal: certs.DeviceSPIFFEURI(privateAliasTenant, privateAliasDevice)},
+	})
+	stubPrivateAliasNetwork(t, privateAliasSources{lan: []models.LANDevice{privateAliasTestLAN(privateAliasDevice, "jetson")}})
+	selected, matched, err := connectPrivateDeviceAlias(t.Context(), host, true)
+	if !matched || selected != nil || err == nil || !strings.Contains(err.Error(), "LAN discovery alone") {
+		t.Fatalf("ordinary LAN pin established a private alias: selected=%v matched=%v err=%v", selected, matched, err)
 	}
 }

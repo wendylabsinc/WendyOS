@@ -153,6 +153,10 @@ func directCommandTarget(conn *grpcclient.AgentConnection, address string) comma
 		}
 		return commandTarget{Device: address, Selector: address, Transport: "cloud", CloudGRPC: u.Host, BrokerURL: os.Getenv("WENDY_BROKER_URL")}
 	}
+	if strings.HasPrefix(conn.DevicePinKey, "private-alias/") &&
+		(address == "" || meshname.IsShortHostname(address) || address == conn.DevicePinKey) {
+		return commandTarget{Device: conn.DevicePinKey, Transport: "direct"}
+	}
 	if meshname.IsShortHostname(address) {
 		return commandTarget{Device: address, Transport: "direct"}
 	}
