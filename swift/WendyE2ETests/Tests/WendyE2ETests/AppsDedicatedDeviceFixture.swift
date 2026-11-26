@@ -23,6 +23,12 @@ extension AppsDeploymentFixture {
             appsDedicatedDeviceTestsEnabled,
             "Dedicated device opt-in is required for service control"
         )
+        if service == .agent,
+            ProcessInfo.processInfo.environment["WENDY_E2E_APPS_SYSTEMD_OUTAGE"] == "true"
+        {
+            try await withIndependentAgentRestart(cli, body)
+            return
+        }
         let sshUser = try Self.setting("WENDY_E2E_APPS_SSH_USER")
         let ssh =
             "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=5 -l \(Self.quote(sshUser)) \(Self.quote(device))"

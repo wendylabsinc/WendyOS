@@ -10,6 +10,7 @@ struct AppsConsoleObservation: Decodable, Sendable {
     struct Row: Decodable, Sendable {
         let cells: [String]
         let links: [String]
+        let titles: [String]
     }
     struct Fact: Decodable, Sendable {
         let panel: String

@@ -8,7 +8,8 @@ struct `'Console Apps and Deployments'` {
      In the same Dev organization, visit Apps and the owned app's Overview,
      Deployments, Releases, Access and Settings. After CLI creation/publish,
      rendered names, app id, release version and owner/access match the owned
-     resources; creation first shows No release yet. Capture rendered evidence
+     resources; creation first shows No release yet. Check the independent
+     access/lifecycle views before publication. Capture rendered evidence
      at the same ids. A successful backing RPC is not a browser observation.
      */
     @Test(.enabled(if: appsBrowserTestsEnabled))
@@ -18,11 +19,6 @@ struct `'Console Apps and Deployments'` {
             let created = try await app.console(cli, path: "/apps/\(app.app)/overview")
             #expect(created.text.contains(app.app))
             #expect(created.text.contains("No release yet"))
-            let release = try await app.publish(cli)
-            let releases = try await app.pollConsole(cli, path: "/apps/\(app.app)/releases") {
-                $0.rows.contains { $0.cells.contains(release.tag) }
-            }
-            #expect(releases.rows.contains { $0.cells.contains(release.tag) })
             let access = try await app.console(cli, path: "/apps/\(app.app)/access")
             #expect(access.text.contains("App owner"))
             _ = try await app.succeed(
@@ -32,13 +28,13 @@ struct `'Console Apps and Deployments'` {
             let settings = try await app.pollConsole(cli, path: "/apps/\(app.app)/settings") {
                 dom in
                 dom.facts.contains {
-                    $0.panel == "Lifecycle policy" && $0.term == "Tagged releases"
+                    $0.panel == "Lifecycle policy" && $0.term.lowercased() == "tagged releases"
                         && $0.value == "Keep the last 1."
                 }
             }
             #expect(
                 settings.facts.contains {
-                    $0.panel == "Lifecycle policy" && $0.term == "Tagged releases"
+                    $0.panel == "Lifecycle policy" && $0.term.lowercased() == "tagged releases"
                         && $0.value == "Keep the last 1."
                 }
             )
@@ -47,6 +43,17 @@ struct `'Console Apps and Deployments'` {
                 "wendy app lifecycle \(app.app) \(app.cloudFlag)"
             )
             #expect(cliPolicy.stdout.contains("keep the last 1"))
+            let release = try await app.publish(cli)
+            let releases = try await app.pollConsole(cli, path: "/apps/\(app.app)/releases") {
+                $0.rows.contains {
+                    $0.titles.contains(release.tag) && $0.titles.contains(release.digest)
+                }
+            }
+            #expect(
+                releases.rows.contains {
+                    $0.titles.contains(release.tag) && $0.titles.contains(release.digest)
+                }
+            )
         }
     }
 
@@ -202,9 +209,11 @@ struct `'Console Apps and Deployments'` {
     }
 
     /**
-     A recorded offline deployment renders its desired release and waiting
-     target without claiming a reported success. After the dedicated Agent
-     reconnects, bounded DOM polling observes that same asset running it.
+     A first deployment recorded while its Agent is offline renders the desired
+     release, no reported release, Not reported yet and Never. This is the fresh
+     assignment's waiting state; Waiting: offline requires a stale prior report.
+     After reconnect, the full runtime/HTTP assertion and bounded DOM polling
+     must observe that same asset running the release.
      */
     @Test(.enabled(if: appsBrowserTestsEnabled && appsDedicatedDeviceTestsEnabled))
     func `shows an offline target waiting and then running after catch-up`() async throws {
@@ -219,9 +228,9 @@ struct `'Console Apps and Deployments'` {
                     path: "/deployments/\(snapshot.deployment.id)/devices"
                 ) { dom in
                     dom.rows.contains {
-                        $0.links.contains("/assets/\(app.asset)") && $0.cells.count >= 4
-                            && $0.cells[1] == release.tag && $0.cells[2] != release.tag
-                            && $0.cells[3].lowercased().contains("waiting")
+                        $0.links.contains("/assets/\(app.asset)") && $0.cells.count >= 5
+                            && $0.cells[1] == release.tag && $0.cells[2] == "--"
+                            && $0.cells[3] == "Not reported yet" && $0.cells[4] == "Never"
                     }
                 }
                 #expect(waiting.rows.count == 1)
