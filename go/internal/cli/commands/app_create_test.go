@@ -62,6 +62,23 @@ func runApp(cmd *cobra.Command, args ...string) (string, error) {
 	return out.String(), err
 }
 
+// WDY-4385: --access who=operator resolves Cloud's built-in app-operator
+// role, and the review still names it App operator.
+func TestAppCreateOperatorGrantResolvesCloudRoleName(t *testing.T) {
+	_, fake := appFixture(t)
+	out, err := runApp(newAppCreateCmd(), "--name", "Cam", "--app", "cam.app", "--access", "ana@example.com=operator", "--org-default", "--yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "ana@example.com (App operator)") {
+		t.Fatalf("review: %s", out)
+	}
+	binds := fake.signed(cloudpb.AccessService_CreateBinding_FullMethodName)
+	if len(binds) != 1 || binds[0].payload.(*cloudpb.CreateBindingRequest).GetRoleId() != "r-op" {
+		t.Fatalf("bindings %+v", binds)
+	}
+}
+
 // With every flag given nothing is asked, even in a terminal: the app, its
 // notification choice and each binding at APP scope are created, and the
 // next step is the exact publish command.

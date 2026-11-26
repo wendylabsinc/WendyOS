@@ -70,10 +70,11 @@ func appIDFromName(name string) string {
 	return id
 }
 
-// appRoles are the built-in app roles, by the short name --access takes.
+// appRoles are the built-in app roles' labels, by the short name --access
+// takes. Cloud names each built-in role app-<short name>.
 var appRoles = map[string]string{"owner": "App owner", "developer": "App developer", "operator": "App operator", "viewer": "App viewer"}
 
-type appGrant struct{ who, role string } // role: the built-in role's name
+type appGrant struct{ who, role string } // role: the short name, a key of appRoles
 
 // parseGrant reads who=role. Who is a member's email or a realm group spelled
 // <realm-issuer>#<group>, as bindings name it.
@@ -83,14 +84,14 @@ func parseGrant(s string) (appGrant, error) {
 		return appGrant{}, fmt.Errorf("%q: give who=role, for example ana@example.com=developer", s)
 	}
 	who, role := strings.TrimSpace(s[:i]), strings.ToLower(strings.TrimSpace(s[i+1:]))
-	name, ok := appRoles[strings.TrimPrefix(role, "app ")]
-	if !ok {
+	role = strings.TrimPrefix(role, "app ")
+	if _, ok := appRoles[role]; !ok {
 		return appGrant{}, fmt.Errorf("%q: the role is one of owner, developer, operator, viewer", s)
 	}
 	if !strings.Contains(who, "@") && !strings.Contains(who, "#") {
 		return appGrant{}, fmt.Errorf("%q: name a person by email, or a group as <realm-issuer>#<group>", s)
 	}
-	return appGrant{who, name}, nil
+	return appGrant{who, role}, nil
 }
 
 func parseGrants(list []string) ([]appGrant, error) {
@@ -302,7 +303,7 @@ func createApp(ctx context.Context, out io.Writer, conn grpc.ClientConnInterface
 	}
 	access := []string{"You (App owner)"}
 	for _, g := range a.grants {
-		access = append(access, g.who+" ("+g.role+")")
+		access = append(access, g.who+" ("+appRoles[g.role]+")")
 	}
 	fmt.Fprintf(out, "Review and create\n  Name: %s\n  App id: %s\n  What it does: %s\n  Notifications: %s\n  Access: %s\n  Lifecycle: %s\nNothing is created until you confirm.\n",
 		a.name, a.id, a.details, notifications, strings.Join(access, ", "), policySummary(a.policy))
@@ -340,7 +341,7 @@ func createApp(ctx context.Context, out io.Writer, conn grpc.ClientConnInterface
 }
 
 // resolveGrants turns each grant into an APP-scope binding: the built-in
-// role by name, a group as written, a person by their email among the
+// role by its Cloud name, a group as written, a person by their email among the
 // organization's members.
 func resolveGrants(ctx context.Context, conn grpc.ClientConnInterface, org, app string, grants []appGrant) ([]*cloudpb.CreateBindingRequest, error) {
 	if len(grants) == 0 {
@@ -355,12 +356,12 @@ func resolveGrants(ctx context.Context, conn grpc.ClientConnInterface, org, app 
 	for _, g := range grants {
 		b := &cloudpb.CreateBindingRequest{OrganizationId: org, ScopeType: cloudpb.BindingScopeType_BINDING_SCOPE_TYPE_APP, ScopeRef: app, Effect: cloudpb.BindingEffect_BINDING_EFFECT_ALLOW}
 		for _, r := range roles.GetRoles() {
-			if r.GetIsBuiltin() && r.GetKind() == cloudpb.RoleKind_ROLE_KIND_APP && r.GetName() == g.role {
+			if r.GetIsBuiltin() && r.GetKind() == cloudpb.RoleKind_ROLE_KIND_APP && r.GetName() == "app-"+g.role {
 				b.RoleId = r.GetId()
 			}
 		}
 		if b.RoleId == "" {
-			return nil, fmt.Errorf("your organization has no %s role", g.role)
+			return nil, fmt.Errorf("your organization has no %s role", appRoles[g.role])
 		}
 		if strings.Contains(g.who, "#") {
 			b.PrincipalType, b.PrincipalId = cloudpb.BindingPrincipalType_BINDING_PRINCIPAL_TYPE_GROUP, g.who

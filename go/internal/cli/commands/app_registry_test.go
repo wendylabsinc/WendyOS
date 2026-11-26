@@ -147,8 +147,8 @@ func newFakeRegistry(t *testing.T, keys ...*cloudpb.RecipientKey) *fakeRegistry 
 		}}
 }
 
-// appRoleIDs are the fake's built-in app role ids, by name.
-var appRoleIDs = map[string]string{"App owner": "r-owner", "App developer": "r-dev", "App operator": "r-op", "App viewer": "r-view"}
+// appRoleIDs are the fake's built-in app role ids, by Cloud's role name.
+var appRoleIDs = map[string]string{"app-owner": "r-owner", "app-developer": "r-dev", "app-operator": "r-op", "app-viewer": "r-view"}
 
 // fakeApps serves AppService, AccessService, RoleService, members and users
 // from the same fake.
