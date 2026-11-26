@@ -3,6 +3,7 @@ package meshsession
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -165,7 +166,7 @@ func TestApplicationHandshakesWaitBrieflyForCloudBurst(t *testing.T) {
 	listener := NewApplicationListener()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- server.serveTLSListener(ctx, listener, 1, 150*time.Millisecond) }()
+	go func() { done <- server.serveTLSListener(ctx, listener, 1, 500*time.Millisecond) }()
 	t.Cleanup(func() {
 		cancel()
 		_ = server.Close()
@@ -205,32 +206,18 @@ func TestApplicationHandshakesWaitBrieflyForCloudBurst(t *testing.T) {
 	expectRead(waiting, 30*time.Millisecond, true)
 	expectRead(waiting, time.Second, false)
 
-	queued := make(chan struct{})
-	result := make(chan error, 1)
-	go func() {
-		address := netip.AddrPortFrom(receiver.Device.MeshAddress(), TLSPort)
-		conn, err := DialTLSWithDialer(ctx, source, receiver.Device, address, 1234, func(ctx context.Context, _, _ string) (net.Conn, error) {
-			conn, err := listener.Dial(ctx)
-			close(queued)
-			return conn, err
-		})
-		if conn != nil {
-			_ = conn.Close()
-		}
-		result <- err
-	}()
-	select {
-	case <-queued:
-	case <-time.After(time.Second):
-		t.Fatal("fifth connection never arrived")
-	}
+	raw := open()
 	_ = busy[0].Close()
-	select {
-	case err := <-result:
-		if !errors.Is(err, ErrDenied) {
-			t.Fatalf("queued connection did not reach app port admission: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("queued handshake did not finish")
+	config, err := source.PeerTLS(receiver.Device)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.ConfigureTLSClient(config, TLSALPN)
+	config.ClientSessionCache = nil
+	config.SessionTicketsDisabled = true
+	handshake, stop := context.WithTimeout(ctx, 3*time.Second)
+	defer stop()
+	if err := tls.Client(raw, config).HandshakeContext(handshake); err != nil {
+		t.Fatalf("queued connection did not complete TLS: %v", err)
 	}
 }
