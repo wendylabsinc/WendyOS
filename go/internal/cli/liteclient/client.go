@@ -914,6 +914,8 @@ func resultToError(result wendypb.WendyComResult) error {
 		return errors.New("WiFi is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_BLE:
 		return errors.New("BLE is not supported by this device")
+	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_ESPNOW:
+		return errors.New("ESP-NOW is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_NAN:
 		return errors.New("NAN is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_BLE_PROFILE_UNSUPPORTED:
