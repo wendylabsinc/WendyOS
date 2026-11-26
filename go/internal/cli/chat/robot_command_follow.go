@@ -23,15 +23,21 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (r
 	result, err = t.executeCommandOnce(ctx, call, true, &attempt)
 	var args struct{ Action string }
 	_ = json.Unmarshal(call.Arguments, &args)
-	if err != nil || call.Name != "robot_command" || args.Action != "localize_active" {
+	if err != nil || call.Name != "robot_command" || (args.Action != "localize_active" && args.Action != "find_active") {
 		return result, err
+	}
+	activity := "alignment"
+	lookupLimit := 5 * time.Second
+	if args.Action == "find_active" {
+		activity = "object search"
+		lookupLimit = 25 * time.Second // One requested camera frame and its submission.
 	}
 	var receipt robotReceipt
 	if json.Unmarshal([]byte(result.Text), &receipt) != nil || receipt.State != "running" {
 		return result, nil
 	}
 	if attempt == nil {
-		return result, errors.New("alignment monitoring has no pending receipt; completion is unverified")
+		return result, fmt.Errorf("%s monitoring has no pending receipt; completion is unverified", activity)
 	}
 	defer func() {
 		if err != nil {
@@ -54,27 +60,27 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (r
 		select {
 		case <-watch.Done():
 			timer.Stop()
-			return result, fmt.Errorf("alignment monitoring ended; robot completion is unverified and the search may continue until Stop or its five-minute bound: %w", watch.Err())
+			return result, fmt.Errorf("%s monitoring ended; robot completion is unverified and the search may continue until Stop or its five-minute bound: %w", activity, watch.Err())
 		case <-timer.C:
 		}
-		lookupCtx, done := context.WithTimeout(watch, 5*time.Second)
+		lookupCtx, done := context.WithTimeout(watch, lookupLimit)
 		next, lookupErr := t.lookupRobotAttempt(lookupCtx, call, attempt)
 		done()
 		if lookupErr != nil {
 			if watch.Err() != nil {
-				return result, fmt.Errorf("alignment monitoring canceled; robot stop is not confirmed: %w", watch.Err())
+				return result, fmt.Errorf("%s monitoring canceled; robot stop is not confirmed: %w", activity, watch.Err())
 			}
 			failures++
 			if failures >= 3 || errors.Is(lookupErr, errRobotReceiptUnknown) {
-				return result, fmt.Errorf("could not confirm the alignment outcome; no movement was restarted: %w", lookupErr)
+				return result, fmt.Errorf("could not confirm the %s outcome; no movement was restarted: %w", activity, lookupErr)
 			}
-			emitRobotProgress(ctx, call, "Alignment receipt temporarily unavailable; retrying the same receipt without restarting movement.")
+			emitRobotProgress(ctx, call, "Robot receipt temporarily unavailable; retrying the same receipt without restarting movement.")
 			continue
 		}
 		failures = 0
 		result = next
 		if json.Unmarshal([]byte(result.Text), &receipt) != nil || receipt.State == "" {
-			return result, errors.New("invalid alignment receipt; completion is unverified")
+			return result, fmt.Errorf("invalid %s receipt; completion is unverified", activity)
 		}
 		if receipt.State != "running" {
 			return result, nil
@@ -176,6 +182,17 @@ func (t *robotCommandTools) recordRobotReceipt(attempt *robotCommandAttempt, res
 			_ = json.Unmarshal([]byte(result.Text), &evidence)
 			if !evidence.Snapshot.Aligned {
 				return errors.New("alignment receipt claims completion without confirmed alignment; outcome remains unresolved")
+			}
+		}
+		if args.Action == "find_active" {
+			var evidence struct {
+				Search struct {
+					Seen bool `json:"seen"`
+				} `json:"object_search"`
+			}
+			_ = json.Unmarshal([]byte(result.Text), &evidence)
+			if !evidence.Search.Seen {
+				return errors.New("object search claims completion without a visual finding; outcome remains unresolved")
 			}
 		}
 		attempt.completed, attempt.result = true, *result

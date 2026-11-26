@@ -311,7 +311,7 @@ func (t *robotCommandTools) executeCommandOnce(ctx context.Context, call ToolCal
 		stoppedAttempt = t.pending.attempt
 	}
 	attempt.sent = true
-	if args["action"] == "localize_active" && attempt.followUntil.IsZero() {
+	if (args["action"] == "localize_active" || args["action"] == "find_active") && attempt.followUntil.IsZero() {
 		limit := t.followLimit
 		if limit <= 0 {
 			// Include setup and final receipt delivery after the controller's
@@ -390,6 +390,19 @@ func canonicalRobotGoal(input map[string]any) (map[string]any, string, string, e
 			return nil, "", "", errors.New("go_to_object requires evidence_id from a navigable object observation")
 		}
 		fields = append(fields, "evidence_id")
+	case "find_active":
+		query, _ := input["query"].(string)
+		if strings.TrimSpace(query) == "" || len(query) > 160 || strings.ContainsFunc(query, unicode.IsControl) {
+			return nil, "", "", errors.New("describe one object using 1 to 160 printable characters")
+		}
+		fields = append(fields, "query")
+		if value, exists := input["model"]; exists {
+			model, ok := value.(string)
+			if !ok || strings.TrimSpace(model) == "" || len(model) > 128 || strings.ContainsFunc(model, unicode.IsControl) {
+				return nil, "", "", errors.New("choose an installed vision model using 1 to 128 printable characters, or omit model")
+			}
+			fields = append(fields, "model")
+		}
 	case "stop", "connect", "status":
 	default:
 		return nil, "", "", fmt.Errorf("unsupported robot command action %q", action)
