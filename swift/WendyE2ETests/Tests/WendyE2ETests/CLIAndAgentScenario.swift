@@ -119,11 +119,57 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
                 runDirectory: WendyE2EEnvironment.cliRunDirectory,
                 fallbackDirectory: repositoryRootDirectoryURL.appendingPathComponent("go/bin").path
             )
-            let cliEnvironment = Self.roleEnvironment(
+            var cliEnvironment = Self.roleEnvironment(
                 sandbox: cliSandbox,
                 binDirectory: cliBinDirectory,
                 machineOS: cliOS
             )
+            let savedAccount = ProcessInfo.processInfo.environment["WENDY_E2E_APPS_ACCOUNT"]
+            if authenticated, savedAccount != nil {
+                // Explicit live-run mode: use the normal config and native
+                // credential store. Keep HOME/work files isolated, but never
+                // copy or export the saved account's credentials.
+                guard cliMachine.isLocal, !WendyE2EEnvironment.parallel,
+                    let directory = ProcessInfo.processInfo.environment[
+                        "WENDY_E2E_SAVED_CONFIG_DIR"
+                    ],
+                    directory.hasPrefix("/"),
+                    ProcessInfo.processInfo.environment["WENDY_E2E_MANAGED_AGENT"] != "true"
+                else {
+                    throw NSError(
+                        domain: "CLIAndAgentScenario",
+                        code: 1,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "Saved-account runs require a local serialized CLI, explicit normal config directory and no managed Agent"
+                        ]
+                    )
+                }
+                cliEnvironment["WENDY_CONFIG_DIR"] = directory
+            }
+            if authenticated,
+                ProcessInfo.processInfo.environment["WENDY_E2E_APPS_BUILDER"] == "true"
+            {
+                // Only public tool locations are referenced. Docker's normal
+                // config may contain registry credentials and is never copied.
+                let inputs = ProcessInfo.processInfo.environment
+                guard let host = inputs["WENDY_E2E_APPS_DOCKER_HOST"],
+                    host.hasPrefix("unix:///"), !host.contains("\n"),
+                    let plugins = inputs["WENDY_E2E_APPS_DOCKER_PLUGIN_DIR"],
+                    let home = cliSandbox.homeDirectory,
+                    plugins.hasPrefix("/"),
+                    FileManager.default.isExecutableFile(atPath: plugins + "/docker-buildx")
+                else {
+                    throw AppsDeploymentFixture.Prerequisite(
+                        description:
+                            "Builder fixture needs an explicit local Docker socket and installed Buildx plugin directory"
+                    )
+                }
+                cliEnvironment["DOCKER_HOST"] = host
+                cliEnvironment["DOCKER_CONFIG"] = Self.path(home, ".docker")
+                cliEnvironment["WENDY_BUILDX_BUILDER"] =
+                    "e2e-apps-" + UUID().uuidString.lowercased()
+            }
             let agentSandbox = Self.roleSandbox(
                 role: "agent",
                 runDirectory: WendyE2EEnvironment.agentRunDirectory,
@@ -149,7 +195,7 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
                 recorder: recorder
             )
             cliSession = cli
-            if authenticated {
+            if authenticated, savedAccount == nil {
                 try await Self.installCLIAuthFixture(into: cli)
             }
             if useDeviceCache, let source = WendyE2EEnvironment.cliDeviceCachePath {

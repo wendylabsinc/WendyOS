@@ -1,0 +1,247 @@
+import Foundation
+import Testing
+import WendyE2ETesting
+
+@Suite(.serialized)
+struct `'wendy app publish'` {
+    /**
+     Scripted first publication builds the actual small HTTP Dockerfile, both
+     from a new project and from an existing wendy.json. In a mixed-case new
+     directory, init derives the normalized app id; a named Git branch supplies
+     the untagged release name. Its suffix must equal the independently hashed
+     registry manifest digest. Both journeys explicitly register, publish one
+     release, retain the receipt and create no deployment or device workload.
+     */
+    @Test(
+        .enabled(
+            if: appsDeploymentTestsEnabled
+                && ProcessInfo.processInfo.environment["WENDY_E2E_APPS_BUILDER"] == "true"
+        ),
+        arguments: [true, false]
+    )
+    func `publishes scripted new and existing small Dockerfile projects without deploying`(
+        newProject: Bool
+    ) async throws {
+        try await AppsDeploymentFixture.withApp { cli, app in
+            try await AppsBuilderFixture.withBuilder(cli) {
+                let directory = newProject ? app.app.uppercased() : "."
+                let prefix = "cd \(AppsDeploymentFixture.quote(directory)) && "
+                if newProject {
+                    try await cli.sh("mkdir \(AppsDeploymentFixture.quote(directory))")
+                    _ = try await app.succeed(
+                        cli,
+                        prefix
+                            + "wendy init --here --target wendyos --language python --git-init no --assistant skip --no-extra-entitlements </dev/null"
+                    )
+                    let result = try await cli.sh(prefix + "cat wendy.json") { $0.stdout }
+                    let initialized = try JSONDecoder().decode(
+                        InitializedProject.self,
+                        from: Data(result.utf8)
+                    )
+                    #expect(initialized.appId == app.app)
+                    #expect(initialized.platform == "linux")
+                    // Keep init's generated identity and scaffold; supply this
+                    // ordinary project's public HTTP settings before building.
+                    let configure =
+                        "import json; p=\(String(reflecting: directory + "/wendy.json")); c=json.load(open(p)); f=json.load(open('wendy.json')); c.update({k:f[k] for k in ['env','requiredEnv','entitlements']}); json.dump(c,open(p,'w'))"
+                    try await cli.sh("python3 -c \(AppsDeploymentFixture.quote(configure))")
+                    try await cli.sh(prefix + "git init -b e2e-first-publish")
+                }
+                try await AppsBuilderFixture.writeSmallContext(cli, directory: directory)
+                let absent = try await app.catalog(cli)
+                #expect(absent.appCode == "NotFound" && absent.app == nil)
+                try await app.create(cli)
+                let mode = newProject ? "--untagged" : "--tag 1.0.0"
+                let receipt = try await app.succeed(
+                    cli,
+                    prefix
+                        + "wendy app publish \(mode) --dockerfile Dockerfile --platform linux/arm64 \(app.cloudFlag) </dev/null"
+                )
+                let catalog = try await app.catalog(cli)
+                let releases = try #require(catalog.releases)
+                try #require(releases.count == 1)
+                let row = releases[0]
+                let digest = try #require(row.imageDigest)
+                #expect(row.name == (newProject ? "e2e-first-publish@\(digest)" : "1.0.0"))
+                let release = AppsDeploymentFixture.Release(
+                    id: row.id,
+                    tag: row.name,
+                    digest: digest
+                )
+                let artifact = try await app.requireArtifact(
+                    cli,
+                    release: release,
+                    defaultUnit: "fahrenheit"
+                )
+                #expect(artifact.computedDigest == digest)
+                #expect(
+                    (receipt.stdout + "\n" + receipt.readableStderr).contains(
+                        "Published release \(row.id) of \(app.app): \(row.name) = \(digest)"
+                    )
+                )
+                #expect(catalog.deployments?.isEmpty == true)
+                let inventory = try await app.inventory(cli)
+                #expect(!inventory.contains { $0.name == app.app })
+            }
+        }
+    }
+
+    private struct InitializedProject: Decodable {
+        let appId: String
+        let platform: String
+    }
+
+    /**
+     Publishes a tagged ARM64 release and reads its actual catalog and encrypted
+     artifact metadata. The returned digest covers the embedded app definition.
+     No deployment or owned device application is created.
+     */
+    @Test(.enabled(if: appsDeploymentTestsEnabled))
+    func `publishes a release without deploying it`() async throws {
+        try await AppsDeploymentFixture.withApp { cli, app in
+            try await app.create(cli)
+            let before = try await app.inventory(cli)
+            let release = try await app.publish(cli)
+            #expect(!release.id.isEmpty)
+            #expect(release.digest.hasPrefix("sha256:"))
+            #expect(release.digest.count == 71)
+            let after = try await app.inventory(cli)
+            #expect(after == before)
+            try await app.refuse(
+                cli,
+                "wendy app deployment show \(app.deployment) \(app.cloudFlag)",
+                guidance: "no deployment"
+            )
+        }
+    }
+
+    /**
+     A local project cannot publish under a different app id. Refusal occurs
+     before Cloud authentication, image building or upload.
+     */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `refuses an app id that differs from the project`() async throws {
+        try await CLIAndAgentScenario().run(authenticated: false) { cli, _ in
+            try await cli.sh(
+                #"printf '%s' '{"appId":"sh.wendy.e2e.original","env":{}}' > wendy.json"#
+            )
+            try await cli.sh("wendy app publish --app sh.wendy.e2e.other --tag 1.0.0 </dev/null") {
+                result in
+                #expect(result.status.isFailure)
+                #expect(result.readableStderr.contains("--app must match appId"))
+            }
+        }
+    }
+
+    /**
+     An invalid requiredEnv definition is rejected before upload. Required
+     names must exist in env; an invalid project must never become a release.
+     */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `validates required settings before publishing`() async throws {
+        try await CLIAndAgentScenario().run(authenticated: false) { cli, _ in
+            try await cli.sh(
+                #"printf '%s' '{"appId":"sh.wendy.e2e.invalid","env":{},"requiredEnv":["MISSING"]}' > wendy.json"#
+            )
+            try await cli.sh("wendy app publish --tag 1.0.0 </dev/null") { result in
+                #expect(result.status.isFailure)
+                #expect(result.readableStderr.contains("requiredEnv"))
+            }
+        }
+    }
+
+    /**
+     The current release path accepts one container app. A project declaring
+     several services refuses before authentication, building or upload and
+     explains how to split it into separately deployable apps.
+     */
+    @Test(.enabled(if: appsDeploymentLocalTestsEnabled))
+    func `refuses unsupported multi-service projects before uploading`() async throws {
+        try await CLIAndAgentScenario().run(authenticated: false) { cli, _ in
+            try await cli.sh(
+                #"printf '%s' '{"appId":"sh.wendy.e2e.multi","services":{"api":{"context":"."},"worker":{"context":"."}}}' > wendy.json"#
+            )
+            try await cli.sh("wendy app publish --tag 1.0.0 </dev/null") { result in
+                #expect(result.status.isFailure)
+                #expect(result.readableStderr.contains("several services cannot be deployed yet"))
+            }
+        }
+    }
+
+    /**
+     A scripted publish cannot silently register a missing Cloud app. After
+     explicit registration, the same project can publish normally.
+     */
+    @Test(.enabled(if: appsDeploymentTestsEnabled))
+    func `requires explicit registration when the Cloud app is missing`() async throws {
+        try await AppsDeploymentFixture.withApp { cli, app in
+            let layout = try AppsDeploymentFixture.setting("WENDY_E2E_APPS_LAYOUT_A")
+            try await app.refuse(
+                cli,
+                "wendy app publish --tag 1.0.0 --oci-layout \(AppsDeploymentFixture.quote(layout)) \(app.cloudFlag)",
+                guidance: "wendy app create"
+            )
+            try await app.create(cli)
+            _ = try await app.publish(cli)
+        }
+    }
+
+    /**
+     Publish --tag 1.0.0 --oci-layout A --platform linux/arm64; read the release,
+     GetArtifact and app-filtered ListArtifacts, following all pages. The receipt's
+     digest matches the returned OCI manifest with embedded app definition,
+     encrypted descriptors and complete upload. Defaults and required names
+     match wendy.json. No deployment exists. Allowed pulls need no audit row.
+     */
+    @Test(.enabled(if: appsDeploymentTestsEnabled))
+    func `records the encrypted artifact and release metadata`() async throws {
+        try await AppsDeploymentFixture.withApp { cli, app in
+            try await app.create(cli)
+            let release = try await app.publish(cli)
+            let artifact = try await app.requireArtifact(cli, release: release)
+            try await app.requireArtifactListing(
+                cli,
+                release: release,
+                blobCount: artifact.manifest.blobs.count
+            )
+            let catalog = try await app.catalog(cli)
+            #expect(catalog.deployments?.isEmpty == true)
+        }
+    }
+
+    /**
+     An unavailable registry produces an actionable command failure and never
+     deploys an app. A wrapper timeout is not accepted as that command result.
+     The owned app and any partially created release remain in the cleanup ledger.
+     */
+    @Test(
+        .enabled(
+            if: appsDeploymentTestsEnabled
+                && ProcessInfo.processInfo.environment["WENDY_E2E_APPS_FAILURES"] == "true"
+        )
+    )
+    func `reports an unavailable registry without deploying anything`() async throws {
+        try await AppsDeploymentFixture.withApp { cli, app in
+            try await app.create(cli)
+            let layout = try AppsDeploymentFixture.setting("WENDY_E2E_APPS_LAYOUT_A")
+            // Loopback discard port is a benign unavailable-service fixture;
+            // no real service is stopped or sent malformed requests.
+            let result = try await app.command(
+                cli,
+                "env WENDY_REGISTRY=127.0.0.1:1 wendy app publish --tag 1.0.0 --oci-layout \(AppsDeploymentFixture.quote(layout)) \(app.cloudFlag)"
+            )
+            try #require(!result.status.description.contains("124"))
+            try #require(!result.stderr.contains("E2E command timed out"))
+            #expect(result.status.isFailure)
+            #expect(
+                result.readableStderr.lowercased().contains("registry")
+                    || result.readableStderr.lowercased().contains("connect")
+            )
+            let catalog = try await app.catalog(cli)
+            #expect(catalog.deployments?.isEmpty == true)
+            let inventory = try await app.inventory(cli)
+            #expect(!inventory.contains { $0.name == app.app })
+        }
+    }
+
+}
