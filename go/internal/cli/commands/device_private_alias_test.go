@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const privateAliasTenant = "11111111-1111-4111-8111-111111111111"
@@ -737,5 +738,72 @@ func TestPrivateDeviceAliasBarePinCannotEstablishCloudName(t *testing.T) {
 	selected, matched, err := connectPrivateDeviceAlias(t.Context(), host, true)
 	if !matched || selected != nil || err == nil || !strings.Contains(err.Error(), "LAN discovery alone") {
 		t.Fatalf("ordinary LAN pin established a private alias: selected=%v matched=%v err=%v", selected, matched, err)
+	}
+}
+
+func TestPrivateDeviceAliasGivesLANTheHeadStart(t *testing.T) {
+	privateAliasConfig(t, nil)
+	online := privateAliasTestCloud(privateAliasDevice, "jetson")
+	online.LastHeartbeat = timestamppb.Now()
+	stubPrivateAliasNetwork(t, privateAliasSources{cloud: []*cloudpbv2.Asset{online}})
+	privateAliasLANBrowse = func(ctx context.Context) ([]models.LANDevice, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(120 * time.Millisecond):
+			return []models.LANDevice{privateAliasTestLAN(privateAliasDevice, "jetson")}, nil
+		}
+	}
+	oldLAN, oldCloud := dialAgentLadderWithCertsFn, connectDefaultCloudAssetV2Fn
+	t.Cleanup(func() { dialAgentLadderWithCertsFn, connectDefaultCloudAssetV2Fn = oldLAN, oldCloud })
+	dialAgentLadderWithCertsFn = func(context.Context, dialTarget, []config.CertificateInfo) (*grpcclient.AgentConnection, error, error) {
+		return privateAliasTestAgent(), nil, nil
+	}
+	connectDefaultCloudAssetV2Fn = func(context.Context, *config.AuthConfig, *cloudpbv2.Asset, string) (*grpcclient.AgentConnection, error) {
+		t.Fatal("Cloud bypassed the LAN head start")
+		return nil, nil
+	}
+	selected, _, err := connectPrivateDeviceAlias(t.Context(), "device-"+privateAliasDevice+".wendy.internal", true)
+	if err != nil || selected == nil || selected.Agent.Reconnect == nil {
+		t.Fatalf("LAN route was not selected: selected=%v err=%v", selected, err)
+	}
+}
+
+func TestPrivateDeviceAliasWaitsForWendyNetWhenInventoryIsOffline(t *testing.T) {
+	privateAliasConfig(t, nil)
+	stubPrivateAliasNetwork(t, privateAliasSources{cloud: []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasDevice, "jetson")}})
+	directory := privateAliasTestMesh(t, privateAliasDevice, "jetson")
+	privateAliasMeshRead = func(ctx context.Context) (sessionbroker.OperatorDirectory, error) {
+		select {
+		case <-ctx.Done():
+			return sessionbroker.OperatorDirectory{}, ctx.Err()
+		case <-time.After(650 * time.Millisecond):
+			directory.Captured = time.Now().UnixMilli()
+			return directory, nil
+		}
+	}
+	privateAliasConnectMesh = func(_ context.Context, selector string, _ bool) (*SelectedDevice, bool, error) {
+		return &SelectedDevice{Agent: privateAliasTestAgent(), Selector: selector}, true, nil
+	}
+	selected, _, err := connectPrivateDeviceAlias(t.Context(), "device-"+privateAliasDevice+".wendy.internal", true)
+	if err != nil || selected == nil || !strings.HasPrefix(selected.Selector, "mesh://") {
+		t.Fatalf("offline Cloud inventory ended the mesh join early: selected=%v err=%v", selected, err)
+	}
+}
+
+func TestPrivateDeviceAliasCloudOfflineClassification(t *testing.T) {
+	auth := privateAliasTestAuth()
+	stubPrivateAliasNetwork(t, privateAliasSources{})
+	privateAliasCloudFetch = func(_ context.Context, _ *config.AuthConfig, onlineOnly bool) ([]*cloudpbv2.Asset, error) {
+		if !onlineOnly {
+			t.Fatal("offline confirmation requires the online view")
+		}
+		return nil, nil
+	}
+	asset := privateAliasTestCloud(privateAliasDevice, "jetson")
+	selector := cloudDeviceSelector{Endpoint: auth.CloudGRPC, TenantUUID: privateAliasTenant, AssetUUID: privateAliasDevice}.String()
+	err := privateAliasCloudConnectError(t.Context(), &auth, selector, asset, status.Error(codes.Unavailable, "device is offline"))
+	if !errors.Is(err, errDeviceOffline) || ErrorClass(err) != "device_offline" {
+		t.Fatalf("Cloud-confirmed offline classification: %v", err)
 	}
 }
