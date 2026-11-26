@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/acmeenroll"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -37,13 +39,22 @@ func (s *ProvisioningServiceV2) StartACMEProvisioning(ctx context.Context, req *
 		return nil, status.Error(codes.FailedPrecondition, "explicit local recovery required before enrollment")
 	}
 	if svc.resetCleanupErr != nil {
-		return nil, status.Error(codes.FailedPrecondition, "reset resource cleanup must finish before enrollment")
+		return nil, resetcleanup.Refusal(codes.FailedPrecondition, "reset resource cleanup must finish before enrollment", svc.resetCleanupErr)
 	}
 	if svc.resetRestartPending {
 		return nil, status.Error(codes.FailedPrecondition, "agent must restart after reset before enrollment")
 	}
 	if svc.enrolled {
 		return nil, status.Error(codes.FailedPrecondition, "agent is already provisioned")
+	}
+	tenant, issuerEndpoint := liteIssuerEndpoint(cfg.DirectoryURL)
+	var liteBundle string
+	if issuerEndpoint != nil {
+		var err error
+		liteBundle, err = fetchLiteIssuers(ctx, issuerEndpoint)
+		if err != nil {
+			svc.logger.Warn("Lite CA discovery unavailable during enrollment", zap.Error(err))
+		}
 	}
 	// pki-core accepts ML-DSA-65 for tier A/B and refuses it for tier C by the
 	// token's profile; the agent never chooses by tier (sem 2026-10-20 21:29).
@@ -65,9 +76,16 @@ func (s *ProvisioningServiceV2) StartACMEProvisioning(ctx context.Context, req *
 		return nil, status.Error(codes.Internal, "PKI returned no certificate chain for device mTLS")
 	}
 	principal, _ := cfg.PrincipalURI()
+	if liteBundle != "" {
+		var err error
+		liteBundle, err = validatedLiteIssuers(liteBundle, chain, tenant)
+		if err != nil {
+			svc.logger.Warn("Lite CA bundle did not validate during enrollment", zap.Error(err))
+		}
+	}
 	state := &provisioningState{
 		Enrolled: true, CloudHost: req.GetCloudHost(), CertPEM: leaf, ChainPEM: chain,
-		PrincipalURI: principal, ACMEDirectoryURL: cfg.DirectoryURL,
+		PrincipalURI: principal, ACMEDirectoryURL: cfg.DirectoryURL, LitePeerIssuers: liteBundle,
 	}
 	complete, err := svc.persistProvisioning(state, keyPEM)
 	if err != nil {

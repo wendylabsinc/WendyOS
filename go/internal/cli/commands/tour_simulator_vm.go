@@ -12,7 +12,7 @@ import (
 )
 
 var createTourVMFn = func(ctx context.Context, out io.Writer, name string) error {
-	return createVMContext(ctx, out, name, "", "", defaultSimulatorDiskGiB, false, 0)
+	return createVMContext(ctx, out, name, "", "", defaultSimulatorDiskGiB, false, 0, "")
 }
 
 func ensureTourVM(ctx context.Context, out io.Writer, name string) (runErr error) {

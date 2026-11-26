@@ -69,7 +69,7 @@ class TrustedSourceTests(unittest.TestCase):
         # Evaluate the actual job expressions using their shared JS operators.
         for name, label in (("api-review", "review: api"), ("docs-review", "review: docs"),
                             ("integration-test-review", "review: integration-tests"),
-                            ("security-review", None)):
+                            ("security-review", "review: security")):
             path = WORKFLOW.with_name(name + ".yml")
             if not path.is_file():
                 continue
@@ -89,21 +89,26 @@ class TrustedSourceTests(unittest.TestCase):
             expression = expression.replace("github.event.pull_request.labels.*.name", "labels")
             group = next(line.strip().removeprefix('group: ').strip('"')
                          for line in lines if line.startswith("  group:"))
+            # Dependabot PRs run the secretless dependency policy without a label.
+            authors = ("author", "dependabot[bot]") if name == "security-review" else ("author",)
             cases = []
             for action in ("opened", "synchronize", "reopened", "labeled", "ready_for_review"):
                 for enabled in (False, True):
                     for matching in (False, True):
                         for draft in (False, True):
                             for fork in (False, True):
-                                labels = [label] if enabled and label else []
-                                event = {"action": action, "label": {"name": label if matching else "unrelated"},
-                                         "pull_request": {"draft": draft, "head": {"repo": {"full_name": "fork" if fork else "repo"}},
-                                                          "user": {"login": "author"}}}
-                                expected = (not fork and (enabled and (action != "labeled" or matching)
-                                                          if label else not draft))
-                                cases.append({"github": {"event_name": "pull_request", "event": event,
-                                                         "repository": "repo", "actor": "author", "run_id": 123},
-                                              "labels": labels, "expected": expected})
+                                for author in authors:
+                                    labels = [label] if enabled and label else []
+                                    event = {"action": action, "label": {"name": label if matching else "unrelated"},
+                                             "pull_request": {"draft": draft, "head": {"repo": {"full_name": "fork" if fork else "repo"}},
+                                                              "user": {"login": author}}}
+                                    requested = enabled and (action != "labeled" or matching)
+                                    automatic = author == "dependabot[bot]" and action != "labeled"
+                                    expected = (not fork and (requested or automatic)
+                                                if label else not fork and not draft)
+                                    cases.append({"github": {"event_name": "pull_request", "event": event,
+                                                             "repository": "repo", "actor": author, "run_id": 123},
+                                                  "labels": labels, "expected": expected})
             execution = subprocess.run(["node", "-e", r'''
 const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
 const evaluate = new Function("github", "labels", "contains", "return " + input.expression);
@@ -155,6 +160,16 @@ for (const c of input.cases) {
         self.assertIn("persist-credentials: false", automatic_job)
         # Otherwise the docs workflow test below would skip on every run.
         self.assertIn(".github/workflows/docs-review.yml", automatic_job)
+
+    def test_trusted_automation_absence_never_bootstraps_pr_head(self):
+        text = WORKFLOW.read_text()
+        automatic_job = text.split("  validate-candidate-tests:", 1)[0]
+        self.assertIn("no PR-head automation fallback is permitted", automatic_job)
+        self.assertNotIn("bootstrap_dir", automatic_job)
+        self.assertNotIn('ref="$EXPECTED_HEAD_SHA"', automatic_job)
+        self.assertNotIn("compatibility_review.py", text)
+        self.assertNotIn("compatibility_state.py", text)
+        self.assertNotIn("guard-public", text)
 
     @needs_docs_workflow
     def test_sparse_checkout_without_docs_workflow_still_passes(self):

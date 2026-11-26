@@ -46,7 +46,7 @@ func decodeEnvelope(t *testing.T, out string) errorBody {
 
 func TestReportFailure_UserCancellationIsSilentSuccess(t *testing.T) {
 	t.Setenv("WENDY_TELEMETRY_ENTRYPOINT", "")
-	for _, err := range []error{nil, commands.ErrUserCancelled, commands.ErrDefaultCleared} {
+	for _, err := range []error{nil, commands.ErrUserCancelled} {
 		var out strings.Builder
 		if code := reportFailure(&out, err, nil, []string{"--json"}); code != 0 || out.Len() != 0 {
 			t.Errorf("reportFailure(%v) = %d, %q; want 0 and no output", err, code, out.String())
@@ -154,16 +154,16 @@ func TestReportFailure_UsageErrorsExitTwoAndPointAtHelp(t *testing.T) {
 func TestReportFailure_StepsLeaveTheMessage(t *testing.T) {
 	var out strings.Builder
 	err := steppedError{
-		cause: fmt.Errorf("default device %q is set but could not be reached: %w", "127.0.0.1:1", dialedError{"127.0.0.1:1", refusedDial}),
-		steps: []string{"Confirm it with 'wendy device get-default'."},
+		cause: fmt.Errorf("device %q could not be reached: %w", "127.0.0.1:1", dialedError{"127.0.0.1:1", refusedDial}),
+		steps: []string{"Check that it is powered on."},
 	}
 	reportFailure(&out, err, nil, []string{"--json"})
 	got := decodeEnvelope(t, out.String())
-	wantMessage := `default device "127.0.0.1:1" is set but could not be reached: Could not connect to device at 127.0.0.1:1. Is it powered on and connected to the network?`
+	wantMessage := `device "127.0.0.1:1" could not be reached: Could not connect to device at 127.0.0.1:1. Is it powered on and connected to the network?`
 	if got.Message != wantMessage {
 		t.Errorf("message = %q, want %q", got.Message, wantMessage)
 	}
-	if !reflect.DeepEqual(got.NextSteps, []string{"Confirm it with 'wendy device get-default'."}) {
+	if !reflect.DeepEqual(got.NextSteps, []string{"Check that it is powered on."}) {
 		t.Errorf("next_steps = %q", got.NextSteps)
 	}
 }

@@ -167,6 +167,10 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			}
 		case appconfig.EntitlementAdmin:
 			applyAdmin(spec)
+		case appconfig.EntitlementSensorRead:
+			if err := applySensorRead(spec); err != nil {
+				return err
+			}
 		case appconfig.EntitlementBuild:
 			applyBuild(spec)
 		}
@@ -793,6 +797,28 @@ func applyAdmin(spec *Spec) {
 		Options:     []string{"rbind", "nosuid", "noexec", "ro"},
 	})
 	spec.Process.Env = append(spec.Process.Env, "WENDY_AGENT_SOCKET="+ctrAgentSocketPath)
+}
+
+// SensorReadSocketHostPath is separate from the full control socket. Mounting
+// its directory keeps reconnects working when the agent recreates the socket.
+var SensorReadSocketHostPath = "/var/lib/wendy/sensor-read/sensors.sock"
+
+// The app API group allows non-root containers to connect; the entitlement's
+// separate mount remains the capability boundary, as with other app sockets.
+const SensorReadSocketGID = appSystemAPIGroupGID
+
+func applySensorRead(spec *Spec) error {
+	fi, err := os.Lstat(SensorReadSocketHostPath)
+	if err != nil {
+		return fmt.Errorf("sensor-read API unavailable: %w", err)
+	}
+	if fi.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("sensor-read endpoint is not a socket")
+	}
+	spec.Mounts = append(spec.Mounts, Mount{Destination: "/run/wendy/sensors", Source: filepath.Dir(SensorReadSocketHostPath), Type: "bind", Options: []string{"rbind", "nosuid", "noexec", "ro"}})
+	spec.Process.Env = append(spec.Process.Env, "WENDY_SENSOR_SOCKET=/run/wendy/sensors/sensors.sock")
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, SensorReadSocketGID)
+	return nil
 }
 
 // NANControlSocketHostPath is the wpa_supplicant control socket for nan0.

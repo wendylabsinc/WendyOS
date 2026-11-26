@@ -8,6 +8,75 @@ import os
 
 @MainActor
 final class ConcurrencyTests: XCTestCase {
+    func testPairingTabChangeStartsNewScanBeforePreviousScanFinishes() async {
+        let scan = PairingScan()
+        let liteStarted = AsyncCallback<Void>()
+        let liteResult = AsyncCallback<PairingSnapshot>()
+        let cameraStarted = AsyncCallback<Void>()
+        let cameraResult = AsyncCallback<PairingSnapshot>()
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await scan.refresh(session: 1) { _, kind in
+                    XCTAssertEqual(kind, .lite)
+                    liteStarted.finish(.success(()))
+                    return try await liteResult.value()
+                }
+            }
+            _ = try? await liteStarted.value()
+            XCTAssertTrue(scan.loading)
+            scan.kind = .camera
+            XCTAssertFalse(scan.loading)
+            group.addTask {
+                await scan.refresh(session: 1) { _, kind in
+                    XCTAssertEqual(kind, .camera)
+                    cameraStarted.finish(.success(()))
+                    return try await cameraResult.value()
+                }
+            }
+            _ = try? await cameraStarted.value()
+            // A cancelled native scan may still finish after the next tab starts.
+            liteResult.finish(.success(PairingSnapshot(devices: [Self.pairingDevice("old sensor")], warning: "old warning")))
+            await group.next()
+            XCTAssertTrue(scan.loading)
+            XCTAssertTrue(scan.devices.isEmpty)
+            XCTAssertEqual(scan.warning, "")
+            cameraResult.finish(.success(PairingSnapshot(devices: [Self.pairingDevice("camera")], warning: "camera warning")))
+            await group.next()
+        }
+        XCTAssertFalse(scan.loading)
+        XCTAssertEqual(scan.devices.map(\.id), ["camera"])
+        XCTAssertEqual(scan.warning, "camera warning")
+    }
+
+    func testPairingLateFailureDoesNotReplaceNewTabResults() async {
+        let scan = PairingScan()
+        let started = AsyncCallback<Void>()
+        let staleResult = AsyncCallback<PairingSnapshot>()
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await scan.refresh(session: 1) { _, _ in
+                    started.finish(.success(()))
+                    return try await staleResult.value()
+                }
+            }
+            _ = try? await started.value()
+            scan.kind = .camera
+            await scan.refresh(session: 1) { _, _ in
+                PairingSnapshot(devices: [Self.pairingDevice("camera")], warning: "")
+            }
+            staleResult.finish(.failure(WendyError(message: "Old scan timed out")))
+            await group.next()
+        }
+        XCTAssertNil(scan.error)
+        XCTAssertFalse(scan.loading)
+        XCTAssertEqual(scan.devices.map(\.id), ["camera"])
+    }
+
+    private static func pairingDevice(_ id: String) -> PairingDevice {
+        PairingDevice(id: id, name: id, address: "", detail: "", cameraID: 0,
+                      paired: false, connected: false, canPair: true)
+    }
+
     func testSettingsDetailLoadsAfterCancelledMenuReadDrains() async {
         let probe = SettingsNavigationProbe()
         await withTaskGroup(of: Void.self) { group in

@@ -47,6 +47,19 @@ type TCPIdentity struct {
 	AppEndpoints            []AppEndpoint // supplied only for ready local listeners
 	Certificate, Chain, Key string
 	Agent                   *AgentMetadata
+	// PreparedCredentials carries the provisioning snapshot shared with the
+	// app sessions. Configured carriers should use the same verified CA set.
+	PreparedCredentials *Credentials `json:"-"`
+}
+
+func (id TCPIdentity) MeshCredentials() (*Credentials, error) {
+	if id.PreparedCredentials != nil {
+		return id.PreparedCredentials, nil
+	}
+	if id.TimePolicy != nil {
+		return NewCredentialsWithTimePolicy(id.Certificate, id.Chain, id.Key, *id.TimePolicy)
+	}
+	return NewCredentials(id.Certificate, id.Chain, id.Key)
 }
 
 // Devices returns the parsed peers of a config loaded for self.

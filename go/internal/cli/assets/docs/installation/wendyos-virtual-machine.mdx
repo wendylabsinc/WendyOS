@@ -64,6 +64,20 @@ PC. `qemu-system-aarch64` names the guest architecture, not a host requirement.
 </Tab>
 </Tabs>
 
+An x86-64 guest (`wendy vm create --arch amd64`, below) needs the x86-64
+emulator and its UEFI firmware instead. Homebrew's `qemu` includes both. On
+Debian or Ubuntu:
+
+```sh
+sudo apt install qemu-system-x86 ovmf
+```
+
+On Fedora:
+
+```sh
+sudo dnf install qemu-system-x86 edk2-ovmf
+```
+
 If QEMU or its firmware is missing, Wendy offers to install it through Homebrew
 on macOS, WinGet on Windows, or apt-get or dnf on Linux. On Linux the install runs
 `sudo`, so Wendy always asks first, even with `--yes`. Without an interactive
@@ -98,7 +112,7 @@ so first boot can take several minutes.
 ## The short version
 
 On macOS and Linux, you do not have to create or start anything by hand. With no `--device` and no
-default device set, `wendy run` opens a picker with a **Simulator** tab:
+`WENDY_DEVICE` set, `wendy run` opens a picker with a **Simulator** tab:
 
 ```sh
 wendy run
@@ -115,14 +129,9 @@ The tab manages simulators without dropping to `wendy vm`:
 | `s` | Start the highlighted VM and, the first time, build its robot |
 | `x` | Power off the highlighted VM |
 | `r` | Delete it and its disk, once it is stopped (asks first) |
-| `d` | Save the highlighted simulator as the default device; press it again to clear the default |
 
 On Windows, `c` in `wendy discover` displays the foreground VM commands and
 keeps discovery open. Run those commands in a separate terminal.
-
-The default uses the VM's name, so it still works when its forwarded port changes.
-Saving a default does not start the VM. Your next device command starts it when
-needed. The `✦` marker identifies the saved default when you reopen the picker.
 
 `wendy discover` shows the same tab with the same keys. There `enter` copies
 the VM's address instead of selecting it, and `s` returns to the tab once the
@@ -177,6 +186,15 @@ wendy vm create dev --version 0.19.0
 wendy vm create dev --image ./wendyos-image-vm-arm64-wendyos.rootfs.wic
 ```
 
+To create an x86-64 guest instead of an ARM64 one:
+
+```sh
+wendy vm create dev --arch amd64
+```
+
+On an x86-64 Linux PC the x86-64 guest is accelerated, and apps for it build
+natively. A local `--image` is treated as ARM64 unless `--arch` is given.
+
 </Step>
 <Step>
 
@@ -200,10 +218,10 @@ In another terminal:
 wendy --device vm:dev device info
 ```
 
-To avoid repeating it:
+To avoid repeating it in this terminal:
 
 ```sh
-wendy device set-default vm:dev
+export WENDY_DEVICE=vm:dev
 wendy run
 ```
 

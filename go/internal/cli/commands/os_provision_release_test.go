@@ -231,10 +231,10 @@ func TestRefusedUnmountOnMacIsReportedOnlyWhenTheEjectFails(t *testing.T) {
 
 	var provErr error
 	out, _ := captureCommandStdout(t, func() error {
-		_, _, provErr = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk4"}, nil, "lab-nano", nil, true, nil)
+		_, _, provErr = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk4"}, nil, "lab-nano", nil, true, agentSeed{})
 		return nil
 	})
-	if provErr != nil || retried || !strings.Contains(out, "Config partition written: name lab-nano") {
+	if provErr != nil || retried || !strings.Contains(out, "✓ First-boot settings written") {
 		t.Fatalf("provisioning = %v, retry offered %v, output %q; want written, no retry", provErr, retried, out)
 	}
 	if err := diskInstallResult("WendyOS 1.0", "SD Card", provErr, nil); err != nil {
@@ -298,7 +298,7 @@ func TestProvisionConfigWithRetryNeverRetriesAStillMountedPartition(t *testing.T
 			calls := withStubbedProvisioning(t, func(drive, []wendyconf.WifiCredential, string, []byte) error { return c.err }, true, []bool{true})
 			var err error
 			out, _ := captureCommandStdout(t, func() error {
-				_, _, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/sdz"}, nil, "lab-nano", nil, c.requested, nil)
+				_, _, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/sdz"}, nil, "lab-nano", nil, c.requested, agentSeed{})
 				return nil
 			})
 			if *calls != 1 {
@@ -307,7 +307,7 @@ func TestProvisionConfigWithRetryNeverRetriesAStillMountedPartition(t *testing.T
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) || !strings.Contains(err.Error(), "still mounted") {
 				t.Fatalf("provisionConfigWithRetry = %v; want %q and the mount", err, c.wantErr)
 			}
-			if got := strings.Contains(out, "Config partition written"); got != c.written {
+			if got := strings.Contains(out, "First-boot settings written"); got != c.written {
 				t.Fatalf("output %q; written line printed = %v, want %v", out, got, c.written)
 			}
 		})

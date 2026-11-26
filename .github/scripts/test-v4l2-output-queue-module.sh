@@ -25,7 +25,7 @@ python3 - "$output" <<'PYRECORD'
 import hashlib,json,subprocess,sys
 from pathlib import Path
 output=Path(sys.argv[1])
-files=[Path('go/internal/agent/services/ipcam_output_queue_linux_test.go'),Path('.github/scripts/run-owned-media-test.py'),output/'services.test']
+files=[Path('go/internal/agent/services/ipcam_output_queue_linux_test.go'),Path('go/internal/agent/services/v4l2_output_compatibility_linux_test.go'),Path('.github/scripts/run-owned-media-test.py'),output/'services.test']
 data={'wendyos_revision':subprocess.check_output(['git','rev-parse','HEAD'],text=True,timeout=10).strip(),
       'files':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in files}}
 (output/'fixture.json').write_text(json.dumps(data,indent=2)+'\n')
@@ -73,10 +73,15 @@ if [[ -d /sys/module/v4l2loopback ]]; then
   echo 'Original module remained loaded.' >&2
   exit 1
 fi
-patch="$builder/recipes-kernel/v4l2loopback/files/0001-output-completion-queue.patch"
 make -C "$source" clean > "$output/clean.log" 2>&1
-git -C "$source" apply --check "$patch"
-git -C "$source" apply "$patch"
+python3 - "$source" "$output/provenance.json" <<'PYAPPLY'
+import json, subprocess, sys
+source, provenance = sys.argv[1:]
+# Apply every reviewed recipe patch in its declared order, never a CI-only fix.
+for patch in json.load(open(provenance))['patches']:
+    subprocess.run(['git', '-C', source, 'apply', '--check', patch], check=True)
+    subprocess.run(['git', '-C', source, 'apply', patch], check=True)
+PYAPPLY
 python3 - "$source/v4l2loopback.c" "$output/provenance.json" <<'PY'
 import hashlib,json,sys
 from pathlib import Path
@@ -102,4 +107,23 @@ if grep -Eq -- '--- SKIP:|WARNING: DATA RACE' "$output/candidate.log" || [[ -e /
   echo 'Candidate evidence or owned node cleanup is invalid.' >&2
   exit 1
 fi
-echo "OUTPUT_QUEUE_MODULE_COMPARISON_VERIFIED logs=$output; existing decoded/shared consumer gates remain required"
+status=0
+# shellcheck disable=SC2024 # The invoking runner owns the output directory/log.
+sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted WENDY_LOOPBACK_JOB_OWNED=1 WENDY_OUTPUT_QUEUE_COMPATIBILITY=1 \
+  python3 .github/scripts/run-owned-media-test.py --timeout 45 -- \
+  "$output/services.test" -test.run '^TestV4L2OutputQueueCompatibility$' -test.v -test.count=1 -test.timeout=0 \
+  > "$output/compatibility.log" 2>&1 || status=$?
+cat "$output/compatibility.log"
+if [[ "$status" != 0 ]] || ! grep -q '^--- PASS: TestV4L2OutputQueueCompatibility ' "$output/compatibility.log" ||
+  ! grep -q 'OUTPUT_SUSTAIN_VERIFIED' "$output/compatibility.log" ||
+  ! grep -q 'OUTPUT_TIMEOUT_IMAGE_VERIFIED' "$output/compatibility.log" ||
+  [[ $(grep -c 'OUTPUT_RESTART_PHASE_VERIFIED' "$output/compatibility.log") != 5 ]] ||
+  ! grep -q 'OUTPUT_QUEUE_COMPATIBILITY_VERIFIED' "$output/compatibility.log"; then
+  echo 'Candidate did not satisfy real timer, timeout-image and concurrent restart compatibility.' >&2
+  exit 1
+fi
+if grep -Eq -- '--- SKIP:|WARNING: DATA RACE|panic:|test timed out|DRAIN_UNKNOWN' "$output/compatibility.log" || [[ -e /dev/video200 || -L /dev/video200 ]]; then
+  echo 'Compatibility evidence or owned node cleanup is invalid.' >&2
+  exit 1
+fi
+echo "OUTPUT_QUEUE_MODULE_COMPARISON_VERIFIED logs=$output; actual timer/restart compatibility passed; existing decoded/shared consumer gates remain required"

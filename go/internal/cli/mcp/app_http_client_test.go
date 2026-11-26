@@ -320,7 +320,7 @@ func TestAppHTTPCancellationAndClose(t *testing.T) {
 				if err == nil {
 					t.Fatal("canceled call succeeded")
 				}
-				if action == "cancel-call" && !errors.Is(err, context.Canceled) {
+				if !errors.Is(err, context.Canceled) {
 					t.Fatalf("cancellation lost: %v", err)
 				}
 			case <-time.After(2 * time.Second):
@@ -421,6 +421,99 @@ func TestAppHTTPListCancellationOnLaterPage(t *testing.T) {
 				t.Fatalf("unexpected page count: %d", pages.Load())
 			}
 		})
+	}
+}
+
+// Force an HTTP failure and cancellation to be visible together at the SDK
+// boundary, regardless of which one the SDK would otherwise return first.
+func TestAppHTTPTransportErrorDuringCancellation(t *testing.T) {
+	for _, method := range []string{"tools/list", "tools/call"} {
+		for _, action := range []string{"none", "caller", "lifetime"} {
+			t.Run(method+"/"+action, func(t *testing.T) {
+				protocol := server.NewMCPServer("app", "1", server.WithPaginationLimit(1))
+				for _, name := range []string{"first", "second"} {
+					protocol.AddTool(mcpgo.NewTool(name), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+						return mcpgo.NewToolResultText("ok"), nil
+					})
+				}
+				handler := server.NewStreamableHTTPServer(protocol)
+				conn, lifetimeCtx, cancelLifetime := appHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == http.MethodPost {
+						body, _ := io.ReadAll(r.Body)
+						r.Body = io.NopCloser(bytes.NewReader(body))
+						var req struct {
+							Method string
+							Params struct{ Cursor string }
+						}
+						_ = json.Unmarshal(body, &req)
+						if req.Method == method && (method == "tools/call" || req.Params.Cursor != "") {
+							// Drop the real HTTP connection without a response.
+							c, _, err := w.(http.Hijacker).Hijack()
+							if err != nil {
+								t.Error(err)
+								return
+							}
+							_ = c.Close()
+							return
+						}
+					}
+					handler.ServeHTTP(w, r)
+				}))
+				address, closeProxy, err := startMCPProxy(lifetimeCtx, conn, "app")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer closeProxy()
+				// The caller need not be a child of the app lifetime.
+				callCtx, cancelCall := context.WithCancel(context.Background())
+				defer cancelCall()
+				sdkClient := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "1"}, nil)
+				sdkClient.AddSendingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
+					return func(ctx context.Context, m string, request sdk.Request) (sdk.Result, error) {
+						result, err := next(ctx, m, request)
+						if m == method && err != nil {
+							if !errors.Is(err, io.EOF) {
+								t.Errorf("expected real HTTP EOF, got %v", err)
+							}
+							switch action {
+							case "caller":
+								cancelCall()
+							case "lifetime":
+								cancelLifetime()
+							}
+						}
+						return result, err
+					}
+				})
+				client, err := newAppHTTPClientWithSDK(lifetimeCtx, lifetimeCtx, "http://"+address, closeProxy, sdkClient)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer client.Close()
+				if method == "tools/list" {
+					result, listErr := client.ListTools(callCtx, mcpgo.ListToolsRequest{})
+					if result != nil {
+						t.Fatal("failed later page returned a partial list")
+					}
+					err = listErr
+				} else {
+					req := mcpgo.CallToolRequest{}
+					req.Params.Name = "first"
+					result, callErr := client.CallTool(callCtx, req)
+					if result != nil {
+						t.Fatal("failed call returned a result")
+					}
+					err = callErr
+				}
+				want := io.EOF
+				if action != "none" {
+					want = context.Canceled
+				}
+				if !errors.Is(err, want) {
+					t.Fatalf("expected %v, got %v", want, err)
+				}
+			})
+		}
 	}
 }
 

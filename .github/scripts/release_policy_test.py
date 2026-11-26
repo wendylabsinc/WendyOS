@@ -97,6 +97,18 @@ class ReleasePolicyTests(unittest.TestCase):
             with self.subTest(regression=regression), self.assertRaises(AssertionError):
                 assert_policy(self, build)
 
+    def test_nonpublishing_dispatch_still_builds_native_packages(self):
+        build = workflow("build.yml")
+        rows = cases()
+        for name in ("package-linux", "package-windows"):
+            # Reuse the actual Actions-expression evaluator for the package gate.
+            candidate = copy.deepcopy(build)
+            candidate["jobs"]["integration-tests"]["if"] = build["jobs"][name]["if"]
+            for row, observed in zip(rows, evaluate(candidate, rows)):
+                with self.subTest(job=name, event=row):
+                    self.assertEqual(observed["integration"],
+                                     row["github"]["event_name"] in ("push", "workflow_dispatch"))
+
     def test_version_step_only_classifies_explicit_publish_as_stable(self):
         step = next(s for s in workflow("build.yml")["jobs"]["determine-version"]["steps"]
                     if s.get("id") == "set-version")

@@ -91,6 +91,11 @@ func decodeVisualROS(typ string, payload []byte) (visualROSDecoded, string, erro
 		frame = fmt.Sprintf("Frame: %s · Header time: %d.%09d", r.str(), sec, ns)
 	}
 	switch typ {
+	case "rcl_interfaces/msg/Log":
+		sec, ns := int32(r.u32()), r.u32()
+		level := r.u8()
+		name, message, file, function, line := r.str(), r.str(), r.str(), r.str(), r.u32()
+		frame = fmt.Sprintf("ROS log level %d · %s: %s\n%s:%d %s · Header time: %d.%09d", level, name, message, file, line, function, sec, ns)
 	case "sensor_msgs/msg/LaserScan":
 		header()
 		angle := r.f32()

@@ -22,28 +22,28 @@ func enableReload(t *testing.T, load func() (*config.Config, error)) {
 
 var laterLogin = config.AuthConfig{CloudGRPC: "grpc.a.sh:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}
 
-// A `wendy auth login` in another terminal after the MCP server started must
-// survive the agent setting a default device: the handler used to save the
-// startup snapshot, which had no login in it.
-func TestDeviceSetDefaultKeepsConfigWrittenAfterStartup(t *testing.T) {
+// device_set_default stays registered so published relay catalogs that list it
+// still pair, but Wendy no longer saves a default device: the call fails and
+// leaves the config alone.
+func TestDeviceSetDefaultIsUnsupported(t *testing.T) {
 	useConfigDir(t)
-	srv := New(&config.Config{}, nil) // startup snapshot: not logged in
+	srv := New(&config.Config{}, nil)
 	if err := config.Save(&config.Config{Auth: []config.AuthConfig{laterLogin}}); err != nil {
 		t.Fatal(err)
 	}
 	result, err := srv.callTool(context.Background(), "device_set_default", map[string]any{"address": "thor.local:50051"})
-	if err != nil || result.IsError {
-		t.Fatalf("device_set_default: err=%v result=%+v", err, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError || structuredMap(t, result)["error_code"] != string(errCodeUnsupported) {
+		t.Fatalf("device_set_default = %+v, want an UNSUPPORTED error", result)
 	}
 	onDisk, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if onDisk.DefaultDevice != "thor.local:50051" {
-		t.Fatalf("DefaultDevice = %q, want thor.local:50051", onDisk.DefaultDevice)
-	}
 	if len(onDisk.Auth) != 1 || onDisk.Auth[0].CloudGRPC != "grpc.a.sh:443" {
-		t.Fatalf("device_set_default dropped a login written after the server started: %+v", onDisk.Auth)
+		t.Fatalf("device_set_default changed the config: %+v", onDisk.Auth)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestCloudAuthEntryReadsALoginWrittenAfterStartup(t *testing.T) {
 }
 
 func TestCurrentConfigFallsBackToTheStartupSnapshot(t *testing.T) {
-	startup := &config.Config{DefaultDevice: "startup.local"}
+	startup := &config.Config{DefaultBuildHost: "startup.local"}
 	srv := New(startup, nil)
 
 	prev := reloadConfigFn

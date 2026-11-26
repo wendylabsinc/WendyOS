@@ -175,6 +175,12 @@ exactly as the `.proto` declares them, and unpopulated fields omitted. That
 covers `sources`, `episodes`, `record`, `stop`, `status`, `campaign list`,
 `campaign trigger`, `campaign arm`, `campaign disarm` and `campaign remove`.
 
+Two commands add to that line and change nothing else in it. `episodes` writes
+its lists as `[]` when they are empty, so a script can iterate them without
+testing for the key (see [Episodes in progress](#episodes-in-progress)).
+`delete` prints one line per deleted Episode: the agent's response, led by
+`"deleted":true`.
+
 Some payloads are already a JSON document the device produced, and those bytes
 are written through untouched so they stay checkable against the device:
 `inspect` emits the episode manifest, and `campaign deploy` and
@@ -215,6 +221,10 @@ EPISODE                            STATE      SIZE     NAME           DURATION  
 20261027T115329Z-e4418826f638364e  complete   7245349  manual-test
 ```
 
+On a device with no Episodes, finalized or in progress, it prints
+`No episodes on this device yet. Record one with 'wendy data record'.` in place
+of the table.
+
 `wendy data status` prints each of them in full, including the trigger reason
 and the sources, and prints `No recording in progress.` when there is none.
 
@@ -234,6 +244,18 @@ of `episodes` keeps working. Both commands' responses set `reports_in_progress`
 when the agent fills `in_progress`, so an empty `in_progress` then means nothing
 is in progress. `status` prints the agent's response: every Episode in
 `in_progress`, and `active` for older clients.
+
+`episodes` writes an empty list as `[]`. The `episodes` key is always there.
+`in_progress` is there whenever the agent sets `reports_in_progress`; from an
+older agent an empty `in_progress` is left out, because that agent does not say
+what is in progress. A device with no Episodes prints:
+
+```json
+{"episodes":[],"in_progress":[],"reports_in_progress":true}
+```
+
+`status` is the agent's response unchanged, so it leaves an empty `in_progress`
+out.
 
 An agent that predates `in_progress` reports at most one Episode in progress,
 with no trigger, sources or size. The CLI still shows that one, estimates its
@@ -514,7 +536,7 @@ disabled.
 | `revision` | yes | Lowercase, 40-character Hugging Face commit SHA. Branch names are rejected. |
 | `labels` | yes | 1–32 unique, nonempty model labels, each at most 128 bytes. |
 | `threshold` | yes | Detection confidence in `(0, 1]`. |
-| `rate` | yes | Frames per second per camera in `(0, 30]`. |
+| `rate` | yes | Frames per second per camera in `(0, 30]`. An upper bound: a model slower than this scores as fast as it can; see `inference_status.throughput` below. |
 | `event` | yes | Event emitted on detection; 1–128 letters, numbers, `.`, `-`, or `_`. |
 | `clear_after` | yes | Continuous absence needed to clear presence; positive duration, at most 24h. |
 | `cooldown` | yes | Minimum interval between detection events; positive duration, at most 24h. |
@@ -526,6 +548,41 @@ Inference requires a camera source and a trigger matching its event in
 `inference_status`, including runtime state, per-camera state and notification
 errors. Temporary camera loss retains presence/cooldown state so reconnecting
 does not produce a duplicate detection.
+
+`rate` is the most the model scores, not a promise: one model scores the
+campaign's cameras in turn, and a model that needs longer for a frame than the
+rate allows scores as fast as it can. `inference_status.throughput` compares
+the two, for either backend: `requested_fps` (the rate, for every camera being
+scored), `achieved_fps`, and a `summary` such as
+`model scores 0.11 frames/s of the 1 requested (about 9.1 s per frame on cpu)`.
+Once the model has missed the rate for 30 seconds, `model_too_slow` is `true`
+and the agent logs a warning. Once it has kept up for 30 seconds the flag is
+gone, and the agent logs that too. Cameras that deliver fewer frames than the
+rate are not reported as a slow model, and neither is the CPU while a TensorRT
+engine is on its way.
+
+Each report from the model process is also published as OpenTelemetry metrics
+of the agent (`service.name` `wendy-agent`, scope `wendy.data.inference`). Reports
+are sent between frames, at most one every 10 seconds, so a slow model reports
+less often.
+
+| Metric | Type | Value |
+|---|---|---|
+| `inference.rate.requested` | gauge, `{frame}/s` | `throughput.requested_fps` |
+| `inference.rate.achieved` | gauge, `{frame}/s` | `stats.fps` |
+| `inference.model.too_slow` | gauge, `0` or `1` | `throughput.model_too_slow` |
+| `inference.frame.duration_ms` | gauge, `ms` | `stats.infer_ms_p50` and `stats.infer_ms_p95`, told apart by `inference.quantile` (`p50`, `p95`) |
+| `inference.frames.scored` | cumulative sum, `{frame}` | `stats.frames_scored`; it starts again when the model process restarts |
+
+Every point carries `inference.campaign` and `inference.model`, and the gauges
+`inference.engine` (`cpu` or `tensorrt`). The requested rate and
+`inference.model.too_slow` are published only while the status has a
+`throughput`, and nothing more is published once a campaign's inference has
+stopped, though a metrics stream opened later still begins with the last
+values the agent published. Read them with the `telemetry_metrics` MCP tool
+(`metric_name_prefix: inference.`), or with
+`wendy device telemetry-stream --metrics`, which prints one JSON line per
+metric: for a metric with several points, such as the frame duration, its last.
 
 Each scored frame produces a `prediction` record, which an Episode that
 records applications keeps in its `events.jsonl`. A frame that raises the
@@ -618,11 +675,11 @@ with `waiting_since` and `build_by`, `queued`, `building` with `started_at`,
 `verifying`, `ready` or `failed` with an `error`) and any `warnings` TensorRT
 printed while loading it. A build or a wait also reports `elapsed_seconds`,
 and a build that stopped waiting for idle CPUs reports `low_priority: true`.
-`inference_status.stats` reports `fps`, inference latency (`infer_ms_p50`,
-`infer_ms_p95`) and `frames_scored`, the frames the model process has scored
-since it started. Each `prediction` record carries `accelerator`, `precision`,
-`infer_ms` and `model_sha256`, because FP16 TensorRT scores differ slightly
-from FP32 CPU scores.
+`inference_status.stats` reports, for either backend, `fps`, inference latency
+(`infer_ms_p50`, `infer_ms_p95`) and `frames_scored`, the frames the model
+process has scored since it started. Each `prediction` record carries
+`accelerator`, `precision`, `infer_ms` and `model_sha256`, because FP16
+TensorRT scores differ slightly from FP32 CPU scores.
 
 The agent keeps what TensorRT needs in its inference directory: `accel/` holds
 the bindings, `engines/` the built engines (about 9 MB each for `yolo11n`),
@@ -876,9 +933,16 @@ Deleted 2 episodes, 19.8 MB in all.
   agent next starts; it is never left half done.
 - Removing a campaign with `wendy data campaign remove` keeps its Episodes.
   Delete them separately.
-- With `--json`, each deleted Episode is one line of protobuf JSON: the Episode
-  as it was listed, and its `upload_state` (`uploaded` means a copy exists at
-  its upload destination).
+- With `--json`, each deleted Episode is one line: `"deleted":true`, then the
+  agent's response as protobuf JSON, which is the Episode as it was listed and
+  its `upload_state` (`uploaded` means a copy exists at its upload
+  destination). Nothing else goes to stdout, so no lines means nothing was
+  deleted. `--all` on a device with no finalized Episodes says so on stderr and
+  exits 0.
+
+  ```json
+  {"deleted":true,"episode":{"id":"20261027T104210Z-91ad","name":"c920-yolo-live","state":"complete","started_unix_nanos":"1793097730000000000","size_bytes":"10485760","boot_id":"7c1d9f4e-2b6a-4d0c-9e35-51a8f0b3c2d7"},"upload_state":"pending"}
+  ```
 - An agent that predates `delete` answers with
   `this device's agent does not support \`wendy data delete\`; update it with \`wendy device update\``.
 

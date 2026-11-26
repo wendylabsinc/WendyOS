@@ -19,17 +19,28 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DeploymentService_CreateAppRelease_FullMethodName     = "/wendycloud.v2.DeploymentService/CreateAppRelease"
-	DeploymentService_UpdateAppRelease_FullMethodName     = "/wendycloud.v2.DeploymentService/UpdateAppRelease"
-	DeploymentService_ListAppReleases_FullMethodName      = "/wendycloud.v2.DeploymentService/ListAppReleases"
-	DeploymentService_CreateDeployment_FullMethodName     = "/wendycloud.v2.DeploymentService/CreateDeployment"
-	DeploymentService_GetDeployment_FullMethodName        = "/wendycloud.v2.DeploymentService/GetDeployment"
-	DeploymentService_ListDeployments_FullMethodName      = "/wendycloud.v2.DeploymentService/ListDeployments"
-	DeploymentService_HandleReportedState_FullMethodName  = "/wendycloud.v2.DeploymentService/HandleReportedState"
-	DeploymentService_ListAssetApps_FullMethodName        = "/wendycloud.v2.DeploymentService/ListAssetApps"
-	DeploymentService_ListAppDeviceStates_FullMethodName  = "/wendycloud.v2.DeploymentService/ListAppDeviceStates"
-	DeploymentService_ListDeviceContainers_FullMethodName = "/wendycloud.v2.DeploymentService/ListDeviceContainers"
-	DeploymentService_ControlContainer_FullMethodName     = "/wendycloud.v2.DeploymentService/ControlContainer"
+	DeploymentService_CreateAppRelease_FullMethodName              = "/wendycloud.v2.DeploymentService/CreateAppRelease"
+	DeploymentService_UpdateAppRelease_FullMethodName              = "/wendycloud.v2.DeploymentService/UpdateAppRelease"
+	DeploymentService_ListAppReleases_FullMethodName               = "/wendycloud.v2.DeploymentService/ListAppReleases"
+	DeploymentService_CreateDeployment_FullMethodName              = "/wendycloud.v2.DeploymentService/CreateDeployment"
+	DeploymentService_CreateDeploymentV2_FullMethodName            = "/wendycloud.v2.DeploymentService/CreateDeploymentV2"
+	DeploymentService_GetDeployment_FullMethodName                 = "/wendycloud.v2.DeploymentService/GetDeployment"
+	DeploymentService_ListDeployments_FullMethodName               = "/wendycloud.v2.DeploymentService/ListDeployments"
+	DeploymentService_UpdateDeployment_FullMethodName              = "/wendycloud.v2.DeploymentService/UpdateDeployment"
+	DeploymentService_RollbackDeployment_FullMethodName            = "/wendycloud.v2.DeploymentService/RollbackDeployment"
+	DeploymentService_RemoveDeployment_FullMethodName              = "/wendycloud.v2.DeploymentService/RemoveDeployment"
+	DeploymentService_ListDeploymentRevisions_FullMethodName       = "/wendycloud.v2.DeploymentService/ListDeploymentRevisions"
+	DeploymentService_ListDeploymentRevisionDevices_FullMethodName = "/wendycloud.v2.DeploymentService/ListDeploymentRevisionDevices"
+	DeploymentService_ListDeploymentRevisionMoves_FullMethodName   = "/wendycloud.v2.DeploymentService/ListDeploymentRevisionMoves"
+	DeploymentService_ListPendingDeviceStatements_FullMethodName   = "/wendycloud.v2.DeploymentService/ListPendingDeviceStatements"
+	DeploymentService_AssignDevice_FullMethodName                  = "/wendycloud.v2.DeploymentService/AssignDevice"
+	DeploymentService_UnassignDevice_FullMethodName                = "/wendycloud.v2.DeploymentService/UnassignDevice"
+	DeploymentService_DetachDevice_FullMethodName                  = "/wendycloud.v2.DeploymentService/DetachDevice"
+	DeploymentService_HandleReportedState_FullMethodName           = "/wendycloud.v2.DeploymentService/HandleReportedState"
+	DeploymentService_ListAssetApps_FullMethodName                 = "/wendycloud.v2.DeploymentService/ListAssetApps"
+	DeploymentService_ListAppDeviceStates_FullMethodName           = "/wendycloud.v2.DeploymentService/ListAppDeviceStates"
+	DeploymentService_ListDeviceContainers_FullMethodName          = "/wendycloud.v2.DeploymentService/ListDeviceContainers"
+	DeploymentService_ControlContainer_FullMethodName              = "/wendycloud.v2.DeploymentService/ControlContainer"
 )
 
 // DeploymentServiceClient is the client API for DeploymentService service.
@@ -37,6 +48,8 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type DeploymentServiceClient interface {
 	// ==================== App Releases ====================
+	// Refused with FAILED_PRECONDITION while the app is being deleted
+	// (App.deletion_started_at).
 	// Signed; payload_type "wendycloud.v2.CreateAppReleaseRequest".
 	CreateAppRelease(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*AppRelease, error)
 	// Signed; payload_type "wendycloud.v2.UpdateAppReleaseRequest".
@@ -44,9 +57,108 @@ type DeploymentServiceClient interface {
 	ListAppReleases(ctx context.Context, in *ListAppReleasesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListAppReleasesResponse], error)
 	// ==================== Deployments ====================
 	// Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
+	// Deprecated: use CreateDeploymentV2, which also returns the per-device
+	// statements still to sign. Kept for clients that have not re-pinned; its
+	// response type cannot change (wire-incompatible for them). It refuses a
+	// request carrying target_site_ids with INVALID_ARGUMENT ("site selection
+	// needs CreateDeploymentV2"); it never ignores them.
 	CreateDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Deployment, error)
+	// Creates a named, lasting deployment at revision 1. Not relayed to
+	// devices: each device gets its own AssignDevice statement, which the client
+	// signs from DeploymentChangeResponse.to_sign. Resource binding:
+	// org/<org>/release/<app_release_id>, as for CreateDeployment. Refused with
+	// FAILED_PRECONDITION while the app is being deleted.
+	// Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
+	CreateDeploymentV2(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeploymentChangeResponse, error)
 	GetDeployment(ctx context.Context, in *GetDeploymentRequest, opts ...grpc.CallOption) (*Deployment, error)
 	ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListDeploymentsResponse], error)
+	// Update, roll back and remove each create exactly one revision, and are
+	// refused with ABORTED unless expected_revision is the current revision.
+	// They are refused with FAILED_PRECONDITION on a removed deployment, and
+	// (like CreateDeployment/V2) while the app is being deleted
+	// (App.deletion_started_at).
+	// None of them is relayed to devices; the per-device statements in the
+	// response are. Resource binding: org/<org>/deployment/<deployment_id>.
+	// Signed; payload_type "wendycloud.v2.UpdateDeploymentRequest".
+	UpdateDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeploymentChangeResponse, error)
+	// Refused with FAILED_PRECONDITION, naming the release, when to_revision's
+	// release has been deleted since.
+	// Signed; payload_type "wendycloud.v2.RollbackDeploymentRequest".
+	RollbackDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeploymentChangeResponse, error)
+	// Its device statements are TERMINAL removals at the maximum revision
+	// (UnassignDeviceRequest.revision); the history records the removal as
+	// revision current + 1.
+	// Signed; payload_type "wendycloud.v2.RemoveDeploymentRequest".
+	RemoveDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeploymentChangeResponse, error)
+	// History, newest first, paginated. Each revision carries its selection and
+	// device count; the device ids come from ListDeploymentRevisionDevices.
+	ListDeploymentRevisions(ctx context.Context, in *ListDeploymentRevisionsRequest, opts ...grpc.CallOption) (*ListDeploymentRevisionsResponse, error)
+	// The resolved device set of one revision, paginated.
+	ListDeploymentRevisionDevices(ctx context.Context, in *ListDeploymentRevisionDevicesRequest, opts ...grpc.CallOption) (*ListDeploymentRevisionDevicesResponse, error)
+	// The devices one revision moved in or out, paginated.
+	ListDeploymentRevisionMoves(ctx context.Context, in *ListDeploymentRevisionMovesRequest, opts ...grpc.CallOption) (*ListDeploymentRevisionMovesResponse, error)
+	// The statements cloud still needs: the continuation of
+	// DeploymentChangeResponse.to_sign, and how any operator who may make the
+	// change resumes after an interruption, from any of their keys. Pending is
+	// every device whose last statement cloud has received differs from the
+	// current revision in content (release, configuration, desired state,
+	// membership), not merely in revision number:
+	// - a device in the current set: an Assign at the current revision;
+	// - a device outside the current set that still holds an older revision,
+	//   also one a superseded revision dropped before its removal was sent: an
+	//   Unassign at the current revision;
+	// - a removed deployment: its outstanding terminal removals (maximum
+	//   revision);
+	// - never a device whose move out of this deployment has been recorded:
+	//   the move statement is its removal;
+	// By app_id it is a different list: before an app delete starts and while
+	// it runs, every device in the app's removal set that is not yet covered
+	// by a removal or a detach (DeleteAppRequest). A client reads this before
+	// it sends its first DeleteApp batch. By app_id the read requires the
+	// right to delete the app. The row kind says what the caller may sign:
+	// - KIND_UNASSIGN (maximum revision): the caller can reach the device.
+	//   Removal is the default; detach is the operator's choice per device.
+	// - KIND_DETACH: the caller cannot reach the device; detach only.
+	// A KIND_DETACH row is the only place a device the caller cannot otherwise
+	// see is listed. It is listed only because the app was sent to it (the
+	// removal set), and it reveals only `device` (its SPIFFE URI) and
+	// `device_display_name`: nothing else about it (no tags, site, hardware,
+	// address, last seen, other apps or reported state).
+	ListPendingDeviceStatements(ctx context.Context, in *ListPendingDeviceStatementsRequest, opts ...grpc.CallOption) (*ListPendingDeviceStatementsResponse, error)
+	// ==================== Per-device statements ====================
+	// Moved here from ArtifactRegistryService (orchestrator ruling D2): same
+	// payload types and the same postbox relay; the deprecated originals stay
+	// until every client and device has moved. The signed `operation` claim
+	// names THIS method, so a device accepts both names for the same payload
+	// type (conformance/postbox-entry/README.md). An agent that knows only the
+	// old names refuses an entry signed for these, so devices are updated
+	// before any client signs for them.
+	//
+	// One signed statement per target device, postbox-relayed verbatim to that
+	// device: its authority to apply and its pull authorization. A move between
+	// two deployments of one app is ONE statement (DeviceAssignment.replaces_*),
+	// never an Unassign plus an Assign. The device's rules are on
+	// DeviceAssignment in registry.proto. Refused with FAILED_PRECONDITION while
+	// the app is being deleted (App.deletion_started_at).
+	// Signed; payload_type "wendycloud.v2.DeviceAssignment".
+	AssignDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeviceStatementResponse, error)
+	// Postbox-relayed to the device; cloud drops the assignment, so pulls stop.
+	// Used when a revision takes a device out of a deployment, when a
+	// deployment is removed, and inside DeleteAppRequest.device_removals.
+	// Cloud refuses one at the maximum revision outside RemoveDeployment and
+	// DeleteApp, and a non-terminal one whose revision is not the deployment's
+	// current revision.
+	// Signed; payload_type "wendycloud.v2.UnassignDeviceRequest".
+	UnassignDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeviceStatementResponse, error)
+	// Declared for its `operation` and payload type only: a DetachDeviceRequest
+	// is accepted only nested in DeleteAppRequest.device_detachments, and cloud
+	// refuses every direct call with FAILED_PRECONDITION ("DetachDevice is
+	// accepted only inside DeleteApp"). Postbox-relayed
+	// verbatim to the one device it names. Detach outside an app delete
+	// (for example with RemoveDeployment) is a follow-up, not part of this
+	// contract.
+	// Signed; payload_type "wendycloud.v2.DetachDeviceRequest".
+	DetachDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeviceStatementResponse, error)
 	// ==================== Asset App Desired Instructions (wendy-agent) ====================
 	HandleReportedState(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[UpdateReportedStateRequest, DesiredStateResponse], error)
 	ListAssetApps(ctx context.Context, in *ListAssetAppsRequest, opts ...grpc.CallOption) (*ListAssetAppsResponse, error)
@@ -116,6 +228,16 @@ func (c *deploymentServiceClient) CreateDeployment(ctx context.Context, in *Sign
 	return out, nil
 }
 
+func (c *deploymentServiceClient) CreateDeploymentV2(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeploymentChangeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeploymentChangeResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_CreateDeploymentV2_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *deploymentServiceClient) GetDeployment(ctx context.Context, in *GetDeploymentRequest, opts ...grpc.CallOption) (*Deployment, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Deployment)
@@ -144,6 +266,106 @@ func (c *deploymentServiceClient) ListDeployments(ctx context.Context, in *ListD
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DeploymentService_ListDeploymentsClient = grpc.ServerStreamingClient[ListDeploymentsResponse]
+
+func (c *deploymentServiceClient) UpdateDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeploymentChangeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeploymentChangeResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_UpdateDeployment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) RollbackDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeploymentChangeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeploymentChangeResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_RollbackDeployment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) RemoveDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeploymentChangeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeploymentChangeResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_RemoveDeployment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) ListDeploymentRevisions(ctx context.Context, in *ListDeploymentRevisionsRequest, opts ...grpc.CallOption) (*ListDeploymentRevisionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDeploymentRevisionsResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_ListDeploymentRevisions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) ListDeploymentRevisionDevices(ctx context.Context, in *ListDeploymentRevisionDevicesRequest, opts ...grpc.CallOption) (*ListDeploymentRevisionDevicesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDeploymentRevisionDevicesResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_ListDeploymentRevisionDevices_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) ListDeploymentRevisionMoves(ctx context.Context, in *ListDeploymentRevisionMovesRequest, opts ...grpc.CallOption) (*ListDeploymentRevisionMovesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDeploymentRevisionMovesResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_ListDeploymentRevisionMoves_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) ListPendingDeviceStatements(ctx context.Context, in *ListPendingDeviceStatementsRequest, opts ...grpc.CallOption) (*ListPendingDeviceStatementsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPendingDeviceStatementsResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_ListPendingDeviceStatements_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) AssignDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeviceStatementResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceStatementResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_AssignDevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) UnassignDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeviceStatementResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceStatementResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_UnassignDevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) DetachDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeviceStatementResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceStatementResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_DetachDevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *deploymentServiceClient) HandleReportedState(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[UpdateReportedStateRequest, DesiredStateResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -212,6 +434,8 @@ func (c *deploymentServiceClient) ControlContainer(ctx context.Context, in *Sign
 // for forward compatibility.
 type DeploymentServiceServer interface {
 	// ==================== App Releases ====================
+	// Refused with FAILED_PRECONDITION while the app is being deleted
+	// (App.deletion_started_at).
 	// Signed; payload_type "wendycloud.v2.CreateAppReleaseRequest".
 	CreateAppRelease(context.Context, *SignedRequest) (*AppRelease, error)
 	// Signed; payload_type "wendycloud.v2.UpdateAppReleaseRequest".
@@ -219,9 +443,108 @@ type DeploymentServiceServer interface {
 	ListAppReleases(*ListAppReleasesRequest, grpc.ServerStreamingServer[ListAppReleasesResponse]) error
 	// ==================== Deployments ====================
 	// Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
+	// Deprecated: use CreateDeploymentV2, which also returns the per-device
+	// statements still to sign. Kept for clients that have not re-pinned; its
+	// response type cannot change (wire-incompatible for them). It refuses a
+	// request carrying target_site_ids with INVALID_ARGUMENT ("site selection
+	// needs CreateDeploymentV2"); it never ignores them.
 	CreateDeployment(context.Context, *SignedRequest) (*Deployment, error)
+	// Creates a named, lasting deployment at revision 1. Not relayed to
+	// devices: each device gets its own AssignDevice statement, which the client
+	// signs from DeploymentChangeResponse.to_sign. Resource binding:
+	// org/<org>/release/<app_release_id>, as for CreateDeployment. Refused with
+	// FAILED_PRECONDITION while the app is being deleted.
+	// Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
+	CreateDeploymentV2(context.Context, *SignedRequest) (*DeploymentChangeResponse, error)
 	GetDeployment(context.Context, *GetDeploymentRequest) (*Deployment, error)
 	ListDeployments(*ListDeploymentsRequest, grpc.ServerStreamingServer[ListDeploymentsResponse]) error
+	// Update, roll back and remove each create exactly one revision, and are
+	// refused with ABORTED unless expected_revision is the current revision.
+	// They are refused with FAILED_PRECONDITION on a removed deployment, and
+	// (like CreateDeployment/V2) while the app is being deleted
+	// (App.deletion_started_at).
+	// None of them is relayed to devices; the per-device statements in the
+	// response are. Resource binding: org/<org>/deployment/<deployment_id>.
+	// Signed; payload_type "wendycloud.v2.UpdateDeploymentRequest".
+	UpdateDeployment(context.Context, *SignedRequest) (*DeploymentChangeResponse, error)
+	// Refused with FAILED_PRECONDITION, naming the release, when to_revision's
+	// release has been deleted since.
+	// Signed; payload_type "wendycloud.v2.RollbackDeploymentRequest".
+	RollbackDeployment(context.Context, *SignedRequest) (*DeploymentChangeResponse, error)
+	// Its device statements are TERMINAL removals at the maximum revision
+	// (UnassignDeviceRequest.revision); the history records the removal as
+	// revision current + 1.
+	// Signed; payload_type "wendycloud.v2.RemoveDeploymentRequest".
+	RemoveDeployment(context.Context, *SignedRequest) (*DeploymentChangeResponse, error)
+	// History, newest first, paginated. Each revision carries its selection and
+	// device count; the device ids come from ListDeploymentRevisionDevices.
+	ListDeploymentRevisions(context.Context, *ListDeploymentRevisionsRequest) (*ListDeploymentRevisionsResponse, error)
+	// The resolved device set of one revision, paginated.
+	ListDeploymentRevisionDevices(context.Context, *ListDeploymentRevisionDevicesRequest) (*ListDeploymentRevisionDevicesResponse, error)
+	// The devices one revision moved in or out, paginated.
+	ListDeploymentRevisionMoves(context.Context, *ListDeploymentRevisionMovesRequest) (*ListDeploymentRevisionMovesResponse, error)
+	// The statements cloud still needs: the continuation of
+	// DeploymentChangeResponse.to_sign, and how any operator who may make the
+	// change resumes after an interruption, from any of their keys. Pending is
+	// every device whose last statement cloud has received differs from the
+	// current revision in content (release, configuration, desired state,
+	// membership), not merely in revision number:
+	// - a device in the current set: an Assign at the current revision;
+	// - a device outside the current set that still holds an older revision,
+	//   also one a superseded revision dropped before its removal was sent: an
+	//   Unassign at the current revision;
+	// - a removed deployment: its outstanding terminal removals (maximum
+	//   revision);
+	// - never a device whose move out of this deployment has been recorded:
+	//   the move statement is its removal;
+	// By app_id it is a different list: before an app delete starts and while
+	// it runs, every device in the app's removal set that is not yet covered
+	// by a removal or a detach (DeleteAppRequest). A client reads this before
+	// it sends its first DeleteApp batch. By app_id the read requires the
+	// right to delete the app. The row kind says what the caller may sign:
+	// - KIND_UNASSIGN (maximum revision): the caller can reach the device.
+	//   Removal is the default; detach is the operator's choice per device.
+	// - KIND_DETACH: the caller cannot reach the device; detach only.
+	// A KIND_DETACH row is the only place a device the caller cannot otherwise
+	// see is listed. It is listed only because the app was sent to it (the
+	// removal set), and it reveals only `device` (its SPIFFE URI) and
+	// `device_display_name`: nothing else about it (no tags, site, hardware,
+	// address, last seen, other apps or reported state).
+	ListPendingDeviceStatements(context.Context, *ListPendingDeviceStatementsRequest) (*ListPendingDeviceStatementsResponse, error)
+	// ==================== Per-device statements ====================
+	// Moved here from ArtifactRegistryService (orchestrator ruling D2): same
+	// payload types and the same postbox relay; the deprecated originals stay
+	// until every client and device has moved. The signed `operation` claim
+	// names THIS method, so a device accepts both names for the same payload
+	// type (conformance/postbox-entry/README.md). An agent that knows only the
+	// old names refuses an entry signed for these, so devices are updated
+	// before any client signs for them.
+	//
+	// One signed statement per target device, postbox-relayed verbatim to that
+	// device: its authority to apply and its pull authorization. A move between
+	// two deployments of one app is ONE statement (DeviceAssignment.replaces_*),
+	// never an Unassign plus an Assign. The device's rules are on
+	// DeviceAssignment in registry.proto. Refused with FAILED_PRECONDITION while
+	// the app is being deleted (App.deletion_started_at).
+	// Signed; payload_type "wendycloud.v2.DeviceAssignment".
+	AssignDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error)
+	// Postbox-relayed to the device; cloud drops the assignment, so pulls stop.
+	// Used when a revision takes a device out of a deployment, when a
+	// deployment is removed, and inside DeleteAppRequest.device_removals.
+	// Cloud refuses one at the maximum revision outside RemoveDeployment and
+	// DeleteApp, and a non-terminal one whose revision is not the deployment's
+	// current revision.
+	// Signed; payload_type "wendycloud.v2.UnassignDeviceRequest".
+	UnassignDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error)
+	// Declared for its `operation` and payload type only: a DetachDeviceRequest
+	// is accepted only nested in DeleteAppRequest.device_detachments, and cloud
+	// refuses every direct call with FAILED_PRECONDITION ("DetachDevice is
+	// accepted only inside DeleteApp"). Postbox-relayed
+	// verbatim to the one device it names. Detach outside an app delete
+	// (for example with RemoveDeployment) is a follow-up, not part of this
+	// contract.
+	// Signed; payload_type "wendycloud.v2.DetachDeviceRequest".
+	DetachDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error)
 	// ==================== Asset App Desired Instructions (wendy-agent) ====================
 	HandleReportedState(grpc.BidiStreamingServer[UpdateReportedStateRequest, DesiredStateResponse]) error
 	ListAssetApps(context.Context, *ListAssetAppsRequest) (*ListAssetAppsResponse, error)
@@ -254,11 +577,44 @@ func (UnimplementedDeploymentServiceServer) ListAppReleases(*ListAppReleasesRequ
 func (UnimplementedDeploymentServiceServer) CreateDeployment(context.Context, *SignedRequest) (*Deployment, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateDeployment not implemented")
 }
+func (UnimplementedDeploymentServiceServer) CreateDeploymentV2(context.Context, *SignedRequest) (*DeploymentChangeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateDeploymentV2 not implemented")
+}
 func (UnimplementedDeploymentServiceServer) GetDeployment(context.Context, *GetDeploymentRequest) (*Deployment, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetDeployment not implemented")
 }
 func (UnimplementedDeploymentServiceServer) ListDeployments(*ListDeploymentsRequest, grpc.ServerStreamingServer[ListDeploymentsResponse]) error {
 	return status.Error(codes.Unimplemented, "method ListDeployments not implemented")
+}
+func (UnimplementedDeploymentServiceServer) UpdateDeployment(context.Context, *SignedRequest) (*DeploymentChangeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateDeployment not implemented")
+}
+func (UnimplementedDeploymentServiceServer) RollbackDeployment(context.Context, *SignedRequest) (*DeploymentChangeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RollbackDeployment not implemented")
+}
+func (UnimplementedDeploymentServiceServer) RemoveDeployment(context.Context, *SignedRequest) (*DeploymentChangeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveDeployment not implemented")
+}
+func (UnimplementedDeploymentServiceServer) ListDeploymentRevisions(context.Context, *ListDeploymentRevisionsRequest) (*ListDeploymentRevisionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListDeploymentRevisions not implemented")
+}
+func (UnimplementedDeploymentServiceServer) ListDeploymentRevisionDevices(context.Context, *ListDeploymentRevisionDevicesRequest) (*ListDeploymentRevisionDevicesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListDeploymentRevisionDevices not implemented")
+}
+func (UnimplementedDeploymentServiceServer) ListDeploymentRevisionMoves(context.Context, *ListDeploymentRevisionMovesRequest) (*ListDeploymentRevisionMovesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListDeploymentRevisionMoves not implemented")
+}
+func (UnimplementedDeploymentServiceServer) ListPendingDeviceStatements(context.Context, *ListPendingDeviceStatementsRequest) (*ListPendingDeviceStatementsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPendingDeviceStatements not implemented")
+}
+func (UnimplementedDeploymentServiceServer) AssignDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AssignDevice not implemented")
+}
+func (UnimplementedDeploymentServiceServer) UnassignDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UnassignDevice not implemented")
+}
+func (UnimplementedDeploymentServiceServer) DetachDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DetachDevice not implemented")
 }
 func (UnimplementedDeploymentServiceServer) HandleReportedState(grpc.BidiStreamingServer[UpdateReportedStateRequest, DesiredStateResponse]) error {
 	return status.Error(codes.Unimplemented, "method HandleReportedState not implemented")
@@ -361,6 +717,24 @@ func _DeploymentService_CreateDeployment_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeploymentService_CreateDeploymentV2_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).CreateDeploymentV2(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_CreateDeploymentV2_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).CreateDeploymentV2(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DeploymentService_GetDeployment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetDeploymentRequest)
 	if err := dec(in); err != nil {
@@ -389,6 +763,186 @@ func _DeploymentService_ListDeployments_Handler(srv interface{}, stream grpc.Ser
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DeploymentService_ListDeploymentsServer = grpc.ServerStreamingServer[ListDeploymentsResponse]
+
+func _DeploymentService_UpdateDeployment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).UpdateDeployment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_UpdateDeployment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).UpdateDeployment(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_RollbackDeployment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).RollbackDeployment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_RollbackDeployment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).RollbackDeployment(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_RemoveDeployment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).RemoveDeployment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_RemoveDeployment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).RemoveDeployment(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_ListDeploymentRevisions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDeploymentRevisionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).ListDeploymentRevisions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_ListDeploymentRevisions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).ListDeploymentRevisions(ctx, req.(*ListDeploymentRevisionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_ListDeploymentRevisionDevices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDeploymentRevisionDevicesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).ListDeploymentRevisionDevices(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_ListDeploymentRevisionDevices_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).ListDeploymentRevisionDevices(ctx, req.(*ListDeploymentRevisionDevicesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_ListDeploymentRevisionMoves_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDeploymentRevisionMovesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).ListDeploymentRevisionMoves(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_ListDeploymentRevisionMoves_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).ListDeploymentRevisionMoves(ctx, req.(*ListDeploymentRevisionMovesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_ListPendingDeviceStatements_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPendingDeviceStatementsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).ListPendingDeviceStatements(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_ListPendingDeviceStatements_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).ListPendingDeviceStatements(ctx, req.(*ListPendingDeviceStatementsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_AssignDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).AssignDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_AssignDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).AssignDevice(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_UnassignDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).UnassignDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_UnassignDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).UnassignDevice(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_DetachDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).DetachDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_DetachDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).DetachDevice(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _DeploymentService_HandleReportedState_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(DeploymentServiceServer).HandleReportedState(&grpc.GenericServerStream[UpdateReportedStateRequest, DesiredStateResponse]{ServerStream: stream})
@@ -482,8 +1036,52 @@ var DeploymentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DeploymentService_CreateDeployment_Handler,
 		},
 		{
+			MethodName: "CreateDeploymentV2",
+			Handler:    _DeploymentService_CreateDeploymentV2_Handler,
+		},
+		{
 			MethodName: "GetDeployment",
 			Handler:    _DeploymentService_GetDeployment_Handler,
+		},
+		{
+			MethodName: "UpdateDeployment",
+			Handler:    _DeploymentService_UpdateDeployment_Handler,
+		},
+		{
+			MethodName: "RollbackDeployment",
+			Handler:    _DeploymentService_RollbackDeployment_Handler,
+		},
+		{
+			MethodName: "RemoveDeployment",
+			Handler:    _DeploymentService_RemoveDeployment_Handler,
+		},
+		{
+			MethodName: "ListDeploymentRevisions",
+			Handler:    _DeploymentService_ListDeploymentRevisions_Handler,
+		},
+		{
+			MethodName: "ListDeploymentRevisionDevices",
+			Handler:    _DeploymentService_ListDeploymentRevisionDevices_Handler,
+		},
+		{
+			MethodName: "ListDeploymentRevisionMoves",
+			Handler:    _DeploymentService_ListDeploymentRevisionMoves_Handler,
+		},
+		{
+			MethodName: "ListPendingDeviceStatements",
+			Handler:    _DeploymentService_ListPendingDeviceStatements_Handler,
+		},
+		{
+			MethodName: "AssignDevice",
+			Handler:    _DeploymentService_AssignDevice_Handler,
+		},
+		{
+			MethodName: "UnassignDevice",
+			Handler:    _DeploymentService_UnassignDevice_Handler,
+		},
+		{
+			MethodName: "DetachDevice",
+			Handler:    _DeploymentService_DetachDevice_Handler,
 		},
 		{
 			MethodName: "ListAssetApps",

@@ -400,10 +400,18 @@ func TestACMEPreEnrollmentBakesEABMaterial(t *testing.T) {
 		return want, nil
 	}
 	name := "dev"
-	got, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
-		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
+	var got *acmeEnrollmentBake
+	out, err := captureCommandStdout(t, func() error {
+		var err error
+		got, err = resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
+			preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
+		return err
+	})
 	if err != nil {
 		t.Fatalf("resolveACMEPreEnrollment: %v", err)
+	}
+	if !strings.Contains(out, "✓ Cloud enrollment reserved") || strings.Contains(out, "Automatic ACME enrollment requires") || strings.Contains(out, "Pre-enrolling device with Wendy Cloud") {
+		t.Fatalf("output %q; want one short reserved line", out)
 	}
 	if got != want {
 		t.Fatalf("bake = %#v, want %#v", got, want)
@@ -482,7 +490,7 @@ func TestProvisioningJSONBlankNameReservesTheNameItBakes(t *testing.T) {
 
 	// The callers write that same name to the config partition.
 	dir := t.TempDir()
-	if err := writeConfigFiles(dir, nil, nil, name, provJSON); err != nil {
+	if err := writeConfigFiles(dir, configAgent{}, nil, name, provJSON); err != nil {
 		t.Fatal(err)
 	}
 	conf, err := os.ReadFile(filepath.Join(dir, "wendy.conf"))

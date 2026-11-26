@@ -12,6 +12,126 @@ import WendyAgentGRPC
 /// controlled stream of opaque probe bytes, not a physical or decoded camera.
 @Suite("VideoService production transport")
 struct VideoServiceTransportTests {
+    // Audit 2321: use the actual startup/service list and persisted provisioning
+    // state. Only capture/control I/O and the private state directory are supplied.
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func productionStartupRegistersCamera(enrolled: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wendy-camera-startup-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ca = try TestPKI.makeCA()
+        let source = try TestPKI.makeDeviceIdentity(org: 7, asset: 1, ca: ca)
+        let operatorIdentity = try TestPKI.makeIdentity(
+            commonName: "startup camera operator",
+            ca: ca,
+            uris: ["urn:wendy:org:7:user:fixture"]
+        )
+        if enrolled {
+            let store = ProvisioningStore(
+                configPath: directory,
+                keychainStore: KeychainStore(service: "sh.wendy.tests.camera.\(UUID().uuidString)")
+            )
+            try store.save(
+                cloudHost: "unused.invalid:443",
+                orgID: 7,
+                assetID: 1,
+                keyBacking: .softwarePEM(source.keyPEM),
+                certPEM: source.certPEM,
+                chainPEM: ca.pem
+            )
+            #expect(try #require(store.load()).enrolled)
+        }
+        let camera = TransportCameraProbe()
+        defer { camera.finishAll() }
+        let agent = WendyAgent(
+            configuration: .init(port: 18799, otelPort: 0),
+            probesLinuxContainerRuntime: false,
+            reportedVersion: { "camera-registration-test" },
+            stateDirectory: directory,
+            makeVideoService: { VideoService(camera: camera, controls: TransportCameraControls()) }
+        )
+        try await agent.start()
+        do {
+            #expect(await agent.status == .running)
+            #expect(await agent.advertisedPort == nil)
+            let port = try #require(await agent.listeningPort)
+            let options: CallOptions = {
+                var value = CallOptions.defaults
+                value.timeout = .seconds(3)
+                return value
+            }()
+            if enrolled {
+                let before = camera.snapshot()
+                let unapproved = try HTTP2ClientTransport.Posix(
+                    target: .ipv4(address: "127.0.0.1", port: port),
+                    transportSecurity: .tls {
+                        $0.trustRoots = .certificates([.bytes(Array(ca.pem.utf8), format: .pem)])
+                        $0.serverCertificateVerification = .noHostnameVerification
+                    }
+                )
+                try await withGRPCClient(transport: unapproved) { client in
+                    do {
+                        _ = try await TransportVideoClient(client: client).listVideoDevices(
+                            .init(),
+                            options: options
+                        )
+                        Issue.record("enrolled startup admitted a client without its certificate")
+                    } catch let error as RPCError {
+                        #expect(error.code == .unavailable)
+                    }
+                }
+                #expect(camera.snapshot().discoveries == before.discoveries)
+                #expect(camera.snapshot().started == 0)
+            }
+            let security: HTTP2ClientTransport.Posix.TransportSecurity =
+                enrolled
+                ? .mTLS(
+                    certificateChain: [.bytes(Array(operatorIdentity.certPEM.utf8), format: .pem)],
+                    privateKey: .bytes(Array(operatorIdentity.keyPEM.utf8), format: .pem)
+                ) {
+                    $0.trustRoots = .certificates([.bytes(Array(ca.pem.utf8), format: .pem)])
+                    $0.serverCertificateVerification = .noHostnameVerification
+                } : .plaintext
+            let transport = try HTTP2ClientTransport.Posix(
+                target: .ipv4(address: "127.0.0.1", port: port),
+                transportSecurity: security
+            )
+            try await withGRPCClient(transport: transport) { client in
+                let video = TransportVideoClient(client: client)
+                #expect(
+                    try await video.listVideoDevices(.init(), options: options).devices.map(\.id)
+                        == [0]
+                )
+                let received = TransportFramesProbe()
+                let capture = Task {
+                    try await video.streamVideo(.init(), options: options) { response in
+                        for try await frame in response.messages {
+                            #expect(frame.data == TransportCameraProbe.payload)
+                            received.record(1)
+                        }
+                    }
+                }
+                defer { capture.cancel() }
+                let delivered = await transportEventually { received.count(1) > 0 }
+                capture.cancel()
+                let result = await capture.result
+                try #require(
+                    delivered,
+                    "production startup did not register a usable camera: \(result)"
+                )
+                try #require(await transportEventually { camera.snapshot().active == 0 })
+                #expect(camera.snapshot().started == 1)
+                #expect(camera.snapshot().terminated == 1)
+            }
+        } catch {
+            await agent.stop()
+            throw error
+        }
+        await agent.stop()
+        #expect(await agent.status == .stopped)
+        #expect(await agent.listeningPort == nil)
+    }
+
     @Test(.timeLimit(.minutes(1)), arguments: [false, true])
     func streamingAdmissionCancellationAndReuse(enrolled: Bool) async throws {
         let ca = try TestPKI.makeCA()

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -148,6 +149,9 @@ func (s *AgentUpdateService) StartOnlineUpdate(ctx context.Context, req *pb.Star
 	if req.GetVersion() == "" {
 		return nil, status.Error(codes.InvalidArgument, "check for updates first")
 	}
+	if err := refuseUpdates(); err != nil {
+		return nil, err
+	}
 	if !s.installer.TryLock() {
 		return nil, status.Error(codes.FailedPrecondition, "an update is already in progress")
 	}
@@ -163,10 +167,14 @@ func (s *AgentUpdateService) StartOnlineUpdate(ctx context.Context, req *pb.Star
 	result := &pb.OnlineUpdateStatus{InstalledVersion: s.online.installed, LatestVersion: rel.version, UpdateAvailable: true, Phase: "downloading", TotalBytes: rel.size}
 	s.online.set(result)
 	// Download belongs to the device and survives the phone closing its view.
-	go s.installOnlineRelease(rel)
+	go s.installOnlineRelease(rel, onlineUpdateVia())
 	return result, nil
 }
-func (s *AgentUpdateService) installOnlineRelease(rel onlineRelease) {
+
+// installOnlineRelease installs rel; via is the remote confirm its supervised
+// trial needs.
+func (s *AgentUpdateService) installOnlineRelease(rel onlineRelease, via string) {
+	defer holdSupervisorWake()()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	committed := false
@@ -178,7 +186,7 @@ func (s *AgentUpdateService) installOnlineRelease(rel onlineRelease) {
 	fail := func(err error) {
 		state := s.online.snapshot()
 		state.Phase = "failed"
-		state.Detail = err.Error()
+		state.Detail = status.Convert(err).Message()
 		s.online.set(state)
 	}
 	raw, err := s.online.get(ctx, s.online.origin+"/"+rel.path, maxAgentArchiveSize)
@@ -216,7 +224,7 @@ func (s *AgentUpdateService) installOnlineRelease(rel onlineRelease) {
 		fail(err)
 		return
 	}
-	file, tmp, cleanup, err := createUpdateTempFile(execPath)
+	file, tmp, cleanup, err := createUpdateTempFile(updateTempTarget(execPath))
 	if err != nil {
 		fail(err)
 		return
@@ -230,7 +238,14 @@ func (s *AgentUpdateService) installOnlineRelease(rel onlineRelease) {
 		fail(err)
 		return
 	}
-	if _, err = commitBinaryUpdate(file, tmp, execPath, hex.EncodeToString(binaryDigest[:]), perm, s.logger); err != nil {
+	sha := hex.EncodeToString(binaryDigest[:])
+	if inbox, ok := supervisor.InboxFromEnv(); ok {
+		// The running file stays; the supervisor runs the release as a trial.
+		if err = stageForSupervisor(ctx, file, tmp, inbox, sha, sha, via); err != nil {
+			fail(err)
+			return
+		}
+	} else if _, err = commitBinaryUpdate(file, tmp, execPath, sha, perm, s.logger); err != nil {
 		if !errors.Is(err, ErrDirFsync) {
 			fail(err)
 			return

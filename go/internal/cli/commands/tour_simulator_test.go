@@ -12,10 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 func TestTourRobotProjectResumesWithoutOverwritingEdits(t *testing.T) {
@@ -143,5 +145,56 @@ func TestTourRobotWalkRequiresObservedMotionAndAlwaysReleases(t *testing.T) {
 				t.Fatalf("no motion verified: %v", distance)
 			}
 		})
+	}
+}
+
+func TestTourGuestArch(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	store, err := vm.NewStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTour := func(t *testing.T, dir, body string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "tour.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stubDefaultGuestArch(t, vm.ArchAMD64)
+	missing := filepath.Join(t.TempDir(), "tour")
+	if got := tourGuestArch(missing); got != vm.ArchAMD64 {
+		t.Errorf("no tour.json: %q, want the default", got)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("tourGuestArch created the project directory: %v", err)
+	}
+
+	stubDefaultGuestArch(t, vm.ArchARM64)
+	recorded := t.TempDir()
+	writeTour(t, recorded, `{"version":1,"vm_name":"tour-0a0b0c0d","duration_seconds":5,"forward_mps":0.55,"turn_rps":0.5}`)
+	if err := store.CreateFrom("tour-0a0b0c0d", strings.NewReader("disk"), 4, 1024, vm.Meta{Arch: vm.ArchAMD64}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tourGuestArch(recorded); got != vm.ArchAMD64 {
+		t.Errorf("tour VM recorded as amd64: %q", got)
+	}
+
+	stubDefaultGuestArch(t, vm.ArchAMD64)
+	gone := t.TempDir()
+	writeTour(t, gone, `{"version":1,"vm_name":"tour-ffffffff","duration_seconds":5,"forward_mps":0.55,"turn_rps":0.5}`)
+	if got := tourGuestArch(gone); got != vm.ArchAMD64 {
+		t.Errorf("tour.json naming a missing VM: %q, want the default", got)
+	}
+	broken := t.TempDir()
+	writeTour(t, broken, "not json")
+	if got := tourGuestArch(broken); got != vm.ArchAMD64 {
+		t.Errorf("unreadable tour.json: %q, want the default", got)
+	}
+	entries, _ := os.ReadDir(broken)
+	if len(entries) != 1 {
+		t.Errorf("tourGuestArch changed the project directory: %v", entries)
 	}
 }

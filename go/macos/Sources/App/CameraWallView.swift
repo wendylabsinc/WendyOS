@@ -15,7 +15,11 @@ final class CameraFeed: ObservableObject, Identifiable {
     private(set) var thermalReceivedAt = Date.distantPast
     @Published private(set) var running = false
     @Published private(set) var receivedVideo = false
-    @Published private(set) var error: String?
+    @Published private(set) var failure: WendyError?
+    var error: String? {
+        get { failure?.message }
+        set { failure = newValue.map { WendyError(message: $0) } }
+    }
     private(set) var stream: UInt64 = 0
     private(set) var manuallyPaused = false
     private var startedAt = Date.distantPast
@@ -33,13 +37,13 @@ final class CameraFeed: ObservableObject, Identifiable {
     }, unavailableReason: { [weak self] in
         guard let self else { return "Camera unavailable." }
         if self.manuallyPaused { return "Camera paused. Resume its video to add color." }
-        if let error = self.error { return PresentedFailure(error).message }
+        if let failure { return PresentedFailure(failure).message }
         return self.running ? nil : "Starting camera…"
     })
 
     func shouldAutoStart(at now: Date) -> Bool {
         guard !manuallyPaused else { return false }
-        if let error, !ConnectionRecovery.canRetry(error) { return false }
+        if let failure, !ConnectionRecovery.canRetry(failure) { return false }
         if running {
             return now.timeIntervalSince(lastVideoReceivedAt ?? startedAt) >= 15
         }
@@ -79,11 +83,24 @@ final class CameraFeed: ObservableObject, Identifiable {
         thermalFrame = nil
     }
 
-    func fail(_ message: String, stream: UInt64) {
+    func fail(_ message: String, stream: UInt64) { fail(WendyError(message: message), stream: stream) }
+
+    func fail(_ failure: WendyError, stream: UInt64) {
         guard running, self.stream == stream else { return }
-        error = message
+        self.failure = failure
         running = false
-        if thermalFrame != nil { jpeg = nil; thermalFrame = nil; receivedVideo = false }
+        // Never leave a disconnected feed looking live.
+        jpeg = nil
+        thermalFrame = nil
+        receivedVideo = false
+        decoder.reset()
+    }
+
+    var resolution: String? {
+        if let image = jpeg { return "\(image.width) × \(image.height)" }
+        if let frame = thermalFrame { return "\(frame.width) × \(frame.height)" }
+        if let size = decoder.imageSize { return "\(size.width) × \(size.height)" }
+        return nil
     }
 
     func calibrationFrame() -> CameraCalibrationFrame? {
@@ -130,14 +147,32 @@ final class CameraFeed: ObservableObject, Identifiable {
 
 struct CameraFeedDisplay: View {
     @ObservedObject var feed: CameraFeed
+    var open: (() -> Void)? = nil
+
     var body: some View {
         if let frame = feed.thermalFrame {
-            ThermalCameraDisplay(feed: feed, frame: frame)
-        } else if let image = feed.jpeg {
-            Image(decorative: image, scale: 1).resizable().scaledToFit()
+            ThermalCameraDisplay(feed: feed, frame: frame, open: open)
         } else {
-            CameraDisplayView(decoder: feed.decoder)
+            Group {
+                if let image = feed.jpeg {
+                    Image(decorative: image, scale: 1).resizable().scaledToFit()
+                } else {
+                    CameraDisplayView(decoder: feed.decoder)
+                }
+            }
+            .modifier(CameraFeedTap(open: open))
         }
+    }
+}
+
+// Only displays given open take taps; others leave them to a parent's
+// gesture or Button.
+struct CameraFeedTap: ViewModifier {
+    let open: (() -> Void)?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let open {
+            content.contentShape(Rectangle()).onTapGesture { open() }
+        } else { content }
     }
 }
 
@@ -160,7 +195,7 @@ struct CameraWallView: View {
                 Slider(value: $tileWidth, in: 240...640) { Text("Camera size") }.frame(width: 120)
                     .help("Resize camera tiles. Drag a camera onto another to reorder.")
             }
-            if let error = model.camerasError {
+            if let error = model.camerasErrorFailure {
                 FailureView(title: "Could not load cameras", error: error) { actions.submit { await model.refreshDetails() } }
             } else if model.cameraFeeds.isEmpty {
                 ContentUnavailableView("No cameras found", systemImage: "video.slash")
@@ -265,7 +300,7 @@ struct CameraPlayer: View {
                     Text(feed.camera.name).font(.headline).lineLimit(2).help(feed.camera.name)
                     Text(status).font(.caption).foregroundStyle(.white.opacity(0.7))
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                if let error = feed.error {
+                if let error = feed.failure {
                     Button("Retry", action: play).buttonStyle(.bordered)
                     let failure = PresentedFailure(error)
                     if failure.details != failure.message {

@@ -35,6 +35,9 @@ import (
 // alarming "bad state" recovery box. The platform thorOpenGadget hooks wrap it.
 var errGadgetUnreachable = errors.New("thor flashing gadget did not appear over USB")
 
+// thorEraseWarning is shown before the question that starts a Thor flash.
+const thorEraseWarning = "Flashing overwrites QSPI and resets the WendyOS installation, including /data. This cannot be undone. Sanitizing the internal NVMe requires a separate secure erase."
+
 // thorDevice identifies a selected Jetson in recovery mode, platform-neutrally.
 // PathKey is the stable physical-location key used to re-find the device across
 // the RCM→gadget re-enumeration; Label is a human description.
@@ -112,7 +115,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	// bad flag or failed enrollment aborts before anything is written. Written
 	// to the config image in stepProvision, then flashed like a disk install's
 	// config partition.
-	creds, err := resolveWiFiCredentialsList(wifi)
+	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
 	}
@@ -127,7 +130,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	enrolled := provJSON != nil
 	if err := confirmRecoveryFlash(recoveryFlashConfirm{
 		target:   dev.Label,
-		warning:  []string{tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone.")},
+		warning:  []string{tui.WarningMessage(thorEraseWarning)},
 		question: fmt.Sprintf("Flash %s?", dev.Label),
 	}, name, creds, enrolled, force); err != nil {
 		return err
@@ -179,7 +182,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 			if err != nil {
 				return false, err
 			}
-			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail, agent)
+			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail, agentSeed{local: agent, nightly: nightly, arch: "arm64"})
 		}},
 		{id: stepStage1, label: "Stage 1  RCM boot", run: func(out io.Writer, _ func(string)) (bool, error) {
 			return false, thorStageOne(fp, dev, out)
@@ -227,6 +230,11 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		case errors.Is(err, errGadgetUnreachable):
 			// Stage-1 booted but the gadget never re-enumerated; nothing was written.
 			printThorGadgetUnreachableHint(os.Stdout)
+		case errors.Is(err, flashengine.ErrOldDataNotCleared):
+			// The engine clears old data before it erases QSPI or writes a
+			// partition, so the Thor is not in the state the box below is for.
+			fmt.Println()
+			fmt.Println(tui.WarningMessage("The Thor's boot firmware and OS were not changed. Its old data may already be erased. Re-enter recovery mode and try again."))
 		case failedID == stepStage2:
 			// Partitions were being written; the Thor can be left unbootable.
 			printThorBadStateHint(os.Stdout)
@@ -238,7 +246,6 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	}
 
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Flashed WendyOS %s — power-cycle the Thor out of recovery to boot it. (press the right button once)", plan.version)))
-	printFirstBootVerification(thorDeviceType, plan.version)
 	return nil
 }
 
@@ -263,13 +270,13 @@ func (w fatWriter) WriteFile(name string, data []byte, _ os.FileMode) error {
 // wendy.conf, provisioning.json, clock_floor — so first boot applies them via the
 // identical on-device path. Runs before stage-2, so a failure aborts with nothing
 // written to the Thor.
-func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) (err error) {
+func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), seed agentSeed) (err error) {
 	// A local agent is required provisioning. Release downloads remain
 	// best-effort so an offline flash can still provision WiFi and enrollment.
-	if err := agent.checkArchitecture("arm64"); err != nil {
+	if err := seed.local.checkArchitecture("arm64"); err != nil {
 		return err
 	}
-	agentBinary, _ := resolveSeedAgent(out, detail, agent)
+	agentBinary, _ := resolveSeedAgent(out, detail, seed)
 
 	d, err := diskfs.Open(img)
 	if err != nil {
@@ -471,14 +478,14 @@ func printThorBadStateHint(w io.Writer) {
 		"Plug the Thor into a monitor and power-cycle it.",
 		"If the screen shows " + thorHintEmph.Render("UEFI") + ", the Thor is in a bad state.",
 		"",
-		"Attach a USB keyboard and type these two commands exactly:",
-		"",
-		thorHintCmd.Render("  " + cmdA),
-		thorHintCmd.Render("  " + cmdB),
+		"Attach a USB keyboard and type the two commands below exactly.",
 		"",
 		"Then power-cycle again, re-enter recovery mode, and re-run the flash.",
 	}, "\n")
 	fmt.Fprintln(w, "\n"+thorHintBorder.Render(body))
+	fmt.Fprintln(w, "\nIn the UEFI shell:")
+	fmt.Fprintln(w, cmdA)
+	fmt.Fprintln(w, cmdB)
 }
 
 // printThorGadgetUnreachableHint is a calm note for a flash that never wrote data.
@@ -503,41 +510,47 @@ func wendyPackagedRule(name string) bool {
 	return false
 }
 
-// linuxUSBAccessStep is the one sentence a Linux user sees when the OS refuses
-// wendy the board over USB. With the package, the rules already cover the user
-// at this computer's desktop, so what is left is plugdev for other logins
-// (SSH, headless). Without it there are no rules, and the package is the fix.
-func linuxUSBAccessStep(device string, packaged bool) string {
+// linuxUSBAccessHint keeps the remedy's command separate from the boxed prose.
+func linuxUSBAccessHint(device string, packaged bool) (string, string) {
 	if packaged {
-		return "Your user can't open the " + device + " over USB from this login; run " +
-			"sudo usermod -aG plugdev $USER and log in again, or run the same command with sudo."
+		return "Your user can't open the " + device + " over USB from this login.\nAdd your user to plugdev with the command below and log in again.\nOr run the same command with sudo.",
+			"Add your user to plugdev:\nsudo usermod -aG plugdev $USER"
 	}
-	return "This wendy was installed without its package, so it can't open the " + device +
-		" over USB; install the package with " + cliupdate.InstallCommand("linux") +
-		", or run the same command with sudo."
+	return "This wendy was installed without its package.\nIt can't open the " + device + " over USB from this login.\nInstall the package with the command below.\nOr run the same command with sudo.",
+		"Install the Wendy CLI package:\n" + cliupdate.InstallCommand("linux")
 }
 
 // usbAccessHintBox explains how to regain USB access to the Jetson when the OS
 // refuses to open it: on Linux, the packaged rules or plugdev; on macOS, its own kernel driver
 // bound to the recovery device (root needed to seize it).
 func usbAccessHintBox() string {
-	return thorHintBorder.Render(strings.Join(usbAccessHintLines(runtime.GOOS), "\n"))
+	return renderUSBAccessHint(runtime.GOOS, wendyPackagedRule("70-wendy-jetson.rules"))
+}
+
+func renderUSBAccessHint(goos string, packaged bool) string {
+	hint := thorHintBorder.Render(strings.Join(usbAccessHintLines(goos, packaged), "\n"))
+	if goos == "linux" {
+		_, commands := linuxUSBAccessHint("Jetson", packaged)
+		hint += "\n\n" + commands
+	}
+	return hint
 }
 
 // usbAccessHintLines builds the body of the USB-access-denied hint for the given
 // GOOS. Split out from usbAccessHintBox so both OS branches are testable without
 // depending on the runner's platform.
-func usbAccessHintLines(goos string) []string {
+func usbAccessHintLines(goos string, packaged bool) []string {
 	lines := []string{
 		thorHintTitle.Render("⚠  USB access denied"),
 		"",
 		"A Jetson is in recovery mode, but the OS refused wendy access to its USB device.",
 	}
 	if goos == "linux" {
+		step, _ := linuxUSBAccessHint("Jetson", packaged)
 		return []string{
 			thorHintTitle.Render("⚠  USB access denied"),
 			"",
-			linuxUSBAccessStep("Jetson", wendyPackagedRule("70-wendy-jetson.rules")),
+			step,
 		}
 	}
 	// macOS: the device enumerated but couldn't be claimed. macOS binds its own

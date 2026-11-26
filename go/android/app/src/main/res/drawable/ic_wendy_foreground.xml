@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Wendy's existing brand mark, sized inside the adaptive icon safe area. -->
+    <group android:scaleX="0.23" android:scaleY="0.23" android:translateX="25.616" android:translateY="33.092">
+        <path android:fillColor="#FFFFFF" android:fillType="evenOdd"
+            android:pathData="M69.93,160.83L0,90.9L69.93,20.98L139.86,90.91Z M22.63,90.9L69.93,138.2L117.23,90.9L69.93,43.6Z" />
+        <path android:fillColor="#FFFFFF"
+            android:pathData="M155.92,0L246.82,90.9L155.92,181.81L65.01,90.9Z" />
+    </group>
+</vector>

@@ -1,0 +1,124 @@
+---
+title: Add Wi-Fi Aware with an Intel BE202 or BE200
+description: Give WendyOS devices fast, direct Wi-Fi links with no access point by fitting an Intel Wi-Fi 7 card and installing its driver add-on.
+---
+
+Wi-Fi Aware lets two Wi-Fi radios find each other and open a direct link, with
+no access point and no shared network. For Wendy Net, that's the middle ground
+between Wi-Fi through a router and Bluetooth: it works anywhere two devices are
+within Wi-Fi range of each other, and it's much faster than Bluetooth.
+
+<Figure src="/images/wendy-net/find-wifi-aware.webp" alt="Two devices joined directly by a dashed line, with a crossed-out access point beside them, under the words Wi-Fi Aware, No access point" caption="Wi-Fi Aware links two radios directly. There's no access point in between." />
+
+Wi-Fi Aware needs a radio and a driver that support it. Wendy supports it with
+Intel's BE202 Wi-Fi 7 card: fit the card, install its driver add-on, and turn
+Wi-Fi Aware on.
+
+## What you need
+
+- **An Intel BE202 card** in an M.2 Key E slot that provides both PCIe, for
+  Wi-Fi, and USB 2.0, for the card's Bluetooth. Connect its antennas.
+- **A current WendyOS image.** It includes the Wi-Fi Aware software. The Intel
+  driver and firmware come separately, as the `intel-be202`
+  [driver add-on](/docs/device/managing-drivers).
+- **A wired management connection,** Ethernet or USB-C, while you install the
+  driver. Installing it briefly removes the device's Wi-Fi interface.
+- **At least two devices with Wi-Fi Aware.** A Wi-Fi Aware link needs a radio at
+  each end.
+
+The `intel-be202` add-on is built for these boards:
+
+| Board | Card | How it connects | Status |
+| --- | --- | --- | --- |
+| Jetson AGX Thor, AGX Orin and Orin Nano developer kits | BE202 | The board's M.2 Key E slot | Built for these boards |
+| Raspberry Pi 5 | BE202 | Waveshare PCIe TO M.2 E KEY HAT+ on the PCIe connector. Boot from an SD card. | Built for this board |
+| Dragonwing IQ8 (IQ-8275 EVK) | BE202 | The board's M.2 slot | Tested, including Wi-Fi Aware routing |
+| Dragonwing IQ9 (IQ-9075 EVK) | BE202 | The board's M.2 slot | Targeted, not yet tested |
+| Dragonwing IQ8 and IQ9 | BE200 | The board's M.2 slot | Targeted, not yet tested |
+
+The BE200 is the BE202's sibling: it uses the same Intel driver and shows up
+with the same PCI ID. The add-on targets it on Dragonwing boards but
+hasn't been tested with it yet, and it isn't claimed for Jetson or Raspberry Pi.
+Start with a BE202.
+
+**On a Raspberry Pi 5,** the HAT has one M.2 slot, so the Pi boots from its SD
+card; booting from NVMe needs a carrier board that can hold both. A HAT that
+only carries PCIe gives you Wi-Fi but not the card's Bluetooth. While the
+add-on is active, the Pi's built-in Wi-Fi is turned off. A Raspberry Pi 4 isn't
+supported.
+
+## Install the driver
+
+With the card fitted and a wired connection to the device, check that the
+add-on is published for the device's WendyOS version, install it, and confirm
+that the card's Wi-Fi shows up:
+
+```sh
+wendy device drivers list --available
+wendy device drivers install intel-be202
+wendy device wifi list
+```
+
+The add-on only activates when the device has the Intel card in it. When it
+does, it loads Intel's Wi-Fi driver, restores the Wi-Fi network connection the
+device was using, and loads the card's Bluetooth firmware. On Jetson and
+Raspberry Pi it replaces the kernel's whole wireless stack with Intel's own
+build, which is why the Wi-Fi interface disappears for a moment. OS updates
+install a matching add-on for the new kernel through the
+[driver workflow](/docs/device/managing-drivers#updating-across-an-os-update).
+
+## Turn on Wi-Fi Aware
+
+Enable Wi-Fi Aware on each device:
+
+```sh
+wendy net configure --device <device> --participate=true --nan=true
+```
+
+`nan` is the setting's name: Wi-Fi Aware is the Wi-Fi Alliance's name for
+Neighbor Awareness Networking. You can turn it on together with the other kinds
+of connection, for example `--ethernet=true --ble=true --nan=true`.
+
+Then check the result on both devices:
+
+```sh
+wendy net status --device <device>
+wendy net topology --device <device>
+```
+
+Saving the setting doesn't check the hardware. If the device has no Wi-Fi Aware
+radio, `wendy net status` shows the state as `failed`, or `degraded` when other
+connections still work, and the detail says that no NAN-capable interface is
+available. The agent keeps retrying every few seconds, so the link comes up
+once the hardware is ready. The device's other connections keep working in the
+meantime.
+
+## How it behaves in Wendy Net
+
+- **Cost 512.** A Wi-Fi Aware link is preferred over Bluetooth (4096), and an
+  ordinary Wi-Fi network (128) or Ethernet (64) is preferred over it. See
+  [path choice](/docs/wendy-net/rerouting#how-a-path-is-chosen).
+- **Four neighbors.** A device keeps up to four Wi-Fi Aware neighbors at once,
+  and starts at most two of those links itself.
+- **Fast failure detection.** The radio reports a lost link straight away, and a
+  silent one is declared dead after 3.5 seconds.
+- **Visible identity.** Like Wendy Net's other announcements, Wi-Fi Aware
+  discovery carries your organization's ID and the device's ID, and anyone
+  nearby can read them. A link still needs mutual TLS with your organization's
+  certificates before it carries traffic.
+- **Channel.** Wendy Net currently schedules its Wi-Fi Aware links on 2.4 GHz
+  channel 6.
+
+### Alongside the device's Wi-Fi connection
+
+The same card can stay connected to an ordinary Wi-Fi network while it runs
+Wi-Fi Aware. Starting Wi-Fi Aware removes the card's Wi-Fi Direct interface,
+because the chip can't run both at once; stopping Wi-Fi Aware doesn't restart
+Wi-Fi or drop the network connection. Running an ordinary Wi-Fi connection and
+Wi-Fi Aware together hasn't been measured for throughput yet.
+
+## Update devices together
+
+Wendy Net's Wi-Fi Aware discovery format has changed in the past, with no
+fallback to older versions. Keep the devices you link over Wi-Fi Aware on
+matching WendyOS versions.

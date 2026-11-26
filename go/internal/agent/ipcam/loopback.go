@@ -147,9 +147,12 @@ type loopbackDeps struct {
 	// call here, so callers (and their tests) only ever see one attempt.
 	modprobe func(ctx context.Context) error
 
-	addNode    func(nr int, label string) error
-	removeNode func(nr int) error
-	nodeExists func(nr int) bool // stat /dev/video<nr>
+	addNode func(nr int, label string) error
+	// addShareNode is addNode with announce_all_caps=1, for per-app share
+	// nodes that must stay a capture device while their writer is away.
+	addShareNode func(nr int, label string) error
+	removeNode   func(nr int) error
+	nodeExists   func(nr int) bool // stat /dev/video<nr>
 }
 
 // Loopback manages the v4l2loopback nodes that back container-visible camera
@@ -839,12 +842,24 @@ func (l *Loopback) fireIdleGrace(camID uint32, cp *camPump, gen uint64) {
 // skip check is the honest option; silently reusing a camera's number would
 // point an app at the wrong camera's frames.
 func (l *Loopback) AllocateAuxNodeNumber() (int, error) {
+	return l.AllocateAuxNodeNumberSkipping(nil)
+}
+
+// AllocateAuxNodeNumberSkipping is AllocateAuxNodeNumber that also passes over
+// every number skip reports (nil skips nothing more). It is for a caller that
+// holds numbers whose nodes do not exist right now: a camera share's record
+// keeps its number across a reboot, which removes every node, until the
+// container's next start makes the node again.
+func (l *Loopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error) {
 	taken := map[int]struct{}{}
 	for _, cam := range l.reg.List() {
 		taken[int(cam.ID)] = struct{}{}
 	}
 	for nr := IDBandEnd; nr >= IDBandStart; nr-- {
 		if _, ok := taken[nr]; ok {
+			continue
+		}
+		if skip != nil && skip(nr) {
 			continue
 		}
 		if l.deps.nodeExists(nr) {
@@ -868,6 +883,21 @@ func (l *Loopback) EnsureAuxNode(_ context.Context, nr int, label string) error 
 		return nil
 	}
 	return l.deps.addNode(nr, label)
+}
+
+// EnsureShareNode creates the node at nr for an app's camera share if it does
+// not already exist. It is EnsureAuxNode with one difference: the node is
+// created with announce_all_caps=1, so it stays a capture device (with the
+// format its writer locked in) while no writer is attached, e.g. during an
+// agent restart. A missing module is "nothing to do", as for EnsureAuxNode.
+func (l *Loopback) EnsureShareNode(_ context.Context, nr int, label string) error {
+	if err := l.Available(); err != nil {
+		return nil
+	}
+	if l.deps.nodeExists(nr) {
+		return nil
+	}
+	return l.deps.addShareNode(nr, label)
 }
 
 // RemoveAuxNode deletes the node at nr. Unlike RemoveCamera there is no pump

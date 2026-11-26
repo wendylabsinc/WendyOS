@@ -52,7 +52,13 @@ func Decode(protocol string) (string, []Fingerprint) {
 	return protocol[:index], hashes
 }
 
-func Application(protocol string) string { base, _ := Decode(protocol); return base }
+func Application(protocol string) string {
+	if base, kind, _ := decodeLeafOffer(protocol); kind != 0 {
+		return base
+	}
+	base, _ := Decode(protocol)
+	return base
+}
 
 // Offer lists root-first chain prefixes, longest first. Selecting one explicitly
 // acknowledges that the server possesses that exact prefix. The final ordinary

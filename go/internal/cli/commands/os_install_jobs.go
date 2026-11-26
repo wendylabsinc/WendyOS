@@ -442,7 +442,7 @@ func provisionInstallJobMedia(ctx context.Context, target drive, fb installJobFi
 	if err := checkpoint("writing_config", false); err != nil {
 		return &onboarding.ProvisioningError{Err: err}
 	}
-	d, attached, provErr := provisionConfigWithRetry(ctx, target, fb.creds, fb.name, nil, true, nil)
+	d, attached, provErr := provisionConfigWithRetry(ctx, target, fb.creds, fb.name, nil, true, agentSeed{})
 	var ejectErr error
 	// A drive that dropped off the bus may have another disk at its old path.
 	if attached {
@@ -525,7 +525,7 @@ func prepareOrinJobWorkspace(fp *flashpack.Flashpack, fb installJobFirstBoot, de
 	}
 	configRel, err := filepath.Rel(fp.FlashImagesDir(), fp.ConfigImage())
 	if err == nil {
-		err = installJobInjectOrinConfig(filepath.Join(workspace, configRel), fb.creds, fb.name, nil, os.Stdout, detail, nil)
+		err = installJobInjectOrinConfig(filepath.Join(workspace, configRel), fb.creds, fb.name, nil, os.Stdout, detail, agentSeed{})
 	}
 	if err != nil {
 		_ = os.RemoveAll(workspace)
@@ -639,6 +639,15 @@ func executeThorInstallJob(ctx context.Context, j *onboarding.Job, fb installJob
 		return fmt.Errorf("opening confirmed Thor flashing gadget: %w. Jobs require its original USB path; if re-enumeration changes that path, inspect the target and use the interactive recovery installer", err)
 	}
 	defer closer()
+	return writeThorInstallJob(ctx, transport, fp, workspace, detail, checkpoint)
+}
+
+// writeThorInstallJob is a Thor job's write phase, entered once the flashing
+// gadget is open: it records that the erase begins, then runs the stage-2
+// engine the terminal installer runs. A job therefore clears the previous
+// installation's data exactly as the terminal installer does, and stops on
+// the same failures.
+func writeThorInstallJob(ctx context.Context, transport flashengine.Transport, fp *flashpack.Flashpack, workspace string, detail func(string), checkpoint onboarding.Checkpoint) error {
 	if err := checkpoint("writing_partitions", true); err != nil {
 		return err
 	}
@@ -656,7 +665,7 @@ func prepareThorJobWorkspace(fp *flashpack.Flashpack, fb installJobFirstBoot, de
 	if !fb.requested() {
 		return workspace, nil
 	}
-	if err := installJobInjectThorConfig(configImage, fb.creds, fb.name, nil, os.Stdout, detail, nil); err != nil {
+	if err := installJobInjectThorConfig(configImage, fb.creds, fb.name, nil, os.Stdout, detail, agentSeed{}); err != nil {
 		_ = os.RemoveAll(workspace)
 		return "", err
 	}

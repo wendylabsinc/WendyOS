@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -93,29 +94,14 @@ func TestGStreamerX264WithoutParserDecodesForInitialAndLateViewers(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Generate the fixture in memory. No image assets are committed. The red
-	// and green halves let decoding prove pixel content as well as dimensions.
-	frame := image.NewRGBA(image.Rect(0, 0, 64, 48))
-	for y := range 48 {
-		for x := range 64 {
-			value := color.RGBA{R: 240, G: 10, B: 10, A: 255}
-			if x >= 32 {
-				value = color.RGBA{R: 10, G: 240, B: 10, A: 255}
-			}
-			frame.SetRGBA(x, y, value)
-		}
-	}
-	var jpegFrame bytes.Buffer
-	if err := jpeg.Encode(&jpegFrame, frame, &jpeg.Options{Quality: 95}); err != nil {
-		t.Fatal(err)
-	}
+	jpegFrame := redGreenJPEG(t, 64, 48)
 	input, writer := io.Pipe()
 	defer input.Close()
 	written := make(chan error, 1)
 	go func() {
 		defer writer.Close()
 		for range 40 {
-			if _, err := writer.Write(jpegFrame.Bytes()); err != nil {
+			if _, err := writer.Write(jpegFrame); err != nil {
 				written <- err
 				return
 			}
@@ -148,29 +134,69 @@ func TestGStreamerX264WithoutParserDecodesForInitialAndLateViewers(t *testing.T)
 	}
 	for name, stream := range map[string][]byte{"initial": encoded, "late": encoded[starts[2]:]} {
 		t.Run(name, func(t *testing.T) {
-			decode := exec.CommandContext(ctx, launch, "-q", "fdsrc", "fd=0", "!", "h264parse", "!", "avdec_h264", "!", "videoconvert", "!", "video/x-raw,format=RGB", "!", "fdsink", "fd=1")
-			decode.Env = viewerEnv
-			decode.Stdin = bytes.NewReader(stream)
-			var errors bytes.Buffer
-			decode.Stderr = &errors
-			pixels, err := decode.Output()
+			pixels, stderr, err := decodeH264ToRGB(ctx, launch, viewerEnv, stream)
 			const frameBytes = 64 * 48 * 3
 			if err != nil || len(pixels) < frameBytes || len(pixels)%frameBytes != 0 {
-				t.Fatalf("%s viewer could not decode complete frames: bytes=%d err=%v stderr=%s", name, len(pixels), err, errors.String())
+				t.Fatalf("%s viewer could not decode complete frames: bytes=%d err=%v stderr=%s", name, len(pixels), err, stderr)
 			}
-			for offset := 0; offset < len(pixels); offset += frameBytes {
-				for _, point := range []struct{ x, y, channel int }{{16, 24, 0}, {48, 24, 1}} {
-					index := offset + (point.y*64+point.x)*3
-					for channel, value := range pixels[index : index+3] {
-						if (channel == point.channel && value < 200) || (channel != point.channel && value > 45) {
-							t.Fatalf("%s viewer frame %d lost fixture colors at %d,%d: %v", name, offset/frameBytes, point.x, point.y, pixels[index:index+3])
-						}
-					}
-				}
+			if err := redGreenMismatch(pixels, 64, 48); err != nil {
+				t.Fatalf("%s viewer %v", name, err)
 			}
 			t.Logf("decoded %d complete 64x48 RGB frames with expected pixels", len(pixels)/frameBytes)
 		})
 	}
+}
+
+// redGreenJPEG encodes a width x height picture whose left half is red and right
+// half green. It is generated in memory, so no image assets are committed, and
+// the two halves let a decoder's output prove pixel content as well as size.
+func redGreenJPEG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	frame := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := range height {
+		for x := range width {
+			value := color.RGBA{R: 240, G: 10, B: 10, A: 255}
+			if x >= width/2 {
+				value = color.RGBA{R: 10, G: 240, B: 10, A: 255}
+			}
+			frame.SetRGBA(x, y, value)
+		}
+	}
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, frame, &jpeg.Options{Quality: 95}); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
+}
+
+// decodeH264ToRGB decodes an Annex B stream as a viewer would and returns its
+// pictures as packed RGB, with what the decoder wrote on stderr. A nil env runs
+// the decoder in this process's environment.
+func decodeH264ToRGB(ctx context.Context, launch string, env []string, stream []byte) ([]byte, string, error) {
+	decode := exec.CommandContext(ctx, launch, "-q", "fdsrc", "fd=0", "!", "h264parse", "!", "avdec_h264", "!", "videoconvert", "!", "video/x-raw,format=RGB", "!", "fdsink", "fd=1")
+	decode.Env = env
+	decode.Stdin = bytes.NewReader(stream)
+	var stderr bytes.Buffer
+	decode.Stderr = &stderr
+	pixels, err := decode.Output()
+	return pixels, stderr.String(), err
+}
+
+// redGreenMismatch checks every decoded RGB frame of a redGreenJPEG picture in
+// the middle of each half, and names the first point that lost its colour.
+func redGreenMismatch(pixels []byte, width, height int) error {
+	frameBytes := width * height * 3
+	for offset := 0; offset+frameBytes <= len(pixels); offset += frameBytes {
+		for _, point := range []struct{ x, y, channel int }{{width / 4, height / 2, 0}, {3 * width / 4, height / 2, 1}} {
+			index := offset + (point.y*width+point.x)*3
+			for channel, value := range pixels[index : index+3] {
+				if (channel == point.channel && value < 200) || (channel != point.channel && value > 45) {
+					return fmt.Errorf("frame %d lost fixture colors at %d,%d: %v", offset/frameBytes, point.x, point.y, pixels[index:index+3])
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // Return only independently decodable IDR access units, each with its own AUD,

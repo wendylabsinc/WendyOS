@@ -347,7 +347,7 @@ class ModelTests(unittest.TestCase):
     def call_model(self, message=None, error=None):
         create = unittest.mock.Mock(return_value=message, side_effect=error)
         client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
-        module = types.SimpleNamespace(Anthropic=lambda: client)
+        module = types.SimpleNamespace(Anthropic=lambda **kwargs: client)
         with patch.dict(sys.modules, {"anthropic": module}):
             result = api_review.review_model(metadata(), diff().decode(), REPO, "test-model")
         return result, create
@@ -446,7 +446,7 @@ class ModelTests(unittest.TestCase):
         self.assertIn("decisions[0].locations[0]", prompt["response_repair"]["validation_error"])
 
     def test_invalid_json_gets_one_complete_response_repair(self):
-        result, create = self.call_model(error=[self.message('```json\n{"risk":"low","decisions":[]}\n```'), self.message({"risk": "low", "decisions": []})])
+        result, create = self.call_model(error=[self.message('{"risk":"low","decisions":['), self.message({"risk": "low", "decisions": []})])
         self.assertEqual(result, {"risk": "low", "decisions": []})
         self.assertEqual(create.call_count, 2)
 
@@ -461,7 +461,7 @@ class ModelTests(unittest.TestCase):
                 message = self.message({"risk": "high", "decisions": [malformed]})
                 create = unittest.mock.Mock(return_value=message)
                 client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
-                with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda: client)}):
+                with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda **kwargs: client)}):
                     with self.assertRaisesRegex(api_review.ReviewError, "after one repair"):
                         api_review.review_model(metadata(), diff().decode(), REPO, "test-model")
                 self.assertEqual(create.call_count, 2)
@@ -492,13 +492,21 @@ class ModelTests(unittest.TestCase):
     def test_truncated_response_does_not_enter_schema_repair(self):
         create = unittest.mock.Mock(return_value=self.message('{"risk":', reason="max_tokens"))
         client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
-        with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda: client)}):
+        with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda **kwargs: client)}):
             with self.assertRaisesRegex(api_review.ReviewError, "did not complete"):
                 api_review.review_model(metadata(), diff().decode(), REPO, "test-model")
         create.assert_called_once()
 
 
 class ReconciliationTests(unittest.TestCase):
+    def test_stored_extended_snapshot_retains_only_validated_api_decisions(self):
+        prior = self.prior()
+        extended = dict(prior, compatibility_findings=[{"retired": "never sent to the model"}])
+        self.assertEqual(api_review.validate_prior_state(extended), prior)
+        extended["decisions"][0]["state"] = "unknown"
+        with self.assertRaises(api_review.ReviewError):
+            api_review.validate_prior_state(extended)
+
     def prior(self):
         return {
             "version": api_review.PRIOR_STATE_VERSION,
@@ -521,7 +529,7 @@ class ReconciliationTests(unittest.TestCase):
             content=[types.SimpleNamespace(type="text", text=json.dumps(response))],
         )
         create = unittest.mock.Mock(return_value=message)
-        module = types.SimpleNamespace(Anthropic=lambda: types.SimpleNamespace(
+        module = types.SimpleNamespace(Anthropic=lambda **kwargs: types.SimpleNamespace(
             messages=types.SimpleNamespace(create=create)))
         prompts = []
         for state in ("pending", "accepted", "needs_re_review", "withdrawn"):
@@ -545,7 +553,7 @@ class ReconciliationTests(unittest.TestCase):
         create = unittest.mock.Mock(side_effect=[types.SimpleNamespace(
             stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text=json.dumps(payload))]
         ) for payload in payloads])
-        module = types.SimpleNamespace(Anthropic=lambda: types.SimpleNamespace(
+        module = types.SimpleNamespace(Anthropic=lambda **kwargs: types.SimpleNamespace(
             messages=types.SimpleNamespace(create=create)))
         return module, create
 
@@ -720,6 +728,32 @@ class ReconciliationTests(unittest.TestCase):
             api_review.reconcile_decisions([decision()], prior, "test-model")[0]["relationship"],
             "new",
         )
+
+
+class EnvelopeTests(unittest.TestCase):
+    def test_whole_json_fence_has_identical_values_without_mutating_raw_text(self):
+        payload={"risk":"low","decisions":[],"literal":"a ``` string"}
+        text=json.dumps(payload)
+        for outer in (text,'```json\n'+text+'\n```','```\r\n'+text+'\r\n```',' \n```JSON\n'+text+'\n```\t'):
+            original=outer
+            self.assertEqual(api_review.decode_model_json(outer),payload)
+            self.assertEqual(outer,original)
+
+    def test_prose_nested_or_malformed_fences_and_non_json_fail(self):
+        for text in ('prefix\n```json\n{}\n```','```json\n{}\n```\nsuffix','```json\n{}','```python\n{}\n```',
+                     '```json\n```json\n{}\n```\n```','{}{}','[]','null','{"x":NaN}','{"x":Infinity}',
+                     '{"risk":"high","risk":"low"}','{"a":{"x":1,"x":2}}'):
+            with self.subTest(text=text),self.assertRaises(api_review.ReviewError):api_review.decode_model_json(text)
+
+    def test_thinking_is_ignored_but_tools_and_truncation_fail(self):
+        text=types.SimpleNamespace(type='text',text='```json\n{}\n```')
+        thinking=types.SimpleNamespace(type='thinking',thinking='private hidden reasoning')
+        message=types.SimpleNamespace(stop_reason='end_turn',content=[thinking,text])
+        self.assertEqual(api_review.decode_model_json(api_review.provider_text(message)),{})
+        for reason in ('max_tokens','refusal','pause_turn',None):
+            with self.subTest(reason=reason),self.assertRaises(api_review.ReviewError):api_review.provider_text(types.SimpleNamespace(stop_reason=reason,content=[text]))
+        with self.assertRaises(api_review.ReviewError):api_review.provider_text(types.SimpleNamespace(stop_reason='end_turn',content=[types.SimpleNamespace(type='tool_use'),text]))
+
 
 
 class CommandTests(unittest.TestCase):

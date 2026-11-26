@@ -71,6 +71,9 @@ def inline(value: str) -> str:
 
 
 def validate_result(result: dict, head_sha: str, base_sha: str) -> None:
+    if isinstance(result, dict) and (result.get("input_visibility", "public") != "public"
+                                     or any(key.startswith("compatibility_") for key in result)):
+        raise ValueError("Retired compatibility results require a fresh API decision review")
     if not isinstance(result, dict) or result.get("status") not in {"complete", "incomplete", "skipped"}:
         raise ValueError("API review result has an invalid status")
     for name, expected in (("head_sha", head_sha), ("base_sha", base_sha)):
@@ -229,6 +232,21 @@ def _record_from_marker(marker: dict, checked: bool | None) -> dict:
     return record
 
 
+def unfenced_lines(body):
+    """Source examples and quoted markers are data, never review state."""
+    fence = None
+    for index, line in enumerate(body.splitlines()):
+        match = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip():
+                fence = None
+            continue
+        if match:
+            fence = match[1]
+            continue
+        yield index, line
+
+
 def parse_comment_state(bodies: list[str]) -> list[dict]:
     records: list[dict] = []
     seen: set[str] = set()
@@ -236,7 +254,7 @@ def parse_comment_state(bodies: list[str]) -> list[dict]:
     headings = {f"## {title}": key for key, title in CATEGORIES.items()}
     for body in bodies:
         lines = body.splitlines()
-        for index, line in enumerate(lines):
+        for index, line in unfenced_lines(body):
             category = headings.get(line, category)
             marker_match = STATE_MARKER_RE.search(line)
             if marker_match:
@@ -631,19 +649,32 @@ class DryRunGitHub:
         return "Dry-run publication: " + json.dumps({"intercepted_mutations": self.mutations, **counts}, sort_keys=True)
 
 
-def authoritative_records(comments: list[dict]) -> list[dict]:
+def authoritative_bodies(comments: list[dict]) -> list[str]:
     comments = sorted(comments, key=lambda comment: comment["id"])
     primary = next((comment for comment in comments if part_index(comment["body"]) == 0), None)
     if primary is None:
         return []
     bodies = [primary["body"]]
-    linked_ids = {int(value) for value in re.findall(r"#issuecomment-(\d+)", primary["body"])}
-    if linked_ids:
+    part = PART_MARKER_RE.search(primary["body"])
+    if part:
+        total = int(part[2])
+        links = re.findall(
+            r"^- \[(?:Checklist|Review) part (\d+) of (\d+)\]\(https://github\.com/[^/\s]+/[^/\s]+/pull/\d+#issuecomment-(\d+)\)$",
+            primary["body"], re.MULTILINE)
+        if len(links) != total or sorted((int(index), int(count)) for index, count, _ in links) != [(index, total) for index in range(1, total + 1)]:
+            raise ValueError("API review primary has incomplete part links")
         by_id = {comment["id"]: comment for comment in comments}
-        if any(identifier not in by_id for identifier in linked_ids):
-            raise ValueError("API review primary links to missing checklist state")
-        bodies.extend(by_id[identifier]["body"] for identifier in sorted(linked_ids))
-    return parse_comment_state(bodies)
+        for index, _, value in sorted(links, key=lambda row: int(row[0])):
+            identifier = int(value)
+            if (identifier not in by_id or part_index(by_id[identifier]["body"]) != int(index)
+                    or int(PART_MARKER_RE.search(by_id[identifier]["body"])[2]) != total):
+                raise ValueError("API review primary links to missing checklist state")
+            bodies.append(by_id[identifier]["body"])
+    return bodies
+
+
+def authoritative_records(comments: list[dict]) -> list[dict]:
+    return parse_comment_state(authoritative_bodies(comments))
 
 
 def list_review_comments(repo: str, pr_number: int, github) -> list[dict]:

@@ -49,7 +49,7 @@ time.sleep(60)
 '@ 'Invalid fixture port [65536]'
 
 Invoke-FixtureSupervisorCheck 'wrong HTTP identity never becomes ready' @'
-import http.server, pathlib, sys
+import http.server, pathlib, socketserver, sys
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -57,14 +57,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'x' * 32)
     def log_message(self, *args): pass
-server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # The supervisor tests HTTP faults, not runner DNS availability.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+server = Server(('127.0.0.1', 0), Handler)
 pathlib.Path(sys.argv[2]).write_text(str(server.server_port))
 server.serve_forever()
 '@ 'readiness nonce mismatch' 3000
 # A wrong-identity response is terminal, even if a subsequent request would
 # return the expected nonce. This also prevents retries from masking the cause.
 Invoke-FixtureSupervisorCheck 'wrong identity cannot recover on a later response' @'
-import http.server, pathlib, sys
+import http.server, pathlib, socketserver, sys
 class Handler(http.server.BaseHTTPRequestHandler):
     attempts = 0
     def do_GET(self):
@@ -76,13 +81,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
     def log_message(self, *args): pass
-server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # The supervisor tests HTTP faults, not runner DNS availability.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+server = Server(('127.0.0.1', 0), Handler)
 pathlib.Path(sys.argv[2]).write_text(str(server.server_port))
 server.serve_forever()
 '@ 'readiness nonce mismatch' 3000
 
 Invoke-FixtureSupervisorCheck 'stalled HTTP body remains bounded' @'
-import http.server, pathlib, sys, time
+import http.server, pathlib, socketserver, sys, time
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -91,7 +101,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.flush()
         time.sleep(60)
     def log_message(self, *args): pass
-server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # The supervisor tests HTTP faults, not runner DNS availability.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+server = Server(('127.0.0.1', 0), Handler)
 pathlib.Path(sys.argv[2]).write_text(str(server.server_port))
 server.serve_forever()
 '@ 'readiness body read timed out' 3000

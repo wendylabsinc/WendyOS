@@ -83,11 +83,9 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 			peer = actual
 			return nil
 		}}
-	// Router binding independently verifies the TLS wire chain at both ends.
-	// Known-issuer ALPN can omit cached CAs from that chain even though the
-	// handshake's cache-aware verifier passed. Retain the full-chain role
-	// until binding also consumes that exact issuer snapshot. Ordinary mesh
-	// TLS continues to use known-issuer negotiation.
+	// Use the base router ALPN so older routers still receive the full operator
+	// chain for role binding. A classical Lite router sends only its leaf, so
+	// both client verification steps use the provisioned issuer candidates.
 	config.NextProtos = []string{meshoperatorlink.RouterALPN}
 	secure, err := dialOperatorTLS(ctx, candidate, config)
 	if err != nil {
@@ -101,7 +99,6 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 	}
 	cfg := s.routerConfig
 	cfg.Router = peer
-	cfg.IssuerCandidates = s.Node.Credentials.TLSIssuerCandidates
 	link, err := meshoperatorlink.RouterClient(ctx, secure, cfg)
 	if err != nil {
 		return err

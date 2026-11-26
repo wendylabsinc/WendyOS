@@ -18,10 +18,11 @@ var errLoopbackUnsupported = errors.New("v4l2loopback is only supported on Linux
 
 func defaultLoopbackDeps() loopbackDeps {
 	return loopbackDeps{
-		statControl: func() error { return errLoopbackUnsupported },
-		modprobe:    func(context.Context) error { return errLoopbackUnsupported },
-		addNode:     func(int, string) error { return errLoopbackUnsupported },
-		removeNode:  func(int) error { return errLoopbackUnsupported },
-		nodeExists:  func(int) bool { return false },
+		statControl:  func() error { return errLoopbackUnsupported },
+		modprobe:     func(context.Context) error { return errLoopbackUnsupported },
+		addNode:      func(int, string) error { return errLoopbackUnsupported },
+		addShareNode: func(int, string) error { return errLoopbackUnsupported },
+		removeNode:   func(int) error { return errLoopbackUnsupported },
+		nodeExists:   func(int) bool { return false },
 	}
 }

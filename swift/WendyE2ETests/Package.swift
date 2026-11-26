@@ -44,6 +44,7 @@ let package = Package(
             name: "WendyE2ETestingTests",
             dependencies: ["WendyE2ETesting"],
             path: "Tests/WendyE2ETestingTests",
+            resources: [.copy("Fixtures")],
             swiftSettings: swiftSettings
         ),
         .testTarget(

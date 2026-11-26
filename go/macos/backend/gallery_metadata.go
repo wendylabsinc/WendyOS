@@ -15,14 +15,26 @@ import (
 )
 
 type GalleryMetadata struct {
-	Types          []string `json:"types"`
-	Labels         []string `json:"labels"`
-	Complete       bool     `json:"complete"`
-	ContentKinds   []string `json:"contentKinds"`
-	HasVisualMedia bool     `json:"hasVisualMedia"`
+	MaximumCelsius  *float64 `json:"maximumCelsius,omitempty"`
+	NotificationIDs []string `json:"notificationIDs,omitempty"`
+	Campaign        string   `json:"campaign,omitempty"`
+	Types           []string `json:"types"`
+	Labels          []string `json:"labels"`
+	Complete        bool     `json:"complete"`
+	ContentKinds    []string `json:"contentKinds"`
+	HasVisualMedia  bool     `json:"hasVisualMedia"`
 }
 
 func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, error) {
+	return b.galleryMetadataAt(selector, episode, false)
+}
+
+// GalleryMediaAt reads only the manifest; content filtering never needs event logs.
+func (b *Backend) GalleryMediaAt(selector, episode string) (GalleryMetadata, error) {
+	return b.galleryMetadataAt(selector, episode, true)
+}
+
+func (b *Backend) galleryMetadataAt(selector, episode string, mediaOnly bool) (GalleryMetadata, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	conn, release, err := b.galleryAcquire(ctx, selector)
@@ -45,6 +57,10 @@ func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, 
 	if manifest.ID != episode {
 		return GalleryMetadata{}, errors.New("recording identity mismatch")
 	}
+	if mediaOnly {
+		return GalleryMetadata{Types: []string{}, Labels: []string{}, Complete: true,
+			ContentKinds: galleryContentKinds(manifest), HasVisualMedia: galleryHasVisualMedia(manifest)}, nil
+	}
 	var events []byte
 	complete := true
 	for _, file := range manifest.Files {
@@ -66,6 +82,7 @@ func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, 
 		reason = "manual"
 	}
 	metadata := galleryMetadata(reason, events, complete)
+	metadata.Campaign = manifest.Trigger.CampaignName
 	metadata.HasVisualMedia = galleryHasVisualMedia(manifest)
 	metadata.ContentKinds = galleryContentKinds(manifest)
 	return metadata, nil
@@ -73,6 +90,7 @@ func (b *Backend) GalleryMetadataAt(selector, episode string) (GalleryMetadata, 
 
 func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadata {
 	types, labels := map[string]bool{}, map[string]bool{}
+	notificationIDs := map[string]bool{}
 	addLabel := func(label string) {
 		if label != "" && len(label) <= 256 && len(labels) < 128 {
 			labels[label] = true
@@ -92,9 +110,10 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 			Type       string `json:"type"`
 			Name       string `json:"name"`
 			Attributes struct {
-				Task       string   `json:"task"`
-				Maximum    *float64 `json:"max_celsius"`
-				Detections []struct {
+				NotificationID string   `json:"notification_id"`
+				Task           string   `json:"task"`
+				Maximum        *float64 `json:"max_celsius"`
+				Detections     []struct {
 					Label string `json:"label"`
 				} `json:"detections"`
 				Label  string   `json:"label"`
@@ -108,6 +127,9 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 		if row.Type == "event" {
 			types["Event"] = true
 			addLabel(row.Name)
+			if id := row.Attributes.NotificationID; len(id) == 36 && len(notificationIDs) < 256 {
+				notificationIDs[id] = true
+			}
 		}
 		if row.Attributes.Maximum != nil {
 			types["Thermal"] = true
@@ -133,7 +155,7 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 	if len(types) == 0 && complete {
 		types["Other recording"] = true
 	}
-	out := GalleryMetadata{Types: []string{}, Labels: []string{}, Complete: complete}
+	out := GalleryMetadata{Types: []string{}, Labels: []string{}, Complete: complete, MaximumCelsius: recordedThermalMaximum(events)}
 	for kind := range types {
 		out.Types = append(out.Types, kind)
 	}
@@ -142,21 +164,18 @@ func galleryMetadata(reason string, events []byte, complete bool) GalleryMetadat
 		out.Labels = append(out.Labels, label)
 	}
 	sort.Strings(out.Labels)
+	for id := range notificationIDs {
+		out.NotificationIDs = append(out.NotificationIDs, id)
+	}
+	sort.Strings(out.NotificationIDs)
 	return out
 }
 
 // Inspect stored payloads rather than inferring media from the trigger or name.
 func galleryHasVisualMedia(manifest data.Manifest) bool {
-	for _, file := range manifest.Files {
-		p := strings.ToLower(file.Path)
-		media := strings.ToLower(file.MediaType)
-		if strings.HasPrefix(media, "video/") || strings.HasPrefix(media, "image/") {
+	for _, kind := range galleryContentKinds(manifest) {
+		if kind == "Video" || kind == "Images" {
 			return true
-		}
-		for _, ext := range []string{".mp4", ".mov", ".h264", ".h265", ".hevc", ".mjpeg", ".jpg", ".jpeg", ".png"} {
-			if strings.HasSuffix(p, ext) {
-				return true
-			}
 		}
 	}
 	return false
@@ -165,20 +184,35 @@ func galleryHasVisualMedia(manifest data.Manifest) bool {
 func galleryContentKinds(manifest data.Manifest) []string {
 	found := map[string]bool{}
 	for _, f := range manifest.Files {
-		p, media := strings.ToLower(f.Path), strings.ToLower(f.MediaType)
-		switch {
-		case strings.HasPrefix(media, "video/") || strings.HasSuffix(p, ".mp4") || strings.HasSuffix(p, ".h264") || strings.HasSuffix(p, ".h265") || strings.HasSuffix(p, ".hevc") || strings.HasSuffix(p, ".mov") || strings.HasSuffix(p, ".mjpeg"):
+		media := strings.ToLower(strings.TrimSpace(strings.SplitN(f.MediaType, ";", 2)[0]))
+		if strings.HasPrefix(media, "video/") {
 			found["Video"] = true
-		case strings.HasPrefix(media, "image/") || strings.HasSuffix(p, ".jpg") || strings.HasSuffix(p, ".jpeg") || strings.HasSuffix(p, ".png"):
+		}
+		if strings.HasPrefix(media, "image/") {
 			found["Images"] = true
-		case strings.HasPrefix(media, "audio/") || strings.HasSuffix(p, ".wav"):
+		}
+		if strings.HasPrefix(media, "audio/") {
 			found["Audio"] = true
-		case p == "telemetry.jsonl":
+		}
+		if f.Path == "telemetry.jsonl" {
 			found["Device stats"] = true
-		case p == "events.jsonl":
+		}
+		if f.Path == "events.jsonl" {
 			found["Events"] = true
-		case strings.HasPrefix(p, "ros2/") && (strings.HasSuffix(p, ".db3") || strings.HasSuffix(p, ".mcap")):
+		}
+		if strings.HasPrefix(f.Path, "ros2/") {
 			found["Robot data"] = true
+		}
+		if media == "" || media == "application/octet-stream" {
+			p := strings.ToLower(f.Path)
+			switch {
+			case strings.HasSuffix(p, ".mp4"), strings.HasSuffix(p, ".h264"), strings.HasSuffix(p, ".h265"), strings.HasSuffix(p, ".hevc"), strings.HasSuffix(p, ".mov"), strings.HasSuffix(p, ".mjpeg"):
+				found["Video"] = true
+			case strings.HasSuffix(p, ".jpg"), strings.HasSuffix(p, ".jpeg"), strings.HasSuffix(p, ".png"):
+				found["Images"] = true
+			case strings.HasSuffix(p, ".wav"):
+				found["Audio"] = true
+			}
 		}
 	}
 	out := []string{}

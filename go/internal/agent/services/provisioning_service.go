@@ -25,6 +25,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/enrolltoken"
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unenrollproof"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -42,6 +43,7 @@ type provisioningState struct {
 	KeyPEM           string             `json:"keyPem,omitempty"` // read-only: migration only; never written
 	CertPEM          string             `json:"certPem,omitempty"`
 	ChainPEM         string             `json:"chainPem,omitempty"`
+	LitePeerIssuers  string             `json:"litePeerIssuers,omitempty"`
 	PrincipalURI     string             `json:"principalURI,omitempty"`
 	ACMEDirectoryURL string             `json:"acmeDirectoryURL,omitempty"`
 	Unenrollment     *unenrollmentState `json:"unenrollment,omitempty"`
@@ -146,6 +148,7 @@ type ProvisioningService struct {
 	keyPEM              []byte // stored as []byte so it can be zeroed on rotation/shutdown
 	certPEM             string
 	chainPEM            string
+	litePeerIssuers     string
 	principalURI        string
 	acmeDirectoryURL    string
 	CloudDialer         CloudDialer
@@ -176,6 +179,9 @@ func NewProvisioningService(logger *zap.Logger, configPath string, clock ...*tim
 // SetResetCleanupError gates enrollment and completion receipts while the agent
 // removes resources from a completed reset. Clearing a transient cleanup error
 // never clears a failure to verify the durable reset authorization itself.
+//
+// The error is what the gated RPCs tell their callers is failing (see
+// resetcleanup.Refusal), so it should name the resource a person can act on.
 func (s *ProvisioningService) SetResetCleanupError(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -226,7 +232,7 @@ func (s *ProvisioningService) IsProvisioned(_ context.Context, _ *agentpb.IsProv
 		return nil, status.Error(codes.Unavailable, "authorized reset recovery incomplete")
 	}
 	if s.resetCleanupErr != nil {
-		return nil, status.Error(codes.Unavailable, "reset resource cleanup incomplete; agent recovery is retrying")
+		return nil, resetcleanup.Refusal(codes.Unavailable, "reset resource cleanup incomplete; agent recovery is retrying", s.resetCleanupErr)
 	}
 	if s.enrolled {
 		return &agentpb.IsProvisionedResponse{
@@ -261,7 +267,7 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		return nil, status.Error(codes.FailedPrecondition, "authorized reset recovery must finish before enrollment")
 	}
 	if s.resetCleanupErr != nil {
-		return nil, status.Error(codes.FailedPrecondition, "reset resource cleanup must finish before enrollment")
+		return nil, resetcleanup.Refusal(codes.FailedPrecondition, "reset resource cleanup must finish before enrollment", s.resetCleanupErr)
 	}
 	if s.resetRestartPending {
 		return nil, status.Error(codes.FailedPrecondition, "agent must restart after reset before enrollment")
@@ -387,6 +393,7 @@ func (s *ProvisioningService) persistProvisioning(state *provisioningState, keyP
 	s.keyPEM = keyPEM
 	s.certPEM = state.CertPEM
 	s.chainPEM = state.ChainPEM
+	s.litePeerIssuers = state.LitePeerIssuers
 
 	s.logger.Info("Provisioning completed successfully",
 		zap.Int32("org_id", s.orgID),
@@ -490,6 +497,7 @@ func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint
 	s.keyPEM = nil
 	s.certPEM = ""
 	s.chainPEM = ""
+	s.litePeerIssuers = ""
 
 	s.logger.Info("Device unprovisioned; agent will restart into unprovisioned mode")
 
@@ -522,7 +530,7 @@ func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint
 
 	if cleanupErr != nil {
 		s.logger.Error("Enrollment credentials erased but resource cleanup failed", zap.Error(cleanupErr))
-		return nil, status.Error(codes.Unavailable, "enrollment credentials erased; resource cleanup incomplete, restart will retry; reset completion unconfirmed")
+		return nil, resetcleanup.Refusal(codes.Unavailable, "enrollment credentials erased; resource cleanup incomplete, restart will retry; reset completion unconfirmed", cleanupErr)
 	}
 	return &agentpb.UnprovisionResponse{}, nil
 }
@@ -593,6 +601,7 @@ func (s *ProvisioningService) loadState() {
 	s.acmeDirectoryURL = state.ACMEDirectoryURL
 	s.certPEM = state.CertPEM
 	s.chainPEM = state.ChainPEM
+	s.litePeerIssuers = state.LitePeerIssuers
 
 	// Load the private key from device-key.pem.  Fall back to the legacy
 	// KeyPEM field in provisioning.json for one-time migration of existing

@@ -242,6 +242,7 @@ func (t *BubbleTable) SetHeight(height int) {
 	// bubbles recalculates the rendered rows on resize, but leaves the old
 	// scroll offset in place. Reconcile it without moving the selected row.
 	if t.model.Cursor() >= 0 {
+		t.model.MoveUp(0)
 		t.model.MoveDown(0)
 	}
 }

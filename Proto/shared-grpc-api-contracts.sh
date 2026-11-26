@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # One immutable source pin for Go and embedded Swift generation.
-SHARED_GRPC_API_CONTRACTS_REF="a1d6fc3d292fcff219d8d8be9f4d71d7c5373755"
+SHARED_GRPC_API_CONTRACTS_REF="268aca872699ce404fb3354b5286287988be0549"
 # Canonical root files are staged under cloud/ to preserve existing descriptors.
 SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS=(
     "apps.proto"
@@ -25,6 +25,7 @@ SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS=(
     "wendy/agent/services/v2/device_info_service.proto"
     "wendy/agent/services/v2/agent_update_service.proto"
     "wendy/agent/services/v2/os_update_service.proto"
+    "wendy/agent/services/v2/power_service.proto"
     "wendy/agent/services/v2/driver_service.proto"
     "wendy/agent/services/v2/arduino_mcu_service.proto"
     "wendy/agent/services/v2/wifi_service.proto"
@@ -58,6 +59,8 @@ SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS=(
 )
 SHARED_GRPC_API_CONTRACTS_INPUT="https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF"
 
+SHARED_GRPC_API_CONTRACTS_WENDYCOM_PROTO="wendylite/v1/wendy_com_msg.proto"
+
 SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS=(
     "wendycloud/tunnel/v2/tunnel.proto"
     "wendycloud/tunnel/lite/v1/relay.proto"
@@ -66,6 +69,8 @@ SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS=(
 # Exact local sources deferred by the approved migration scope. Each must
 # still match a catalogue source; remove its exception with its source migration.
 SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
+    # Retain enrollment fields 13 and 14 until the shared WendyCom schema includes them.
+    "wendy/lite/wendy_com_msg.proto"
     # Retain the deployed OTLP common dependency closure; remove under WDY-4154.
     "opentelemetry/proto/common/v1/common.proto"
     # Retain the deployed OTLP resource dependency closure; remove under WDY-4154.
@@ -132,6 +137,8 @@ check_shared_grpc_api_contracts_sources() {
         catalogue_proto="$exception"
         if [ ! -f "$catalogue_dir/$catalogue_proto" ]; then
             case "$exception" in
+                wendy/lite/wendy_com_msg.proto)
+                    catalogue_proto="wendylite/v1/wendy_com_msg.proto" ;;
                 cloud/*)
                     case "${exception#cloud/}" in
                         */*) ;;
@@ -150,7 +157,8 @@ check_shared_grpc_api_contracts_sources() {
         alias=""
         # Root catalogue files are staged under cloud/ by legacy consumers.
         case "$proto" in
-            wendylite/v1/sensorlink.proto) alias="wendy/lite/sensorlink.proto" ;;
+            wendylite/v1/sensorlink.proto|wendylite/v1/wendy_com_msg.proto)
+                alias="wendy/lite/${proto##*/}" ;;
             */*) ;;
             *) alias="cloud/$proto" ;;
         esac

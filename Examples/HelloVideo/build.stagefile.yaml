@@ -9,6 +9,10 @@ stages:
         paths: [Package.swift]
       - from: local
         paths: [Sources]
+      # Package.swift declares the LinuxVideoTests target; SwiftPM needs its
+      # directory to resolve the package.
+      - from: local
+        paths: [Tests]
     build:
       lang: swift
       # Sources/CLinuxVideo is a systemLibrary target over <linux/videodev2.h>,

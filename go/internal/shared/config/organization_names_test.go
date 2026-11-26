@@ -1,6 +1,51 @@
 package config
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestOrganizationNameFreshness(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WENDY_CONFIG_DIR", dir)
+	SetOrganizationName("prod:443", "7", "Robotics")
+	if got := FreshOrganizationName("prod:443", "7", time.Hour); got != "Robotics" {
+		t.Fatalf("fresh persisted name = %q", got)
+	}
+	if FreshOrganizationName("other:443", "7", time.Hour) != "" || FreshOrganizationName("prod:443", "8", time.Hour) != "" {
+		t.Fatal("freshness crossed an endpoint or organization boundary")
+	}
+	for _, tc := range []struct {
+		name    string
+		updated time.Time
+	}{
+		{"expired", time.Now().Add(-2 * time.Hour)},
+		{"old cache", time.Time{}},
+		{"clock moved backwards", time.Now().Add(time.Hour)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, "organization-names.json")
+			cache := readOrganizationNameCache(path)
+			cache.UpdatedAt["prod:443"]["7"] = tc.updated
+			data, err := json.Marshal(cache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if FreshOrganizationName("prod:443", "7", time.Hour) != "" {
+				t.Fatal("stale timestamp was considered fresh")
+			}
+			if OrganizationName("prod:443", "7") != "Robotics" {
+				t.Fatal("stale name lost its offline fallback")
+			}
+		})
+	}
+}
 
 func TestOrganizationLabelNamesFirstAndFallsBackToTheID(t *testing.T) {
 	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())

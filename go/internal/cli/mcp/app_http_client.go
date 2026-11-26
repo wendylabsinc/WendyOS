@@ -86,7 +86,7 @@ func (c *appHTTPClient) ListTools(ctx context.Context, req mcpgo.ListToolsReques
 	for {
 		page, err := c.session.ListTools(ctx, params)
 		if err != nil {
-			return nil, err
+			return nil, c.callError(ctx, err)
 		}
 		var converted mcpgo.ListToolsResult
 		if err := appMCPJSON(page, &converted); err != nil {
@@ -110,7 +110,7 @@ func (c *appHTTPClient) CallTool(ctx context.Context, req mcpgo.CallToolRequest)
 	defer done()
 	result, err := c.session.CallTool(ctx, &sdk.CallToolParams{Name: req.Params.Name, Arguments: req.Params.Arguments})
 	if err != nil {
-		return nil, err
+		return nil, c.callError(ctx, err)
 	}
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -131,6 +131,19 @@ func appMCPJSON(from, to any) error {
 		return fmt.Errorf("adapting app MCP response: %w", err)
 	}
 	return nil
+}
+
+// Proxy teardown can reach the SDK before cancellation does, yielding an EOF
+// instead. Preserve cancellation at the adapter boundary, including when the
+// lifetime's AfterFunc has not yet canceled the individual call context.
+func (c *appHTTPClient) callError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if c.ctx.Err() != nil {
+		return c.ctx.Err()
+	}
+	return err
 }
 
 // Calls belong to both the caller and the app generation. Cancel them before

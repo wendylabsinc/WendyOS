@@ -142,7 +142,7 @@ struct DeviceViewfinder: View {
                                 do {
                                     await model.connect(device)
                                     guard model.connected?.id == device.id, model.detailError == nil else {
-                                        throw WendyError(message: model.detailError ?? "Could not connect to the selected device.")
+                                        throw WendyError(message: model.detailError?.message ?? "Could not connect to the selected device.")
                                     }
                                     try await controller.engine.remember(controller.reference(for: device, frame: frame))
                                     registering = nil; remembering = false; error = nil
@@ -299,7 +299,7 @@ private struct DeviceSightDetails: View {
         await model.connect(device)
         guard !Task.isCancelled else { return }
         guard model.connected?.id == device.id, model.detailError == nil else {
-            failure = model.detailError ?? "The device could not be reached."
+            failure = model.detailError?.message ?? "The device could not be reached."
             loading = false
             return
         }

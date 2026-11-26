@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/resetcleanup"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -174,6 +176,153 @@ func TestV2UnenrollResumeHintNamesTheCommand(t *testing.T) {
 	// The device argument is copied into a shell command: keep it one word.
 	if hint := v2UnenrollResumeHint("evil; rm -rf ~", unenrollAsset); !strings.Contains(hint, "--device 'evil; rm -rf ~' --asset-id") {
 		t.Fatalf("unquoted device in hint: %q", hint)
+	}
+}
+
+// erasedUnfinishedReset is what performV2Unenroll returns when the device
+// answers "credentials erased, cleanup incomplete": the reset happened.
+func erasedUnfinishedReset() error {
+	refusal := resetcleanup.Refusal(codes.Unavailable,
+		"enrollment credentials erased; resource cleanup incomplete, restart will retry; reset completion unconfirmed",
+		errors.New(`interface "wendy0" is not owned by wendy-net`))
+	return fmt.Errorf("certificate revoked and asset deleted; local reset unconfirmed after 1 attempt(s): %w", refusal)
+}
+
+// stubClearSavedIdentity puts the command in a terminal (or not), answers the
+// question, and records what was asked and which identities were cleared.
+func stubClearSavedIdentity(t *testing.T, interactive, jsonMode, answer bool, forgetErr error) (asked, cleared *[]string) {
+	t.Helper()
+	prevTerminal, prevJSON, prevConfirm, prevForget := isInteractiveTerminalFn, jsonOutput, confirmFn, forgetResetDeviceIdentityFn
+	t.Cleanup(func() {
+		isInteractiveTerminalFn, jsonOutput, confirmFn, forgetResetDeviceIdentityFn = prevTerminal, prevJSON, prevConfirm, prevForget
+	})
+	asked, cleared = new([]string), new([]string)
+	isInteractiveTerminalFn = func() bool { return interactive }
+	jsonOutput = jsonMode
+	confirmFn = func(question string) bool { *asked = append(*asked, question); return answer }
+	forgetResetDeviceIdentityFn = func(keys ...string) error { *cleared = append(*cleared, keys...); return forgetErr }
+	return asked, cleared
+}
+
+// A device that answers "credentials erased, cleanup incomplete" has been
+// reset. The authenticated reset cannot be retried: the device no longer holds
+// the identity that retry needs, and it serves only its setup port, which this
+// computer refuses while it still has the device's identity saved. Clearing
+// that saved identity is what a finished unenroll does, so in a terminal the
+// CLI asks and does it, instead of naming a command for the user to type.
+func TestV2UnenrollErasedButUnfinishedResetOffersToClearTheSavedIdentity(t *testing.T) {
+	asked, cleared := stubClearSavedIdentity(t, true, false, true, nil)
+
+	err := v2UnenrollErasedUnfinished(erasedUnfinishedReset(), "robot.local", "urn:wendy:device:robot")
+
+	if len(*asked) != 1 || !strings.Contains((*asked)[0], "robot.local") {
+		t.Fatalf("questions asked = %q, want one that names the device", *asked)
+	}
+	if !slices.Equal(*cleared, []string{"urn:wendy:device:robot"}) {
+		t.Fatalf("identities cleared = %q, want the device's own", *cleared)
+	}
+	msg := err.Error()
+	for _, want := range []string{"erased its enrollment", "saved identity for it is cleared", "wendy device enroll --device robot.local"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("outcome %q lacks %q", msg, want)
+		}
+	}
+	for _, unwanted := range []string{"wendy device unpin", "may still hold its enrollment keys", "--asset-id", "--force"} {
+		if strings.Contains(msg, unwanted) {
+			t.Errorf("outcome %q still names a step that is done or cannot run: %q", msg, unwanted)
+		}
+	}
+	// The device's refusal still travels with the outcome, so the recovery
+	// step for an unfinished cleanup is still offered.
+	if len(ResetCleanupRecovery(err)) == 0 {
+		t.Errorf("outcome lost the device's cleanup refusal: %v", err)
+	}
+}
+
+// Declining leaves the saved identity alone and names the command that clears it.
+func TestV2UnenrollErasedButUnfinishedResetNamesTheCommandWhenDeclined(t *testing.T) {
+	asked, cleared := stubClearSavedIdentity(t, true, false, false, nil)
+
+	msg := v2UnenrollErasedUnfinished(erasedUnfinishedReset(), "robot.local", "urn:wendy:device:robot").Error()
+
+	if len(*asked) != 1 || len(*cleared) != 0 {
+		t.Fatalf("asked %d time(s) and cleared %q, want one question and nothing cleared", len(*asked), *cleared)
+	}
+	for _, want := range []string{"erased its enrollment", "wendy device unpin robot.local", "wendy device enroll --device robot.local"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("outcome %q lacks %q", msg, want)
+		}
+	}
+}
+
+// Without a terminal, and under --json, nothing is asked and nothing is
+// cleared: the outcome names both commands.
+func TestV2UnenrollErasedButUnfinishedResetNeverAsksWithoutATerminal(t *testing.T) {
+	for name, mode := range map[string]struct{ interactive, json bool }{
+		"no terminal": {false, false},
+		"json":        {true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			asked, cleared := stubClearSavedIdentity(t, mode.interactive, mode.json, true, nil)
+
+			msg := v2UnenrollErasedUnfinished(erasedUnfinishedReset(), "robot.local", "urn:wendy:device:robot").Error()
+
+			if len(*asked) != 0 || len(*cleared) != 0 {
+				t.Fatalf("asked %q and cleared %q, want neither", *asked, *cleared)
+			}
+			for _, want := range []string{"wendy device unpin robot.local", "wendy device enroll --device robot.local"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("outcome %q lacks %q", msg, want)
+				}
+			}
+			for _, unwanted := range []string{"may still hold its enrollment keys", "--asset-id", "--force"} {
+				if strings.Contains(msg, unwanted) {
+					t.Errorf("outcome %q still offers a reset that cannot run: %q", msg, unwanted)
+				}
+			}
+			// The device argument is copied into shell commands: keep it one word.
+			if msg := v2UnenrollErasedUnfinished(erasedUnfinishedReset(), "evil; rm -rf ~").Error(); !strings.Contains(msg, "wendy device unpin 'evil; rm -rf ~'") {
+				t.Errorf("unquoted device in outcome: %q", msg)
+			}
+		})
+	}
+}
+
+// A clear that fails says so and still names the command, rather than
+// reporting an identity as cleared that is not.
+func TestV2UnenrollErasedButUnfinishedResetReportsAClearThatFailed(t *testing.T) {
+	stubClearSavedIdentity(t, true, false, true, errors.New("config is read-only"))
+
+	msg := v2UnenrollErasedUnfinished(erasedUnfinishedReset(), "robot.local", "urn:wendy:device:robot").Error()
+
+	for _, want := range []string{"failed (config is read-only)", "wendy device unpin robot.local", "wendy device enroll --device robot.local"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("outcome %q lacks %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "is cleared") {
+		t.Errorf("outcome claims a clear that failed: %q", msg)
+	}
+}
+
+// Only a device that says it erased its enrollment is offered the clear. Any
+// other unconfirmed reset may still hold its keys, so it keeps the commands
+// that finish the reset and its saved identity is left alone.
+func TestV2UnenrollNotResetAsksOnlyAfterAnErasedReset(t *testing.T) {
+	asked, cleared := stubClearSavedIdentity(t, true, false, true, nil)
+
+	refused := fmt.Errorf("certificate revoked and asset deleted; local reset unconfirmed after 4 attempt(s): %w", errAgentRefusedReset)
+	got := v2UnenrollNotReset(refused, "robot.local", unenrollAsset, "urn:wendy:device:robot").Error()
+	if want := v2UnenrollUnfinished(refused, "robot.local", unenrollAsset).Error(); got != want {
+		t.Errorf("outcome for a refused reset = %q, want the resume commands %q", got, want)
+	}
+	if len(*asked) != 0 || len(*cleared) != 0 {
+		t.Fatalf("a refused reset asked %q and cleared %q, want neither", *asked, *cleared)
+	}
+
+	v2UnenrollNotReset(erasedUnfinishedReset(), "robot.local", unenrollAsset, "urn:wendy:device:robot")
+	if len(*asked) != 1 || !slices.Equal(*cleared, []string{"urn:wendy:device:robot"}) {
+		t.Fatalf("an erased reset asked %q and cleared %q, want one question and the device's identity cleared", *asked, *cleared)
 	}
 }
 

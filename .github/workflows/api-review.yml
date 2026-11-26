@@ -3,7 +3,6 @@ name: API Review
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    branches: [main]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -42,7 +41,7 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      CLAUDE_MODEL: claude-opus-4-8
+      CLAUDE_MODEL: claude-opus-5-5
     steps:
       - name: Resolve current trusted main automation
         id: trusted-automation
@@ -74,36 +73,16 @@ jobs:
             .github/workflows/integration-test-review.yml
           persist-credentials: false
 
-      - name: Bootstrap batched review automation when absent from base
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Require complete trusted review automation
         run: |
           set -euo pipefail
           scripts_dir="$GITHUB_WORKSPACE/review-automation/.github/scripts"
-          if [[ -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" && -f "$scripts_dir/review_diff.py" ]]; then
-            exit 0
-          fi
-          if [[ -f "$scripts_dir/api_review.py" && ! -f "$scripts_dir/api_review_comment.py" ]] || \
-             [[ ! -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" ]]; then
-            echo "::error::Base revision contains incomplete API review automation."
-            exit 1
-          fi
-
-          # Bootstrap only: the introducing PR predates batched review on base.
-          # Only same-repository writers can reach this step. Download only the
-          # review automation files at the event's immutable head SHA;
-          # application code is never checked out, compiled, or executed.
-          echo "::notice::Bootstrapping API review automation from the same-repository PR"
-          bootstrap_dir="$(mktemp -d)"
-          for filename in api_review.py api_review_test.py api_review_comment.py api_review_comment_test.py review_diff.py review_diff_test.py review_sources.py; do
-            gh api --method GET \
-              "repos/$REPO/contents/.github/scripts/$filename" \
-              -f ref="$EXPECTED_HEAD_SHA" --jq '.content' \
-              | base64 --decode > "$bootstrap_dir/$filename"
-            test -s "$bootstrap_dir/$filename"
+          for filename in api_review.py api_review_comment.py review_diff.py review_sources.py; do
+            if [[ ! -s "$scripts_dir/$filename" ]]; then
+              echo "::error::API Review is not activated on trusted main; no PR-head automation fallback is permitted."
+              exit 1
+            fi
           done
-          mkdir -p "$scripts_dir"
-          cp "$bootstrap_dir/"*.py "$scripts_dir/"
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -244,7 +223,7 @@ jobs:
 
   validate-candidate-tests:
     name: Test candidate API review without credentials
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
@@ -285,7 +264,7 @@ jobs:
       REPO: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number }}
       EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
-      CLAUDE_MODEL: claude-opus-4-8
+      CLAUDE_MODEL: claude-opus-5-5
     steps:
       # SECURITY: Manual dispatch is an explicit writer-authorized candidate
       # validation. Pin execution to the dispatched immutable commit; automatic

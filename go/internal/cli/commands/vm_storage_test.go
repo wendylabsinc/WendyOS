@@ -38,7 +38,7 @@ func TestVMStorageReportsCapacityAndVolumeBeforeDownload(t *testing.T) {
 		}
 		return nil, errors.New("stop before downloading the image")
 	})
-	if err := createVMContext(context.Background(), &out, "test1", "", "", 16, false, 0); err == nil || !requested {
+	if err := createVMContext(context.Background(), &out, "test1", "", "", 16, false, 0, ""); err == nil || !requested {
 		t.Fatalf("create error = %v, request started = %v", err, requested)
 	}
 }
@@ -93,7 +93,7 @@ func TestVMCreateChecksImageSpaceBeforeWriting(t *testing.T) {
 			vmDiskAvailBytes = func(string) (int64, bool) { return 0, true }
 			var err error
 			if mode == "cli" {
-				err = createVMContext(context.Background(), io.Discard, "test1", image, "", 16, false, 0)
+				err = createVMContext(context.Background(), io.Discard, "test1", image, "", 16, false, 0, "")
 			} else {
 				_, err = createMCPSimulator(context.Background(), store, wendymcp.SimulatorCreateOptions{
 					Name: "test1", Profile: "generic", Image: image, DiskGiB: 16,
@@ -112,7 +112,7 @@ func TestVMCreateChecksImageSpaceBeforeWriting(t *testing.T) {
 func TestVMCreateRejectsInvalidCapacityBeforeDownload(t *testing.T) {
 	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	for _, diskGiB := range []int{-1, 0, int(math.MaxInt64>>30) + 1} {
-		if err := createVMContext(context.Background(), io.Discard, "test1", "", "", diskGiB, false, 0); err == nil || !strings.Contains(err.Error(), "VM disk size must be between") {
+		if err := createVMContext(context.Background(), io.Discard, "test1", "", "", diskGiB, false, 0, ""); err == nil || !strings.Contains(err.Error(), "VM disk size must be between") {
 			t.Fatalf("disk %d: %v", diskGiB, err)
 		}
 	}

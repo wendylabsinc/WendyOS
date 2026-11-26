@@ -18,10 +18,10 @@ func TestSaveReplacesTheFileWithAPrivateOne(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("WENDY_CONFIG_DIR", dir)
 	path := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(path, []byte(`{"defaultDevice":"old.local"}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"defaultBuildHost":"old.local"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Save(&Config{DefaultDevice: "new.local"}); err != nil {
+	if err := Save(&Config{DefaultBuildHost: "new.local"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	if runtime.GOOS != "windows" {
@@ -46,8 +46,8 @@ func TestSaveReplacesTheFileWithAPrivateOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DefaultDevice != "new.local" {
-		t.Errorf("DefaultDevice = %q, want new.local", cfg.DefaultDevice)
+	if cfg.DefaultBuildHost != "new.local" {
+		t.Errorf("DefaultBuildHost = %q, want new.local", cfg.DefaultBuildHost)
 	}
 }
 
@@ -64,7 +64,7 @@ func TestSaveWritesThroughASymlinkedConfig(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable here: %v", err)
 	}
-	if err := Save(&Config{DefaultDevice: "through-link.local"}); err != nil {
+	if err := Save(&Config{DefaultBuildHost: "through-link.local"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	info, err := os.Lstat(link)
@@ -100,7 +100,7 @@ func TestSaveWritesThroughADanglingSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable here: %v", err)
 	}
-	if err := Save(&Config{DefaultDevice: "dangling-link.local"}); err != nil {
+	if err := Save(&Config{DefaultBuildHost: "dangling-link.local"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	info, err := os.Lstat(link)
@@ -130,12 +130,12 @@ func TestSaveRefusesToReplaceAReadOnlyConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("WENDY_CONFIG_DIR", dir)
 	path := filepath.Join(dir, "config.json")
-	original := []byte(`{"defaultDevice":"readonly.local"}`)
+	original := []byte(`{"defaultBuildHost":"readonly.local"}`)
 	if err := os.WriteFile(path, original, 0o444); err != nil {
 		t.Fatal(err)
 	}
 
-	err := Save(&Config{DefaultDevice: "new.local"})
+	err := Save(&Config{DefaultBuildHost: "new.local"})
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("Save = %v, want an error wrapping fs.ErrPermission", err)
 	}

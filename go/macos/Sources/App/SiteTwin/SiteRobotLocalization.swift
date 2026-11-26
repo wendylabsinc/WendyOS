@@ -23,6 +23,7 @@ struct RobotFusionRequest: Encodable, Sendable {
     var architecture, furniture: [Double]
     var visual: RobotVisualHint?
     var reference: [RobotObservedSurface]
+    var explore = false
 }
 struct RobotScanPoint: Decodable, Equatable, Sendable {
     var X, Y, Z: Double
@@ -56,6 +57,33 @@ struct RobotSuggestionFreshness {
     func shouldRefresh(observationRevision current: UInt64, now: Date) -> Bool {
         let age = now.timeIntervalSince(received)
         return age >= 30 || (age >= 5 && current != observationRevision)
+    }
+}
+
+// Recovery observes new evidence indefinitely while the map is open. It never
+// grants another movement attempt, and repeated packets cannot consume CPU.
+struct RobotPassiveLocalization {
+    private(set) var active = false
+    private var revision: UInt64?
+    private var cameraSequence: UInt64?
+    private var nextAttempt = Date.distantPast
+
+    mutating func start(after revision: UInt64? = nil, now: Date = .now) {
+        active = true
+        self.revision = revision
+        cameraSequence = nil
+        nextAttempt = now.addingTimeInterval(1)
+    }
+
+    mutating func cancel() { active = false }
+
+    mutating func takeAttempt(revision: UInt64, cameraSequence: UInt64?, now: Date = .now) -> Bool {
+        guard active, now >= nextAttempt,
+              self.revision != revision || (cameraSequence != nil && self.cameraSequence != cameraSequence) else { return false }
+        self.revision = revision
+        self.cameraSequence = cameraSequence
+        nextAttempt = now.addingTimeInterval(2)
+        return true
     }
 }
 
@@ -111,7 +139,14 @@ enum RobotReferenceStore {
 }
 
 @MainActor
-final class RobotVisualLocalization {
+protocol RobotVisualMatching: AnyObject {
+    func load(model: URL, frame: String, revision: UUID) async throws
+    func locate(first: CameraCalibrationFrame, lens: SiteCameraLens?,
+                next: @MainActor () async throws -> CameraCalibrationFrame) async throws -> (RobotVisualHint, SiteCameraLens)
+}
+
+@MainActor
+final class RobotVisualLocalization: RobotVisualMatching {
     private var engine = SiteLocalizationEngine()
     private var loadedFrame = ""
     private var loadedDigest = ""
@@ -159,7 +194,7 @@ final class RobotVisualLocalization {
     func locate(first: CameraCalibrationFrame, lens: SiteCameraLens?, next: @MainActor () async throws -> CameraCalibrationFrame) async throws -> (RobotVisualHint, SiteCameraLens) {
         guard let revision, first.isFresh(at: Date()) else { throw SiteLocalizationError.invalidImage }
         var solution: SiteLocalizationResult
-        do { solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height, revision: revision, lens: lens) }
+        do { solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height, revision: revision, lens: lens, estimated: lens?.measured == false) }
         catch let error as SiteLocalizationError {
             guard case .noSolution = error, lens?.measured != true else { throw error }
             solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height, revision: revision, lens: lens, estimated: true)
@@ -177,9 +212,10 @@ final class RobotVisualLocalization {
         }
         let forward = simd_quatd(vector: verification.pose.rotation).act(SIMD3<Double>(0,0,1))
         guard hypot(forward.x,forward.z) > 0.7 else { throw SiteLocalizationError.invalidResult }
-        // The front camera is a soft position/heading cue. The backend retains
-        // uncertainty for its offset from the body; this is not a body transform.
-        let hint = RobotVisualHint(position: RobotMapPoint(X:b.x,Y:-b.z), yaw:atan2(-forward.z,forward.x),
+        // Convert the nominal Go2 front-camera mount to the body origin. This
+        // remains supporting evidence, verified against LiDAR by the backend.
+        let body = Go2CameraProfile.bodyPosition(camera: verification.pose)
+        let hint = RobotVisualHint(position: RobotMapPoint(X:body.x,Y:-body.z), yaw:atan2(-forward.z,forward.x),
             at:second.received.timeIntervalSince1970, inliers:min(solution.inliers,verification.inliers), residual:max(solution.residual,verification.residual))
         solution.lens.captureMode = "\(second.codec) \(second.width)x\(second.height)"
         return (hint, solution.lens)
@@ -199,13 +235,17 @@ struct RobotLocalizationDiagnostics: View {
                         Text("Best fit: \(best.architecture) wall · \(best.furniture) furniture · \(best.reference) saved matches")
                         Text("\(best.directions) supported surface directions · Camera constraint: \(report.visualUsed ? "verified" : "unavailable")")
                     }
-                    Toggle("Show provisional scan fit", isOn: $model.showScan)
-                    Text("Green: walls · Orange: furniture · Blue: saved scan · Gray: rejected or unmatched")
-                    if report.tracking.selected < 0 { Text("This overlay is a hypothesis. Go2's position is not confirmed.").foregroundStyle(.orange) }
+                    Toggle("Show scan fit", isOn: $model.showScan)
+                        .disabled(!model.canShowScanFit)
+                    if model.canShowScanFit {
+                        Text("Green: walls · Orange: furniture · Blue: saved scan · Gray: rejected or unmatched")
+                    } else {
+                        Text("Scan points stay hidden until a position is suggested or confirmed.")
+                    }
                 }
                 Text(model.visualStatus)
                 Text("Saved robot map: \(model.referenceCount) surfaces")
-                if let lens = model.measuredLens { Text("Measured lens · \(lens.captureMode)") }
+                if let selection = model.lensSelection { Text("\(selection.label) · \(selection.lens.captureMode)") }
                 Text("For better visual references, include the room from Go2's camera height during the iPhone scan. Keep fixed desks and cabinets visible across several views.")
             }.font(.caption2).foregroundStyle(.secondary).padding(.top, 4)
         }.font(.caption)
@@ -234,6 +274,42 @@ struct RobotRotationOffer {
     mutating func dismiss() { offered = true; waitingSince = nil }
 }
 
+enum RobotRotationState: Equatable {
+    case idle, waitingForMeasurements, waitingForClearView
+    case checking(Int), turning(Int), matching(Int), advancing(Int), settling(Int)
+    case stopped(String)
+
+    var title: String? {
+        switch self {
+        case .idle: nil
+        case .waitingForMeasurements: "Waiting for sensors"
+        case .waitingForClearView: "Waiting for a clear view"
+        case .checking: "Checking space to turn"
+        case .turning: "Looking around"
+        case .matching: "Finding Go2 in the room"
+        case .advancing: "Moving to a new viewpoint"
+        case .settling: "Gathering fresh observations"
+        case .stopped: "Discovery stopped"
+        }
+    }
+
+    var detail: String? {
+        switch self {
+        case .idle: nil
+        case .waitingForMeasurements: "Go2 will stay still until fresh LiDAR and odometry arrive, then continue automatically."
+        case .waitingForClearView: "Checking fresh LiDAR and floor coverage. Discovery resumes when safe."
+        case .checking(let turn): "Checking clearance for turn \(turn) of 6."
+        case .turning(let turn): "Turn \(turn) of 6. Keep Go2 in sight and its turning area clear."
+        case .matching(let turn): "Comparing the view after turn \(turn) of 6 with your room."
+        case .advancing(let move): "Viewpoint move \(move) of 3. Go2 chooses a clear nearby viewpoint, turning as needed."
+        case .settling(let move): "Stopped after viewpoint move \(move) of 3. Waiting for fresh LiDAR before matching."
+        case .stopped(let reason): reason
+        }
+    }
+
+    var canRetry: Bool { if case .stopped = self { true } else { false } }
+}
+
 // Only accepting the rotation prompt arms movement. Passive observations never do.
 struct RobotPositionSearch {
     enum Outcome { case exhausted, timedOut }
@@ -242,7 +318,7 @@ struct RobotPositionSearch {
     private(set) var remainingTurns = 0
     private(set) var direction: Int32 = 0
     private var deadline = Date.distantPast
-    mutating func start(now: Date) { active = true; outcome = nil; remainingTurns = 12; direction = 0; deadline = now.addingTimeInterval(300) }
+    mutating func start(now: Date) { active = true; outcome = nil; remainingTurns = 6; direction = 0; deadline = now.addingTimeInterval(300) }
     mutating func resumeAfterCalibration(now: Date) { if active { deadline = now.addingTimeInterval(300) } }
     mutating func shouldRetryLocalization(pose: Bool, scanReady: Bool, measurementsReady: Bool, aligned: Bool,
                                          rematchAfterLook: Bool, attempts: Int, now: Date,

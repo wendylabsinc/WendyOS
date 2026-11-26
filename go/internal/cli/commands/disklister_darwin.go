@@ -217,10 +217,8 @@ func unmountDarwinDisk(devPath string, run preparationCommand) error {
 // unmountBeforeWrite releases the disk before the progress bar starts, so a
 // hung unmount is reported as one instead of as a write stuck at 0%.
 func unmountBeforeWrite(d drive) error {
-	fmt.Printf("Preparing %s for writing...\n", d.DevicePath)
-	if err := stopTargetIndexing(d.DevicePath, runWithTimeout); err != nil {
-		fmt.Printf("Note: could not stop Spotlight on %s: %v\n", d.DevicePath, err)
-	}
+	// Best effort: Spotlight left running only slows the write down.
+	_ = stopTargetIndexing(d.DevicePath, runWithTimeout)
 	return unmountDisk(d.DevicePath)
 }
 

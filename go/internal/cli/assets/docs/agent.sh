@@ -621,6 +621,8 @@ WorkingDirectory=/var/lib/wendy-agent
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
 Restart=always
 RestartSec=2
+# A child killed for memory must not stop the agent.
+OOMPolicy=continue
 LimitNOFILE=65536
 
 [Install]

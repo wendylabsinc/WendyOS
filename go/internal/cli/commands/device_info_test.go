@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -160,13 +161,68 @@ func TestDeviceInfoOptionalStatusFailure(t *testing.T) {
 
 func TestDeviceInfoUncachedVersionFailure(t *testing.T) {
 	wantErr := errors.New("agent unavailable")
-	client := &deviceInfoClient{versionErr: wantErr}
+	client := &deviceInfoClient{versionErr: wantErr, updateStatus: func(ctx context.Context, _ *agentpb.GetOSUpdateStatusRequest) (*agentpb.GetOSUpdateStatusResponse, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
 	_, err := runDeviceInfoWithClient(t, client, nil, true, context.Background())
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want wrapped version RPC error", err)
 	}
-	if client.statusCalls != 0 {
-		t.Fatal("queried optional status after mandatory metadata failed")
+	if client.statusCalls != 1 {
+		t.Fatal("optional request did not finish after mandatory metadata failed")
+	}
+}
+
+func TestDeviceInfoQueriesOverlap(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	transport, err := grpc.NewClient("passthrough:///concurrent-device-info",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, _, reply any, _ *grpc.ClientConn, _ grpc.UnaryInvoker, _ ...grpc.CallOption) error {
+			started <- method
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			switch response := reply.(type) {
+			case *agentpb.GetAgentVersionResponse:
+				response.Version = "concurrent"
+			case *agentpb.GetOSUpdateStatusResponse:
+				response.HasResult = true
+			case *agentpbv2.IsProvisionedResponse:
+				response.ResponseType = &agentpbv2.IsProvisionedResponse_NotProvisioned{NotProvisioned: &agentpbv2.NotProvisionedResponse{}}
+			default:
+				t.Errorf("unexpected query %s", method)
+			}
+			return nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+	conn := &grpcclient.AgentConnection{Conn: transport, AgentService: agentpb.NewWendyAgentServiceClient(transport)}
+	finished := make(chan error, 1)
+	go func() {
+		version, update, organization, err := fetchDeviceInfo(ctx, conn)
+		if err == nil && (version.GetVersion() != "concurrent" || !update.GetHasResult() || organization == nil || organization.ID != "") {
+			err = errors.New("parallel queries lost metadata")
+		}
+		finished <- err
+	}()
+	for range 3 {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("queries did not all start before any completed")
+		}
+	}
+	close(release)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
 	}
 }
 
