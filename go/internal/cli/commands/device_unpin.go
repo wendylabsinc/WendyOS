@@ -94,7 +94,11 @@ func newDeviceUnpinCmd() *cobra.Command {
 					}
 					_, tenant, err := alias.authScope(cfg)
 					if err != nil {
-						return false, err
+						// Without an organization, an explicitly named legacy
+						// hostname can still be cleared from the config store.
+						if _, found := cfg.DevicePinFor(alias.host); alias.tenant.IsValid() || !found {
+							return false, err
+						}
 					}
 					cleared = clearPrivateAliasPins(cfg, alias, tenant)
 				} else {
@@ -124,26 +128,31 @@ func newDeviceUnpinCmd() *cobra.Command {
 	}
 }
 
-// clearPrivateAliasPins uses the same deterministic keys as alias selection.
-// Older unscoped entries only govern aliases in their own organization.
+// clearPrivateAliasPins clears the selected organization's binding and the
+// exact legacy host key if it has no known owner or belongs to that organization.
+// Without a selected organization, only the exact legacy config key is cleared.
 func clearPrivateAliasPins(cfg *config.Config, alias privateDeviceAlias, tenant meshid.Tenant) []clearedPin {
 	var cleared []clearedPin
 	var identityKeys []string
-	scoped := alias.pinKey(tenant)
-	for _, key := range []string{scoped, alias.host} {
+	keys := []string{alias.host}
+	if tenant.IsValid() {
+		keys = []string{alias.pinKey(tenant), alias.host}
+	}
+	for _, key := range keys {
 		pin, ok := cfg.DevicePinFor(key)
 		if !ok {
 			continue
 		}
 		identity := expectedIdentityForPin(pin)
-		inTenant := identity != nil && identity.EntityType == certs.EntityAsset && identity.TenantUUID == tenant.String()
-		if key != scoped && !inTenant {
+		inTenant := tenant.IsValid() && identity != nil && identity.TenantUUID == tenant.String()
+		hasOwner := identity != nil && identity.TenantUUID != ""
+		if key == alias.host && tenant.IsValid() && !inTenant && (alias.tenant.IsValid() || hasOwner) {
 			continue
 		}
 		cfg.ClearDevicePin(key)
 		identityKey := configPinIdentityKey(pin)
 		cleared = append(cleared, clearedPin{store: clearedConfigPin, key: key, identity: identityKey})
-		if inTenant {
+		if inTenant && identity.EntityType == certs.EntityAsset {
 			identityKeys = append(identityKeys, identityKey)
 		}
 	}

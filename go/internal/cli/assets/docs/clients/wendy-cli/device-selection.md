@@ -27,12 +27,11 @@ multiple Cloud contexts, run [`wendy auth use`](./commands/auth/use.md) and
 select the context for the device's enrolled organization. The CLI searches
 for the hostname through mesh, LAN, and Cloud within that organization.
 
-To use the UUID hostname, run
-[`wendy cloud discover --all --json`](./commands/cloud/discover.md). The
-`--all` flag includes enrolled devices that are offline. Set `DEVICE_UUID`
-to the device's `pkiDeviceName`, such as
-`00000000-0000-4000-8000-000000000001`. If that field is missing, use `id` only
-if it is a UUID. Devices with only a numeric asset ID use a Cloud selector.
+To use the UUID hostname, set `DEVICE_UUID` to the device UUID from the
+[Wendy Net services guide's inventory lookup](/docs/guides/wendy-net-services#verify-short-dns-from-the-client-app).
+The lookup requires an active Cloud login and includes offline devices. If
+`pkiDeviceName` is missing, use `id` if it is a UUID. Devices with only a
+numeric asset ID use a Cloud selector.
 
 ```sh
 wendy --device jetson.wendy.internal device info
@@ -43,15 +42,18 @@ Valid enrolled DNS labels keep their repeated hyphens, so `jetson--a` and
 `jetson-a` refer to different names. A legacy display name such as `Jetson A`
 becomes `jetson-a.wendy.internal`.
 
-The CLI gathers LAN, Wendy Net, and Cloud candidates in parallel. Direct LAN
-gets a 500 ms head start before choosing another ready route. When nothing is
-reachable, Wendy Net can take up to 15 seconds to discover a route, including
-over Bluetooth. Friendly names use a bounded discovery window to check for
-conflicts and require a trusted binding from the signed mesh directory,
-authenticated Cloud inventory, or a saved pin. If the mesh directory reports
-that its results are incomplete, the CLI refuses friendly names even when
-Cloud inventory or a saved pin has a match. An omitted peer could share the
-name. Use the UUID form when a name is ambiguous or the directory is incomplete.
+The CLI gathers LAN, Wendy Net, and Cloud candidates in parallel. For UUID
+hostnames, direct LAN gets a 500 ms head start before the CLI chooses another
+ready route. For friendly hostnames, the CLI allows up to 3 seconds for LAN
+and Cloud discovery to check for conflicts. If it still needs a route, Wendy
+Net discovery can run for up to 15 seconds, including over Bluetooth.
+
+Friendly hostnames require a trusted binding from the signed Wendy Net
+directory, authenticated Cloud inventory, or a saved pin. If the directory
+reports incomplete results, it may have omitted another device with the same
+name. In that case, the CLI refuses the name even when Cloud inventory or a
+saved pin has a match. Use the UUID form when a name is ambiguous or the
+directory is incomplete.
 
 For LAN access when Cloud is unavailable, use the credentials for the device's
 organization and choose the hostname form:
@@ -60,8 +62,9 @@ organization and choose the hostname form:
   CLI requires a saved pin for that private hostname in the selected
   organization. An ordinary `.local` pin does not establish the binding.
   To save it, connect once by the exact friendly hostname while Cloud
-  inventory is reachable. The CLI verifies the peer's certificate before
-  saving the binding.
+  inventory is reachable or the device appears in the signed Wendy Net
+  directory. The CLI verifies the peer's certificate before saving the
+  binding.
 - **UUID hostname.** A reachable LAN sighting is enough. The CLI verifies
   the peer's certificate against the UUID in the hostname, so you can connect
   without a prior online connection or saved pin.
@@ -73,9 +76,10 @@ discovery. Switch back to the original organization with `wendy auth use` and
 retry. A pin under the selected organization's key that points to a device in
 another organization also causes a refusal before discovery.
 
-A saved private hostname can still reach its original device while offline.
-If Cloud or Wendy Net reports that the hostname now belongs to a different
-device, the command stops and asks you to verify the change.
+A saved private hostname can still reach its original device while offline
+when the Wendy Net directory is unavailable or complete. If Cloud or Wendy
+Net reports that the hostname now belongs to a different device, the command
+stops and asks you to verify the change.
 
 After verifying an intentional replacement or an invalid saved pin, select
 the intended organization's context and unpin the hostname:
@@ -84,13 +88,15 @@ the intended organization's context and unpin the hostname:
 wendy device unpin jetson.wendy.internal
 ```
 
-Pass the hostname as shown. The CLI derives the pin key for the selected
-organization and clears that binding and any older matching keys owned by that
-organization. To clear a binding in another organization, switch to its
-context first. Check the replacement's UUID with
-`wendy cloud discover --all --json`, then reconnect by short hostname while
-Cloud inventory is reachable so the CLI can verify and save the new binding.
-If the replacement has yet to be enrolled, complete enrollment first.
+The CLI clears the selected organization's binding. It also clears the exact
+legacy hostname pin if it belongs to that organization or has no recorded
+organization UUID. With no enrolled organization selected, the command can
+still clear the exact legacy hostname pin. To clear a scoped binding in another
+organization, switch to its context first. Check the replacement's UUID with
+`wendy cloud discover --all --json`, then reconnect by hostname while Cloud
+inventory is reachable or the device appears in the signed Wendy Net
+directory. If the replacement has yet to be enrolled, complete enrollment
+first.
 
 ## 2. `WENDY_DEVICE`
 

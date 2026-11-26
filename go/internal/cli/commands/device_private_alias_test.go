@@ -558,6 +558,51 @@ func TestPrivateDeviceAliasUnpinKeepsOtherTenant(t *testing.T) {
 	}
 }
 
+func TestPrivateDeviceAliasUnpinLegacyHost(t *testing.T) {
+	const host = "jetson.wendy.internal"
+	otherPrincipal := certs.DeviceSPIFFEURI(privateAliasOtherTenant, privateAliasOtherDevice)
+	scopedKey := privateAliasScopePrefix + privateAliasOtherTenant + "/" + host
+	for _, tc := range []struct {
+		name     string
+		withAuth bool
+		legacy   config.DevicePin
+		keepHost bool
+	}{
+		{name: "signed out", legacy: config.DevicePin{Principal: otherPrincipal}},
+		{name: "no recorded asset", withAuth: true, legacy: config.DevicePin{OrgID: 7}},
+		{name: "numeric asset without tenant", withAuth: true, legacy: config.DevicePin{OrgID: 7, AssetID: "42"}},
+		{name: "owned by another tenant", withAuth: true, legacy: config.DevicePin{Principal: otherPrincipal}, keepHost: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			foreign := config.DevicePin{Principal: otherPrincipal}
+			pins := map[string]config.DevicePin{host: tc.legacy, scopedKey: foreign}
+			if tc.withAuth {
+				privateAliasConfig(t, pins)
+			} else {
+				setTempConfig(t, &config.Config{DevicePins: pins})
+			}
+			seedSPKIPins(t, otherPrincipal, "urn:wendy:org:7:asset:42")
+			output := runUnpin(t, host)
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, found := cfg.DevicePinFor(host); found != tc.keepHost {
+				t.Errorf("legacy pin present = %v, want %v", found, tc.keepHost)
+			}
+			if reported := strings.Contains(output, `Cleared device pin "jetson.wendy.internal"`); reported == tc.keepHost {
+				t.Errorf("unexpected unpin report %q", output)
+			}
+			if got, ok := cfg.DevicePinFor(scopedKey); !ok || got != foreign {
+				t.Errorf("another organization's scoped pin changed: %+v", got)
+			}
+			if got := readSPKIPins(t); len(got) != 2 {
+				t.Errorf("unrelated certificate key pins changed: %v", got)
+			}
+		})
+	}
+}
+
 func TestPrivateDeviceAliasScopedSelectorRetainsOrganization(t *testing.T) {
 	const host = "jetson.wendy.internal"
 	privateAliasConfig(t, nil)
