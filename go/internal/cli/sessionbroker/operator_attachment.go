@@ -32,32 +32,42 @@ type operatorAttachment struct {
 }
 
 func configuredOperatorCertificate(spec Spec) (config.CertificateInfo, error) {
+	certificate, _, err := configuredOperatorMaterial(spec)
+	return certificate, err
+}
+
+func configuredOperatorMaterial(spec Spec) (config.CertificateInfo, string, error) {
 	cfg, err := loadConfig()
 	if err != nil {
-		return config.CertificateInfo{}, err
+		return config.CertificateInfo{}, "", err
 	}
 	for _, auth := range cfg.Auth {
 		for _, candidate := range auth.Certificates {
 			operator, err := operatorPrincipal(candidate)
 			if err == nil && operator.Principal() == spec.Operator.Principal && certificateFingerprint(candidate) == spec.CertFingerprint {
-				return candidate, nil
+				return candidate, auth.PKIEndpoint, nil
 			}
 		}
 	}
-	return config.CertificateInfo{}, errOperatorCredentialsChanged
+	return config.CertificateInfo{}, "", errOperatorCredentialsChanged
 }
 
 func (a *operatorAttachment) open(ctx context.Context) (*operatorAttachmentState, error) {
 	if err := operatorRecipeCurrent(a.spec); err != nil {
 		return nil, err
 	}
-	certificate, err := configuredOperatorCertificate(a.spec)
+	certificate, pkiEndpoint, err := configuredOperatorMaterial(a.spec)
 	if err != nil {
 		return nil, err
 	}
 	// Open reloads the profile trust/pin state and persists a new revision before
 	// dialing. Neither an older key snapshot nor an old proof is reused.
 	options := operatormesh.Options{StateDirectory: a.directory, Certificate: certificate}
+	if pkiEndpoint != "" {
+		discovery, cancel := context.WithTimeout(ctx, 2*time.Second)
+		options.LiteIssuerChain, _ = operatormesh.LiteIssuers(discovery, a.directory, pkiEndpoint, certificate)
+		cancel()
+	}
 	options.ReportCarrierFailure = operatorCarrierReporter(ctx)
 	session, err := openOperatorSession(ctx, options)
 	if err != nil {

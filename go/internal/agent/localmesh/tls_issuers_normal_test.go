@@ -5,7 +5,47 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 )
+
+func TestPinnedPeerIssuerRecoveryRequiresShortenedALPN(t *testing.T) {
+	root := mintIssued(t, "root", "", nil)
+	clientCA := mintIssued(t, "client CA", "", &root)
+	serverCA := mintIssued(t, "server CA", "", &root)
+	a := mintIssued(t, "client", testPrincipal(testTenantUUID, testDeviceAID), &clientCA)
+	b := mintIssued(t, "server", testPrincipal(testTenantUUID, testDeviceBID), &serverCA)
+	clientCredentials := issuedCredentials(t, a, a.pem+clientCA.pem, root.pem)
+	serverCredentials := issuedCredentials(t, b, b.pem+serverCA.pem, root.pem)
+
+	for _, shorten := range []bool{false, true} {
+		clientCredentials.SetTLSRecovery(new(meshalpn.Recovery))
+		client, err := clientCredentials.PeerTLS(serverCredentials.Device)
+		if err != nil {
+			t.Fatal(err)
+		}
+		protocol := LinkALPN
+		if shorten {
+			protocol = client.NextProtos[0]
+			if _, prefix := meshalpn.Decode(protocol); len(prefix) == 0 {
+				t.Fatal("test setup did not offer a shortening alias")
+			}
+		}
+		// Omit the issuer on both variants to distinguish verification
+		// rejection from the recovery decision.
+		leaf := serverCredentials.Certificate
+		leaf.Certificate = leaf.Certificate[:1]
+		server := &tls.Config{Certificates: []tls.Certificate{leaf}, NextProtos: []string{protocol}, MinVersion: tls.VersionTLS13}
+		result := rootTLSRoundtrip(client, server)
+		if !certs.IsIssuerPathError(result.err) || result.client.NegotiatedProtocol != protocol {
+			t.Fatalf("ALPN %q produced %q and %v, want issuer-path rejection", protocol, result.client.NegotiatedProtocol, result.err)
+		}
+		if cooledDown := len(clientCredentials.ClientProtocols(LinkALPN)) == 1; cooledDown != shorten {
+			t.Fatalf("cooldown = %t after ALPN %q, want %t", cooledDown, protocol, shorten)
+		}
+	}
+}
 
 // Exercise actual certificate messages, rather than merely testing callbacks.
 // Both shared and distinct issuing paths are ordinary valid enrollments.

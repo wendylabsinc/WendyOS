@@ -4,8 +4,23 @@ import (
 	"crypto/tls"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/estcacerts"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 )
+
+func (c *Credentials) SetLiteIssuerChain(bundle, trustPEM string, now time.Time) error {
+	issuers, err := certs.ParseCertsFromPEM([]byte(bundle))
+	if err != nil {
+		return err
+	}
+	path, window, err := estcacerts.LitePathForEnrolledPeer(issuers, trustPEM, c.Device.Tenant().String(), now)
+	if err != nil {
+		return err
+	}
+	c.issuerMaterial.SetLiteIssuers(path, window.NotBefore, window.NotAfter)
+	return nil
+}
 
 // SetTLSRecovery selects the runtime sharing issuer-hint recovery. Call before
 // using these credentials; nil retains the normal process-wide controller.

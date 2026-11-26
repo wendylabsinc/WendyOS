@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
 	clitimesync "github.com/wendylabsinc/wendy/go/internal/cli/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -335,6 +336,11 @@ func runOIDCLogin(ctx context.Context, opts oidcLoginOptions, hooks oidcLoginHoo
 	hooks.print(tui.SuccessMessage(fmt.Sprintf("Signed in to %s. API session and certificates saved.", issuerRealm(effectiveIssuer))))
 	hooks.print(sessionKeyLine(keyAlgorithmName(key.Public()), "OIDC"))
 	clitimesync.CacheProof(ctx)
+	if directory, err := config.ConfigDir(); err == nil {
+		discovery, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, _ = operatormesh.LiteIssuers(discovery, directory, authEntry.PKIEndpoint, certInfo)
+		cancel()
+	}
 	return nil
 }
 

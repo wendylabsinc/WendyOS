@@ -2290,21 +2290,23 @@ func (x *WendyComEnrollmentChallengeParams) GetStatusOnly() bool {
 }
 
 type WendyComEnrollmentChallenge struct {
-	state                      protoimpl.MessageState `protogen:"open.v1"`
-	NonceHex                   string                 `protobuf:"bytes,1,opt,name=nonce_hex,json=nonceHex,proto3" json:"nonce_hex,omitempty"`
-	Enrolled                   bool                   `protobuf:"varint,2,opt,name=enrolled,proto3" json:"enrolled,omitempty"`
-	UsbTrustSupported          bool                   `protobuf:"varint,3,opt,name=usb_trust_supported,json=usbTrustSupported,proto3" json:"usb_trust_supported,omitempty"`  // accepts explicitly provisioned CA bundles
-	RoughtimeSupported         bool                   `protobuf:"varint,4,opt,name=roughtime_supported,json=roughtimeSupported,proto3" json:"roughtime_supported,omitempty"` // sync_time verifies device-nonce-bound replies
-	BuiltinRootsReady          bool                   `protobuf:"varint,5,opt,name=builtin_roots_ready,json=builtinRootsReady,proto3" json:"builtin_roots_ready,omitempty"`  // device and HTTPS CA bundles configured
-	BuiltinTsaRootsReady       bool                   `protobuf:"varint,6,opt,name=builtin_tsa_roots_ready,json=builtinTsaRootsReady,proto3" json:"builtin_tsa_roots_ready,omitempty"`
-	EnrollmentResetSupported   bool                   `protobuf:"varint,7,opt,name=enrollment_reset_supported,json=enrollmentResetSupported,proto3" json:"enrollment_reset_supported,omitempty"`             // physical USB reset with current nonce
-	CloudEnrollmentSupported   *bool                  `protobuf:"varint,8,opt,name=cloud_enrollment_supported,json=cloudEnrollmentSupported,proto3,oneof" json:"cloud_enrollment_supported,omitempty"`       // absent on older firmware
-	MldsaVerificationSupported *bool                  `protobuf:"varint,9,opt,name=mldsa_verification_supported,json=mldsaVerificationSupported,proto3,oneof" json:"mldsa_verification_supported,omitempty"` // wolfSSL ML-DSA CA and peer certificate verification
-	DeviceId                   string                 `protobuf:"bytes,10,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`                                                               // configured PKI identity; distinct from the USB hardware ID
-	TenantId                   string                 `protobuf:"bytes,11,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UuidEnrollmentSupported    bool                   `protobuf:"varint,12,opt,name=uuid_enrollment_supported,json=uuidEnrollmentSupported,proto3" json:"uuid_enrollment_supported,omitempty"` // UUID discovery and enrollment identity reporting
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	state                          protoimpl.MessageState `protogen:"open.v1"`
+	NonceHex                       string                 `protobuf:"bytes,1,opt,name=nonce_hex,json=nonceHex,proto3" json:"nonce_hex,omitempty"`
+	Enrolled                       bool                   `protobuf:"varint,2,opt,name=enrolled,proto3" json:"enrolled,omitempty"`
+	UsbTrustSupported              bool                   `protobuf:"varint,3,opt,name=usb_trust_supported,json=usbTrustSupported,proto3" json:"usb_trust_supported,omitempty"`  // accepts explicitly provisioned CA bundles
+	RoughtimeSupported             bool                   `protobuf:"varint,4,opt,name=roughtime_supported,json=roughtimeSupported,proto3" json:"roughtime_supported,omitempty"` // sync_time verifies device-nonce-bound replies
+	BuiltinRootsReady              bool                   `protobuf:"varint,5,opt,name=builtin_roots_ready,json=builtinRootsReady,proto3" json:"builtin_roots_ready,omitempty"`  // device and HTTPS CA bundles configured
+	BuiltinTsaRootsReady           bool                   `protobuf:"varint,6,opt,name=builtin_tsa_roots_ready,json=builtinTsaRootsReady,proto3" json:"builtin_tsa_roots_ready,omitempty"`
+	EnrollmentResetSupported       bool                   `protobuf:"varint,7,opt,name=enrollment_reset_supported,json=enrollmentResetSupported,proto3" json:"enrollment_reset_supported,omitempty"`             // physical USB reset with current nonce
+	CloudEnrollmentSupported       *bool                  `protobuf:"varint,8,opt,name=cloud_enrollment_supported,json=cloudEnrollmentSupported,proto3,oneof" json:"cloud_enrollment_supported,omitempty"`       // absent on older firmware
+	MldsaVerificationSupported     *bool                  `protobuf:"varint,9,opt,name=mldsa_verification_supported,json=mldsaVerificationSupported,proto3,oneof" json:"mldsa_verification_supported,omitempty"` // wolfSSL ML-DSA CA and peer certificate verification
+	DeviceId                       string                 `protobuf:"bytes,10,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`                                                               // configured PKI identity; distinct from the USB hardware ID
+	TenantId                       string                 `protobuf:"bytes,11,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UuidEnrollmentSupported        bool                   `protobuf:"varint,12,opt,name=uuid_enrollment_supported,json=uuidEnrollmentSupported,proto3" json:"uuid_enrollment_supported,omitempty"`                              // UUID discovery and enrollment identity reporting
+	MldsaPeerVerificationSupported *bool                  `protobuf:"varint,13,opt,name=mldsa_peer_verification_supported,json=mldsaPeerVerificationSupported,proto3,oneof" json:"mldsa_peer_verification_supported,omitempty"` // peer verification independent of issuance profile
+	MeshTrustSupported             bool                   `protobuf:"varint,14,opt,name=mesh_trust_supported,json=meshTrustSupported,proto3" json:"mesh_trust_supported,omitempty"`                                             // provision tenant mesh trust during enrollment
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
 }
 
 func (x *WendyComEnrollmentChallenge) Reset() {
@@ -2417,6 +2419,20 @@ func (x *WendyComEnrollmentChallenge) GetTenantId() string {
 func (x *WendyComEnrollmentChallenge) GetUuidEnrollmentSupported() bool {
 	if x != nil {
 		return x.UuidEnrollmentSupported
+	}
+	return false
+}
+
+func (x *WendyComEnrollmentChallenge) GetMldsaPeerVerificationSupported() bool {
+	if x != nil && x.MldsaPeerVerificationSupported != nil {
+		return *x.MldsaPeerVerificationSupported
+	}
+	return false
+}
+
+func (x *WendyComEnrollmentChallenge) GetMeshTrustSupported() bool {
+	if x != nil {
+		return x.MeshTrustSupported
 	}
 	return false
 }
@@ -4373,7 +4389,7 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x1bWendyComGetDeviceInfoParams\"D\n" +
 	"!WendyComEnrollmentChallengeParams\x12\x1f\n" +
 	"\vstatus_only\x18\x01 \x01(\bR\n" +
-	"statusOnly\"\x9c\x05\n" +
+	"statusOnly\"\xc4\x06\n" +
 	"\x1bWendyComEnrollmentChallenge\x12\x1b\n" +
 	"\tnonce_hex\x18\x01 \x01(\tR\bnonceHex\x12\x1a\n" +
 	"\benrolled\x18\x02 \x01(\bR\benrolled\x12.\n" +
@@ -4387,9 +4403,12 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\tdevice_id\x18\n" +
 	" \x01(\tR\bdeviceId\x12\x1b\n" +
 	"\ttenant_id\x18\v \x01(\tR\btenantId\x12:\n" +
-	"\x19uuid_enrollment_supported\x18\f \x01(\bR\x17uuidEnrollmentSupportedB\x1d\n" +
+	"\x19uuid_enrollment_supported\x18\f \x01(\bR\x17uuidEnrollmentSupported\x12N\n" +
+	"!mldsa_peer_verification_supported\x18\r \x01(\bH\x02R\x1emldsaPeerVerificationSupported\x88\x01\x01\x120\n" +
+	"\x14mesh_trust_supported\x18\x0e \x01(\bR\x12meshTrustSupportedB\x1d\n" +
 	"\x1b_cloud_enrollment_supportedB\x1f\n" +
-	"\x1d_mldsa_verification_supported\"j\n" +
+	"\x1d_mldsa_verification_supportedB$\n" +
+	"\"_mldsa_peer_verification_supported\"j\n" +
 	"\x1dWendyComEnrollmentResetParams\x12,\n" +
 	"\x12expected_device_id\x18\x01 \x01(\tR\x10expectedDeviceId\x12\x1b\n" +
 	"\tnonce_hex\x18\x02 \x01(\tR\bnonceHex\"L\n" +
