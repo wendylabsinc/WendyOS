@@ -81,11 +81,6 @@ func FriendlyLabel(name string) (string, bool) {
 	if len(name) == 0 || len(name) > 63 || name[0] < 'a' || name[0] > 'z' || name[len(name)-1] == '-' {
 		return "", false
 	}
-	for _, c := range name {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
-			return "", false
-		}
-	}
 	if strings.HasPrefix(name, "device-") {
 		if _, err := meshid.ParseDeviceUUID(strings.TrimPrefix(name, "device-")); err == nil {
 			return "", false

@@ -556,7 +556,7 @@ registered name from their authenticated Cloud roster in the existing manifest
 name field. Republished names use the durable revision gate. An empty name
 withdraws the alias while preserving the route.
 Custom DNS resolvers implement
-[`mesh.ExactResolver`](https://github.com/wendylabsinc/WendyOS/blob/4ffb109c56e29ecc66b389ac2d19066922b38528/go/internal/agent/mesh/dns.go#L45)
+[`mesh.ExactResolver`](../mesh/dns.go)
 to answer short friendly names. The UUID form uses the enrolled identity and
 VIP table. All supported UUID hostname spellings for a device share one VIP
 allocation.

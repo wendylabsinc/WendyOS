@@ -160,9 +160,11 @@ device-<device-uuid>.wendy.internal:18080
 ```
 
 The friendly name is scoped to the client's enrolled organization. Current
-device names are lowercase DNS labels; hyphens are preserved, so `jetson-a` and
-`jetson--a` name different devices. The `device-<uuid>` form is reserved for
-identity-based lookup.
+device names are DNS labels of up to 63 characters. They start with a
+lowercase letter, use lowercase letters, digits, and hyphens, and end with a
+letter or digit. Hyphens are preserved, so `jetson-a` and `jetson--a` name
+different devices. The `device-<uuid>` form is reserved for identity-based
+lookup.
 
 The agent checks the signed Wendy Net directory and the organization's
 authenticated Cloud roster for short friendly names. Older agents publish a
@@ -172,13 +174,12 @@ discovery `cloud-name` TXT record after their first roster sync. They retain the
 last confirmed name during an outage, including after reboot. The LAN
 `name` record continues to carry the local device name, which can change
 immediately on a local rename. If the device has never confirmed a Cloud
-name, use its UUID or local hostname where supported. Friendly Cloud DNS
-labels start with a letter. A missing, invalid, or ambiguous Cloud label
-does not change the local advertisement.
+name, use its UUID or local hostname where supported. A missing, invalid, or
+ambiguous Cloud label leaves the local advertisement unchanged.
 
 One unambiguous binding from either source is enough. If both sources bind the
-name, they must identify the same device. A resolved name still needs a
-reachable Wendy Net application route.
+name, they must identify the same device. Follow the
+[Wendy Net setup guide](/docs/guides/wendy-net) to establish an application route.
 
 The calling host allocates virtual IPs from the app's `serviceCIDR`, the
 `10.99.0.0/16` range configured in [step 1](#1-give-the-publishing-app-wendy-net-access).
@@ -222,14 +223,16 @@ getent ahostsv4 "device-${DEVICE_UUID}.wendy.internal"
 
 Expect an address in `10.99.0.0/16`. The resolver allocates a virtual
 address for a well-formed UUID even if no device has that UUID. Verify the
-UUID against the inventory and connect to the published port to check
+device in the inventory and connect to the published port to confirm
 reachability. If the lookup returns no address, check client enrollment,
 network mode, and short DNS support in the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
 
 For an offline friendly-name check, verify the destination agent's support
 for Cloud-registered name publication before running the next command. Run
-`wendy device info` against the destination and check its Agent Version in
-the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
+`wendy device info` against the destination to find its **Agent Version**.
+In the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases),
+look for the release that introduced short device DNS and Cloud-registered
+name publication (`cloud-name`) and compare it with the installed version.
 
 Once the UUID lookup works, check the destination's friendly name. Replace
 `jetson` in the examples with the target's enrolled DNS label.
