@@ -40,4 +40,27 @@ struct `HTTP app fixture guards` {
             }
         }
     }
+    @Test
+    func `keyless inventory permits only its exact target warning`() throws {
+        let target = "dedicated-board.local"
+        let notice =
+            "\(target) is not enrolled: its identity was not verified against a saved device binding, and this connection is not encrypted.\n"
+        let ordinary = try HTTPAppFixture(device: target, mode: .prebuiltCompose)
+        let keyless = try HTTPAppFixture(
+            device: target,
+            mode: .prebuiltCompose,
+            allowKeylessInventoryWarning: true
+        )
+        #expect(ordinary.inventoryDiagnosticIsAllowed(""))
+        #expect(!ordinary.inventoryDiagnosticIsAllowed(notice))
+        #expect(keyless.inventoryDiagnosticIsAllowed(""))
+        #expect(keyless.inventoryDiagnosticIsAllowed(notice))
+        #expect(!keyless.inventoryDiagnosticIsAllowed(notice + "unexpected diagnostic\n"))
+        #expect(
+            !keyless.inventoryDiagnosticIsAllowed(
+                notice.replacingOccurrences(of: target, with: "other-board.local")
+            )
+        )
+    }
+
 }

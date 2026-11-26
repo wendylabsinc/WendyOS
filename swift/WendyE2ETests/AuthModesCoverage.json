@@ -1,0 +1,650 @@
+{
+  "formatVersion": 1,
+  "meaning": "Coverage declarations, not pass results. Test results, skips, known issues and command receipts come from the normal E2E attempt artifacts. A passed subtest establishes only its listed tier and assertions.",
+  "frozenMethodMatrix": "../../go/internal/agent/interceptor/testdata/auth-modes-matrix.json",
+  "scenarios": [
+    {
+      "id": "A01",
+      "implementedLocalAssertions": [
+        "local ML-DSA-65 SPKI and independent SHA-256 fingerprint",
+        "fresh-process stability and distinct config identity",
+        "0600 mode, unsafe/unreadable refusal and identity preservation",
+        "complete public output accepted from file and stdin"
+      ],
+      "implementedLiveAssertions": [
+        "local fingerprint preserved during live enrollment"
+      ],
+      "noExecutableAssertion": [
+        "human sign-in itself is externally provisioned, not automated"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/WendyAuthLocalKeyTests.swift",
+          "name": "A01 keeps one local key independently of Cloud sign-in"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A01 accepts whole public output by file and stdin"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A01 preserves an unreadable local identity"
+        }
+      ]
+    },
+    {
+      "id": "A02",
+      "implementedLocalAssertions": [
+        "Open shape and management refusals without trusted state"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "physical Open app read, advertised TXT and access-file absence"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A02 reports Open and refuses key management without creating access state"
+        }
+      ]
+    },
+    {
+      "id": "A03",
+      "implementedLocalAssertions": [
+        "normal executable close, sole owner, fresh-process role, keyless off, duplicate close refusal"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "physical access-file mode and first-owner boot observation outside USB"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A03 makes the closing computer its sole owner across fixture restart"
+        }
+      ]
+    },
+    {
+      "id": "A04",
+      "implementedLocalAssertions": [
+        "close/open/remove nonterminal consent from valid states",
+        "real PTY No from all three valid states",
+        "explicit yes executes"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "interactive EOF is not established by SIGHUP or nonterminal stdin closure"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A04 requires nonterminal consent from each valid starting state"
+        }
+      ]
+    },
+    {
+      "id": "A05",
+      "implementedLocalAssertions": [
+        "untrusted fingerprint and owner guidance, no trusted fingerprints disclosed",
+        "same refusal with usable synthetic Cloud certificate"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "physical plaintext GetAccess observation"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A05 refuses an untrusted key even with a stored Cloud certificate"
+        }
+      ]
+    },
+    {
+      "id": "A06",
+      "implementedLocalAssertions": [
+        "owner/operator/viewer reconnect, labels and current-key rendering",
+        "all nonowner access/key mutation refusals with unchanged trusted state",
+        "normal JSON list verifies AddedBy, exact role and current-key identity"
+      ],
+      "implementedLiveAssertions": [
+        "three roles and recovery owner during device setup"
+      ],
+      "noExecutableAssertion": [],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A06 gives each trusted key its role and refuses nonowner key management"
+        }
+      ]
+    },
+    {
+      "id": "A07",
+      "implementedLocalAssertions": [
+        "duplicate addition preserves role",
+        "remove and re-add same key changes role",
+        "unknown fingerprint preserves other keys"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "role-changed key read/start effects are admission-only"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A07 changes a role by removing and adding the same public key"
+        }
+      ]
+    },
+    {
+      "id": "A08",
+      "implementedLocalAssertions": [
+        "sole-owner removal refused",
+        "second owner removes first; fresh old key refused and remaining owner usable"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A08 retains a usable owner after refusing removal of the last owner"
+        }
+      ]
+    },
+    {
+      "id": "A09",
+      "implementedLocalAssertions": [
+        "actual inert log stream enters before removal",
+        "fixture restart ends stream; removed key cannot reconnect; owner reconnects"
+      ],
+      "implementedLiveAssertions": [
+        "real owned-app log stream, bounded termination after key removal, new connection refusal, independent owner"
+      ],
+      "noExecutableAssertion": [],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesDeviceTests.swift",
+          "name": "A09 removing an operator ends its live stream and new access"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A09 ends an actual stream when the isolated fixture honors restart"
+        }
+      ]
+    },
+    {
+      "id": "A10",
+      "implementedLocalAssertions": [
+        "five unsupported algorithms: normal CLI add and raw Open CloseDevice",
+        "private PEM, junk, missing/custom roles",
+        "synthetic peer control-character rendering",
+        "129-byte/control labels refused; 128-byte label round-trips"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "invalid Agent role-code assertions remain covered only through role parsing and policy checks"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A10 refuses unsupported algorithms and malformed input without adding keys"
+        }
+      ]
+    },
+    {
+      "id": "A11",
+      "implementedLocalAssertions": [
+        "207 independently frozen rows, all six caller classes, 1242 handler-entry decisions",
+        "descriptor-selected unary and all streaming shapes, exact descriptor equality"
+      ],
+      "implementedLiveAssertions": [
+        "ordinary app operations only; no claim of all-method hardware coverage"
+      ],
+      "noExecutableAssertion": [
+        "all 207 hardware rows remain unverified by this PR run; inspect each matrix row and live command recordings separately"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A11 admits every frozen method for exactly its assigned callers"
+        }
+      ]
+    },
+    {
+      "id": "A12",
+      "implementedLocalAssertions": [
+        "viewer method admission and denial across frozen matrix"
+      ],
+      "implementedLiveAssertions": [
+        "viewer lists owned app, reads logs/device info; start/stop/remove refusals preserve HTTP instance and trusted list",
+        "viewer normal prebuilt deployment refused; independent inventory and existing HTTP instance unchanged"
+      ],
+      "noExecutableAssertion": [],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesDeviceTests.swift",
+          "name": "A12 A13 viewer reads and operator manages a real HTTP app"
+        }
+      ]
+    },
+    {
+      "id": "A13",
+      "implementedLocalAssertions": [
+        "registry TLS proxy connection and keyless route selection"
+      ],
+      "implementedLiveAssertions": [
+        "ordinary prebuilt app deploy/list/logs/stop/start/remove with independent HTTP identity and process evidence"
+      ],
+      "noExecutableAssertion": [
+        "physical image-push TLS registry path and refused viewer/unknown/plaintext pushes; prebuilt Compose is not that proof"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesDeviceTests.swift",
+          "name": "A12 A13 viewer reads and operator manages a real HTTP app"
+        }
+      ]
+    },
+    {
+      "id": "A14",
+      "implementedLocalAssertions": [
+        "owner-only shell/hook/updater/OS/driver/MCU/build-host handler admission, no privileged handler effects"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "physical privileged operations deliberately excluded from this run scope"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A14 reserves privileged method admission and root hooks for owners"
+        }
+      ]
+    },
+    {
+      "id": "A15",
+      "implementedLocalAssertions": [
+        "deployment entitlement gates and exec/attach entitlement gates using existing passive defensive fixtures",
+        "root-hook metadata admission"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "container runtime/marker non-effects are not established by pure admission"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A15 checks deployment and exec privileges beyond method admission"
+        }
+      ]
+    },
+    {
+      "id": "A16",
+      "implementedLocalAssertions": [
+        "all 207 admin socket admissions/denials match operator column"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "admin-entitled app socket mounting and owned-app lifecycle inside an actual container"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A16 limits admin socket admission to operator authority"
+        }
+      ]
+    },
+    {
+      "id": "A17",
+      "implementedLocalAssertions": [
+        "forced-recovery gate before inert scheduler; owner scheduling and normal-mode scheduler"
+      ],
+      "implementedLiveAssertions": [
+        "optional normal operator reboot with two valid, different Linux boot IDs read through the authorized owner CLI shell; viewer refusal and role persistence"
+      ],
+      "noExecutableAssertion": [
+        "forced-recovery hardware is deliberately not requested"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesDeviceTests.swift",
+          "name": "A17 operator reboots and all roles survive a changed Linux boot ID"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A17 refuses nonowner forced recovery before the isolated scheduler"
+        }
+      ]
+    },
+    {
+      "id": "A18",
+      "implementedLocalAssertions": [
+        "fixed 20-method keyless set plus public GetAccess",
+        "untrusted no-role CLI state; trusted keylist denial",
+        "registry keyless routing",
+        "read-only app readiness retries only classified transient transport errors; never an authorization/setup failure or mutation"
+      ],
+      "implementedLiveAssertions": [
+        "real keyless prebuilt deploy/logs/stop/start/remove and independent HTTP"
+      ],
+      "noExecutableAssertion": [
+        "actual plain-HTTP registry image upload"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesDeviceTests.swift",
+          "name": "A18 A19 opens and closes the ordinary app set without losing keys"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A18 and A19 restore roles and keyless off across fixture restarts"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A18 A19 retries only transient read-only app failures"
+        }
+      ]
+    },
+    {
+      "id": "A19",
+      "implementedLocalAssertions": [
+        "off state and all trusted roles survive multiple fixture restarts",
+        "read-only app readiness retries only classified transient transport errors; never an authorization/setup failure or mutation"
+      ],
+      "implementedLiveAssertions": [
+        "real serving app, trusted list and roles preserved when switching off; stranger refused"
+      ],
+      "noExecutableAssertion": [
+        "already-open keyless stream termination and off-state registry push refusal",
+        "persistence of keyless off across a real subsequent reboot"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesDeviceTests.swift",
+          "name": "A18 A19 opens and closes the ordinary app set without losing keys"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A18 and A19 restore roles and keyless off across fixture restarts"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A18 A19 retries only transient read-only app failures"
+        }
+      ]
+    },
+    {
+      "id": "A20",
+      "implementedLocalAssertions": [
+        "discovery row/glyph/legend and alias pin isolation using existing defensive fixtures",
+        "DNS-SD parser refuses wrong host, wrong shape, missing or conflicting data"
+      ],
+      "implementedLiveAssertions": [
+        "target-only DNS-SD resolution verifies Open, Closed, Enrolled and returned Closed against the selected hostname; macOS discovery opt-in"
+      ],
+      "noExecutableAssertion": [
+        "physical BLE absence and public discover JSON/table rendering remain without live assertions"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesDeviceTests.swift",
+          "name": "A20 target-only TXT reports Open then Closed"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesCloudTests.swift",
+          "name": "A20 target-only TXT follows Open Closed Enrolled and returned Closed"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A20 treats discovery shape as a display hint"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A20 accepts TXT only when the selected host and shape agree"
+        }
+      ]
+    },
+    {
+      "id": "A21",
+      "implementedLocalAssertions": [
+        "changed local server key refused and alias isolation using existing defensive fixtures"
+      ],
+      "implementedLiveAssertions": [
+        "Closed server SPKI compared before/after Cloud lifecycle"
+      ],
+      "noExecutableAssertion": [
+        "explicit replayed-certificate-without-key pin assertion remains in existing TLS defenses; no new replay workflow"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A21 retains identity pins and refuses a replacement device key"
+        }
+      ]
+    },
+    {
+      "id": "A22",
+      "implementedLocalAssertions": [
+        "existing defensive pinned/no-plaintext/refused-handshake/reset/Cloud-identity checks"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "no new attack, fallback or credential-bypass workflow is implemented"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A22 preserves existing defensive no plaintext guarantees"
+        }
+      ]
+    },
+    {
+      "id": "A23",
+      "implementedLocalAssertions": [
+        "normal open, deliberate stale-other-config cleanup, new sole owner without restored keys",
+        "default normal-entry WDY-4393 assertion; only exact reproduced failure is a known issue; strict mode available"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "physical reopen polling is covered by the worker evidence, not this PR run"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A23 reopens and creates a new sole owner without reviving keys"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A23 reconnects Open after polling during restart WDY-4393"
+        }
+      ]
+    },
+    {
+      "id": "A24",
+      "implementedLocalAssertions": [
+        "public CLI enrollment, with saved synthetic Cloud session, keyless off/on",
+        "operator/viewer/keyless denied before Cloud enrollment request",
+        "owner reaches independent Cloud permission denial; no fake enrollment success",
+        "MCP normal tool dispatch refuses operator, viewer and keyless before any Cloud request"
+      ],
+      "implementedLiveAssertions": [
+        "owner normal-entry lifecycle uses dedicated runner auth fixture"
+      ],
+      "noExecutableAssertion": [],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A24 checks Closed ownership before public enrollment submits to Cloud"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A24 MCP refuses nonowners before any Cloud request"
+        }
+      ]
+    },
+    {
+      "id": "A25",
+      "implementedLocalAssertions": [
+        "Enrolled service refuses access/key mutations with exact defensive status checks"
+      ],
+      "implementedLiveAssertions": [
+        "real normal-entry Closed enrollment, catalog UUID and authenticated binding check, enrolled access, local-owner-only refusal, mutation refusals and unchanged catalog"
+      ],
+      "noExecutableAssertion": [
+        "physical dormant access-file bytes and server key read while Enrolled; TXT advertisement"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesCloudTests.swift",
+          "name": "A25 A26 restores Closed keyless off after Cloud removal"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesCloudTests.swift",
+          "name": "A25 A26 restores Closed keyless on after Cloud removal"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A25 refuses access mutations while the isolated service is Enrolled"
+        }
+      ]
+    },
+    {
+      "id": "A26",
+      "implementedLocalAssertions": [
+        "existing defensive cleanup retains Closed state and local key"
+      ],
+      "implementedLiveAssertions": [
+        "Closed keyless off/on: four keys, role recovery, saved switch, server SPKI, exact catalog deletion and signed reset",
+        "Open-origin enrollment/reset returns Open without trusted keys"
+      ],
+      "noExecutableAssertion": [
+        "two consecutive cycles plus a deliberately interrupted third require an authorized live run"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesCloudTests.swift",
+          "name": "A25 A26 restores Closed keyless off after Cloud removal"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesCloudTests.swift",
+          "name": "A25 A26 restores Closed keyless on after Cloud removal"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesCloudTests.swift",
+          "name": "A26 Open origin returns Open without inventing trusted keys"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A26 preserves dormant Closed state through defensive cleanup"
+        }
+      ]
+    },
+    {
+      "id": "A27",
+      "implementedLocalAssertions": [
+        "seed serialization and installed 0600 state in temporary config partition",
+        "sudo resolves invoking-user key; refuses creating a replacement as root"
+      ],
+      "implementedLiveAssertions": [
+        "separately gated externally-provisioned Orin/Thor/Dragonwing first boot: installer owner, addedBy install, no keyless, 0600 file, second key refused, matching boot ID"
+      ],
+      "noExecutableAssertion": [
+        "post-install physical reboot persistence is not yet a separate executable USB check"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesInstallTests.swift",
+          "name": "A27 Orin first boot is Closed with the installed owner"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesInstallTests.swift",
+          "name": "A27 Thor first boot is Closed with the installed owner"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesInstallTests.swift",
+          "name": "A27 Dragonwing first boot is Closed with the installed owner"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A27 sudo keeps the invoking users key and refuses a root replacement"
+        }
+      ],
+      "externalOperations": [
+        "USB flash performed by an explicitly authorized external provisioner"
+      ]
+    },
+    {
+      "id": "A28",
+      "implementedLocalAssertions": [
+        "public executable rejects missing name, pre-enroll conflict and direct image/drive",
+        "isolated drive/Lite rejection, Open/old Agent/wrong-owner/unreachable first boots, prompt pin-mismatch failure",
+        "seed 0600 serialization",
+        "seed-write failure cannot report success",
+        "Linux desktop and headless Mac reject before config load, token minting or installer instructions"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A28 verifies seed writing and protective first boot refusal paths"
+        }
+      ]
+    },
+    {
+      "id": "A29",
+      "implementedLocalAssertions": [
+        "unusable/truncated/group-writable trusted state remains Closed without owners",
+        "Enrolled reporting and six mutation/list refusals take precedence over unusable dormant local state"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "real process/supervisor fallback and listener failure are not exercised; live fault injection excluded"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A29 fails closed for unusable access files"
+        },
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A29 enrollment takes precedence over an unusable dormant local store"
+        }
+      ]
+    },
+    {
+      "id": "A30",
+      "implementedLocalAssertions": [
+        "existing seed wins, unusable seed retained, failed seed application fails",
+        "consumed marker prevents reclose after reopen despite remaining seed"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [
+        "physical config-partition fault run is excluded"
+      ],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A30 never replaces existing owners or reapplies a consumed seed"
+        }
+      ]
+    },
+    {
+      "id": "A31",
+      "implementedLocalAssertions": [
+        "registered unmapped unary and streaming gRPC methods denied to all six callers",
+        "12 PERMISSION_DENIED responses and zero handler entries; descriptor completeness separate"
+      ],
+      "implementedLiveAssertions": [],
+      "noExecutableAssertion": [],
+      "testDeclarations": [
+        {
+          "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
+          "name": "A31 refuses registered unmapped unary and streaming handlers for every caller"
+        }
+      ]
+    }
+  ],
+  "liveExecution": "Not run by the implementation helper. Worker observations and future opt-in runs are separate evidence; skipped cases are not passes.",
+  "hardwareMethodRowsObservedByImplementationHelper": [],
+  "hardwareMethodAttribution": "Worker normal-entry recordings establish the operations observed, not complete wire-method attribution. The implementation helper used no hardware."
+}

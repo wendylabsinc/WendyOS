@@ -705,3 +705,119 @@ Prefer the wrapper for normal development; use this only when debugging the
 harness itself. Authenticated tests copy `CLI_AUTH_CONFIG_PATH` into sandbox
 directories, so keep the fixture out of version control and remove stale
 sandboxes when they are no longer needed.
+
+## Auth Modes acceptance
+
+Run the local and isolated tiers through the normal entry point (no board,
+Cloud login, shared CLI config or running Agent is needed):
+
+```bash
+bash Scripts/E2ETest.sh --no-managed-agent --test-timeout 1200 \
+  --filter 'wendy auth local-key show' --filter 'Auth Modes isolated acceptance'
+```
+
+The CLI subprocesses use separate config directories. The Swift scenario and
+recorder capture Go's structured test events, actual CLI commands and diagnostics,
+plus every method/caller admission decision. Missing selections, skips inside
+an enabled isolated test, build/setup failures and unexpected failures are red.
+Remote CLI and Windows tiers are explicitly skipped. Isolated Go compilation
+uses a checkout-owned cache under `Build/auth-modes-go-cache`; `GOMODCACHE`
+may select an existing module cache.
+
+[AuthModesCoverage.json](AuthModesCoverage.json) maps all 31 approved scenarios to
+implemented assertions and explicitly unfinished/external sub-assertions. It is
+not a results file. The 207-row frozen matrix is independent of the runtime
+permission table. Its 1,242 decisions prove admission to inert handlers, and
+12 registered unmapped unary/stream calls prove refusal before entry. Neither
+establishes physical operations. This PR's local run exercises no hardware method
+rows. Every matrix row remains hardware-unverified by that run, even if its
+isolated admission succeeds. Live CLI recordings establish the specific commands
+and effects observed; they do not claim wire attribution for all 207 rows.
+
+[WDY-4393 — Owner CLI can keep treating a reopened device as Closed after polling
+during restart](https://linear.app/wendylabsinc/issue/WDY-4393/owner-cli-can-keep-treating-a-reopened-device-as-closed-after-polling)
+runs by default on supported local platforms. Only the reproduced stale-pin
+assertion is recorded as a known issue. A tool/setup failure or different failure
+stays red. `WENDY_E2E_AUTH_MODES_STRICT=true` makes that functional failure red too.
+The normal-entry enrollment test protects the fix in
+[WendyOS #3071 — feat(cli): use, manage and install Closed devices](https://github.com/wendylabsinc/WendyOS/pull/3071)
+for [WDY-4392 — CLI refuses to enroll a Closed device with its verified owner key](https://linear.app/wendylabsinc/issue/WDY-4392/cli-refuses-to-enroll-a-closed-device-with-its-verified-owner-key).
+Its isolated Cloud intentionally denies enrollment authority after local ownership
+passes. It never labels a partial synthetic enrollment as success.
+
+Physical suites are nested under one serialized `AuthModesLiveAcceptance` parent;
+setup, both saved-keyless Cloud cases and recovery cannot overlap within one Swift
+Testing process. Set `WENDY_E2E_AUTH_MODES_LIVE=true`, select the exact
+`--device-address`, and provide `WENDY_E2E_AUTH_MODES_TARGET` pointing to a private
+JSON file with these fields:
+
+```json
+{
+  "device": "dedicated-board.local",
+  "resource": "ci-owned-board",
+  "holder": "the exact reservation holder",
+  "recoveryDirectory": "/private/tmp/auth-modes-dedicated-run",
+  "cloudGRPC": "api.dev.example:443",
+  "tenant": "the-disposable-tenant-uuid",
+  "mdnsInstance": "dedicated-board",
+  "disposableEnrollment": true
+}
+```
+
+`RANCH_ORGANIZATION_ROOT/reservations/<resource>` must already contain that exact
+holder and a future ISO8601 `until` time. The suite never creates/releases a
+reservation. The runner owns that booking through final cleanup and must not run
+another process against the same target concurrently. A fresh device journey
+requires an independently observed Open baseline. Reconcile a prior journal
+under the same booking before preparing new keys; recovery failure retains the
+journal and credentials and fails the test. No fault injection, privileged shell,
+updater, recovery boot or automated flash is performed.
+
+`WENDY_E2E_AUTH_MODES_DISCOVERY=true` enables target-only TXT observations on
+macOS with `dns-sd`. Provide `mdnsInstance` for this exact board and use its
+`.local` hostname as the explicit device. The observer resolves only that named
+`_wendyos._udp` instance, checks the returned hostname and expected `access` TXT,
+and terminates every DNS-SD process. It never browses or probes other boards.
+The device case observes Open/Closed; with the Cloud opt-in, the corresponding
+case also observes Enrolled and returned Closed. Unsupported discovery platforms
+are skipped. The coverage map separates implemented-but-unrun live assertions
+from sub-assertions with no executable check.
+
+Device cases use the existing immutable prebuilt HTTP fixture, separate owner,
+recovery-owner, operator, viewer and stranger keys, independent HTTP observations
+and exact app cleanup. Keyless transitions use a bounded read-only app readiness barrier beyond the
+Agent's scheduled restart budget. Only classified transient transport failures
+may retry; mutations and authorization/setup failures are never retried.
+The prebuilt Compose journey does not claim physical
+registry image-push coverage. `WENDY_E2E_AUTH_MODES_REBOOT=true` additionally opts
+into the normal operator reboot test. It reads only
+`/proc/sys/kernel/random/boot_id` through the authorized owner's normal
+`device shell -- cat` command on the selected target, requiring two valid,
+different boot UUIDs. No second SSH login is needed.
+
+Cloud adds `WENDY_E2E_AUTH_MODES_CLOUD=true` and the runner's dedicated
+`--cli-auth-config /private/path/auth.json`. Exactly one operator context must
+match the configured TLS endpoint and tenant. The scenario copies that fixture
+under runner isolation; no ambient login is used. The recovery directory holds
+only the test's generated keys and copied dedicated session until restoration.
+Each enrollment uses a fresh name and records its returned UUID; no legacy asset
+ID is required. Before deletion, the public read-only
+`device unenroll --check --asset-id <exact UUID>` independently verifies the
+installed device principal, leaf, tenant, endpoint, Cloud binding and guarded
+reset capability. Cleanup refuses a changed UUID, never deletes by name alone,
+and uses the normal Cloud-owned signed removal path. Secret config values and
+private keys are never printed. Run with the same runner entry point and filter
+`AuthModesLiveAcceptance`; Cloud and reboot cases remain skipped unless their
+additional switches are set.
+
+USB proof is externally provisioned. Select exactly one
+`WENDY_E2E_AUTH_MODES_USB_ROUTE` (`orin`, `thor`, `dragonwing`), provide
+`--agent-address` for that board, and set `WENDY_E2E_AUTH_MODES_USB_RECEIPT` to a
+private JSON receipt with `route`, `device`, `imageSHA256`,
+`installerExitStatus`, `firstBootID`, `fingerprint`,
+`installerConfigDirectory` and the actual remote `accessFile` path. A person or
+separately authorized provisioner performs `install --close`; these tests only
+verify the resulting first boot, seeded owner, file mode and second-key refusal.
+Unselected routes are skipped. The receipt is evidence of external provisioning,
+not proof that this suite performed a flash or proved post-install reboot
+persistence. Outstanding assertions remain listed in the coverage map.
