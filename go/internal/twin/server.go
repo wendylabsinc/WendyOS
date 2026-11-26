@@ -23,6 +23,7 @@ type robotSession struct {
 	objectEvidence             map[string]objectEvidence
 	commandMu                  sync.Mutex
 	commandReceipts            map[string]robotCommandReceipt
+	commandRetired             bool // protected by commandMu; forbids dispatch through a replaced observer
 	robot                      robotControl
 	serial                     string
 	lastActivity               time.Time

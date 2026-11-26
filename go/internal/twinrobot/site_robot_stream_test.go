@@ -93,3 +93,22 @@ func TestSiteRobotSilentStreamTimesOutWithoutWeakeningFreshness(t *testing.T) {
 		t.Fatal("late packet revived closed subscription")
 	}
 }
+
+func TestRetiredObserverCannotSendCapturedStopToReplacement(t *testing.T) {
+	old, transport := readySiteRobot()
+	old.ctx, old.cancel = context.WithCancel(context.Background())
+	old.done = make(chan struct{})
+	close(old.done)
+	old.Retire()
+	replacement, _ := readySiteRobot()
+	replacement.client = transport
+	replacement.Stop(1)
+	if len(transport.commands) != 1 {
+		t.Fatal("replacement cannot stop")
+	}
+	old.Stop(999999)
+	result := old.ExecuteCommand(context.Background(), Command{Action: "stop"})
+	if len(transport.commands) != 1 || result.State == "completed" {
+		t.Fatal("expired observer sent a command to replacement", transport.commands, result)
+	}
+}

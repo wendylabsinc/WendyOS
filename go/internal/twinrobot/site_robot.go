@@ -99,6 +99,7 @@ type SiteRobot struct {
 	motionRecoveryAllowed           bool
 	controlWarning                  string
 	closed                          bool
+	retired                         bool
 	streamDisconnected              bool
 	lastPosePacket                  time.Time
 	lastCloudProcessingMS           float64
@@ -419,6 +420,9 @@ func (r *SiteRobot) disconnectStreamLocked(message string) {
 	r.cancel()
 }
 func (r *SiteRobot) command(command pb.UnitreeCommand, forward, turn float64) error {
+	if r.retired {
+		return errors.New("robot controller has been replaced")
+	}
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
@@ -707,6 +711,15 @@ func (r *SiteRobot) Stop(sequence uint64) {
 	r.stopLocked()
 }
 func (r *SiteRobot) Close() { r.cancel(); <-r.done }
+
+// Retire drains shutdown before fencing all commands, including late Stop calls
+// captured by an expired desktop handle. A replacement performs its own Stop.
+func (r *SiteRobot) Retire() {
+	r.Close()
+	r.mu.Lock()
+	r.retired = true
+	r.mu.Unlock()
+}
 
 func (r *SiteRobot) SetUnderBodyAllowance(sequence uint64, enabled bool) error {
 	r.mu.Lock()

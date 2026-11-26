@@ -51,7 +51,9 @@ func (s *Server) robotCommandUsingSearch(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if q.Action == "connect" {
-		session, created, err := s.ensureCommandRobot(r.Context(), q.Serial, open)
+		setupContext, done := s.beginCommandSetup(r.Context(), q.Serial)
+		defer done()
+		session, created, err := s.ensureCommandRobotRecovery(setupContext, q.Serial, open, true)
 		if err != nil {
 			respond(w, nil, err)
 			return
@@ -91,7 +93,22 @@ func (s *Server) robotCommandUsingSearch(w http.ResponseWriter, r *http.Request,
 		respond(w, result, nil)
 		return
 	}
-	autoSetup := session == nil && autoEligible
+	// Resolve an old identity before reconnecting. Retrying a lost command
+	// response must never create a fresh controller or execute that goal again.
+	if session != nil && q.Action != "stop" && q.Action != "status" {
+		session.commandMu.Lock()
+		old, exists := session.commandReceipts[q.RequestID]
+		session.commandMu.Unlock()
+		if exists {
+			if old.request != q {
+				respond(w, nil, errors.New("request_id was already used for a different command"))
+			} else {
+				respond(w, old.result, nil)
+			}
+			return
+		}
+	}
+	autoSetup := autoEligible && (session == nil || session.robot.Status().Disconnected)
 	if autoSetup {
 		var err error
 		session, _, err = s.ensureCommandRobot(r.Context(), q.Serial, open)
@@ -149,6 +166,11 @@ func (s *Server) robotCommandUsingSearch(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		respond(w, old.result, nil)
+		return
+	}
+	if session.commandRetired {
+		session.commandMu.Unlock()
+		respond(w, nil, errors.New("robot observations were replaced; retry with the same request_id on the current session"))
 		return
 	}
 	if len(session.commandReceipts) >= 256 {
@@ -327,6 +349,10 @@ func (s *Server) openCommandRobot(ctx context.Context, serial string) (robotCont
 // Connecting starts observations and the same STOP/avoidance preparation used
 // by the map. It never replaces another operator or invents a map alignment.
 func (s *Server) ensureCommandRobot(ctx context.Context, serial string, open commandRobotOpener) (*robotSession, bool, error) {
+	return s.ensureCommandRobotRecovery(ctx, serial, open, false)
+}
+
+func (s *Server) ensureCommandRobotRecovery(ctx context.Context, serial string, open commandRobotOpener, explicit bool) (*robotSession, bool, error) {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -335,8 +361,39 @@ func (s *Server) ensureCommandRobot(ctx context.Context, serial string, open com
 	s.mu.Lock()
 	session := s.observers[serial]
 	s.mu.Unlock()
-	if session != nil {
+	if session != nil && !session.robot.Status().Disconnected {
 		return session, false, nil
+	}
+	if open == nil {
+		return nil, false, errors.New("robot observation reconnect is unavailable")
+	}
+	previous := session
+	var receipts map[string]robotCommandReceipt
+	published := false
+	if previous != nil {
+		if err := retireDisconnectedCommands(previous, explicit); err != nil {
+			return nil, false, err
+		}
+		defer func() {
+			if !published {
+				previous.commandMu.Lock()
+				previous.commandRetired = false
+				previous.commandMu.Unlock()
+			}
+		}()
+		previous.commandMu.Lock()
+		receipts = make(map[string]robotCommandReceipt, len(previous.commandReceipts))
+		for id, receipt := range previous.commandReceipts {
+			receipts[id] = receipt
+		}
+		previous.commandMu.Unlock()
+		previous.pendingMu.Lock()
+		if retire, ok := previous.robot.(interface{ Retire() }); ok {
+			retire.Retire()
+		} else {
+			previous.robot.Close()
+		}
+		previous.pendingMu.Unlock()
 	}
 	if s.Context == nil || s.Context.Err() != nil {
 		return nil, false, errors.New("robot gateway is unavailable")
@@ -360,14 +417,70 @@ func (s *Server) ensureCommandRobot(ctx context.Context, serial string, open com
 		}
 		return nil, false, err
 	}
-	session = &robotSession{robot: robot, serial: serial}
+	if previous != nil && explicit {
+		controller, ok := robot.(robotCommander)
+		if !ok || controller.ExecuteCommand(ctx, twinrobot.Command{Action: "stop"}).State != "completed" {
+			cancel()
+			robot.Close()
+			return nil, false, errors.New("reconnected robot did not acknowledge Stop; previous command outcomes remain unresolved")
+		}
+	}
+	session = &robotSession{robot: robot, serial: serial, commandReceipts: receipts}
 	s.mu.Lock()
+	if ctx.Err() != nil {
+		s.mu.Unlock()
+		cancel()
+		robot.Close()
+		return nil, false, ctx.Err()
+	}
+	// Old desktop sequence counters and candidate handles cannot target the
+	// replacement controller. A desktop client must explicitly open it again.
+	for handle, old := range s.robots {
+		if old == previous {
+			delete(s.robots, handle)
+		}
+	}
 	if s.observers == nil {
 		s.observers = map[string]*robotSession{}
 	}
 	s.observers[serial] = session
+	published = true
 	s.mu.Unlock()
 	return session, true, nil
+}
+
+// Only a definitively dead, idle observer may be replaced. Running or unknown
+// receipts are never converted to success, canceled, or a replayable empty map.
+func retireDisconnectedCommands(session *robotSession, explicit bool) error {
+	state := session.robot.Status()
+	if !state.Disconnected || state.Moving {
+		return errors.New("robot observer is not disconnected and idle")
+	}
+	if controller, ok := session.robot.(robotCommander); !ok || controller.CommandActive() {
+		return errors.New("robot command is still active; stop it and resolve its receipt before reconnecting")
+	}
+	session.searchMu.Lock()
+	searching := session.searchState == "searching"
+	session.searchMu.Unlock()
+	session.findMu.Lock()
+	finding := session.find.State == "searching"
+	session.findMu.Unlock()
+	if searching || finding {
+		return errors.New("robot search is still active; stop it before reconnecting")
+	}
+	session.commandMu.Lock()
+	defer session.commandMu.Unlock()
+	for _, receipt := range session.commandReceipts {
+		switch receipt.result.State {
+		case "completed", "failed", "rejected", "canceled", "superseded":
+		default:
+			if !explicit {
+				return errors.New("a prior robot command outcome is still running or unknown; explicitly connect to stop and recover observations without replaying it")
+			}
+		}
+	}
+	session.commandRetired = true
+	return nil
 }
 
 type commandSetup struct{ cancel context.CancelFunc }
