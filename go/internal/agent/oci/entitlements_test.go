@@ -2766,6 +2766,7 @@ func installFakeFastrpcDevTree(t *testing.T, nodes map[string][2]int64, heap *[2
 	})
 
 	fastrpcDeviceGlob = filepath.Join(dir, "fastrpc-*")
+	installFakeAccelRoot(t, t.TempDir())
 	dmaHeapDevicePath = heapPath
 	dtModelPath = modelPath
 	statDeviceNode = func(path string) (int64, int64, error) {
@@ -3080,6 +3081,120 @@ func withHostGPUs(t *testing.T, devices ...gpudiscovery.Device) {
 	orig := hostGPUs
 	t.Cleanup(func() { hostGPUs = orig })
 	hostGPUs = func() []gpudiscovery.Device { return devices }
+}
+
+func installFakeAccelRoot(t *testing.T, root string) {
+	t.Helper()
+	orig := accelRoot
+	t.Cleanup(func() { accelRoot = orig })
+	accelRoot = root
+}
+
+// fakeAccelNode is a /dev/accel node and the sysfs device it hangs off.
+type fakeAccelNode struct {
+	parent string // under /sys
+	driver string // PCI driver bound to parent, if any
+	num    [2]int64
+}
+
+// The kernel's layouts: rocket hangs its node off an "rknn" platform device no
+// driver binds; the Intel VPU hangs its node off its bound PCI device.
+const (
+	rocketAccelParent   = "devices/platform/rknn"
+	intelVPUAccelParent = "devices/pci0000:00/0000:00:0b.0"
+)
+
+// writeFakeAccelNode lays out /dev/accel/<name> and its sysfs class entry as the kernel does.
+func writeFakeAccelNode(t *testing.T, root, name string, n fakeAccelNode) string {
+	t.Helper()
+	node := filepath.Join(root, "dev", "accel", name)
+	minor := filepath.Join(root, "sys", n.parent, "accel", name)
+	class := filepath.Join(root, "sys", "class", "accel")
+	for _, dir := range []string{filepath.Dir(node), minor, class} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := map[string]string{
+		filepath.Join(minor, "device"): "../../../" + filepath.Base(n.parent),
+		filepath.Join(class, name):     filepath.Join("../..", n.parent, "accel", name),
+	}
+	if n.driver != "" {
+		links[filepath.Join(root, "sys", n.parent, "driver")] = "../../../bus/pci/drivers/" + n.driver
+	}
+	for link, target := range links {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(node, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
+
+// installFakeAccelNPU lays out the given /dev/accel nodes with no FastRPC nodes.
+func installFakeAccelNPU(t *testing.T, nodes map[string]fakeAccelNode) string {
+	t.Helper()
+	root := t.TempDir()
+	nums := map[string][2]int64{}
+	for name, n := range nodes {
+		nums[writeFakeAccelNode(t, root, name, n)] = n.num
+	}
+	origGlob, origStat, origRender := fastrpcDeviceGlob, statDeviceNode, lookupRenderGID
+	t.Cleanup(func() { fastrpcDeviceGlob, statDeviceNode, lookupRenderGID = origGlob, origStat, origRender })
+	installFakeAccelRoot(t, root)
+	fastrpcDeviceGlob = filepath.Join(root, "dev", "fastrpc-*")
+	statDeviceNode = func(path string) (int64, int64, error) {
+		if mm, ok := nums[path]; ok {
+			return mm[0], mm[1], nil
+		}
+		return 0, 0, os.ErrNotExist
+	}
+	lookupRenderGID = func() (uint32, bool) { return 107, true }
+	return root
+}
+
+// The mainline Rockchip NPU is a DRM accel node: bound at its own major:minor
+// with the render group, and none of the FastRPC runtime's environment.
+func TestApplyNPU_GrantsRockchipAccelNode(t *testing.T) {
+	root := installFakeAccelNPU(t, map[string]fakeAccelNode{
+		"accel0": {parent: rocketAccelParent, num: [2]int64{261, 0}},
+		"accel1": {parent: intelVPUAccelParent, driver: "intel_vpu", num: [2]int64{261, 1}},
+	})
+
+	spec := npuSpec(t)
+
+	node := filepath.Join(root, "dev", "accel", "accel0")
+	if m, ok := mountForDest(spec, node); !ok || m.Type != "bind" || m.Source != node {
+		t.Errorf("npu entitlement did not bind %s: %+v", node, m)
+	}
+	if !hasExactDeviceRule(spec, 261, 0) || countMajorRule(spec, 261) != 1 {
+		t.Error("npu entitlement must allow exactly the NPU's major:minor")
+	}
+	if !hasGID(spec, 107) {
+		t.Error("npu entitlement did not add the render GID")
+	}
+	if hasMountDest(spec, filepath.Join(root, "dev", "accel", "accel1")) || hasExactDeviceRule(spec, 261, 1) {
+		t.Error("npu entitlement granted an accel node of an unknown device")
+	}
+	if hasEnv(spec, fastrpcProcessAttrsEnv) || hasEnv(spec, "MACHINE_NAME") {
+		t.Error("a Rockchip NPU got the FastRPC runtime environment")
+	}
+	if got := AccelNPUs(root); len(got) != 1 || got[0].Vendor != "rockchip" || got[0].Path != node {
+		t.Errorf("AccelNPUs = %+v, want the rocket node as rockchip", got)
+	}
+}
+
+func TestApplyNPU_UnknownAccelDeviceAddsNothing(t *testing.T) {
+	installFakeAccelNPU(t, map[string]fakeAccelNode{
+		"accel0": {parent: intelVPUAccelParent, driver: "intel_vpu", num: [2]int64{261, 0}},
+	})
+	base := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	spec := npuSpec(t)
+	if len(spec.Mounts) != len(base.Mounts) || hasGID(spec, 107) {
+		t.Error("npu entitlement changed the spec for an unknown accel device")
+	}
 }
 
 // installFakeQualcommDevTree stands in for a Qualcomm SoC such as the Dragonwing

@@ -689,12 +689,48 @@ func IsFastrpcNode(path string) bool {
 	return err == nil && ok
 }
 
-// applyNPU grants the FastRPC transport to the on-SoC DSPs.
+// accelNPUVendors maps the device an accel node hangs off to the NPU vendor granted.
+// Keyed by device, not driver: rocket's "rknn" parent never has a driver bound.
+var accelNPUVendors = map[string]string{"rknn": "rockchip"}
+
+var accelNodeNameRe = regexp.MustCompile(`^accel[0-9]+$`)
+
+// accelRoot is the filesystem root the npu entitlement scans; tests use a fixture tree.
+var accelRoot = "/"
+
+// AccelNPU is a DRM compute-accelerator node of a known NPU.
+type AccelNPU struct{ Path, Vendor string }
+
+// AccelNPUs lists the accel NPU nodes under root. Exported so device metadata
+// reports exactly what the npu entitlement grants.
+func AccelNPUs(root string) []AccelNPU {
+	matches, _ := filepath.Glob(filepath.Join(root, "dev", "accel", "accel*"))
+	var npus []AccelNPU
+	for _, node := range matches {
+		name := filepath.Base(node)
+		if !accelNodeNameRe.MatchString(name) {
+			continue
+		}
+		parent, err := os.Readlink(filepath.Join(root, "sys", "class", "accel", name, "device"))
+		if err != nil {
+			continue
+		}
+		if vendor, ok := accelNPUVendors[filepath.Base(parent)]; ok {
+			npus = append(npus, AccelNPU{Path: node, Vendor: vendor})
+		}
+	}
+	return npus
+}
+
+// applyNPU grants the on-SoC NPU: a DRM accel node, or the FastRPC transport to
+// the DSPs.
 //
 // Bind-mounted rather than mknod'd: access is authorised by the nodes' group ownership
 // and, for the dma-buf heap, a POSIX ACL, neither of which a node re-created inside the
-// container would carry. A host with no FastRPC nodes is left untouched.
+// container would carry. A host with neither is left untouched.
 func applyNPU(spec *Spec) {
+	applyAccelNPU(spec)
+
 	matches, err := filepath.Glob(fastrpcDeviceGlob)
 	if err != nil {
 		return
@@ -736,6 +772,23 @@ func applyNPU(spec *Spec) {
 	// and ACPI trees.
 	if model := hostDeviceTreeModel(); model != "" {
 		spec.Process.Env = setEnvValue(spec.Process.Env, "MACHINE_NAME", model)
+	}
+}
+
+// applyAccelNPU grants accel NPU nodes, owned by the render group like the GPU's
+// render node.
+func applyAccelNPU(spec *Spec) {
+	granted := false
+	for _, npu := range AccelNPUs(accelRoot) {
+		if _, _, err := addScopedCharDevice(spec, npu.Path); err == nil {
+			granted = true
+		}
+	}
+	if !granted {
+		return
+	}
+	if gid, ok := lookupRenderGID(); ok {
+		spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, gid)
 	}
 }
 
