@@ -24,6 +24,13 @@ Linux release container is pinned by digest. Dependabot does not update
 were resolved through their upstream repositories; this change does not upgrade
 action major versions.
 
+Renovate (`renovate.json5`) opens version updates for the directories Dependabot
+covered and advisory fixes for every manifest in the repository. The repository
+setting "Dependabot security updates" stays on: Renovate opens no fix for Swift
+packages, for a dependency that appears only in a lockfile (transitive npm and uv
+dependencies), or for an Actions advisory. Expect a Dependabot and a Renovate PR
+for the same advisory on a direct dependency; merge one and close the other.
+
 The pre-release `Local: Ubuntu 24` check audits all workflows and composite actions
 with zizmor 1.32.0, blocking high-severity, high-confidence findings. It runs the
 E2E suite even when the audit fails, then fails the job. The Go test aggregate

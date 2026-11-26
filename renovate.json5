@@ -2,31 +2,33 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended"],
 
-  // Replaces Dependabot (sem, 2026-11-26): the same directories, labels and limits as the
-  // .github/dependabot.yml it replaces, plus versions and images written inside the workflows.
+  // Replaces Dependabot (sem, 2026-11-26): version updates in the same directories, with the
+  // same labels and limits, as the .github/dependabot.yml it replaces, plus versions and images
+  // written inside the workflows; advisory fixes for every manifest, as Dependabot security
+  // updates opened them.
   // Self-hosted: .github/workflows/renovate.yml decides when this runs (Monday, as Dependabot
   // did), so there is no `schedule:`.
   // No automerge: Dependabot PRs were never automerged here. main's ruleset needs no approving
   // review and auto-merge is on, so an automerged PR would land with no human looking at it.
-  enabledManagers: ["gomod", "npm", "github-actions", "pip_requirements", "custom.regex"],
-  // Dependabot's directories and nothing else. Examples/, web-client/, docs, fixtures and
-  // .github/actions/ were never updated; ci_execution_test.py checks every go.mod is listed.
-  includePaths: [
-    "go.mod",
-    "go/babel/go.mod",
-    "screencast/package.json",
-    "go/simulator/go2/*requirements*.txt",
-    "go/simulator/g1/*requirements*.txt",
-    ".github/workflows/*.yml",
-  ],
+  // Every manifest in the repo is scanned, so advisory fixes reach all of them, as Dependabot
+  // security updates did. Version updates stay in Dependabot's old directories: see the first
+  // packageRule. pep621 reads pyproject.toml with uv.lock; gradle is the Android app.
+  enabledManagers: ["gomod", "npm", "github-actions", "pip_requirements", "pep621", "gradle", "custom.regex"],
+  // The preset skips examples/, test/ and similar directories; Dependabot did not.
+  ignorePaths: [],
   labels: ["dependencies"],
+  // New releases wait three days before a version-update PR. Advisory fixes do not wait:
+  // Renovate's vulnerabilityAlerts defaults reset this to null.
+  minimumReleaseAge: "3 days",
   // Dependabot capped open PRs at 5 per ecosystem with no hourly cap. Renovate's cap is
   // repo-wide, so: three ecosystems with version updates times 5.
   prConcurrentLimit: 15,
   prHourlyLimit: 0,
-  // Dependabot's security updates: OSV advisories need no extra app permission. `enabled`
-  // is forced onto every advisory fix, so it also reaches the pip files below, which are
-  // otherwise disabled.
+  // Advisory fixes from OSV: Go, npm, PyPI and Maven (Gradle). Actions advisories come only
+  // from the repo's Dependabot alerts, which renovate.yml's token does not request yet.
+  // `enabled` is forced onto every advisory fix, so it reaches files whose version updates
+  // are disabled below. Renovate fixes no Swift packages and no dependency that appears only
+  // in a lockfile; Dependabot security updates stay on for those (CI_SECURITY.md).
   osvVulnerabilityAlerts: true,
   vulnerabilityAlerts: { enabled: true },
 
@@ -50,6 +52,11 @@
   ],
 
   packageRules: [
+    {
+      description: "Version updates only where Dependabot ran them; everywhere else advisory fixes only. ci_execution_test.py checks every go.mod is listed.",
+      matchFileNames: ["!go.mod", "!go/babel/go.mod", "!screencast/**", "!.github/workflows/*.yml"],
+      enabled: false,
+    },
     // Labels as Dependabot set them: "dependencies" plus the ecosystem.
     { matchManagers: ["gomod"], addLabels: ["go"] },
     { matchManagers: ["npm"], addLabels: ["javascript"] },
@@ -70,11 +77,6 @@
       description: "Dependabot never moved the go and toolchain lines of a go.mod; those stay by hand.",
       matchManagers: ["gomod"],
       matchDepTypes: ["golang", "toolchain"],
-      enabled: false,
-    },
-    {
-      description: "Simulator pip files: security updates only (Dependabot's open-pull-requests-limit: 0). Advisory fixes still open, see vulnerabilityAlerts.",
-      matchManagers: ["pip_requirements"],
       enabled: false,
     },
     {

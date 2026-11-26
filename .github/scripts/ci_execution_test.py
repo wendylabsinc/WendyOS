@@ -150,10 +150,10 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
         self.assertTrue(any("run-automation-regressions.py" in s.get("run", "") for s in job["steps"]))
 
     def test_renovate_tracks_every_repository_module(self):
-        # renovate.json5 is JSON5; its includePaths entries are plain quoted strings.
+        # renovate.json5 is JSON5; the version-update scope is the "!path" list of its first
+        # packageRule, so every go.mod must be listed there to keep getting version updates.
         config = (ROOT / "renovate.json5").read_text()
-        include = re.search(r"includePaths: \[(.*?)\]", config, re.S).group(1)
-        modules = [p for p in re.findall(r'"([^"]+)"', include) if p.endswith("go.mod")]
+        modules = re.findall(r'"!([^"]*go\.mod)"', config)
         # Git's tracked files exclude downloaded dependencies and temporary fixtures.
         tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
         discovered = {p for p in tracked if p == "go.mod" or p.endswith("/go.mod")}
