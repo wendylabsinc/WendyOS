@@ -82,6 +82,9 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		}
 	}
 	wait := func() bool {
+		if owner, ok := session.robot.(interface{ Check() error }); ok && owner.Check() != nil {
+			return false
+		}
 		select {
 		case <-ctx.Done():
 			return false
