@@ -19,12 +19,20 @@ var ErrObservationUnavailable = errors.New("robot observations are temporarily u
 const stopUnconfirmedMessage = "Stop was not acknowledged. Use the Go2 controller to verify it has stopped."
 
 type SiteRobotSnapshot struct {
-	Frame                                                string
-	Disconnected                                         bool
-	LookDirection                                        int
-	LookState                                            int // 0 idle, 1 turning, 2 completed, 3 aborted
-	DiscoveryState                                       int // 0 idle, 1 advancing, 2 completed, 3 aborted
-	Message                                              string
+	Frame          string
+	Disconnected   bool
+	LookDirection  int
+	LookState      int // 0 idle, 1 turning, 2 completed, 3 aborted
+	DiscoveryState int // 0 idle, 1 advancing, 2 completed, 3 aborted
+	Message        string
+	// Message retains the operation's terminal reason for existing search and
+	// UI consumers. These fields distinguish current measurement readiness
+	// from an earlier aborted movement without acknowledging that failure.
+	ReadinessMessage, LastMotionFailure                  string
+	PoseReceivedAgeMS, PoseCaptureAgeMS, ScanAgeMS       *float64
+	LastCloudProcessingMS, LastObservationLockWaitMS     float64
+	LastObservationTopic                                 string
+	LatestObservationFault                               *SiteObservationFault
 	ControlWarning                                       string
 	Pose, Ready, Aligned, Moving                         bool
 	ArrivalTiming, UsingArrivalTiming, TimingUnavailable bool
@@ -88,6 +96,10 @@ type SiteRobot struct {
 	closed                          bool
 	streamDisconnected              bool
 	lastPosePacket                  time.Time
+	lastCloudProcessingMS           float64
+	lastObservationLockWaitMS       float64
+	lastObservationTopic            string
+	latestObservationFault          *SiteObservationFault
 	stopUnconfirmed                 bool
 	underBodyAllowance              bool
 	strictMeasuredFloor             bool
@@ -177,7 +189,10 @@ func (r *SiteRobot) receiveObservations(stream interface {
 		if t == nil {
 			continue
 		}
+		waiting := time.Now()
 		r.mu.Lock()
+		r.lastObservationLockWaitMS = time.Since(waiting).Seconds() * 1000
+		r.lastObservationTopic = t.Topic
 		r.receiveObservationLocked(t.Topic, t.Data, t.Binary, time.Unix(0, t.ReceivedUnixNanos), time.Now())
 		r.mu.Unlock()
 	}
@@ -202,6 +217,10 @@ func (r *SiteRobot) prepareDirectMovement(ctx context.Context) {
 func (r *SiteRobot) receiveObservationLocked(topic string, raw []byte, binary bool, received, now time.Time) {
 	if r.closed || r.ctx.Err() != nil {
 		return
+	}
+	if topic == sitenav.CloudTopic {
+		started := time.Now()
+		defer func() { r.lastCloudProcessingMS = time.Since(started).Seconds() * 1000 }()
 	}
 	if topic == sitenav.PoseTopic {
 		// Receipt here detects a silent subscription; it never renews pose freshness.
@@ -792,7 +811,19 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	if renew {
 		r.heartbeat = now
 	}
-	s := SiteRobotSnapshot{Frame: r.frame, Message: r.message, Pose: sitenav.Fresh(r.observed.Pose.Received, now) && !r.closed, Aligned: r.frame != "", Moving: r.moving, FloorY: r.floorY}
+	s := SiteRobotSnapshot{Frame: r.frame, Message: r.message, LastMotionFailure: r.motionFailure, Pose: sitenav.Fresh(r.observed.Pose.Received, now) && !r.closed, Aligned: r.frame != "", Moving: r.moving, FloorY: r.floorY}
+	s.PoseReceivedAgeMS = observationAgeMS(r.observed.Pose.Received, now)
+	s.PoseCaptureAgeMS = observationAgeMS(r.observed.Pose.Captured, now)
+	s.ScanAgeMS = observationAgeMS(r.observed.CloudAt, now)
+	s.LastCloudProcessingMS = r.lastCloudProcessingMS
+	s.LastObservationLockWaitMS = r.lastObservationLockWaitMS
+	s.LastObservationTopic = r.lastObservationTopic
+	if r.latestObservationFault != nil {
+		fault := *r.latestObservationFault
+		fault.PoseAgeMS = copyObservationAge(fault.PoseAgeMS)
+		fault.CaptureAgeMS = copyObservationAge(fault.CaptureAgeMS)
+		s.LatestObservationFault = &fault
+	}
 	s.ControlWarning = r.controlWarning
 	if r.stopUnconfirmed {
 		s.ControlWarning = "Go2 did not confirm Stop. Movement is blocked until Stop succeeds."
@@ -805,6 +836,7 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 		if !r.streamDisconnected && !r.stopUnconfirmed {
 			s.Message = "Go2 connection closed."
 		}
+		s.ReadinessMessage = s.Message
 		return s
 	}
 	s.LookState = r.lookState
@@ -821,7 +853,16 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	s.TimingUnavailable = r.observed.TimingUnavailable
 	s.UnderBodyAllowance = r.underBodyAllowance
 	s.AllowUnobservedFloor = r.allowUnobservedFloor
-	s.MeasurementsReady = r.observed.MeasurementsReady(now) == nil && !r.closed && !r.stopUnconfirmed
+	measurementErr := r.observed.MeasurementsReady(now)
+	s.MeasurementsReady = measurementErr == nil && !r.closed && !r.stopUnconfirmed
+	switch {
+	case r.stopUnconfirmed:
+		s.ReadinessMessage = stopUnconfirmedMessage
+	case measurementErr != nil:
+		s.ReadinessMessage = measurementErr.Error()
+	default:
+		s.ReadinessMessage = "Fresh Go2 odometry and LiDAR measurements."
+	}
 	s.ScanReady = (r.observed.SurfaceReady(now) == nil || r.observed.LocalizationReady(now) == nil) && !r.closed && !r.stopUnconfirmed
 	if err := r.observed.Ready(now); err == nil {
 		s.HazardsReady = s.Aligned
