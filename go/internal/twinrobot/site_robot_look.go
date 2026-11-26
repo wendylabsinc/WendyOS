@@ -75,7 +75,7 @@ func (r *SiteRobot) lookAngleLocked(direction int, angle float64) error {
 	}
 	target := p.Yaw + float64(direction)*angle
 	if !r.navigationGridLocked(departure).Turn(p.Position, p.Yaw, target+float64(direction)*lookStopMargin) {
-		if r.allowUnobservedFloor {
+		if r.allowUnobservedFloor && !r.strictMeasuredFloor {
 			return fmt.Errorf("%w: An obstacle or drop overlaps Go2's body during this turn.", ErrDiscoveryBlocked)
 		}
 		return fmt.Errorf("%w: Go2's body would cross an obstacle, drop or unobserved floor during this turn.", ErrDiscoveryBlocked)
@@ -123,7 +123,7 @@ func (r *SiteRobot) stepLookLocked(now time.Time) {
 	}
 	if !r.navigationGridLocked(r.departure).Turn(p.Position, p.Yaw, p.Yaw+turn.direction*(remaining+lookStopMargin)) {
 		r.message = "Look turn stopped: the scan marks an obstacle or drop in the turning footprint."
-		if !r.allowUnobservedFloor {
+		if !r.allowUnobservedFloor || r.strictMeasuredFloor {
 			r.message = "Look turn stopped: the scan marks blocked or unobserved floor in the turning footprint."
 		}
 		r.stopForObservationLossLocked()
