@@ -5,6 +5,93 @@ import WendyE2ETesting
 @Suite(.serialized)
 struct `'wendy app publish'` {
     /**
+     Scripted first publication builds the actual small HTTP Dockerfile, both
+     from a new project and from an existing wendy.json. In a mixed-case new
+     directory, init derives the normalized app id; a named Git branch supplies
+     the untagged release name. Its suffix must equal the independently hashed
+     registry manifest digest. Both journeys explicitly register, publish one
+     release, retain the receipt and create no deployment or device workload.
+     */
+    @Test(
+        .enabled(
+            if: appsDeploymentTestsEnabled
+                && ProcessInfo.processInfo.environment["WENDY_E2E_APPS_BUILDER"] == "true"
+        ),
+        arguments: [true, false]
+    )
+    func `publishes scripted new and existing small Dockerfile projects without deploying`(
+        newProject: Bool
+    ) async throws {
+        try await AppsDeploymentFixture.withApp { cli, app in
+            try await AppsBuilderFixture.withBuilder(cli) {
+                let directory = newProject ? app.app.uppercased() : "."
+                let prefix = "cd \(AppsDeploymentFixture.quote(directory)) && "
+                if newProject {
+                    try await cli.sh("mkdir \(AppsDeploymentFixture.quote(directory))")
+                    _ = try await app.succeed(
+                        cli,
+                        prefix
+                            + "wendy init --here --target wendyos --language python --git-init no --assistant skip --no-extra-entitlements </dev/null"
+                    )
+                    let result = try await cli.sh(prefix + "cat wendy.json") { $0.stdout }
+                    let initialized = try JSONDecoder().decode(
+                        InitializedProject.self,
+                        from: Data(result.utf8)
+                    )
+                    #expect(initialized.appId == app.app)
+                    #expect(initialized.platform == "linux")
+                    // Keep init's generated identity and scaffold; supply this
+                    // ordinary project's public HTTP settings before building.
+                    let configure =
+                        "import json; p=\(String(reflecting: directory + "/wendy.json")); c=json.load(open(p)); f=json.load(open('wendy.json')); c.update({k:f[k] for k in ['env','requiredEnv','entitlements']}); json.dump(c,open(p,'w'))"
+                    try await cli.sh("python3 -c \(AppsDeploymentFixture.quote(configure))")
+                    try await cli.sh(prefix + "git init -b e2e-first-publish")
+                }
+                try await AppsBuilderFixture.writeSmallContext(cli, directory: directory)
+                let absent = try await app.catalog(cli)
+                #expect(absent.appCode == "NotFound" && absent.app == nil)
+                try await app.create(cli)
+                let mode = newProject ? "--untagged" : "--tag 1.0.0"
+                let receipt = try await app.succeed(
+                    cli,
+                    prefix
+                        + "wendy app publish \(mode) --dockerfile Dockerfile --platform linux/arm64 \(app.cloudFlag) </dev/null"
+                )
+                let catalog = try await app.catalog(cli)
+                let releases = try #require(catalog.releases)
+                try #require(releases.count == 1)
+                let row = releases[0]
+                let digest = try #require(row.imageDigest)
+                #expect(row.name == (newProject ? "e2e-first-publish@\(digest)" : "1.0.0"))
+                let release = AppsDeploymentFixture.Release(
+                    id: row.id,
+                    tag: row.name,
+                    digest: digest
+                )
+                let artifact = try await app.requireArtifact(
+                    cli,
+                    release: release,
+                    defaultUnit: "fahrenheit"
+                )
+                #expect(artifact.computedDigest == digest)
+                #expect(
+                    (receipt.stdout + "\n" + receipt.readableStderr).contains(
+                        "Published release \(row.id) of \(app.app): \(row.name) = \(digest)"
+                    )
+                )
+                #expect(catalog.deployments?.isEmpty == true)
+                let inventory = try await app.inventory(cli)
+                #expect(!inventory.contains { $0.name == app.app })
+            }
+        }
+    }
+
+    private struct InitializedProject: Decodable {
+        let appId: String
+        let platform: String
+    }
+
+    /**
      Publishes a tagged ARM64 release and reads its actual catalog and encrypted
      artifact metadata. The returned digest covers the embedded app definition.
      No deployment or owned device application is created.

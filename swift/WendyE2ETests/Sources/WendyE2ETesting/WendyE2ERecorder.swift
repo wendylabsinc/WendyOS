@@ -570,8 +570,8 @@ public struct WendyE2ERecorder: Sendable {
 
     private static func normalizedFunctionName(_ function: String) -> String {
         var value = function
-        if value.hasSuffix("()") {
-            value.removeLast(2)
+        if value.hasSuffix(")"), let parameters = value.lastIndex(of: "(") {
+            value = String(value[..<parameters])
         }
         if value.first == "`", value.last == "`" {
             value = String(value.dropFirst().dropLast())
