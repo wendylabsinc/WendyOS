@@ -45,7 +45,7 @@ func TestRobotCommandRecoversDeadObserverAndPreservesReceipts(t *testing.T) {
 }
 
 func TestRobotCommandRecoveryRefusesActiveOrUnknownAutomaticReplay(t *testing.T) {
-	for _, mode := range []string{"moving", "intent", "search", "find", "running", "unknown"} {
+	for _, mode := range []string{"moving", "intent", "search", "running", "unknown"} {
 		t.Run(mode, func(t *testing.T) {
 			robot := &passiveLocalizeTestRobot{setupTestRobot: &setupTestRobot{state: twinrobot.SiteRobotSnapshot{Disconnected: true}}}
 			session := &robotSession{robot: robot, serial: "go2"}
@@ -56,8 +56,6 @@ func TestRobotCommandRecoveryRefusesActiveOrUnknownAutomaticReplay(t *testing.T)
 				robot.active = true
 			case "search":
 				session.searchState = "searching"
-			case "find":
-				session.find.State = "searching"
 			default:
 				session.commandReceipts = map[string]robotCommandReceipt{"unknown-id": {result: twinrobot.CommandResult{State: mode}}}
 			}

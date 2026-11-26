@@ -456,10 +456,7 @@ func retireDisconnectedCommands(session *robotSession, explicit bool) error {
 	session.searchMu.Lock()
 	searching := session.searchState == "searching"
 	session.searchMu.Unlock()
-	session.findMu.Lock()
-	finding := session.find.State == "searching"
-	session.findMu.Unlock()
-	if searching || finding {
+	if searching {
 		return errors.New("robot search is still active; stop it before reconnecting")
 	}
 	session.commandMu.Lock()
