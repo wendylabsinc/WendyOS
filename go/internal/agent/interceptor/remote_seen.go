@@ -39,8 +39,10 @@ func RemoteVia(ctx context.Context) string {
 // agent, which is what approves a new agent on trial.
 func UnaryRemoteSeen(dir string) grpc.UnaryServerInterceptor {
 	m := &remoteMarker{dir: dir}
-	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		m.mark(ctx)
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if counts(ctx, info.FullMethod) {
+			m.mark(ctx)
+		}
 		return handler(ctx, req)
 	}
 }
@@ -48,10 +50,20 @@ func UnaryRemoteSeen(dir string) grpc.UnaryServerInterceptor {
 // StreamRemoteSeen is UnaryRemoteSeen for streaming calls.
 func StreamRemoteSeen(dir string) grpc.StreamServerInterceptor {
 	m := &remoteMarker{dir: dir}
-	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		m.mark(ss.Context())
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if counts(ss.Context(), info.FullMethod) {
+			m.mark(ss.Context())
+		}
 		return handler(srv, ss)
 	}
+}
+
+// counts is false for a call a Closed device admits from anyone (GetAccess):
+// it shows nothing of the key or keyless path working. Closed listeners run
+// this after their authorizer, so a refused call never counts either.
+func counts(ctx context.Context, method string) bool {
+	_, closed := CallerFromContext(ctx)
+	return !closed || methodRoles[method] != anyone
 }
 
 type remoteMarker struct {
