@@ -85,6 +85,10 @@ func (d mcpCloudDevice) openTunnel(ctx context.Context, brokerConn *grpc.ClientC
 	if err != nil {
 		return nil, err
 	}
+	auth, err = mcpCurrentAuth(auth)
+	if err != nil {
+		return nil, err
+	}
 	signer, err := mcpTunnelPrincipalSigner(auth)
 	if err != nil {
 		return nil, err
@@ -103,6 +107,37 @@ func (d mcpCloudDevice) openTunnel(ctx context.Context, brokerConn *grpc.ClientC
 		return nil, err
 	}
 	return cloudrelay.OpenTCP(ctx, cloudCtx, conn, &cloudrelay.Verifier{Issuer: issuer}, d.key, service, signer)
+}
+
+// mcpCurrentAuth returns the held session as it is on disk now: connections
+// and forwards redial with the login they captured (WDY-4396). Same session
+// identity as config.AddAuth. An expired leaf fails here, before Cloud.
+func mcpCurrentAuth(held *config.AuthConfig) (*config.AuthConfig, error) {
+	auth := held
+	if reloadConfigFn != nil {
+		cfg, err := reloadConfigFn()
+		if err != nil {
+			return nil, err
+		}
+		auth = nil
+		for i := range cfg.Auth {
+			a := &cfg.Auth[i]
+			if a.CloudDashboard == held.CloudDashboard && a.CloudGRPC == held.CloudGRPC && a.OAuthIssuer == held.OAuthIssuer &&
+				a.ServiceAccount == held.ServiceAccount && a.OrganizationKey() == held.OrganizationKey() {
+				auth = a
+				break
+			}
+		}
+		if auth == nil {
+			return nil, fmt.Errorf("this Wendy Cloud login is gone; %s", signInAgainHint)
+		}
+	}
+	if len(auth.Certificates) > 0 {
+		if leaf, err := certs.ParseStoredLeaf(auth.Certificates[0].PemCertificate); err == nil && time.Now().After(leaf.NotAfter) {
+			return nil, fmt.Errorf("your Wendy Cloud certificate has expired; %s", signInAgainHint)
+		}
+	}
+	return auth, nil
 }
 
 // mcpAgentRPCPingSession measures a real request/response over the authorized

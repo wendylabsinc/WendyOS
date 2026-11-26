@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 	"google.golang.org/protobuf/proto"
@@ -92,6 +93,30 @@ func TestPrincipalSignerMLDSA(t *testing.T) {
 	signature, _ := decode64(parts[2])
 	if !scheme.Verify(pub, []byte(parts[0]+"."+parts[1]), signature, nil) {
 		t.Fatal("invalid ML-DSA request signature")
+	}
+}
+
+// WDY-4396: Cloud refuses an expired leaf, so never send one.
+func TestPrincipalSignerRefusesExpiredLeaf(t *testing.T) {
+	keyPEM, err := certs.GenerateMLDSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := certs.ParseSigningPrivateKeyPEM([]byte(keyPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-2 * time.Hour), NotAfter: time.Now().Add(-time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := PrincipalSigner(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), []byte(keyPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signer([]byte(`{}`)); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("signed with an expired leaf: %v", err)
 	}
 }
 func TestPrincipalSignerRefusesECDSADowngrade(t *testing.T) {

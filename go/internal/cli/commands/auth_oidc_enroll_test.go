@@ -45,6 +45,11 @@ func TestOIDCLoginPKIIdentityEndpointDefaultsToProductionAndSupportsTargets(t *t
 
 func testLeafPEM(t *testing.T, key crypto.Signer) string {
 	t.Helper()
+	return testLeafPEMUntil(t, key, time.Now().Add(time.Hour))
+}
+
+func testLeafPEMUntil(t *testing.T, key crypto.Signer, notAfter time.Time) string {
+	t.Helper()
 	now := time.Now()
 	principal, err := url.Parse("spiffe://wendy.sh/tenant/" + testOperatorTenant + "/operator/" + testOperatorSubject)
 	if err != nil {
@@ -54,7 +59,7 @@ func testLeafPEM(t *testing.T, key crypto.Signer) string {
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "operator"},
 		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.Add(time.Hour),
+		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		URIs:         []*url.URL{principal},

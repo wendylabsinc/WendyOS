@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -150,6 +152,16 @@ func tunnelAuthorizationFor(ctx context.Context, auth *config.AuthConfig) (*tunn
 }
 
 func openAuthorizedTunnel(ctx context.Context, auth *config.AuthConfig, assetID, service string, halfClose bool) (net.Conn, error) {
+	// Held connections and forwards redial with the login they captured. Sign
+	// with the login on disk now, renewed where possible, never an expired one.
+	current := *auth
+	if err := prepareDefaultCloudCertificate(ctx, &current); err != nil {
+		if errors.Is(err, errCertExpired) {
+			return nil, fmt.Errorf("%w; run 'wendy auth login' to sign in again", err)
+		}
+		return nil, err
+	}
+	auth = &current
 	entry, release, err := tunnelAuthorizationFor(ctx, auth)
 	if err != nil {
 		return nil, err

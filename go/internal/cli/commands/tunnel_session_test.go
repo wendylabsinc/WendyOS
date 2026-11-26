@@ -1,14 +1,20 @@
 package commands
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 	"google.golang.org/grpc"
@@ -35,6 +41,7 @@ func TestTunnelSessionReusesConnectionButAuthorizesEveryDial(t *testing.T) {
 	defer srv.Stop()
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = lis.Addr().String()
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
 	id := "00000000-0000-4000-8000-000000000042"
 	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
 	var session TunnelSession
@@ -153,6 +160,7 @@ func TestTunnelSessionPauseCancelsAuthorization(t *testing.T) {
 	defer srv.Stop()
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = lis.Addr().String()
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
 	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
@@ -214,6 +222,7 @@ func TestTunnelSessionRecoversAsSoonAsCloudReturns(t *testing.T) {
 	defer func() { srv.Stop() }()
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = address
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
 	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
@@ -297,5 +306,71 @@ func TestTunnelSessionReadsSigningFilesOnEveryDial(t *testing.T) {
 	}
 	if _, _, err := tunnelAuthorizationFor(ctx, auth); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dial after the signing key was removed: %v", err)
+	}
+}
+
+// WDY-4396: a held connection signs each dial with the login on disk now. An
+// expired one fails locally; a renewed one is used without a restart.
+func TestHeldCloudTunnelSignsWithLoginOnDisk(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signedWith := make(chan []byte, 2)
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		var req pb.RequestTunnelRequest
+		if err := stream.RecvMsg(&req); err != nil {
+			return err
+		}
+		var header struct{ X5C [][]byte }
+		raw, _ := base64.RawURLEncoding.DecodeString(strings.Split(string(req.GetPrincipalRequest().GetValue()), ".")[0])
+		_ = json.Unmarshal(raw, &header)
+		signedWith <- header.X5C[0]
+		return status.Error(codes.PermissionDenied, "test refusal")
+	}))
+	go srv.Serve(lis)
+	defer srv.Stop()
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = lis.Addr().String()
+	auth.OAuthIssuer = "" // no sign-in re-issue: an expired leaf stays expired
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
+	held := *auth
+	id := "00000000-0000-4000-8000-000000000042"
+	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	later := time.Now().Add(2 * time.Hour) // past the held leaf's NotAfter
+	oldNow := timeNowFn
+	t.Cleanup(func() { timeNowFn = oldNow })
+	timeNowFn = func() time.Time { return later }
+	if _, err := d.openTunnel(ctx, nil, &held, 50052, false); err == nil || !strings.Contains(err.Error(), "wendy auth login") {
+		t.Fatalf("expired login: %v", err)
+	}
+	select {
+	case <-signedWith:
+		t.Fatal("expired login reached Cloud")
+	default:
+	}
+
+	key, err := certs.ParseSigningPrivateKeyPEM([]byte(auth.Certificates[0].PemPrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed := *auth
+	renewed.Certificates = []config.CertificateInfo{auth.Certificates[0]}
+	renewed.Certificates[0].PemCertificate = testLeafPEMUntil(t, key, time.Now().Add(48*time.Hour))
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{renewed}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.openTunnel(ctx, nil, &held, 50052, false); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("renewed login: %v", err)
+	}
+	leaf, err := certs.ParseStoredLeaf(renewed.Certificates[0].PemCertificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := <-signedWith; !bytes.Equal(got, leaf.Raw) {
+		t.Fatal("held connection signed with its captured leaf, not the renewed one")
 	}
 }
