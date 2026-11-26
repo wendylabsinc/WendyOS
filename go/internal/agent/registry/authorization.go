@@ -404,18 +404,20 @@ func trustedKeyMiddleware(keys *trustedkeys.Store) func(http.Handler) http.Handl
 					_ = ociregistry.WriteError(w, ociregistry.ErrUnauthorized)
 					return
 				}
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(trustedkeys.WithCallerRole(r.Context(), trustedkeys.RoleNone)))
 				return
 			}
 			if len(r.TLS.PeerCertificates) == 0 {
 				_ = ociregistry.WriteError(w, ociregistry.ErrUnauthorized)
 				return
 			}
-			if role, _ := keys.Lookup(r.TLS.PeerCertificates[0].RawSubjectPublicKeyInfo); role < trustedkeys.RoleOperator {
+			role, _ := keys.Lookup(r.TLS.PeerCertificates[0].RawSubjectPublicKeyInfo)
+			if role < trustedkeys.RoleOperator {
 				_ = ociregistry.WriteError(w, ociregistry.ErrDenied)
 				return
 			}
-			next.ServeHTTP(w, r)
+			// The role a tag push needs depends on the app made from it.
+			next.ServeHTTP(w, r.WithContext(trustedkeys.WithCallerRole(r.Context(), role)))
 		})
 	}
 }

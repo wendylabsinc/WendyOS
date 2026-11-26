@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	containerd "github.com/containerd/containerd/v2/client"
+
 	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
@@ -56,5 +58,41 @@ func TestExecAndAttachNeedTheRoleTheAppsEntitlementsNeed(t *testing.T) {
 	plain := retirementContainerForTest{id: "app", labels: wendyLabels("app", "", "1", nil, nil, "", nil)}
 	if err := roleMayDrive(as(trustedkeys.RoleOperator), plain); err != nil {
 		t.Errorf("operator into a plain app: %v", err)
+	}
+}
+
+// A push that re-points the image an app was made from runs on the app's
+// next restart with the app's entitlements, so it needs the role that could
+// have deployed them.
+func TestPushOverAnAppNeedsTheRoleItsEntitlementsNeed(t *testing.T) {
+	bg := context.Background()
+	as := func(r trustedkeys.Role) context.Context { return trustedkeys.WithCallerRole(bg, r) }
+	app := func(ent string) []containerd.Container {
+		var ents []appconfig.Entitlement
+		if ent != "" {
+			ents = []appconfig.Entitlement{{Type: ent}}
+		}
+		return []containerd.Container{retirementContainerForTest{id: "app", labels: wendyLabels("app", "", "1", nil, ents, "", nil)}}
+	}
+	for _, c := range []struct {
+		name string
+		ctx  context.Context
+		ent  string
+		ok   bool
+	}{
+		{"keyless over admin", as(trustedkeys.RoleNone), appconfig.EntitlementAdmin, false},
+		{"keyless over plain", as(trustedkeys.RoleNone), "", true},
+		{"keyless over gpu", as(trustedkeys.RoleNone), appconfig.EntitlementGPU, true},
+		{"operator over build", as(trustedkeys.RoleOperator), appconfig.EntitlementBuild, false},
+		{"owner over admin", as(trustedkeys.RoleOwner), appconfig.EntitlementAdmin, true},
+		{"owner over build", as(trustedkeys.RoleOwner), appconfig.EntitlementBuild, true},
+	} {
+		if err := imageReplaceError(c.ctx, app(c.ent)); (err == nil) != c.ok {
+			t.Errorf("%s: err=%v, want allowed=%v", c.name, err, c.ok)
+		}
+	}
+	// Open and Enrolled devices carry no role and look nothing up.
+	if err := ImageReplaceError(bg, nil, "localhost/app:latest"); err != nil {
+		t.Errorf("open or enrolled: %v", err)
 	}
 }

@@ -33,6 +33,7 @@ import (
 	digest "github.com/opencontainers/go-digest"
 	"go.uber.org/zap"
 
+	agentcontainerd "github.com/wendylabsinc/wendy/go/internal/agent/containerd"
 	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 )
@@ -794,6 +795,11 @@ func (r containerdRegistry) MountBlob(ctx context.Context, fromRepo, toRepo stri
 }
 
 func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag string, contents []byte, mediaType string) (ociregistry.Descriptor, error) {
+	if tag != "" {
+		if err := agentcontainerd.ImageReplaceError(ctx, r.client, r.imageName(repo, tag)); err != nil {
+			return ociregistry.Descriptor{}, ociregistry.NewError(err.Error(), ociregistry.ErrDenied.Code(), nil)
+		}
+	}
 	desc := ociregistry.Descriptor{
 		Digest:    digest.FromBytes(contents),
 		Size:      int64(len(contents)),

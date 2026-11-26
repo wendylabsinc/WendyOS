@@ -916,6 +916,9 @@ const assembleLeaseExpiration = 30 * time.Minute
 
 func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader, imageConfig []byte) error {
 	ctx = c.withNamespace(ctx)
+	if err := ImageReplaceError(ctx, c.client, imageName); err != nil {
+		return err
+	}
 	cleanupCtx := c.withNamespace(context.Background())
 	cs := c.client.ContentStore()
 	is := c.client.ImageService()
@@ -6149,6 +6152,15 @@ func entitlementRoleError(ctx context.Context, cfg *appconfig.AppConfig) error {
 	if !closed {
 		return nil
 	}
+	if name, min, denied := deniedEntitlement(role, cfg); denied {
+		return fmt.Errorf("the %s entitlement needs the %s key and this deploy has %s; remove it from wendy.json or deploy with the %s key", name, min, describeRole(role), min)
+	}
+	return nil
+}
+
+// deniedEntitlement returns the first entitlement in cfg that role must not
+// grant, and the role it needs.
+func deniedEntitlement(role trustedkeys.Role, cfg *appconfig.AppConfig) (string, trustedkeys.Role, bool) {
 	for _, e := range []struct {
 		name string
 		min  trustedkeys.Role
@@ -6157,7 +6169,36 @@ func entitlementRoleError(ctx context.Context, cfg *appconfig.AppConfig) error {
 		{appconfig.EntitlementBuild, trustedkeys.RoleOwner},
 	} {
 		if role < e.min && cfg.HasEntitlement(e.name) {
-			return fmt.Errorf("the %s entitlement needs the %s key and this deploy has %s; remove it from wendy.json or deploy with the %s key", e.name, e.min, describeRole(role), e.min)
+			return e.name, e.min, true
+		}
+	}
+	return "", trustedkeys.RoleNone, false
+}
+
+// ImageReplaceError refuses, on a Closed device, pointing imageName at new
+// content while an app made from it holds an entitlement the caller's role
+// could not deploy: the app's next restart would run the new image with that
+// entitlement. Open and Enrolled devices are not checked.
+func ImageReplaceError(ctx context.Context, client *containerd.Client, imageName string) error {
+	if _, closed := trustedkeys.CallerRole(ctx); !closed {
+		return nil
+	}
+	ctrs, err := client.Containers(ctx, fmt.Sprintf("image==%q", imageName))
+	if err != nil {
+		return fmt.Errorf("finding the apps made from %s: %w", imageName, err)
+	}
+	return imageReplaceError(ctx, ctrs)
+}
+
+func imageReplaceError(ctx context.Context, ctrs []containerd.Container) error {
+	role, _ := trustedkeys.CallerRole(ctx)
+	for _, ctr := range ctrs {
+		labels, err := ctr.Labels(ctx)
+		if err != nil {
+			return fmt.Errorf("reading the app's entitlements: %w", err)
+		}
+		if name, min, denied := deniedEntitlement(role, &appconfig.AppConfig{Entitlements: parseEntitlementsFromAnnotations(labels)}); denied {
+			return fmt.Errorf("app %s runs this image with the %s entitlement, which needs the %s key, and this push has %s; push under another image name or with the %s key", labels[labelKeyAppID], name, min, describeRole(role), min)
 		}
 	}
 	return nil

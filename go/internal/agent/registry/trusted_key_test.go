@@ -88,3 +88,40 @@ func TestTrustedKeyMiddlewareCapsManifestBodies(t *testing.T) {
 		t.Fatalf("read %d manifest bytes, cap is %d", read, maxManifestBody)
 	}
 }
+
+// A tag push is checked against the apps made from that image, so the
+// middleware hands the caller's role to the backend.
+func TestTrustedKeyMiddlewarePassesTheCallerRole(t *testing.T) {
+	keys, err := trustedkeys.Open(filepath.Join(t.TempDir(), trustedkeys.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, _ := mldsa.GenerateKey(mldsa.MLDSA65())
+	ownerKey, _ := x509.MarshalPKIXPublicKey(k.Public())
+	owner, err := keys.Close(ownerKey, "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keys.SetKeylessApps(true, owner.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	var got trustedkeys.Role
+	var closed bool
+	h := trustedKeyMiddleware(keys)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, closed = trustedkeys.CallerRole(r.Context())
+	}))
+	push := func(key []byte) {
+		got, closed = -1, false
+		r := httptest.NewRequest(http.MethodPut, "/v2/app/manifests/latest", nil)
+		if key != nil {
+			r.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{RawSubjectPublicKeyInfo: key}}}
+		}
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	if push(nil); !closed || got != trustedkeys.RoleNone {
+		t.Errorf("keyless push: role=%v closed=%v", got, closed)
+	}
+	if push(ownerKey); !closed || got != trustedkeys.RoleOwner {
+		t.Errorf("owner push: role=%v closed=%v", got, closed)
+	}
+}
