@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/json"
 	"strings"
+	"unicode"
 )
 
 func isRobotStopPrompt(prompt string) bool {
@@ -20,7 +21,7 @@ func (e *Engine) robotEvidenceCall(prompt string, available []Tool, round int) *
 	priorRobot := e.robotControlMode
 	for _, message := range e.messages {
 		for _, call := range message.ToolCalls {
-			if call.Name == "robot_command" || call.Name == "robot_status" {
+			if call.Name == "robot_command" || call.Name == "robot_status" || call.Name == "unitree_pairings" {
 				priorRobot = true
 			}
 		}
@@ -40,6 +41,17 @@ func (e *Engine) robotEvidenceCall(prompt string, available []Tool, round int) *
 		}
 	}
 	question := strings.Contains(text, "?") || strings.HasPrefix(text, "is ") || strings.HasPrefix(text, "are ") || strings.HasPrefix(text, "what") || strings.HasPrefix(text, "how") || strings.HasPrefix(text, "have ") || strings.HasPrefix(text, "has ") || strings.HasPrefix(text, "did ")
+	connection, robot := robotConnectionQuestion(text, priorRobot)
+	if (question || strings.HasPrefix(text, "check ")) && connection {
+		if robot {
+			for _, tool := range available {
+				if tool.Name == "unitree_pairings" && !tool.RequiresApproval {
+					return &ToolCall{Name: "unitree_pairings", Arguments: json.RawMessage(`{}`)}
+				}
+			}
+		}
+		return nil
+	}
 	status := strings.Contains(text, "not moving") || strings.Contains(text, "status") || strings.Contains(text, "progress") || question && (strings.Contains(text, "align") || strings.Contains(text, "localiz") || strings.Contains(text, "done") || strings.Contains(text, "still") || strings.Contains(text, "moving"))
 	if !robotContext || !status {
 		return nil
@@ -50,4 +62,23 @@ func (e *Engine) robotEvidenceCall(prompt string, available []Tool, round int) *
 		}
 	}
 	return nil
+}
+
+// Gateway connectivity cannot establish whether a paired robot is online.
+// Context permits "is it online?", but not "is my Orin online?".
+func robotConnectionQuestion(text string, priorRobot bool) (connection, robot bool) {
+	var explicitRobot, pronoun, gateway bool
+	for _, word := range strings.FieldsFunc(text, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		switch word {
+		case "robot", "robots", "go2", "unitree":
+			explicitRobot = true
+		case "it", "they":
+			pronoun = true
+		case "gateway", "orin", "device", "server", "computer":
+			gateway = true
+		case "online", "offline", "paired", "connected", "disconnected":
+			connection = true
+		}
+	}
+	return connection, explicitRobot || priorRobot && pronoun && !gateway
 }
