@@ -296,3 +296,102 @@ func TestRobotCommandExplicitConnectStillOnlyObserves(t *testing.T) {
 		t.Fatalf("opens%d commands%+v", opened, robot.recorded())
 	}
 }
+
+func TestRobotCommandExistingIdleObserverWaitsForStrictMeasurements(t *testing.T) {
+	for _, action := range []string{"turn", "forward", "go_to"} {
+		t.Run(action, func(t *testing.T) {
+			store, _ := NewStore(t.TempDir())
+			saved, _ := store.Put(room())
+			frame := saved.Site.ID + "/" + saved.Site.ModelRevision
+			if err := store.SaveWaypoint(frame, "kitchen", RoomObject{X: 2, Z: 1}); err != nil {
+				t.Fatal(err)
+			}
+			robot := &setupTestRobot{state: twinrobot.SiteRobotSnapshot{IdleMeasurementsReady: true, MeasurementsReady: false, Pose: true, Aligned: true, Frame: frame}}
+			session := &robotSession{robot: robot, serial: "go2"}
+			s := &Server{Store: store, Context: context.Background(), observers: map[string]*robotSession{"go2": session}}
+			q := robotCommandRequest{Action: action, Serial: "go2", RequestID: "wait-for-fresh", Degrees: 45, DistanceMeters: 1, Destination: "kitchen"}
+			results := make(chan *httptest.ResponseRecorder, 1)
+			open := func(context.Context, string) (robotControl, error) {
+				t.Error("reopened existing observer")
+				return robot, nil
+			}
+			go func() { results <- setupCommandCall(s, context.Background(), open, q) }()
+			waitSetupCondition(t, func() bool {
+				session.commandMu.Lock()
+				defer session.commandMu.Unlock()
+				return session.commandReceipts[q.RequestID].result.State == "running"
+			})
+			if len(robot.recorded()) != 0 {
+				t.Fatal("idle readiness authorized motion")
+			}
+			robot.mu.Lock()
+			robot.state.MeasurementsReady = true
+			robot.mu.Unlock()
+			select {
+			case w := <-results:
+				if w.Code != 200 || !strings.Contains(w.Body.String(), `"state":"completed"`) {
+					t.Fatal(w.Body.String())
+				}
+			case <-time.After(time.Second):
+				t.Fatal("fresh measurements did not release bounded command")
+			}
+			setupCommandCall(s, context.Background(), open, q)
+			if len(robot.recorded()) != 1 {
+				t.Fatal("same request dispatched more than once")
+			}
+		})
+	}
+}
+
+func TestRobotCommandExistingIdleWaitCanBeStoppedOrCanceled(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancel", true: "stop"}[stop], func(t *testing.T) {
+			robot := &setupTestRobot{state: twinrobot.SiteRobotSnapshot{IdleMeasurementsReady: true}}
+			session := &robotSession{robot: robot, serial: "go2"}
+			s := &Server{Context: context.Background(), observers: map[string]*robotSession{"go2": session}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			q := robotCommandRequest{Action: "turn", Serial: "go2", RequestID: "idle-wait-turn", Degrees: 45}
+			results := make(chan *httptest.ResponseRecorder, 1)
+			go func() { results <- setupCommandCall(s, ctx, nil, q) }()
+			waitSetupCondition(t, func() bool {
+				session.commandMu.Lock()
+				defer session.commandMu.Unlock()
+				return session.commandReceipts[q.RequestID].result.State == "running"
+			})
+			if stop {
+				setupCommandCall(s, context.Background(), nil, robotCommandRequest{Action: "stop", Serial: "go2", RequestID: "stop-idle-wait"})
+			} else {
+				cancel()
+			}
+			select {
+			case w := <-results:
+				if !strings.Contains(w.Body.String(), `"state":"canceled"`) {
+					t.Fatal(w.Body.String())
+				}
+			case <-time.After(time.Second):
+				t.Fatal("idle wait ignored cancellation")
+			}
+			robot.mu.Lock()
+			robot.state.MeasurementsReady = true
+			robot.mu.Unlock()
+			setupCommandCall(s, context.Background(), nil, q)
+			expected := 0
+			if stop {
+				expected = 1
+			}
+			commands := robot.recorded()
+			if len(commands) != expected || (stop && commands[0].Action != "stop") {
+				t.Fatalf("unexpected movement %+v", commands)
+			}
+		})
+	}
+}
+
+func TestRobotCommandWaitReportsCurrentReadinessReason(t *testing.T) {
+	robot := &setupTestRobot{state: twinrobot.SiteRobotSnapshot{Message: "old obstacle failure", ReadinessMessage: "current odometry is delayed"}}
+	err := waitCommandMeasurements(context.Background(), robot, false)
+	if err == nil || !strings.Contains(err.Error(), "current odometry is delayed") || strings.Contains(err.Error(), "old obstacle") {
+		t.Fatalf("%v", err)
+	}
+}

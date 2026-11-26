@@ -11,6 +11,20 @@ import (
 // Room snapshots contain dense point clouds and repeated floor vertices. Keep
 // these transfers small over the authenticated container-exec connection.
 func respondRoom(w http.ResponseWriter, r *http.Request, value any, err error) {
+	// Localization mesh is an internal cache, not another large room asset to
+	// resend on every dashboard/state refresh. Availability remains metadata.
+	switch room := value.(type) {
+	case Room:
+		room.LocalizationGeometry = nil
+		value = room
+	case []Room:
+		rooms := make([]Room, len(room))
+		copy(rooms, room)
+		for i := range rooms {
+			rooms[i].LocalizationGeometry = nil
+		}
+		value = rooms
+	}
 	w.Header().Add("Vary", "Accept-Encoding")
 	if err != nil || !acceptsGzip(strings.Join(r.Header.Values("Accept-Encoding"), ",")) {
 		respond(w, value, err)
