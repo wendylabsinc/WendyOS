@@ -3,11 +3,14 @@ package twin
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
 )
 
@@ -28,20 +31,66 @@ type robotCommandRequest struct {
 
 // The chat transport reaches this through the selected agent's authenticated
 // container stream. It shares the map's existing observer and controller.
+type commandRobotOpener func(context.Context, string) (robotControl, error)
+
 func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
+	s.robotCommandUsing(w, r, s.openCommandRobot)
+}
+
+func (s *Server) robotCommandUsing(w http.ResponseWriter, r *http.Request, open commandRobotOpener) {
 	var q robotCommandRequest
 	if !decode(w, r, &q, 4096) {
 		return
 	}
-	if q.Action == "connect" {
-		s.connectCommandRobot(w, r, q.Serial)
+	if err := validateRobotCommand(q); err != nil {
+		respond(w, nil, err)
 		return
+	}
+	if q.Action == "connect" {
+		session, created, err := s.ensureCommandRobot(r.Context(), q.Serial, open)
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		message := "Robot observation session already exists."
+		if created {
+			message = "Observations started. Check robot_status for current measurements before movement."
+		}
+		respond(w, twinrobot.CommandResult{State: "completed", Message: message, Snapshot: session.robot.Status()}, nil)
+		return
+	}
+	if q.Action == "stop" {
+		s.cancelCommandSetups(q.Serial)
+	}
+	autoEligible := q.Action == "turn" || q.Action == "forward" || q.Action == "go_to"
+	if autoEligible {
+		// Register before checking observations so Stop orders setup and dispatch
+		// cancellation consistently, even when requests arrive together.
+		setupContext, done := s.beginCommandSetup(r.Context(), q.Serial)
+		defer done()
+		r = r.WithContext(setupContext)
 	}
 	s.mu.Lock()
 	session := s.observers[q.Serial]
 	s.mu.Unlock()
+	autoSetup := session == nil && autoEligible
+	if autoSetup {
+		var err error
+		session, _, err = s.ensureCommandRobot(r.Context(), q.Serial, open)
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+	}
 	if session == nil {
-		respond(w, nil, errors.New("use robot_command with action connect to start this Go2's observations"))
+		message := "No robot observations are active. Use action connect to inspect the robot."
+		if q.Action == "go_to_object" {
+			message = "Object evidence is missing; find the object again before approaching."
+		}
+		if q.Action == "stop" {
+			message = "Pending command startup canceled. No observation session exists to confirm a robot stop."
+		}
+		respond(w, nil, errors.New(message))
 		return
 	}
 	state := session.robot.Status()
@@ -53,14 +102,6 @@ func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		respond(w, map[string]any{"snapshot": state, "destinations": places}, nil)
-		return
-	}
-	if q.Action != "stop" && q.Action != "turn" && q.Action != "go_to" && q.Action != "remember" && q.Action != "forward" && q.Action != "go_to_object" {
-		respond(w, nil, errors.New("choose status, stop, turn, forward, go_to, go_to_object, or remember"))
-		return
-	}
-	if len(q.RequestID) < 8 || len(q.RequestID) > 80 {
-		respond(w, nil, errors.New("request_id must contain 8 to 80 characters; reuse it for retries"))
 		return
 	}
 	controller, ok := session.robot.(robotCommander)
@@ -109,6 +150,21 @@ func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	reject := func(message string) {
 		finish(twinrobot.CommandResult{State: "rejected", Message: message, Snapshot: session.robot.Status()})
+	}
+	if autoSetup {
+		if err := waitCommandMeasurements(r.Context(), session.robot); err != nil {
+			outcome := "rejected"
+			if r.Context().Err() != nil {
+				outcome = "canceled"
+			}
+			finish(twinrobot.CommandResult{State: outcome, Message: err.Error(), Snapshot: session.robot.Status()})
+			return
+		}
+		state = session.robot.Status()
+	}
+	if err := r.Context().Err(); err != nil {
+		finish(twinrobot.CommandResult{State: "canceled", Message: err.Error(), Snapshot: session.robot.Status()})
+		return
 	}
 	session.searchMu.Lock()
 	searching := session.searchState == "searching"
@@ -181,29 +237,145 @@ type robotCommandReceipt struct {
 	result  twinrobot.CommandResult
 }
 
+// validateRobotCommand runs before opening subscriptions or preparing control.
+// Controller checks remain authoritative for live geometry and readiness.
+func validateRobotCommand(q robotCommandRequest) error {
+	if !unitree.ValidSerial(q.Serial) {
+		return errors.New("invalid robot serial")
+	}
+	switch q.Action {
+	case "connect", "status":
+		return nil
+	case "stop", "turn", "forward", "go_to", "remember", "go_to_object":
+	default:
+		return errors.New("choose connect, status, stop, turn, forward, go_to, go_to_object, or remember")
+	}
+	if len(q.RequestID) < 8 || len(q.RequestID) > 80 {
+		return errors.New("request_id must contain 8 to 80 characters; reuse it for retries")
+	}
+	if q.Action == "turn" && (q.Degrees == 0 || q.Degrees < -180 || q.Degrees > 180) {
+		return errors.New("turn by 1 to 180 degrees; positive is left, negative is right")
+	}
+	if q.Action == "forward" && (math.IsNaN(q.DistanceMeters) || math.IsInf(q.DistanceMeters, 0) || q.DistanceMeters < .1 || q.DistanceMeters > 2) {
+		return errors.New("forward distance must be 0.1 to 2 meters")
+	}
+	if q.Action == "go_to" || q.Action == "remember" {
+		name := strings.TrimSpace(q.Destination)
+		if name == "" || len(name) > 80 || strings.ContainsFunc(name, unicode.IsControl) {
+			return errors.New("name a destination using 1 to 80 printable characters")
+		}
+	}
+	return nil
+}
+
+func (s *Server) openCommandRobot(ctx context.Context, serial string) (robotControl, error) {
+	if s.Conn == nil {
+		return nil, errors.New("robot gateway is unavailable")
+	}
+	return twinrobot.Open(ctx, s.Conn, serial)
+}
+
 // Connecting starts observations and the same STOP/avoidance preparation used
 // by the map. It never replaces another operator or invents a map alignment.
-func (s *Server) connectCommandRobot(w http.ResponseWriter, r *http.Request, serial string) {
+func (s *Server) ensureCommandRobot(ctx context.Context, serial string, open commandRobotOpener) (*robotSession, bool, error) {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	s.mu.Lock()
 	session := s.observers[serial]
 	s.mu.Unlock()
 	if session != nil {
-		respond(w, twinrobot.CommandResult{State: "completed", Message: "Robot observation session already exists.", Snapshot: session.robot.Status()}, nil)
-		return
+		return session, false, nil
 	}
-	if s.Conn == nil || s.Context == nil || r.Context().Err() != nil {
-		respond(w, nil, errors.New("robot gateway is unavailable"))
-		return
+	if s.Context == nil || s.Context.Err() != nil {
+		return nil, false, errors.New("robot gateway is unavailable")
 	}
-	robot, err := twinrobot.Open(s.Context, s.Conn, serial)
-	if err != nil {
-		respond(w, nil, err)
-		return
+	// The observer outlives this HTTP request after successful setup. While
+	// opening, request cancellation (including Stop) also cancels its transport.
+	life, cancel := context.WithCancel(s.Context)
+	stopCancel := context.AfterFunc(ctx, cancel)
+	robot, err := open(life, serial)
+	stopped := stopCancel()
+	if err != nil || !stopped || ctx.Err() != nil {
+		cancel()
+		if robot != nil {
+			robot.Close()
+		}
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		if err == nil {
+			err = context.Canceled
+		}
+		return nil, false, err
 	}
+	session = &robotSession{robot: robot, serial: serial}
 	s.mu.Lock()
-	s.observers[serial] = &robotSession{robot: robot, serial: serial}
+	if s.observers == nil {
+		s.observers = map[string]*robotSession{}
+	}
+	s.observers[serial] = session
 	s.mu.Unlock()
-	respond(w, twinrobot.CommandResult{State: "completed", Message: "Observations started. Check robot_status for current measurements before movement.", Snapshot: robot.Status()}, nil)
+	return session, true, nil
+}
+
+type commandSetup struct{ cancel context.CancelFunc }
+
+func (s *Server) beginCommandSetup(ctx context.Context, serial string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	setup := &commandSetup{cancel: cancel}
+	s.mu.Lock()
+	if s.commandSetups == nil {
+		s.commandSetups = map[string]map[*commandSetup]struct{}{}
+	}
+	if s.commandSetups[serial] == nil {
+		s.commandSetups[serial] = map[*commandSetup]struct{}{}
+	}
+	s.commandSetups[serial][setup] = struct{}{}
+	s.mu.Unlock()
+	return ctx, func() {
+		cancel()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.commandSetups[serial], setup)
+		if len(s.commandSetups[serial]) == 0 {
+			delete(s.commandSetups, serial)
+		}
+	}
+}
+
+func (s *Server) cancelCommandSetups(serial string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for setup := range s.commandSetups[serial] {
+		setup.cancel()
+	}
+}
+
+func waitCommandMeasurements(ctx context.Context, robot robotControl) error {
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(25 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		state := robot.Status()
+		if state.Disconnected {
+			return errors.New("robot disconnected while starting observations")
+		}
+		if state.MeasurementsReady {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("observations started but fresh measurements are not ready: %s", state.Message)
+		case <-poll.C:
+		}
+	}
 }

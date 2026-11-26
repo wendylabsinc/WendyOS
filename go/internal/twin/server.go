@@ -40,6 +40,8 @@ type robotSession struct {
 	searchReport               json.RawMessage
 }
 type Server struct {
+	commandSetups map[string]map[*commandSetup]struct{}
+
 	Store        *Store
 	Conn         grpc.ClientConnInterface
 	Context      context.Context

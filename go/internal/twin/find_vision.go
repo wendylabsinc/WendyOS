@@ -119,8 +119,10 @@ func (v visionModel) locate(ctx context.Context, jpeg []byte, query string) (box
 			Content string `json:"content"`
 		} `json:"message"`
 	}
-	err = v.call(ctx, "POST", "/api/chat", map[string]any{"model": v.model, "stream": false, "format": groundingSchema, "think": false, "keep_alive": "10m",
-		"options":  map[string]any{"temperature": 0, "num_predict": 300, "num_ctx": 4096},
+	// Match local chat's runner shape: changing num_ctx reloads the single
+	// resident model between tool selection, object detection, and the reply.
+	err = v.call(ctx, "POST", "/api/chat", map[string]any{"model": v.model, "stream": false, "format": groundingSchema, "think": false, "keep_alive": "1h",
+		"options":  map[string]any{"temperature": 0, "num_predict": 300, "num_ctx": 32768},
 		"messages": []map[string]any{{"role": "user", "content": prompt, "images": [][]byte{jpeg}}}}, &reply)
 	if err != nil {
 		return box, false, err
