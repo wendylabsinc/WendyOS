@@ -18,6 +18,14 @@ func TestRecoveryFlagCombinationsFailBeforeManifestLookup(t *testing.T) {
 		{"--device-type", orinNanoDeviceType, "--no-bmap"},
 		{"--device-type", orinDeviceType, "--yes-overwrite-internal"},
 		{"--device-type", orinDeviceType, "--rootfs-only", "--storage", "emmc"},
+		{"--device-type", go2DeviceType, "--rootfs-only", "--no-wifi"},
+		{"--device-type", go2DeviceType, "--storage", "sd", "--no-wifi"},
+		{"--device-type", go2DeviceType, "--drive", "/dev/disk9", "--no-wifi"},
+		{"--device-type", g1PC2DeviceType, "--rootfs-only", "--no-wifi"},
+		{"--device-type", g1PC2DeviceType, "--storage", "emmc", "--no-wifi"},
+		{"--device-type", g1PC2DeviceType, "--drive", "/dev/disk9", "--no-wifi"},
+		{"--device-type", go2DeviceType, "--flashpack", "go2.tar.zst", "--version", "1", "--no-wifi"},
+		{"--device-type", orinNanoDeviceType, "--flashpack", "go2.tar.zst", "--no-wifi"},
 	}
 	for _, args := range tests {
 		cmd := newOSInstallCmd()
@@ -25,6 +33,14 @@ func TestRecoveryFlagCombinationsFailBeforeManifestLookup(t *testing.T) {
 		if err := cmd.Execute(); err == nil {
 			t.Fatalf("args %v unexpectedly accepted", args)
 		}
+	}
+}
+
+func TestG1RecoverySelectorAcceptsLocalFlashpack(t *testing.T) {
+	cmd := newOSInstallCmd()
+	cmd.SetArgs([]string{"--device-type", g1DeviceType, "--flashpack", "g1.tar.zst", "--version", "1", "--no-wifi"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--flashpack cannot be combined") {
+		t.Fatalf("expected the G1 selector to reach local recovery option validation, got %v", err)
 	}
 }
 
@@ -100,6 +116,8 @@ func TestRecoverySelectorFiltersJetsonFamily(t *testing.T) {
 		{Product: rcm.ProductOrinAGX32},
 		{Product: rcm.ProductOrinNano8},
 		{Product: rcm.ProductThor},
+		{Product: rcm.ProductOrinNX16},
+		{Product: rcm.ProductOrinNX8},
 	}
 	thor := filterRecoveryDevices(devs, func(d rcm.RecoveryDevice) bool { return d.IsThor() })
 	if len(thor) != 1 || !thor[0].IsThor() {
@@ -114,6 +132,51 @@ func TestRecoverySelectorFiltersJetsonFamily(t *testing.T) {
 	agx := filterRecoveryDevices(devs, orinRecoveryMatch(orinDeviceType))
 	if len(agx) != 1 || !agx[0].IsOrinAGX() {
 		t.Fatalf("AGX filter = %+v", agx)
+	}
+	go2 := filterRecoveryDevices(devs, orinRecoveryMatch(go2DeviceType))
+	if len(go2) != 1 || go2[0].Product != rcm.ProductOrinNX16 {
+		t.Fatalf("Go2 filter = %+v", go2)
+	}
+	g1 := filterRecoveryDevices(devs, orinRecoveryMatch(g1PC2DeviceType))
+	if len(g1) != 1 || g1[0].Product != rcm.ProductOrinNX16 {
+		t.Fatalf("G1 PC2 filter = %+v", g1)
+	}
+}
+
+func TestGo2RecoveryBriefingAndDetection(t *testing.T) {
+	opts := t234InstallOptions{DeviceType: go2DeviceType, DeviceName: go2InstallName, Storage: "nvme"}
+	box := orinRecoveryBriefingBox(opts, false)
+	for _, want := range []string{"BAT and RJ45", "recessed recovery button", "Reconnect BAT", "two seconds", "NVME"} {
+		if !strings.Contains(box, want) {
+			t.Errorf("Go2 recovery briefing missing %q", want)
+		}
+	}
+	hints := orinRecoveryHints(opts)
+	if !strings.Contains(hints.buttonLine, "SIM eject tool") || !strings.Contains(hints.cablingLine, "BAT and RJ45") {
+		t.Fatalf("unexpected Go2 wait hints: %+v", hints)
+	}
+	device := installUSBDevice{vendor: rcm.VendorNVIDIA, product: rcm.ProductOrinNX16}
+	oldScan := scanRecoveryReadyUSBDevices
+	t.Cleanup(func() { scanRecoveryReadyUSBDevices = oldScan })
+	scanRecoveryReadyUSBDevices = func() ([]installUSBDevice, error) { return []installUSBDevice{device}, nil }
+	if !installRecoveryDetected(go2DeviceType) || installUSBTarget(device) != "" {
+		t.Fatal("the NX16 PID must establish recovery readiness without identifying a Go2 carrier")
+	}
+	if shouldPromptFlashMode(go2DeviceType, "recovery", false, "", true) {
+		t.Fatal("Go2 must go straight to USB recovery")
+	}
+}
+
+func TestG1PC2RecoveryBriefing(t *testing.T) {
+	opts := t234InstallOptions{DeviceType: g1PC2DeviceType, DeviceName: g1PC2InstallName, Storage: "nvme"}
+	box := orinRecoveryBriefingBox(opts, false)
+	for _, want := range []string{"USB 2.0 data cable", "PC2 flashing USB-C", "PWR and REC", "two PC2 lights"} {
+		if !strings.Contains(box, want) {
+			t.Errorf("G1 PC2 recovery briefing missing %q", want)
+		}
+	}
+	if shouldPromptFlashMode(g1PC2DeviceType, "recovery", false, "", true) {
+		t.Fatal("G1 PC2 must go straight to USB recovery")
 	}
 }
 

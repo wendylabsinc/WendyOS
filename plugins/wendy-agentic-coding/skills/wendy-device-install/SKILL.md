@@ -1,14 +1,14 @@
 ---
 name: wendy-device-install
-description: Install WendyOS on a new Raspberry Pi or Jetson, install the Wendy Agent on a robot or Linux host, or diagnose first boot after flashing. Use for board setup and empty discovery on new hardware; use wendy-install for the developer machine's CLI and wendy-device-debug for an already working installation.
+description: Install WendyOS on a new Raspberry Pi or Jetson, install the Wendy Agent on an existing Linux host, or diagnose first boot after flashing. Use for board setup and empty discovery on new hardware; use wendy-install for the developer machine's CLI and wendy-device-debug for an already working installation.
 ---
 
 # Device installation
 
 Identify the board, carrier, existing OS, host OS, intended storage and network
-before selecting an image. Ask only for missing details. For Unitree G1 PC2,
-keep vendor Ubuntu and install the Agent; a generic Jetson image does not support
-its custom carrier. Distinguish a new board from an installed but unreachable one.
+before selecting an image. Ask only for missing details. For Unitree G1 EDU PC2,
+select `unitree-g1` to use the carrier-specific WendyOS recovery image.
+Distinguish a new board from an installed but unreachable one.
 
 ## Plan without writing
 
@@ -17,7 +17,7 @@ server. Install tools are in the `setup` group, which is not listed until you
 call `wendy_tools(groups=["setup"])`. Use `os_install_plan` without a device
 connection. It returns the method,
 published version/artifact, erase scope, requirements and command argument array.
-Jetson planning requires `carrier="developer-kit"`; do not infer this from its SoC.
+Jetson developer-kit planning requires `carrier="developer-kit"`. Verify the carrier.
 
 If the tool is still missing after enabling `setup`, check
 `wendy install plan --help`. Update the CLI and
@@ -79,7 +79,7 @@ input mechanism; keep passwords and enrollment tokens out of reusable commands,
 PRs and logs. Cloud pre-enrollment is optional. `provisioning_start` enrolls an
 already running agent; it cannot install an OS on a blank board.
 
-For the G1 or another agent-only Linux installation, run the installer **on the
+For agent-only setup on an existing Linux host, run the installer **on the
 confirmed target host**, using its board guide. Running it on the development
 laptop will not install the robot.
 

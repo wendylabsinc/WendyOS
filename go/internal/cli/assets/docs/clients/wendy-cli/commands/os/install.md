@@ -7,6 +7,8 @@ Installs WendyOS onto an NVMe or SD card, fully recovers supported Jetsons over 
 The command presents a device picker with Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, then use the arrow keys and Enter to select a device. Linux includes WendyOS targets and Linux Desktop, Mac offers Headless Mac, and Microcontrollers lists ESP32 targets with published firmware. Empty categories are hidden. When a Jetson in USB recovery mode, a Qualcomm board in EDL mode, or an ESP32-S31 in ROM download mode is connected, a Detected USB tab appears first; see [`wendy install`](../install.md). Select the device type to take the appropriate path:
 
 - **Jetson Orin Nano / AGX Orin** -> download a recovery flashpack -> verify the module/carrier -> update QSPI and NVMe/eMMC together
+- **Unitree Go2 EDU (Orin NX 16 GB)** -> download a Go2 recovery flashpack -> boot over USB recovery -> update QSPI and internal NVMe
+- **Unitree G1 EDU PC2 (Orin NX 16 GB)** -> download a PC2 recovery flashpack -> boot over USB recovery -> update QSPI and internal NVMe
 - **Raspberry Pi targets** -> download OS image -> write to SD/NVMe -> write config partition
 - **Jetson AGX Thor** -> download flashpack -> boot over USB recovery -> flash QSPI and internal NVMe
 - **ESP32 targets** → detect USB serial port → download firmware `.bin` → flash over serial
@@ -26,6 +28,12 @@ wendy install --device-type jetson-agx-thor
 
 # Orin Nano: full QSPI + NVMe recovery (macOS or Linux)
 wendy install --device-type jetson-orin-nano
+
+# Go2 EDU: full QSPI + NVMe recovery over USB
+wendy install --device-type unitree-go2 --no-wifi
+
+# G1 EDU PC2: full QSPI + NVMe recovery over USB
+wendy install --device-type unitree-g1 --no-wifi
 
 # AGX Orin: storage is mandatory non-interactively
 wendy install --device-type jetson-agx-orin --storage nvme
@@ -57,13 +65,70 @@ and the serial console is active. They are for testing the PR on hardware —
 the PR is closed.
 
 `--pr` is supported for Linux disk-image devices, for Jetson recovery (Orin
-Nano/AGX and AGX Thor) and for the Dragonwing EDL flash. PR builds publish
+Nano/AGX, Go2 EDU, G1 EDU PC2 and AGX Thor) and for the Dragonwing EDL flash. PR builds publish
 recovery flashpacks into the `pr/<N>/` sandbox, so `--pr` can drive a full
 recovery install (QSPI+storage for Orin, QSPI+NVMe for Thor) as well as
 `--pr --rootfs-only` raw imaging on Orin. It is not supported for ESP32
 targets (Wendy Lite firmware is not built by the per-PR pipeline).
 `--pr` is mutually exclusive with `--nightly`, `--version`, and a positional
 image path.
+
+---
+
+## Unitree Go2 EDU
+
+This procedure installs WendyOS on the Go2 EDU expansion dock with the Orin NX
+16 GB (P3767-0000) and internal NVMe. Run the installer on an internet-connected
+computer. Wendy downloads the latest Go2 recovery flashpack and writes it to the
+dock over USB.
+
+```sh
+wendy install --device-type unitree-go2 --no-wifi
+```
+
+1. Power off the Go2. Connect a USB data cable to the dock’s recovery
+   USB-C port beside the BAT and RJ45 connectors.
+2. Disconnect the dock's BAT power. Press and hold the recessed recovery button
+   near RJ45 with a SIM eject tool. Reconnect BAT while holding the button, wait
+   about two seconds, then release it.
+3. Confirm the cable is connected to the intended Go2 dock. APX identifies
+   the Orin NX module and USB location. Identify the carrier physically.
+4. Confirm the erase of QSPI and the internal NVMe. Keep the cable connected
+   through the recovery boot, firmware and NVMe writes, and final status.
+
+Wendy sends the recovery payload over USB with the Jetson RCM protocol. The
+recovery initrd exports USB mass-storage disks for firmware handoff, NVMe write
+and final status. The CLI shows each step and byte progress during the NVMe write.
+After reboot, the dock uses `192.168.123.18/24` on its robot-facing Ethernet.
+
+For local Builder testing, pass `--flashpack ./go2.flashpack.tar.zst` to use a
+Go2 flashpack from disk.
+
+---
+
+## Unitree G1 EDU PC2
+
+Use this procedure for the G1 EDU development computer with an Orin NX 16 GB
+(P3767-0000) and internal NVMe. Save the running PC2 system and firmware
+before accepting the erase prompt. From an internet-connected computer, run:
+
+```sh
+wendy install --device-type unitree-g1 --no-wifi
+```
+
+1. Locate the PC2 flashing connector below the PWR and REC buttons in the
+   rear electronics compartment. Use a USB 2.0 data cable to keep both stages
+   of recovery on the same host USB path.
+2. Switch on the G1 and check that three PC2 lights are steady. Hold the
+   two PC2 buttons together for two seconds.
+3. Let go of PWR while continuing to hold REC. When only two lights are
+   visible, take your finger off REC.
+4. Confirm the selected unit and approve the QSPI and NVMe write. Leave the
+   USB cable in place while the installer writes the firmware and NVMe and
+   collects the final status.
+
+For development, `--flashpack ./g1.flashpack.tar.zst` loads a local G1 PC2
+archive. `--device-type unitree-g1-pc2` is also accepted.
 
 ---
 
@@ -258,6 +323,7 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--pr` | — | Install from wendyos-builder PR #N (mutually exclusive with `--nightly`, `--version`, positional path; not supported for ESP32 targets) |
 | `--device-type` | — | Device type from manifest (Linux targets only, e.g. `raspberry-pi-5`; not supported for ESP32 targets: `esp32-c5`, `esp32-c6`, `esp32-c61`, `esp32-p4`, `esp32-s3`) |
 | `--version` | latest | WendyOS version to install (Linux only) |
+| `--flashpack` | — | Local Go2 EDU or G1 EDU PC2 USB recovery archive (`.tar.zst`) |
 | `--drive` | interactive | Target drive path (e.g. `/dev/disk4`) |
 | `--rootfs-only` | false | Explicitly write only an Orin SD/NVMe image; QSPI is not updated |
 | `--force` | false | Skip confirmation prompts; required without a terminal |
@@ -313,13 +379,16 @@ returns the installation method, erase scope, requirements and CLI argument arra
 ```sh
 wendy install plan --device-type raspberry-pi-5 --drive <confirmed-drive>
 wendy install plan --device-type jetson-orin-nano --carrier developer-kit --storage nvme
+wendy install plan --device-type unitree-go2 --carrier go2-edu
 wendy install plan --device-type unitree-g1
 wendy install verify --address <expected-device> --expected-os-version <version> --expected-device-type <board>
 ```
 
-Planning supports Pi 3/4/5, Orin/Thor developer kits, G1 PC2 and Linux agent installs.
-Jetson planning requires `--carrier developer-kit`; custom carriers need their
-vendor guide. Raw-media plans require a drive from `wendy os list-drives --all --json`
+Planning supports Pi 3/4/5, Orin/Thor developer kits, published Go2 EDU and
+G1 EDU PC2 flashpacks, and agent installs for Linux hosts. Jetson developer-kit plans require
+`--carrier developer-kit`. The explicit `unitree-go2` target selects the Go2 EDU
+carrier, and `unitree-g1` selects the G1 EDU development computer. Raw-media
+plans require a drive from `wendy os list-drives --all --json`
 before returning a write command. `--rootfs-only` leaves Orin QSPI unchanged.
 The write still runs through the regular installer in a terminal.
 

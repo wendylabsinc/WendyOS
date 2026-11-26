@@ -1,5 +1,5 @@
 ---
-title: Reflash Unitree G1 PC2
+title: Restore Unitree JetPack on G1 PC2
 description: Replace the Unitree G1 PC2 image and firmware with Unitree's JetPack 6.2 release
 ---
 
@@ -14,7 +14,7 @@ description: Replace the Unitree G1 PC2 image and firmware with Unitree's JetPac
 This guide replaces the operating system and module firmware on the Unitree G1
 development computer, known as PC2, with Unitree's JetPack 6.2 image.
 
-You do not need to reflash PC2 to [install Wendy Agent](/docs/installation/wendy-agent-unitree-g1).
+To install WendyOS, use the [G1 USB recovery guide](/docs/installation/wendy-agent-unitree-g1).
 
 <Callout type="warning">
   This process erases the target NVMe drive and replaces the PC2 firmware.
@@ -166,15 +166,7 @@ include the G1 carrier-board configuration.
 
 ## Verify G1 Hardware
 
-After [installing Wendy Agent](/docs/installation/wendy-agent-unitree-g1), check
-the RealSense camera and other hardware from your development machine:
-
-```bash
-wendy device camera list --device unitree-g1-nx.local:50052
-wendy device hardware list --device unitree-g1-nx.local:50052
-```
-
-Check the G1 in this order:
+Check the restored system and peripherals in this order:
 
 - Ethernet and Wi-Fi
 - USB devices and cameras
@@ -193,5 +185,5 @@ that owns the camera, then retry.
 
 ## Next Steps
 
-- [Install Wendy Agent on the G1](/docs/installation/wendy-agent-unitree-g1)
+- [Install WendyOS on the G1](/docs/installation/wendy-agent-unitree-g1)
 - [JetPack 6.2 release information](https://developer.nvidia.com/embedded/jetpack-sdk-62)

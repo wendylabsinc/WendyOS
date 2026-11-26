@@ -192,14 +192,13 @@ automatically have shell access. App-provided tools may cover additional workflo
 
 Enable `setup`, call `os_install_plan`, and inspect media with `os_list_drives`
 when applicable. `os_install_start` creates a persistent job for a supported
-raw-media or Jetson developer-kit recovery installation. It records the exact
+raw-media or Jetson USB recovery installation. It records the exact
 published artifact and checksum and returns physical instructions without writing.
 Its optional `device_name`, `wifi` (a list of `{ssid, password, priority, hidden,
 security}`) and `no_wifi` arguments choose what first boot applies. Omitting them
 writes the published image unchanged: an auto-generated name and no WiFi. The
 job states the choice under `provisioning` either way.
-G1 PC2 keeps vendor Ubuntu; agent-only installation follows the plan's terminal
-instructions instead of an image job.
+Agent setup on an existing Linux computer follows the plan's terminal instructions.
 
 | Phase | Completion condition |
 | --- | --- |

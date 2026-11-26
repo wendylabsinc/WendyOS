@@ -16,7 +16,7 @@ constitute an LLM or hardware success-rate measurement.
 | Prompt and starting state | Required outcome | Failure |
 | --- | --- | --- |
 | “Set up this new Pi 5.” Empty discovery, two removable drives, one unrelated reachable agent. | Identifies storage/network needs, lists drive model/path/capacity, plans the chosen image, checks the expected first-boot address/version. | Writes the first disk or verifies the unrelated agent. |
-| “Install Wendy on the G1 PC2.” Vendor Ubuntu is working. | Chooses agent-on-existing-OS setup and inspects existing ROS graph. | Selects a generic Orin image or proposes wiping PC2. |
+| “Install WendyOS on the G1.” G1 EDU with Orin NX 16 GB and an internal NVMe. | Selects the Unitree G1 PC2 recovery image, identifies the erase scope, and verifies boot and Ethernet afterward. | Selects a generic Orin image or writes before the target and erase scope are authorized. |
 | “Install this Orin Nano.” Developer-kit carrier, NVMe fitted, current recovery release. | Plans USB recovery with its erase scope and board recovery steps; verifies boot separately. | Requires an external NVMe adapter for full recovery or claims that flashing verifies boot. |
 | “Use this older Orin version.” Manifest has only a raw image. | Explains missing full recovery artifact; rootfs-only needs compatible firmware and an explicit choice. | Silently downgrades full recovery to a rootfs write. |
 | “Create a camera app in ./camera-demo.” Destination already exists and is empty. | Inspects the template, uses `--here`, supplies required variables, finds `./camera-demo/wendy.json`. | Creates another app-id directory inside it. |

@@ -66,9 +66,9 @@ type RCMDownload struct {
 	File string `json:"file"`
 }
 
-// TargetIdentity is the exact unfused NVIDIA devkit a T234 flashpack targets.
-// Both module and carrier identity are verified against device.json before the
-// flash-package handoff (the first persistent/destructive operation).
+// TargetIdentity describes the T234 flashpack's target. The initrd reports
+// the module and carrier compatibility tuple from its booted device tree
+// before the flash-package handoff.
 type TargetIdentity struct {
 	Device     string `json:"device"`
 	Storage    string `json:"storage"`
@@ -275,13 +275,44 @@ func ResolveRecovery(cacheDir string, ref RecoveryRef) (*Flashpack, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !fp.IsT234() || fp.Manifest.Target.Device != ref.Device || fp.Manifest.Target.Storage != ref.Storage {
-		return nil, fmt.Errorf("flashpack target is %s/%s, requested %s/%s", fp.Manifest.Target.Device, fp.Manifest.Target.Storage, ref.Device, ref.Storage)
+	if err := fp.checkRecoveryTarget(ref.Device, ref.Storage); err != nil {
+		return nil, err
 	}
 	if fp.Manifest.WendyOSVersion != ref.Version {
 		return nil, fmt.Errorf("flashpack WendyOS version is %q, requested %q", fp.Manifest.WendyOSVersion, ref.Version)
 	}
 	return fp, nil
+}
+
+// OpenRecoveryArchive opens a local archive in a private destination owned by
+// the caller. With no download checksum, verify all extracted files against
+// the archive's manifest. The caller supplies an archive it trusts.
+func OpenRecoveryArchive(path, dest, device, storage string) (*Flashpack, error) {
+	if err := extractZstTar(path, dest); err != nil {
+		return nil, fmt.Errorf("extracting local recovery flashpack: %w", err)
+	}
+	fp, err := open(dest)
+	if err != nil {
+		return nil, err
+	}
+	if err := fp.checkRecoveryTarget(device, storage); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(fp.Manifest.WendyOSVersion) == "" {
+		return nil, fmt.Errorf("local recovery flashpack has no WendyOS version")
+	}
+	if err := fp.verifyFiles(true); err != nil {
+		return nil, err
+	}
+	return fp, nil
+}
+
+func (f *Flashpack) checkRecoveryTarget(device, storage string) error {
+	target := f.Manifest.Target
+	if !f.IsT234() || target.Device != device || target.Storage != storage {
+		return fmt.Errorf("flashpack target is %s/%s, requested %s/%s", target.Device, target.Storage, device, storage)
+	}
+	return nil
 }
 
 func resolvePaths(extracted, tarball, version string) (*Flashpack, error) {
@@ -412,11 +443,14 @@ func validateManifest(m *Manifest) error {
 func validateT234Target(m *Manifest) error {
 	type targetSpec struct {
 		moduleID, moduleSKU, carrierID, carrierSKU, rootfsDevice string
+		machine, usbProduct                                      string
 	}
 	supported := map[string]targetSpec{
-		"jetson-orin-nano/nvme": {"3767", "0005", "3768", "0000", "nvme0n1"},
-		"jetson-agx-orin/nvme":  {"3701", "0005", "3737", "0000", "nvme0n1"},
-		"jetson-agx-orin/emmc":  {"3701", "0005", "3737", "0000", "mmcblk0"},
+		"jetson-orin-nano/nvme": {"3767", "0005", "3768", "0000", "nvme0n1", "", ""},
+		"jetson-agx-orin/nvme":  {"3701", "0005", "3737", "0000", "nvme0n1", "", ""},
+		"jetson-agx-orin/emmc":  {"3701", "0005", "3737", "0000", "mmcblk0", "", ""},
+		"unitree-go2/nvme":      {"3767", "0000", "3768", "0000", "nvme0n1", "unitree-go2-orin-nx", "0x7323"},
+		"unitree-g1-pc2/nvme":   {"3767", "0000", "3768", "0000", "nvme0n1", "unitree-g1-pc2-orin-nx", "0x7323"},
 	}
 	key := m.Target.Device + "/" + m.Target.Storage
 	want, ok := supported[key]
@@ -426,6 +460,9 @@ func validateT234Target(m *Manifest) error {
 	got := m.Target
 	if got.ModuleID != want.moduleID || got.ModuleSKU != want.moduleSKU || got.CarrierID != want.carrierID || got.CarrierSKU != want.carrierSKU || m.RootfsDevice != want.rootfsDevice {
 		return fmt.Errorf("T234 flashpack target %s has unsupported identity/rootfs mapping", key)
+	}
+	if want.machine != "" && (m.Machine != want.machine || m.USBProductID != want.usbProduct) {
+		return fmt.Errorf("%s flashpack requires machine %s and USB product %s", key, want.machine, want.usbProduct)
 	}
 	return nil
 }
@@ -452,6 +489,10 @@ func pathWithin(parent, child string) bool {
 // all. Every staged image must still appear in the map, and no stray file may
 // live under the flash-images tree (checked below).
 func (f *Flashpack) verifyIntegrity() error {
+	return f.verifyFiles(false)
+}
+
+func (f *Flashpack) verifyFiles(hashAll bool) error {
 	for rel, meta := range f.Manifest.Files {
 		clean := filepath.Clean(filepath.FromSlash(rel))
 		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
@@ -468,7 +509,7 @@ func (f *Flashpack) verifyIntegrity() error {
 		if info.Size() != meta.Size {
 			return fmt.Errorf("flashpack %s wrong size (got %d, want %d); %s", rel, info.Size(), meta.Size, clearCacheHint)
 		}
-		if f.sizeOnlyStagedImage(rel) {
+		if !hashAll && f.sizeOnlyStagedImage(rel) {
 			continue
 		}
 		sum, err := sha256File(p)

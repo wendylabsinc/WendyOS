@@ -35,6 +35,10 @@ func installRecoveryDetected(deviceType string) bool {
 		fmt.Println(tui.WarningMessage(fmt.Sprintf("Could not check USB recovery mode: %v", err)))
 	}
 	for _, d := range devices {
+		// With the carrier already selected, the NX16 PID identifies recovery readiness.
+		if isUnitreeOrinRecovery(deviceType) && d.vendor == rcm.VendorNVIDIA && d.product == rcm.ProductOrinNX16 {
+			return true
+		}
 		if installUSBTarget(d) == deviceType {
 			return true
 		}

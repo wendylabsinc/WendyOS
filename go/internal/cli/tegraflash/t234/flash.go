@@ -256,7 +256,7 @@ func (s *Stage2) verifyDeviceIdentity(ctx context.Context, disk UMSDisk) (UMSDis
 	path := tmp.Name()
 	tmp.Close()
 	defer os.Remove(path)
-	s.detail("verifying module and carrier identity")
+	s.detail("checking recovery device tree and USB session")
 	const identityReadAttempts = 3
 	for attempt := 1; ; attempt++ {
 		readErr := s.RunHelper(ctx, HelperRequest{Writer: WriterOptions{Device: disk.RawPath, DumpTo: path, DumpBytes: flashpkgSize}}, nil)
@@ -311,7 +311,7 @@ func (s *Stage2) verifyDeviceIdentity(ctx context.Context, disk UMSDisk) (UMSDis
 		return UMSDisk{}, err
 	}
 	s.supportsSingle = hasSingleEnumeration(got.Capabilities)
-	fmt.Fprintf(s.Out, "  identity verified: module P%s-%s, carrier P%s-%s, session %s\n", got.ModuleID, got.ModuleSKU, got.CarrierID, got.CarrierSKU, got.SessionID)
+	fmt.Fprintf(s.Out, "  recovery device tree matches: module P%s-%s, carrier P%s-%s, session %s\n", got.ModuleID, got.ModuleSKU, got.CarrierID, got.CarrierSKU, got.SessionID)
 	return disk, nil
 }
 

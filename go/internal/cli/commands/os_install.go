@@ -29,6 +29,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/devicename"
+	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/flashpack"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -44,11 +46,13 @@ type t234InstallOptions struct {
 	Version       string
 	Storage       string
 	Artifact      *recoveryFlashpackInfo
+	Flashpack     *flashpack.Flashpack
 	Force         bool
 	WiFi          wifiCLIOptions
 	RequestedName string
 	PreEnroll     preEnrollOptions
 	Agent         *localInstallAgent
+	PRNumber      int
 	// Nightly picks the agent seeded on /config from the same channel as the image.
 	Nightly bool
 }
@@ -80,6 +84,7 @@ func newOSInstallCmd() *cobra.Command {
 	var enrollCloudGRPC string
 	var prNumber int
 	var binaryPath string
+	var localFlashpack string
 	var drivers []string
 
 	cmd := &cobra.Command{
@@ -94,6 +99,12 @@ When called with positional arguments, skips interactive prompts:
 
 When called with manifest-backed flags, installs a specific version:
   wendy os install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force --no-wifi
+
+Download and install WendyOS on a Go2 EDU expansion dock over USB-C:
+  wendy install --device-type unitree-go2 --no-wifi
+
+Download and install WendyOS on a G1 EDU PC2 over USB-C:
+  wendy install --device-type unitree-g1 --no-wifi
 
 Pre-seed multiple WiFi networks (repeatable, highest-priority first):
   wendy os install --device-type raspberry-pi-5 --drive /dev/disk4 --force \
@@ -117,6 +128,9 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			defer startInstallSession(cmd)()
+			// The G1 image targets the EDU development computer. Keep the
+			// carrier-specific name for archive and manifest validation.
+			deviceType = onboarding.CanonicalDeviceType(deviceType)
 			// Alias and driver resolution can fetch manifests before runOSInstall.
 			// Refuse unsupported explicit targets before either path runs.
 			if isESP32Target(deviceType) {
@@ -135,6 +149,22 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 			}
 			if rootfsOnly && len(args) > 0 {
 				return usageErrorf("--rootfs-only cannot be combined with positional [image] [drive] arguments")
+			}
+			if cmd.Flags().Changed("flashpack") {
+				if localFlashpack == "" || !isUnitreeOrinRecovery(deviceType) {
+					return usageErrorf("--flashpack requires a local archive path and --device-type %s or %s", go2DeviceType, g1DeviceType)
+				}
+				if len(args) != 0 || nightly || prNumber != 0 || versionFlag != "" || len(drivers) > 0 {
+					return usageErrorf("--flashpack cannot be combined with positional arguments, --version, --nightly, --pr, or --driver")
+				}
+			}
+			if isUnitreeOrinRecovery(deviceType) {
+				if err := checkUnitreeRecoveryOptions(deviceType, rootfsOnly, storageOverride); err != nil {
+					return err
+				}
+				if err := rejectRecoveryDriveFlags(driveFlag, noBmap, yesOverwriteInternal); err != nil {
+					return err
+				}
 			}
 			if prNumber > 0 {
 				if nightly || versionFlag != "" || len(args) > 0 {
@@ -195,6 +225,13 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 				}
 			}
 			rootfsOnlyExplicit := cmd.Flags().Changed("rootfs-only")
+			if localFlashpack != "" {
+				return installUnitreeFromArchive(cmd.Context(), localFlashpack, t234InstallOptions{
+					DeviceType: deviceType, DeviceName: unitreeRecovery(deviceType).name, Storage: "nvme",
+					Force: force, WiFi: opts, RequestedName: deviceName,
+					PreEnroll: preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, Agent: agent,
+				})
+			}
 			// The alias lookup, the driver lookup and the device list all read the
 			// master manifest; they share one download of it.
 			ctx := withMainManifestMemo(cmd.Context())
@@ -226,6 +263,7 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 	cmd.Flags().BoolVar(&yesOverwriteInternal, "yes-overwrite-internal", false, "Required to wipe an internal (non-removable) drive in non-interactive mode")
 	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5)")
 	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted)")
+	cmd.Flags().StringVar(&localFlashpack, "flashpack", "", "Install a local Go2 EDU or G1 EDU PC2 USB recovery flashpack (.tar.zst)")
 	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
 	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure a single WiFi SSID on first boot (shortcut for --wifi)")
 	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Password for --wifi-ssid")
@@ -779,6 +817,14 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	if err := checkInstallMode(selectedVersion, ver.InstallMode); err != nil {
 		return err
 	}
+	if isUnitreeOrinRecovery(selected) {
+		if err := checkUnitreeRecoveryOptions(selected, rootfsOnly, storageOverride); err != nil {
+			return err
+		}
+		if ver.InstallMode != "recovery" {
+			return fmt.Errorf("version %s has no USB recovery flashpack for %s", selectedVersion, selected)
+		}
+	}
 	if rootfsOnly && !isT234RecoveryDevice(selected) {
 		return fmt.Errorf("--rootfs-only is supported only for Jetson Orin recovery targets")
 	}
@@ -849,7 +895,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		return installOrinRestartable(ctx, t234InstallOptions{
 			DeviceType: selected, DeviceName: device.Name, Version: selectedVersion,
 			Storage: storage, Artifact: artifact, Force: force, WiFi: wifi,
-			RequestedName: deviceName, PreEnroll: preOpts, Agent: agent, Nightly: nightly,
+			RequestedName: deviceName, PreEnroll: preOpts, Agent: agent, PRNumber: prNumber, Nightly: nightly,
 		})
 	}
 	if isT234RecoveryDevice(selected) && rootfsOnly {
@@ -912,6 +958,7 @@ func rejectRecoveryDriveFlags(drive string, noBmap, overwriteInternal bool) erro
 // today's behavior untouched.
 func shouldPromptFlashMode(deviceType, installMode string, rootfsOnlyExplicit bool, storageOverride string, interactive bool) bool {
 	return isT234RecoveryDevice(deviceType) &&
+		!isUnitreeOrinRecovery(deviceType) &&
 		installMode == "recovery" &&
 		!rootfsOnlyExplicit &&
 		storageOverride != "emmc" &&
@@ -941,9 +988,9 @@ func t234FlashModeItems() []tui.PickerItem {
 }
 
 func chooseT234RecoveryStorage(device, override string) (string, error) {
-	if device == orinNanoDeviceType {
+	if device == orinNanoDeviceType || isUnitreeOrinRecovery(device) {
 		if override != "" && override != "nvme" {
-			return "", fmt.Errorf("%s recovery supports NVMe only", orinNanoDeviceType)
+			return "", fmt.Errorf("%s recovery supports NVMe only", device)
 		}
 		return "nvme", nil
 	}

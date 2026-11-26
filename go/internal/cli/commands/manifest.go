@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -677,8 +678,16 @@ const orinDeviceType = "jetson-agx-orin"
 
 const orinNanoDeviceType = "jetson-orin-nano"
 
+const go2DeviceType = "unitree-go2"
+const g1DeviceType = onboarding.UnitreeG1
+const g1PC2DeviceType = onboarding.UnitreeG1PC2
+
+func isUnitreeOrinRecovery(deviceType string) bool {
+	return deviceType == go2DeviceType || deviceType == g1PC2DeviceType
+}
+
 func isT234RecoveryDevice(deviceType string) bool {
-	return deviceType == orinDeviceType || deviceType == orinNanoDeviceType
+	return deviceType == orinDeviceType || deviceType == orinNanoDeviceType || isUnitreeOrinRecovery(deviceType)
 }
 
 // fetchInstallMainManifest is the master manifest that install aliases are

@@ -24,6 +24,13 @@ func TestInstallPlanRoutesAndValidatesBeforeWriting(t *testing.T) {
 		{name: "missing disk", opts: onboarding.Options{DeviceType: "raspberry-pi-5", Drive: "/dev/stale"}, artifact: deviceVersion{Path: "pi.img", SizeBytes: 1024}, wantErr: "relist drives"},
 		{name: "undersized disk", opts: onboarding.Options{DeviceType: "raspberry-pi-5", Drive: "/dev/test-disk"}, artifact: deviceVersion{Path: "pi.img", SizeBytes: 8192}, wantErr: "too small"},
 		{name: "Orin defaults to recovery", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "developer-kit"}, artifact: recovery, method: "usb-recovery"},
+		{name: "Go2 defaults to NVMe USB recovery", opts: onboarding.Options{DeviceType: go2DeviceType}, artifact: recovery, method: "usb-recovery"},
+		{name: "Go2 rejects developer kit carrier", opts: onboarding.Options{DeviceType: go2DeviceType, Carrier: "developer-kit"}, wantErr: "carrier=go2-edu"},
+		{name: "Go2 rejects rootfs-only", opts: onboarding.Options{DeviceType: go2DeviceType, RootfsOnly: true}, wantErr: "USB recovery"},
+		{name: "Go2 rejects SD", opts: onboarding.Options{DeviceType: go2DeviceType, Storage: "sd"}, wantErr: "NVMe only"},
+		{name: "G1 PC2 defaults to NVMe USB recovery", opts: onboarding.Options{DeviceType: g1PC2DeviceType, Carrier: "g1-pc2"}, artifact: recovery, method: "usb-recovery"},
+		{name: "G1 selector plans PC2 recovery", opts: onboarding.Options{DeviceType: g1DeviceType}, artifact: recovery, method: "usb-recovery"},
+		{name: "G1 PC2 rejects Go2 carrier", opts: onboarding.Options{DeviceType: g1PC2DeviceType, Carrier: "go2-edu"}, wantErr: "carrier=g1-pc2"},
 		{name: "Orin rootfs explicit", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "developer-kit", RootfsOnly: true, Drive: "/dev/test-disk"}, artifact: recovery, method: "rootfs-only"},
 		{name: "no generic custom carrier image", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "custom"}, wantErr: "vendor"},
 		{name: "no assumed carrier", opts: onboarding.Options{DeviceType: orinNanoDeviceType}, wantErr: "carrier"},
@@ -31,7 +38,7 @@ func TestInstallPlanRoutesAndValidatesBeforeWriting(t *testing.T) {
 		{name: "old Orin cannot silently downgrade mode", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "developer-kit"}, artifact: deviceVersion{Path: "legacy.img"}, wantErr: "no full recovery"},
 		{name: "AGX storage required", opts: onboarding.Options{DeviceType: orinDeviceType, Carrier: "developer-kit"}, artifact: recovery, wantErr: "choose nvme or emmc"},
 		{name: "Nano cannot choose emmc", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "developer-kit", Storage: "emmc"}, artifact: recovery, wantErr: "unsupported recovery storage"},
-		{name: "G1 cannot request a flash", opts: onboarding.Options{DeviceType: "unitree-g1", Drive: "/dev/test-disk"}, wantErr: "agent installation"},
+		{name: "G1 recovery rejects a host drive", opts: onboarding.Options{DeviceType: g1DeviceType, Drive: "/dev/test-disk"}, artifact: recovery, wantErr: "omit drive"},
 		{name: "unknown image mode", opts: onboarding.Options{DeviceType: "raspberry-pi-5"}, artifact: deviceVersion{InstallMode: "future"}, wantErr: "cannot perform"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,6 +61,12 @@ func TestInstallPlanRoutesAndValidatesBeforeWriting(t *testing.T) {
 			if p.Method != tc.method || p.Version != release {
 				t.Fatalf("unexpected plan: %+v", p)
 			}
+			if p.DeviceType == go2DeviceType && (p.Storage != "nvme" || !strings.Contains(strings.Join(p.Requirements, " "), "recessed recovery button")) {
+				t.Fatalf("unexpected Go2 recovery plan: %+v", p)
+			}
+			if p.DeviceType == g1PC2DeviceType && (p.Storage != "nvme" || !strings.Contains(strings.Join(p.Requirements, " "), "PWR and REC")) {
+				t.Fatalf("G1 PC2 plan should include the NVMe recovery sequence: %+v", p)
+			}
 			if p.Method != "usb-recovery" && tc.opts.Drive == "" {
 				if len(p.Command) != 0 {
 					t.Fatal("plan supplied a write command without a target")
@@ -68,13 +81,13 @@ func TestInstallPlanRoutesAndValidatesBeforeWriting(t *testing.T) {
 	}
 }
 
-func TestG1PlanNeverFetchesAnOSImageOrListsDrives(t *testing.T) {
-	p, err := buildInstallPlan(context.Background(), onboarding.Options{DeviceType: "unitree-g1"}, nil, nil)
+func TestLinuxDesktopPlanNeverFetchesAnOSImageOrListsDrives(t *testing.T) {
+	p, err := buildInstallPlan(context.Background(), onboarding.Options{DeviceType: linuxDesktopValue}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Method != "agent" || len(p.Command) != 0 || p.ArtifactURL != "" {
-		t.Fatalf("unsafe G1 plan: %+v", p)
+		t.Fatalf("unexpected Linux desktop plan: %+v", p)
 	}
 }
 

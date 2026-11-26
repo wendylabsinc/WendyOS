@@ -60,7 +60,7 @@
                 }
                 if guide.board == .other {
                     Link(
-                        "Unitree G1 agent installation guide",
+                        "Unitree G1 WendyOS installation guide",
                         destination: URL(
                             string:
                                 "https://docs.wendy.dev/latest/installation/wendy-agent-unitree-g1"

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/rcm"
 )
 
 func TestInstallJobCompressedImageMeasurement(t *testing.T) {
@@ -88,6 +89,25 @@ func TestInstallJobFingerprintBindsObservedIdentity(t *testing.T) {
 	fingerprintInstallTarget(&again)
 	if again.Fingerprint != base.Fingerprint {
 		t.Fatal("fingerprint is not stable")
+	}
+}
+
+func TestInstallJobProbesResolvedG1RecoveryTarget(t *testing.T) {
+	previous := scanInstallJobRecoveryDevices
+	t.Cleanup(func() { scanInstallJobRecoveryDevices = previous })
+	scanInstallJobRecoveryDevices = func() ([]rcm.RecoveryDevice, error) {
+		return []rcm.RecoveryDevice{
+			{Product: rcm.ProductOrinNano8},
+			{Product: rcm.ProductOrinNX16, PathKey: "1-2", ECID: "0123456789abcdef0123456789abcdef"},
+		}, nil
+	}
+	j := &onboarding.Job{
+		Options: onboarding.Options{DeviceType: g1DeviceType},
+		Plan:    &onboarding.Plan{DeviceType: g1PC2DeviceType, Method: "usb-recovery"},
+	}
+	got, err := probeInstallJobTarget(context.Background(), j)
+	if err != nil || got == nil || got.USBProduct != rcm.ProductOrinNX16 || got.USBPath != "1-2" {
+		t.Fatalf("G1 recovery target = %+v, %v", got, err)
 	}
 }
 

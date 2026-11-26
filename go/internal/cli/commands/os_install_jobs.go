@@ -86,23 +86,25 @@ func fingerprintInstallTarget(t *onboarding.Target) {
 	t.Fingerprint = hex.EncodeToString(sum[:])
 }
 
+var scanInstallJobRecoveryDevices = listInstallJobRecoveryDevices
+
 func probeInstallJobTarget(ctx context.Context, j *onboarding.Job) (*onboarding.Target, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if j.Plan.Method == "usb-recovery" {
-		devs, err := listInstallJobRecoveryDevices()
+		devs, err := scanInstallJobRecoveryDevices()
 		if err != nil {
 			return nil, err
 		}
 		var match []rcm.RecoveryDevice
 		for _, d := range devs {
-			if j.Options.DeviceType == thorDeviceType && d.IsThor() || isT234RecoveryDevice(j.Options.DeviceType) && orinRecoveryMatch(j.Options.DeviceType)(d) {
+			if j.Plan.DeviceType == thorDeviceType && d.IsThor() || isT234RecoveryDevice(j.Plan.DeviceType) && orinRecoveryMatch(j.Plan.DeviceType)(d) {
 				match = append(match, d)
 			}
 		}
 		if len(match) != 1 {
-			return nil, fmt.Errorf("expected exactly one %s in USB recovery; found %d. Check the recovery button sequence and disconnect other matching boards", j.Options.DeviceType, len(match))
+			return nil, fmt.Errorf("expected exactly one %s in USB recovery; found %d. Check the recovery button sequence and disconnect other matching boards", j.Plan.DeviceType, len(match))
 		}
 		d := match[0]
 		if !rcm.ValidChipID(d.ECID) {
@@ -218,7 +220,7 @@ func newOSInstallJobsCmd() *cobra.Command {
 		return json.NewEncoder(c.OutOrStdout()).Encode(j)
 	}}
 	startCmd.Flags().StringVar(&start.DeviceType, "device-type", "", "Exact board type")
-	startCmd.Flags().StringVar(&start.Carrier, "carrier", "", "Jetson carrier: developer-kit")
+	startCmd.Flags().StringVar(&start.Carrier, "carrier", "", "Jetson carrier: developer-kit, go2-edu, or g1-pc2")
 	startCmd.Flags().StringVar(&start.Version, "version", "", "Exact release, otherwise latest stable")
 	startCmd.Flags().StringVar(&start.Storage, "storage", "", "sd, nvme or emmc")
 	startCmd.Flags().StringVar(&start.Drive, "drive", "", "Exact host drive path")
@@ -367,7 +369,7 @@ func executeInstallJob(ctx context.Context, j *onboarding.Job, fb installJobFirs
 	if err := checkpoint("download_and_verify", false); err != nil {
 		return err
 	}
-	if j.Options.DeviceType == thorDeviceType {
+	if j.Plan.DeviceType == thorDeviceType {
 		return executeThorInstallJob(ctx, j, fb, cache, detail, checkpoint)
 	}
 	return executeOrinInstallJob(ctx, j, fb, cache, detail, checkpoint)
@@ -460,8 +462,8 @@ func provisionInstallJobMedia(ctx context.Context, target drive, fb installJobFi
 }
 
 func executeOrinInstallJob(ctx context.Context, j *onboarding.Job, fb installJobFirstBoot, cache string, detail func(string), checkpoint onboarding.Checkpoint) error {
-	ref := flashpack.RecoveryRef{Device: j.Options.DeviceType, Storage: j.Plan.Storage, Version: j.Plan.Version}
-	info := &recoveryFlashpackInfo{URL: j.Plan.ArtifactURL, Checksum: j.Plan.ArtifactSHA256, Version: j.Plan.Version, Device: j.Options.DeviceType, Storage: j.Plan.Storage}
+	ref := flashpack.RecoveryRef{Device: j.Plan.DeviceType, Storage: j.Plan.Storage, Version: j.Plan.Version}
+	info := &recoveryFlashpackInfo{URL: j.Plan.ArtifactURL, Checksum: j.Plan.ArtifactSHA256, Version: j.Plan.Version, Device: j.Plan.DeviceType, Storage: j.Plan.Storage}
 	fp, _, err := resolveT234Flashpack(cache, ref, info, detail)
 	if err != nil {
 		return err
@@ -497,6 +499,9 @@ func executeOrinInstallJob(ctx context.Context, j *onboarding.Job, fb installJob
 		return err
 	}
 	if err := stage.SendFlashPackage(ctx); err != nil {
+		if isUnitreeOrinRecovery(j.Plan.DeviceType) {
+			return fmt.Errorf("recovery handoff failed: %w. Connect directly with a USB 2.0 data cable and confirm the same host USB path", err)
+		}
 		return fmt.Errorf("recovery handoff failed: %w. This job requires the flashing gadget at the confirmed USB path; if USB speed changes its path, inspect the device and use the interactive recovery installer", err)
 	}
 	if err := stage.WriteRootfsDevice(ctx); err != nil {

@@ -274,13 +274,25 @@ func targetInstructions(j *Job) []string {
 		return []string{"Attach the selected media to this host and check its path, model and capacity. Resume to probe the target; no write occurs during this probe.", firstBootLine(j.Provisioning)}
 	}
 	button := "Use the developer kit's Force Recovery button or header while applying power/reset, then release Force Recovery."
+	cable := "Disconnect other recovery-mode Jetsons. Attach a USB data cable to the selected developer kit's recovery port and keep it connected until the write finishes."
+	portCheck := "Jobs pin the recovery chip ID before booting the flash payload, then require the flashing gadget at the same USB path. A USB speed change that changes that path requires inspection and the interactive installer; the job will not select a different port automatically."
 	if p.DeviceType == "jetson-agx-thor" {
 		button = "Hold Force Recovery (middle button), tap Reset (right button), then release Force Recovery."
 	}
 	if p.DeviceType == "jetson-orin-nano" {
 		button = "Disconnect power. Bridge FC REC to GND, pins 9 and 10 on the button header under the module, with a jumper. Connect power to enter recovery, then remove the jumper. This developer kit has no recovery buttons."
 	}
-	steps := []string{"Disconnect other recovery-mode Jetsons. Attach a USB data cable to the selected developer kit's recovery port and keep it connected until the write finishes.", button, "Resume to probe the board. No flash occurs until the observed target is returned and explicitly authorized.", firstBootLine(j.Provisioning), "Jobs pin the recovery chip ID before booting the flash payload, then require the flashing gadget at the same USB path. A USB speed change that changes that path requires inspection and the interactive installer; the job will not select a different port automatically."}
+	if p.DeviceType == "unitree-go2" {
+		cable = "Disconnect other recovery-mode Jetsons. Confirm this is the Go2 EDU expansion dock and connect its recovery USB-C port beside BAT and RJ45. Keep the cable attached until the write finishes."
+		button = "Power off the Go2 and disconnect the dock's BAT power. Hold its recessed recovery button near RJ45 with a SIM eject tool while reconnecting BAT. Hold it for about two seconds, then release it."
+		portCheck = "The Go2 installer pins the Orin NX chip ID and requires the flashing gadget at the same USB path."
+	}
+	if p.DeviceType == UnitreeG1PC2 {
+		cable = "Disconnect other recovery-mode Jetsons. Use a USB 2.0 data cable at the G1 EDU PC2 flashing port underneath PWR and REC. Keep it attached until the write completes."
+		button = "Power the G1 on and wait for three steady PC2 lights. Hold PWR and REC together for two seconds. Let go of PWR first, wait for two lights, then release REC."
+		portCheck = "The G1 PC2 installer verifies the Orin NX chip ID and checks that the flash disks appear on the selected USB path."
+	}
+	steps := []string{cable, button, "Resume to probe the board. No flash occurs until the observed target is returned and explicitly authorized.", firstBootLine(j.Provisioning), portCheck}
 	if p.HostOS == "darwin" {
 		steps = append(steps, "If macOS says the attached disk is unreadable, choose Ignore. Do not initialize or eject the flashing disk.")
 	}
@@ -293,9 +305,9 @@ func targetInstructions(j *Job) []string {
 func bootInstructions(j *Job) []string {
 	steps := []string{"The write finished. First boot and application health are not yet verified."}
 	if j.Plan.Method == "usb-recovery" {
-		if j.Options.DeviceType == "jetson-agx-thor" {
+		if j.Plan.DeviceType == "jetson-agx-thor" {
 			steps = append(steps, "Release Force Recovery, then power-cycle the Thor or press Reset (right button) once to boot WendyOS.")
-		} else if j.Options.DeviceType == "jetson-orin-nano" {
+		} else if j.Plan.DeviceType == "jetson-orin-nano" {
 			steps = append(steps, "Confirm the FC REC-to-GND jumper is removed, then allow the Orin Nano to reboot. Power-cycle normally if it stays in recovery.")
 		} else {
 			steps = append(steps, "Release Force Recovery and allow the Jetson to reboot. Power-cycle normally if it stays in recovery.")

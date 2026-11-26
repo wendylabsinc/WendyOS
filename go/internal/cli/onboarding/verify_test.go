@@ -148,6 +148,18 @@ func TestVerifyNeverFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestVerifyG1SelectorMatchesPC2(t *testing.T) {
+	fake := &bootAgent{
+		version:      &agentpb.GetAgentVersionResponse{Version: "agent", DeviceType: proto.String(UnitreeG1PC2)},
+		provisioning: &agentpb.IsProvisionedResponse{Response: &agentpb.IsProvisionedResponse_NotProvisioned{}},
+	}
+	opts := VerifyOptions{Address: "expected.local", DeviceType: UnitreeG1, Timeout: time.Second}
+	v, err := Verify(context.Background(), opts, serveBootAgent(t, fake, "expected.local:50051"))
+	if err != nil || !v.Verified || v.DeviceType != UnitreeG1PC2 {
+		t.Fatalf("unexpected G1 verification: %+v, %v", v, err)
+	}
+}
+
 func TestVerificationAddress(t *testing.T) {
 	for input, want := range map[string]string{
 		"robot.local": "robot.local:50051", "192.0.2.1": "192.0.2.1:50051", "::1": "[::1]:50051", "robot:50052": "robot:50052", "cloud://host/org/1/asset/2": "cloud://host/org/1/asset/2",
