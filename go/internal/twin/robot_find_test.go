@@ -35,7 +35,7 @@ func (f findRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { retu
 func TestFindEndpointLocalCameraToEvidenceWithoutMotion(t *testing.T) {
 	var jpegBytes bytes.Buffer
 	jpeg.Encode(&jpegBytes, image.NewRGBA(image.Rect(0, 0, 1280, 720)), nil)
-	for _, mode := range []string{"grounded", "visible-only", "no-match", "unknown-mode", "model-error"} {
+	for _, mode := range []string{"grounded", "visible-only", "no-match", "unknown-mode", "model-error", "no-observer-seen", "no-observer-absent"} {
 		t.Run(mode, func(t *testing.T) {
 			robot := &objectEvidenceTestRobot{}
 			if mode == "visible-only" {
@@ -43,6 +43,11 @@ func TestFindEndpointLocalCameraToEvidenceWithoutMotion(t *testing.T) {
 			}
 			session := &robotSession{robot: robot}
 			s := &Server{observers: map[string]*robotSession{"robot": session}}
+			noObserver := strings.HasPrefix(mode, "no-observer-")
+			if noObserver {
+				s.observers = nil
+			}
+			absent := mode == "no-match" || mode == "no-observer-absent"
 			calls := 0
 			client := &http.Client{Transport: findRoundTrip(func(r *http.Request) (*http.Response, error) {
 				calls++
@@ -64,7 +69,7 @@ func TestFindEndpointLocalCameraToEvidenceWithoutMotion(t *testing.T) {
 						t.Fatal("wrong camera image")
 					}
 					content := `{"objects":[{"box":[100,100,500,800]}]}`
-					if mode == "no-match" {
+					if absent {
 						content = `{"objects":[]}`
 					}
 					output := map[string]any{"done": true, "message": map[string]string{"content": content}}
@@ -99,7 +104,7 @@ func TestFindEndpointLocalCameraToEvidenceWithoutMotion(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Seen != (mode != "no-match") || result.Navigable != (mode == "grounded") || calls != 3 {
+			if result.Seen == absent || result.Navigable != (mode == "grounded") || calls != 3 {
 				t.Fatalf("%+v calls%d", result, calls)
 			}
 			if mode == "grounded" {
@@ -107,8 +112,16 @@ func TestFindEndpointLocalCameraToEvidenceWithoutMotion(t *testing.T) {
 				if err != nil || cmd.Action != "approach_object" || cmd.ObjectView == nil {
 					t.Fatalf("%+v %v", cmd, err)
 				}
-			} else if result.EvidenceID != "" {
+			} else if result.EvidenceID != "" || result.Target != nil {
 				t.Fatal("created unsafe evidence")
+			}
+			if noObserver {
+				if len(s.observers) != 0 {
+					t.Fatal("visual finding created an observer")
+				}
+				if !absent && !strings.Contains(result.Message, "no geometric controller") {
+					t.Fatal(result.Message)
+				}
 			}
 		})
 	}
