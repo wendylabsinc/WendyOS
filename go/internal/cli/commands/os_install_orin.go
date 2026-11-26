@@ -41,22 +41,26 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err := opts.Agent.checkArchitecture("arm64"); err != nil {
 		return err
 	}
-	cacheDir, err := osCacheDir()
-	if err != nil {
-		return fmt.Errorf("resolving cache dir: %w", err)
-	}
-	if opts.Artifact == nil {
+	if opts.Artifact == nil && opts.Flashpack == nil {
 		return fmt.Errorf("missing recovery artifact metadata")
 	}
 	ref := flashpack.RecoveryRef{Device: opts.DeviceType, Storage: opts.Storage, Version: opts.Version}
+	var cacheDir string
 
 	// Announce a stale cache before the flash UI takes over, mirroring the Thor
 	// path. resolveT234Flashpack does the same detection later, but reports it via
 	// a step-status line that the download progress immediately overwrites — so the
 	// reason for the re-download would otherwise be invisible.
-	if extracted := flashpack.RecoveryExtractedCachePath(cacheDir, ref); flashpack.StampStale(extracted, opts.Artifact.Checksum) {
-		if _, err := os.Stat(filepath.Join(extracted, "manifest.json")); err == nil {
-			fmt.Println(tui.Dim(fmt.Sprintf("Cached WendyOS %s is outdated; downloading the current build.", opts.Version)))
+	if opts.Flashpack == nil {
+		var err error
+		cacheDir, err = osCacheDir()
+		if err != nil {
+			return fmt.Errorf("resolving cache dir: %w", err)
+		}
+		if extracted := flashpack.RecoveryExtractedCachePath(cacheDir, ref); flashpack.StampStale(extracted, opts.Artifact.Checksum) {
+			if _, err := os.Stat(filepath.Join(extracted, "manifest.json")); err == nil {
+				fmt.Println(tui.Dim(fmt.Sprintf("Cached WendyOS %s is outdated; downloading the current build.", opts.Version)))
+			}
 		}
 	}
 
@@ -82,6 +86,10 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
+	go2 := opts.DeviceType == go2DeviceType
+	if go2 && (dev.PathKey == "" || !rcm.ValidChipID(dev.ECID)) {
+		return fmt.Errorf("cannot verify the Go2 recovery module's USB port and chip ID; connect it directly and check USB permissions")
+	}
 
 	creds, err := resolveFirstBootWiFi(opts.WiFi)
 	if err != nil {
@@ -96,11 +104,17 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		return err
 	}
 	enrolled := provJSON != nil
-	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+	confirm := recoveryFlashConfirm{
 		target:   dev.Describe(),
 		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},
 		question: fmt.Sprintf("Flash %s?", dev.Describe()),
-	}, name, creds, enrolled, opts.Force); err != nil {
+	}
+	if go2 {
+		confirm.target = go2InstallName + " — " + dev.Describe()
+		confirm.warning = append(confirm.warning, go2CarrierCheck)
+		confirm.question = "Flash the connected Go2 EDU expansion dock?"
+	}
+	if err := confirmRecoveryFlash(confirm, name, creds, enrolled, opts.Force); err != nil {
 		return err
 	}
 
@@ -136,7 +150,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	}
 
 	var (
-		fp          *flashpack.Flashpack
+		fp          = opts.Flashpack
 		workspace   string
 		layoutPath  string
 		flashPlan   *t234.Plan
@@ -179,10 +193,14 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 				StatusPath: fp.Manifest.Layout.FlashPackageStatus, LogsPath: fp.Manifest.Layout.FlashPackageLogs,
 				ExpectedIdentity: t234.IdentityExpectation{ModuleID: target.ModuleID, ModuleSKU: target.ModuleSKU, CarrierID: target.CarrierID, CarrierSKU: target.CarrierSKU},
 				Out:              out, Detail: detail, RunHelper: runT234Helper, TempDir: handoffDir,
+				StrictPort: go2,
 			}
 			return false, nil
 		}},
 		{id: orinStepRCMBoot, label: "Stage 1  RCM boot", run: func(out io.Writer, _ func(string)) (bool, error) {
+			if go2 {
+				return false, orinStageOneVerified(fp, dev, out, dev.ECID)
+			}
 			return false, orinStageOne(fp, dev, out)
 		}},
 		{id: orinStepCommands, label: "Stage 2  verify target + hand off recovery", abortWarning: boundaryWarning, run: func(out io.Writer, detail func(string)) (bool, error) {
@@ -214,6 +232,9 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			}
 			return false, nil
 		}},
+	}
+	if opts.Flashpack != nil {
+		steps = steps[1:] // The local archive was extracted and checked before USB selection.
 	}
 
 	failedID, err := runFlashSteps(fmt.Sprintf("Recovering %s with WendyOS %s", opts.DeviceName, opts.Version), steps, cancelFlash, logW)
@@ -469,20 +490,30 @@ func confirmOrinReady(opts t234InstallOptions) error {
 // recovery PID, and a jetson-orin-nano install must never pick up an AGX Orin
 // sitting in recovery on the same host (or vice versa).
 func orinRecoveryMatch(deviceType string) func(rcm.RecoveryDevice) bool {
-	if deviceType == orinNanoDeviceType {
+	switch deviceType {
+	case go2DeviceType:
+		return func(d rcm.RecoveryDevice) bool { return d.Product == rcm.ProductOrinNX16 }
+	case orinNanoDeviceType:
 		return func(d rcm.RecoveryDevice) bool { return d.IsOrinNano() }
+	case orinDeviceType:
+		return func(d rcm.RecoveryDevice) bool { return d.IsOrinAGX() }
+	default:
+		return func(rcm.RecoveryDevice) bool { return false }
 	}
-	return func(d rcm.RecoveryDevice) bool { return d.IsOrinAGX() }
 }
 
 // orinRecoveryPort names the USB-C port carrying recovery/device mode for the
 // given T234 device type. The Orin Nano devkit has a single USB-C port; the AGX
 // Orin devkit's recovery port is the USB-C next to the 40-pin header.
 func orinRecoveryPort(deviceType string) string {
-	if deviceType == orinNanoDeviceType {
+	switch deviceType {
+	case go2DeviceType:
+		return go2RecoveryPort
+	case orinNanoDeviceType:
 		return "the devkit's USB-C port"
+	default:
+		return "the USB-C port next to the 40-pin header"
 	}
-	return "the USB-C port next to the 40-pin header"
 }
 
 // orinRecoveryHints is the USB-recovery wait-UI text for a T234 Orin target,
@@ -496,7 +527,10 @@ func orinRecoveryHints(opts t234InstallOptions) recoveryWaitHints {
 		cablingLine: "the USB-C cable is in " + briefPort.Render(orinRecoveryPort(opts.DeviceType)),
 		buttonLine:  "the recovery sequence: power off, hold " + briefKey.Render("Force Recovery") + ", tap " + briefKey.Render("Reset/Power") + ", release Force Recovery",
 	}
-	if opts.DeviceType == orinNanoDeviceType {
+	switch opts.DeviceType {
+	case go2DeviceType:
+		hints.buttonLine = "the Go2 recovery sequence: " + go2RecoveryEntry
+	case orinNanoDeviceType:
 		hints.buttonLine = "the recovery jumper: " + briefKey.Render("FC REC") + " bridged to " + briefKey.Render("GND") + " (pins 9–10 on the button header under the module) when power is connected"
 	}
 	return hints
@@ -512,10 +546,18 @@ func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) str
 		"  QSPI and " + briefKey.Render(strings.ToUpper(opts.Storage)) + " are updated together; all partitions, including /data, are erased.",
 		"",
 	}
+	go2 := opts.DeviceType == go2DeviceType
+	if go2 {
+		lines = append(lines, "  "+go2CarrierCheck, "")
+	}
 	if recoveryDetected {
+		label := opts.DeviceName
+		if go2 {
+			label = "Jetson Orin NX 16 GB module"
+		}
 		lines = append(lines,
 			briefMarker.Render("●")+" "+briefTitle.Render("USB recovery detected"),
-			"  A "+opts.DeviceName+" is already in recovery mode. Keep its USB-C cable attached.",
+			"  A "+label+" is already in recovery mode. Keep its USB-C cable attached.",
 		)
 	} else {
 		lines = append(lines,
@@ -524,14 +566,22 @@ func orinRecoveryBriefingBox(opts t234InstallOptions, recoveryDetected bool) str
 			"",
 			briefMarker.Render("●")+" "+briefTitle.Render("Entering recovery mode"),
 		)
-		if opts.DeviceType == orinNanoDeviceType {
+		switch opts.DeviceType {
+		case go2DeviceType:
+			lines = append(lines,
+				"    "+briefNum.Render("1.")+" Power off the Go2 and connect the USB data cable.",
+				"    "+briefNum.Render("2.")+" Disconnect the dock's BAT power. Press the recessed recovery button near RJ45 with a SIM eject tool.",
+				"    "+briefNum.Render("3.")+" Reconnect BAT with the button held. Keep holding for about two seconds, then release it.",
+				"    "+briefNum.Render("4.")+" Keep the recovery USB-C cable attached until Wendy reports success.",
+			)
+		case orinNanoDeviceType:
 			lines = append(lines,
 				"    "+briefNum.Render("1.")+" Disconnect power from the devkit (it has no buttons).",
 				"    "+briefNum.Render("2.")+" Bridge "+briefKey.Render("FC REC")+" to "+briefKey.Render("GND")+" — pins 9–10 on the button header under the module — with a jumper.",
 				"    "+briefNum.Render("3.")+" Connect power; the devkit boots straight into recovery mode. The jumper can then be removed.",
 				"    "+briefNum.Render("4.")+" Keep the recovery USB-C cable attached until final SUCCESS.",
 			)
-		} else {
+		default:
 			lines = append(lines,
 				"    "+briefNum.Render("1.")+" Power off the devkit and connect power.",
 				"    "+briefNum.Render("2.")+" Hold "+briefKey.Render("Force Recovery")+", tap "+briefKey.Render("Reset/Power")+", then release Force Recovery.",
@@ -645,13 +695,15 @@ func printOrinFullDiskAccessHint(w io.Writer) {
 	fmt.Fprintln(w, "\n"+thorHintBorder.Render(body))
 }
 
-// orinInstallCommand is the command that starts this install again.
+// orinInstallCommand tells the operator how to start the same install again.
 func orinInstallCommand(opts t234InstallOptions) string {
+	if opts.Flashpack != nil {
+		return "Run your original install command with the same --device-type and --flashpack options."
+	}
 	return fmt.Sprintf("wendy os install --device-type %s --storage %s", opts.DeviceType, opts.Storage)
 }
 
 func printOrinBadStateHint(w io.Writer, opts t234InstallOptions) {
-	cmd := orinInstallCommand(opts)
 	body := strings.Join([]string{
 		thorHintTitle.Render("⚠  Recovery was interrupted — the Jetson may not boot"), "",
 		"QSPI or the rootfs may be partially written. Re-enter Force Recovery mode.",
@@ -659,5 +711,5 @@ func printOrinBadStateHint(w io.Writer, opts t234InstallOptions) {
 	}, "\n")
 	fmt.Fprintln(w, "\n"+thorHintBorder.Render(body))
 	fmt.Fprintln(w, "\nRetry the installation:")
-	fmt.Fprintln(w, cmd)
+	fmt.Fprintln(w, orinInstallCommand(opts))
 }

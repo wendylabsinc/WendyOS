@@ -274,13 +274,20 @@ func targetInstructions(j *Job) []string {
 		return []string{"Attach the selected media to this host and check its path, model and capacity. Resume to probe the target; no write occurs during this probe.", firstBootLine(j.Provisioning)}
 	}
 	button := "Use the developer kit's Force Recovery button or header while applying power/reset, then release Force Recovery."
+	cable := "Disconnect other recovery-mode Jetsons. Attach a USB data cable to the selected developer kit's recovery port and keep it connected until the write finishes."
+	portCheck := "Jobs pin the recovery chip ID before booting the flash payload, then require the flashing gadget at the same USB path. A USB speed change that changes that path requires inspection and the interactive installer; the job will not select a different port automatically."
 	if p.DeviceType == "jetson-agx-thor" {
 		button = "Hold Force Recovery (middle button), tap Reset (right button), then release Force Recovery."
 	}
 	if p.DeviceType == "jetson-orin-nano" {
 		button = "Disconnect power. Bridge FC REC to GND, pins 9 and 10 on the button header under the module, with a jumper. Connect power to enter recovery, then remove the jumper. This developer kit has no recovery buttons."
 	}
-	steps := []string{"Disconnect other recovery-mode Jetsons. Attach a USB data cable to the selected developer kit's recovery port and keep it connected until the write finishes.", button, "Resume to probe the board. No flash occurs until the observed target is returned and explicitly authorized.", firstBootLine(j.Provisioning), "Jobs pin the recovery chip ID before booting the flash payload, then require the flashing gadget at the same USB path. A USB speed change that changes that path requires inspection and the interactive installer; the job will not select a different port automatically."}
+	if p.DeviceType == "unitree-go2" {
+		cable = "Disconnect other recovery-mode Jetsons. Confirm this is the Go2 EDU expansion dock and connect its recovery USB-C port beside BAT and RJ45. Keep the cable attached until the write finishes."
+		button = "Power off the Go2 and disconnect the dock's BAT power. Hold its recessed recovery button near RJ45 with a SIM eject tool while reconnecting BAT. Hold it for about two seconds, then release it."
+		portCheck = "The Go2 installer pins the Orin NX chip ID and requires the flashing gadget at the same USB path."
+	}
+	steps := []string{cable, button, "Resume to probe the board. No flash occurs until the observed target is returned and explicitly authorized.", firstBootLine(j.Provisioning), portCheck}
 	if p.HostOS == "darwin" {
 		steps = append(steps, "If macOS says the attached disk is unreadable, choose Ignore. Do not initialize or eject the flashing disk.")
 	}

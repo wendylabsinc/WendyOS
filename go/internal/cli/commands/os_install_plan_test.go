@@ -24,6 +24,10 @@ func TestInstallPlanRoutesAndValidatesBeforeWriting(t *testing.T) {
 		{name: "missing disk", opts: onboarding.Options{DeviceType: "raspberry-pi-5", Drive: "/dev/stale"}, artifact: deviceVersion{Path: "pi.img", SizeBytes: 1024}, wantErr: "relist drives"},
 		{name: "undersized disk", opts: onboarding.Options{DeviceType: "raspberry-pi-5", Drive: "/dev/test-disk"}, artifact: deviceVersion{Path: "pi.img", SizeBytes: 8192}, wantErr: "too small"},
 		{name: "Orin defaults to recovery", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "developer-kit"}, artifact: recovery, method: "usb-recovery"},
+		{name: "Go2 defaults to NVMe USB recovery", opts: onboarding.Options{DeviceType: go2DeviceType}, artifact: recovery, method: "usb-recovery"},
+		{name: "Go2 rejects developer kit carrier", opts: onboarding.Options{DeviceType: go2DeviceType, Carrier: "developer-kit"}, wantErr: "Go2 EDU expansion dock"},
+		{name: "Go2 rejects rootfs-only", opts: onboarding.Options{DeviceType: go2DeviceType, RootfsOnly: true}, wantErr: "USB recovery"},
+		{name: "Go2 rejects SD", opts: onboarding.Options{DeviceType: go2DeviceType, Storage: "sd"}, wantErr: "NVMe only"},
 		{name: "Orin rootfs explicit", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "developer-kit", RootfsOnly: true, Drive: "/dev/test-disk"}, artifact: recovery, method: "rootfs-only"},
 		{name: "no generic custom carrier image", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "custom"}, wantErr: "vendor"},
 		{name: "no assumed carrier", opts: onboarding.Options{DeviceType: orinNanoDeviceType}, wantErr: "carrier"},
@@ -53,6 +57,9 @@ func TestInstallPlanRoutesAndValidatesBeforeWriting(t *testing.T) {
 			}
 			if p.Method != tc.method || p.Version != release {
 				t.Fatalf("unexpected plan: %+v", p)
+			}
+			if p.DeviceType == go2DeviceType && (p.Storage != "nvme" || !strings.Contains(strings.Join(p.Requirements, " "), "recessed recovery button")) {
+				t.Fatalf("unexpected Go2 recovery plan: %+v", p)
 			}
 			if p.Method != "usb-recovery" && tc.opts.Drive == "" {
 				if len(p.Command) != 0 {

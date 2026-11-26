@@ -1,6 +1,7 @@
 package flashpack
 
 import (
+	"archive/tar"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -120,6 +121,60 @@ func TestT234SchemaV2HashesControlFilesSizeChecksImages(t *testing.T) {
 	sameSize(t, filepath.Join(root, "stage2/flash/rootfs.img"))
 	if err := fp.verifyIntegrity(); err != nil {
 		t.Fatalf("size-only staged image should pass verifyIntegrity, got %v", err)
+	}
+	if err := fp.verifyFiles(true); err == nil || !strings.Contains(err.Error(), "rootfs.img checksum mismatch") {
+		t.Fatalf("local archive must check the staged image checksum, got %v", err)
+	}
+}
+
+func TestOpenLocalGo2RecoveryArchive(t *testing.T) {
+	fp, err := open(writeT234ManifestFixture(t, T234Schema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := fp.Manifest
+	m.Target.Device, m.Target.ModuleSKU = "unitree-go2", "0000"
+	m.Machine, m.USBProductID = "unitree-go2-orin-nx", "0x7323"
+	wrong := m
+	wrong.USBProductID = "0x7023"
+	if err := validateManifest(&wrong); err == nil {
+		t.Fatal("accepted a Go2 pack that declares the wrong USB product")
+	}
+	wrong = m
+	wrong.Machine = "jetson-orin-nano-wendyos"
+	if err := validateManifest(&wrong); err == nil {
+		t.Fatal("accepted a Go2 pack from the wrong BSP machine")
+	}
+
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []tar.Header{{Name: "manifest.json", Mode: 0o644}}
+	bodies := []string{string(data)}
+	for rel := range m.Files {
+		body, err := os.ReadFile(filepath.Join(fp.Root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, tar.Header{Name: rel, Mode: 0o644})
+		bodies = append(bodies, string(body))
+	}
+	path := filepath.Join(t.TempDir(), "local.flashpack.tar.zst")
+	writeZstTar(t, path, entries, bodies)
+	dest := filepath.Join(t.TempDir(), "flashpack")
+	got, err := OpenRecoveryArchive(path, dest, "unitree-go2", "nvme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Manifest.WendyOSVersion != m.WendyOSVersion || got.Manifest.Target != m.Target {
+		t.Fatalf("unexpected firmware identity: %+v", got.Manifest)
+	}
+	if err := got.checkRecoveryTarget("jetson-orin-nano", "nvme"); err == nil {
+		t.Fatal("Go2 archive accepted for the Nano")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("opening a local flashpack changed the original archive: %v", err)
 	}
 }
 

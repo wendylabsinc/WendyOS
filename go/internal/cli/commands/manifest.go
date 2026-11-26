@@ -677,8 +677,10 @@ const orinDeviceType = "jetson-agx-orin"
 
 const orinNanoDeviceType = "jetson-orin-nano"
 
+const go2DeviceType = "unitree-go2"
+
 func isT234RecoveryDevice(deviceType string) bool {
-	return deviceType == orinDeviceType || deviceType == orinNanoDeviceType
+	return deviceType == orinDeviceType || deviceType == orinNanoDeviceType || deviceType == go2DeviceType
 }
 
 // fetchInstallMainManifest is the master manifest that install aliases are

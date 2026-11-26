@@ -35,6 +35,11 @@ func installRecoveryDetected(deviceType string) bool {
 		fmt.Println(tui.WarningMessage(fmt.Sprintf("Could not check USB recovery mode: %v", err)))
 	}
 	for _, d := range devices {
+		// A user-selected Go2 can use this PID to detect recovery readiness.
+		// The picker cannot infer a Go2 carrier from an Orin NX module.
+		if deviceType == go2DeviceType && d.vendor == rcm.VendorNVIDIA && d.product == rcm.ProductOrinNX16 {
+			return true
+		}
 		if installUSBTarget(d) == deviceType {
 			return true
 		}
