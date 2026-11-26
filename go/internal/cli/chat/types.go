@@ -29,6 +29,9 @@ type Image struct {
 type ToolResult struct {
 	Text   string
 	Images []Image
+	// Set only by the trusted robot tool transport when dispatch did not occur.
+	// A failed receipt lookup says nothing about an earlier command's outcome.
+	CommandNotStarted bool
 }
 
 // MediaExecutor extends text-only executors without requiring every tool to

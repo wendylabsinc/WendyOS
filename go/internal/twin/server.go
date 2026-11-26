@@ -19,6 +19,8 @@ import (
 var ErrRobotBusy = errors.New("robot is controlled by another session; close it or wait 15 seconds after it disconnects")
 
 type robotSession struct {
+	objectMu                   sync.Mutex
+	objectEvidence             map[string]objectEvidence
 	commandMu                  sync.Mutex
 	commandReceipts            map[string]robotCommandReceipt
 	robot                      robotControl
@@ -52,6 +54,8 @@ func (session *robotSession) cancelFind() {
 }
 
 type Server struct {
+	commandSetups map[string]map[*commandSetup]struct{}
+
 	Store        *Store
 	Conn         grpc.ClientConnInterface
 	Context      context.Context
@@ -127,6 +131,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /v1/robot", s.robotRequest)
 	mux.HandleFunc("POST /v1/robot/command", s.robotCommand)
+	mux.HandleFunc("POST /v1/robot/find-object", s.robotFindObject)
 	return mux
 }
 func decode(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {

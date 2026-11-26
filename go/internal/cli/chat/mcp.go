@@ -222,7 +222,11 @@ func mediaToolResult(result *mcpgo.CallToolResult) (ToolResult, error) {
 	}
 	value := ToolResult{Text: truncateOutput(output.String()), Images: images}
 	if result.IsError {
-		return ToolResult{Text: value.Text}, errors.New("Wendy MCP tool reported an error")
+		if fields, ok := result.StructuredContent.(map[string]any); ok {
+			value.CommandNotStarted, _ = fields["command_not_started"].(bool)
+		}
+		value.Images = nil
+		return value, errors.New("Wendy MCP tool reported an error")
 	}
 	if value.Text == "" && len(images) == 0 {
 		value.Text = "Tool completed successfully with no output."

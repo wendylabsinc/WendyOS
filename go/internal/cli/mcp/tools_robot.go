@@ -37,14 +37,25 @@ func (s *mcpServer) registerRobotTools(srv *server.MCPServer) {
 	register("unitree_pairings", "Read saved Unitree Go2 pairings and their current connection status directly from the selected Wendy device. Does not scan, pair, or move a robot. Use this for 'is my Go2 paired?' instead of interactive wendy device pair commands.", true)
 	serial := mcpgo.WithString("serial", mcpgo.Description("Robot serial returned by unitree_pairings. Omit only when exactly one saved robot exists. Include it for Stop to avoid a pairing lookup."))
 	register("robot_status", "Read the Go2's live digital-twin position, controller status, and saved named destinations. Does not acquire control or renew movement. If observations are absent, use robot_command action connect.", true, serial)
-	register("robot_command", "Control the paired Go2 through its existing digital-twin controller. Actions: connect (start observations without a map click), turn (signed degrees, positive left; 1 to 180), go_to a saved destination, remember the current map position under a name, or stop. 'Turn around' is 180 degrees. Movement is bounded to 30 seconds, uses live obstacle checks, and stops on cancellation. Reuse request_id on retries; a running receipt is not completion. Report returned state and message; never claim success for rejected/failed/superseded/canceled. Use robot_status for destination names, never invent coordinates. The user's explicit movement request authorizes that bounded goal under the current approval policy.", false, serial,
-		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("connect", "turn", "go_to", "remember", "stop")),
+	register("robot_command", "Control the paired Go2 through its existing digital-twin controller. Actions: connect (start observations without a map click), turn (signed degrees, positive left; 1 to 180), forward (0.1 to 2 meters measured with odometry), go_to a saved destination, go_to_object with evidence from robot_find_object, remember the current map position under a name, or stop. 'Turn around' is 180 degrees. Movement is bounded to 30 seconds, uses live obstacle checks, and stops on cancellation. Reuse request_id on retries; a running receipt is not completion. Report returned state and message; never claim success for rejected/failed/superseded/canceled. Use robot_status for destination names, never invent coordinates. The user's explicit movement request authorizes that bounded goal under the current approval policy.", false, serial,
+		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("connect", "turn", "forward", "go_to", "go_to_object", "remember", "stop")),
 		mcpgo.WithString("request_id", mcpgo.Required(), mcpgo.Description("Unique ID of 8 to 80 characters for this user command. Reuse for retries; never reuse for a different command.")),
+		mcpgo.WithBoolean("receipt_only", mcpgo.Description("Runtime retry lookup: return the existing receipt for request_id without executing or starting observations. Missing receipts have unknown outcome.")),
 		mcpgo.WithNumber("degrees", mcpgo.Description("For turn: integer degrees from -180 to 180, excluding zero.")),
+		mcpgo.WithNumber("distance_meters", mcpgo.Min(0.1), mcpgo.Max(2), mcpgo.Description("For forward: distance in meters, 0.1 to 2.")),
+		mcpgo.WithString("evidence_id", mcpgo.Description("For go_to_object: opaque evidence_id from a navigable robot_find_object result. Never invent it.")),
 		mcpgo.WithString("destination", mcpgo.Description("For go_to or remember: saved map position name, such as kitchen.")))
 }
 
-func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolRequest) (result *mcpgo.CallToolResult, resultErr error) {
+	dispatched := false
+	defer func() {
+		if req.Params.Name == "robot_command" && !dispatched && result != nil && result.IsError {
+			if fields, ok := result.StructuredContent.(map[string]any); ok {
+				fields["command_not_started"] = true
+			}
+		}
+	}()
 	conn := s.GetConn()
 	if conn == nil {
 		return errNotConnected(), nil
@@ -79,13 +90,16 @@ func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolReque
 	}
 	args := map[string]any{"serial": serial, "action": "status"}
 	if req.Params.Name == "robot_command" {
-		for _, field := range []string{"action", "request_id", "degrees", "destination"} {
+		for _, field := range []string{"action", "request_id", "degrees", "distance_meters", "destination", "evidence_id"} {
 			if value, ok := req.GetArguments()[field]; ok {
 				args[field] = value
 			}
 		}
 		if args["action"] == "status" || args["action"] == "" {
 			return errResult(errCodeInvalidArgument, "Specify a robot command action."), nil
+		}
+		if lookup, _ := req.GetArguments()["receipt_only"].(bool); lookup {
+			args["action"] = "receipt"
 		}
 	}
 	body, err := json.Marshal(args)
@@ -102,12 +116,19 @@ func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolReque
 		return errResult(errCodeInvalidArgument, err.Error()), nil
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	dispatched = true
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return errResult(errCodeDeviceUnreachable, fmt.Sprintf("Digital-twin request failed; outcome is unknown. Retry with the same request_id: %v", err)), nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		// This fixed command endpoint returns 400 only before controller
+		// dispatch; controller outcomes are 200 receipts. A missing route also
+		// cannot have dispatched. Other failures remain ambiguous.
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusNotFound {
+			dispatched = false
+		}
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == http.StatusNotFound {
 			return errResult(errCodeUnsupported, "The digital-twin app needs the chat-control update."), nil

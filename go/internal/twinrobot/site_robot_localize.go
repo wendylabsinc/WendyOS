@@ -26,6 +26,10 @@ func (r *SiteRobot) Localize(sequence uint64, frame string, mesh []sitenav.Trian
 		r.mu.Unlock()
 		return nil, errors.New("This localization request is no longer active.")
 	}
+	if r.intentActive {
+		r.mu.Unlock()
+		return nil, errChatLocalizationBusy
+	}
 	r.commandSequence = sequence
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
@@ -56,6 +60,9 @@ func (r *SiteRobot) Localize(sequence uint64, frame string, mesh []sitenav.Trian
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.intentActive {
+		return nil, errChatLocalizationBusy
+	}
 	if r.commandSequence != sequence || r.closed || epoch != r.poseEpoch || r.ctx.Err() != nil {
 		return nil, errors.New("This localization request was superseded.")
 	}

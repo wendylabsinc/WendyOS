@@ -68,6 +68,10 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 		r.mu.Unlock()
 		return report, errors.New("This localization request is no longer active.")
 	}
+	if r.intentActive {
+		r.mu.Unlock()
+		return report, errChatLocalizationBusy
+	}
 	r.commandSequence = sequence
 	if r.moving || r.stopUnconfirmed {
 		if err = r.stopLocked(); err != nil {
@@ -104,6 +108,9 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.intentActive {
+		return report, errChatLocalizationBusy
+	}
 	if r.closed || r.ctx.Err() != nil || r.commandSequence != sequence || r.poseEpoch != epoch {
 		return report, errors.New("This localization request was superseded.")
 	}

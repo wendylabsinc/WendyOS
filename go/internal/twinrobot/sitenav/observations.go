@@ -33,6 +33,7 @@ func TransientPoseError(err error) bool {
 type Pose struct {
 	Position    Point
 	Height, Yaw float64
+	Roll, Pitch float64
 	Received    time.Time
 	Captured    time.Time
 }
@@ -241,7 +242,9 @@ func (o *Observations) Receive(topic string, raw []byte, isBinary bool, received
 			return errors.New("Go2 pose jumped. Align the robot again.")
 		}
 	}
-	o.Pose = Pose{p, height, yaw, received, capture}
+	roll := math.Atan2(2*(q[0]*q[1]+q[2]*q[3]), 1-2*(q[1]*q[1]+q[2]*q[2]))
+	pitch := math.Asin(math.Max(-1, math.Min(1, 2*(q[0]*q[2]-q[3]*q[1]))))
+	o.Pose = Pose{Position: p, Height: height, Yaw: yaw, Roll: roll, Pitch: pitch, Received: received, Captured: capture}
 	return nil
 }
 
