@@ -73,6 +73,20 @@ func (s *Server) robotCommandUsing(w http.ResponseWriter, r *http.Request, open 
 	s.mu.Lock()
 	session := s.observers[q.Serial]
 	s.mu.Unlock()
+	if q.Action == "receipt" {
+		// Internal transport recovery is a lookup, never a replay. An observer
+		// replacement may have lost its receipts, so absence means unknown.
+		result := twinrobot.CommandResult{State: "unknown", Message: "No command receipt exists in the current observation session; the prior outcome is unknown. The lookup sent no new command."}
+		if session != nil {
+			session.commandMu.Lock()
+			if receipt, exists := session.commandReceipts[q.RequestID]; exists {
+				result = receipt.result
+			}
+			session.commandMu.Unlock()
+		}
+		respond(w, result, nil)
+		return
+	}
 	autoSetup := session == nil && autoEligible
 	if autoSetup {
 		var err error
@@ -246,7 +260,7 @@ func validateRobotCommand(q robotCommandRequest) error {
 	switch q.Action {
 	case "connect", "status":
 		return nil
-	case "stop", "turn", "forward", "go_to", "remember", "go_to_object":
+	case "stop", "turn", "forward", "go_to", "remember", "go_to_object", "receipt":
 	default:
 		return errors.New("choose connect, status, stop, turn, forward, go_to, go_to_object, or remember")
 	}
