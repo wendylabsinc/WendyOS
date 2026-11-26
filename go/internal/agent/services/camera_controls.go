@@ -446,7 +446,7 @@ func localCameraPath(devID uint32) (string, error) {
 
 // GetCameraControls reports the tunable controls a local camera exposes.
 func (s *VideoService) GetCameraControls(_ context.Context, req *agentpb.GetCameraControlsRequest) (*agentpb.GetCameraControlsResponse, error) {
-	path, err := localCameraPath(req.GetDeviceId())
+	path, err := s.controlCameraPath(req.GetDeviceId())
 	if err != nil {
 		return nil, err
 	}
@@ -465,7 +465,7 @@ func (s *VideoService) GetCameraControls(_ context.Context, req *agentpb.GetCame
 // folding it in here as a flag meant every request carried a field that made
 // `value` meaningless whenever it was true.
 func (s *VideoService) SetCameraControls(_ context.Context, req *agentpb.SetCameraControlsRequest) (*agentpb.SetCameraControlsResponse, error) {
-	path, err := localCameraPath(req.GetDeviceId())
+	path, err := s.controlCameraPath(req.GetDeviceId())
 	if err != nil {
 		return nil, err
 	}
@@ -534,7 +534,7 @@ func (s *VideoService) SetCameraControls(_ context.Context, req *agentpb.SetCame
 // The default comes from the driver (QUERYCTRL), so the camera answers rather
 // than the caller having to know.
 func (s *VideoService) ResetCameraControls(_ context.Context, req *agentpb.ResetCameraControlsRequest) (*agentpb.ResetCameraControlsResponse, error) {
-	path, err := localCameraPath(req.GetDeviceId())
+	path, err := s.controlCameraPath(req.GetDeviceId())
 	if err != nil {
 		return nil, err
 	}
