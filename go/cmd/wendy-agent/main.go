@@ -655,7 +655,8 @@ func main() {
 	genericSensorFeed := services.NewGenericSensorFeed(logger, filepath.Join(supervisor.RemoteSeenDir, "sensor-channel-ids"))
 	sensorSup.SetGenericSink(genericSensorFeed)
 	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
-	sensorSup.SetSourceResolver(mcusource.NewSourceResolver(meshCatalog.SensorSources))
+	resolveSensorSource := mcusource.NewSourceResolver(meshCatalog.SensorSources)
+	sensorSup.SetSourceResolver(resolveSensorSource)
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
 	sensorAgentScope := func() certs.Scope {
 		certPEM, _, _ := mcuIdentity()
@@ -664,6 +665,7 @@ func main() {
 		return scope
 	}
 	sensorSvc := services.NewSensorPairingService(logger, sensorStore, sensorAgentScope, sensorRunner.StartDiscovered, sensorRunner.StopPairing, sensorSup.IsPairingConnected)
+	sensorSvc.SetPairingProbe(sensorSup.ProbePairing)
 	// `device pair` lists sources from this device's network, so this device
 	// must not offer itself. Its asset ID is read per request because
 	// enrollment can assign one while the agent runs.
