@@ -1032,6 +1032,9 @@ func (m *chatModel) handleEvent(event Event) {
 	case "tool_progress":
 		m.appendEntry("notice", "Robot progress", event.Text)
 		m.status = "Following robot alignment"
+	case "robot_outcome":
+		m.appendEntry("notice", "Robot outcome", event.Text)
+		m.status = "Robot command finished"
 	case "status":
 		m.status = event.Text
 	case "memory":
