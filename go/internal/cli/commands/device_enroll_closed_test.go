@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -108,5 +109,49 @@ func TestEnrollCheckRunsOnKeylessConnections(t *testing.T) {
 		if c.refused != (err != nil) || (c.refused && !strings.Contains(err.Error(), "owner key")) {
 			t.Errorf("%s: err = %v, refused want %v", c.name, err, c.refused)
 		}
+	}
+}
+
+// WDY-4392: enroll selects a Closed device the way the command does (the
+// unbound setup selection, no saved pin) and must end on the owner's local
+// key, not the plaintext setup connection, whether or not the owner opened
+// the keyless apps set.
+func TestEnrollSelectionUsesLocalKeyForClosedDevice(t *testing.T) {
+	for _, keyless := range []bool{false, true} {
+		t.Run(fmt.Sprintf("keyless=%v", keyless), func(t *testing.T) {
+			restoreDeviceGlobals(t)
+			setTempConfig(t, &config.Config{})
+			setPinCache(t)
+			owner := useLocalKey(t)
+			dir := closedDir(t, owner)
+			if keyless {
+				keys, _ := trustedkeys.Open(dir + "/" + trustedkeys.FileName)
+				if err := keys.SetKeylessApps(true, keys.List()[0].Fingerprint()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			d := closedtest.Start(t, dir, func(s *grpc.Server) {
+				agentpbv2.RegisterWendyProvisioningServiceServer(s, &acmeProvisioningServer{})
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			target, err := resolveTargetInner(ctx, func(cfg *resolveConfig) {
+				cfg.device = d.Addr
+				cfg.enrollmentTrustRecovery = true
+				cfg.nonInteractive = true
+				cfg.disableSessionBroker = true
+				cfg.suppressUpdateCheck = true
+			})
+			if err != nil {
+				t.Fatalf("select: %v", err)
+			}
+			defer target.Close()
+			if target.Agent == nil || !target.Agent.IsLocalOperator {
+				t.Fatal("enroll did not select the local-key connection")
+			}
+			if err := cloudenroll.RequireClosedDeviceOwner(ctx, target.Agent.Conn); err != nil {
+				t.Fatalf("owner check on the selected connection: %v", err)
+			}
+		})
 	}
 }

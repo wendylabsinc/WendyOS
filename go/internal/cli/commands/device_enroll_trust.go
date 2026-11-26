@@ -12,6 +12,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var confirmEnrollmentTrustFn = func() (bool, error) {
@@ -94,8 +97,9 @@ func isUnboundSetupSelection(ctx context.Context) bool {
 // ordinary management dial. It never overrides a saved identity, including an
 // older incomplete pin, or treats an enrolled or unknown state as a setup endpoint.
 //
-// Enrollment reports every failure here (handled=true). Wi-Fi setup reports
-// handled=false unless it produced a connection, so the ordinary resolver keeps
+// Enrollment reports every failure here (handled=true), except a Closed device:
+// it is left to the ordinary resolver, which dials it over the local key.
+// Wi-Fi setup reports handled=false unless it produced a connection, so the ordinary resolver keeps
 // its typed refusals, Cloud name fallback, recovery and Bluetooth fallback, and
 // a CLI without certificates keeps its existing plaintext behavior.
 func connectUnboundSetupTarget(ctx context.Context, pinKey, addr string, extraCandidates ...string) (*SelectedDevice, bool, error) {
@@ -113,7 +117,8 @@ func connectUnboundSetupTarget(ctx context.Context, pinKey, addr string, extraCa
 	}
 	conn, err := connectEnrollmentPlaintext(ctx, append(resolveAddrCandidates(ctx, addr), extraCandidates...))
 	if err != nil {
-		if wifi && ctx.Err() == nil {
+		// A Closed device refuses a caller without a key (PermissionDenied).
+		if (wifi && ctx.Err() == nil) || (!wifi && status.Code(err) == codes.PermissionDenied) {
 			return nil, false, nil
 		}
 		return nil, true, err
@@ -130,6 +135,15 @@ func connectUnboundSetupTarget(ctx context.Context, pinKey, addr string, extraCa
 			err = fmt.Errorf("explicit setup requires an unprovisioned device; enrolled-device management requires a trusted expected identity")
 		}
 		return nil, true, err
+	}
+	if !wifi {
+		// A Closed device with keyless apps on answers here too; enrolling it
+		// needs the owner key.
+		access, err := agentpbv2.NewWendyAccessServiceClient(conn.Conn).GetAccess(probeCtx, &agentpbv2.GetAccessRequest{})
+		if err == nil && access.GetShape() == agentpbv2.AccessShape_ACCESS_SHAPE_CLOSED {
+			conn.Close()
+			return nil, false, nil
+		}
 	}
 	conn.DevicePinKey = pinKey
 	return &SelectedDevice{Agent: conn, unverifiedSetup: true}, true, nil
