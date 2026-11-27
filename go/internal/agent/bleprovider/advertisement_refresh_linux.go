@@ -27,11 +27,14 @@ func (r *runtime) requestAdvertisementRefresh() {
 
 func runAdvertisementRefresh(ctx context.Context, requests <-chan struct{}, interval time.Duration, pulse func(context.Context) error) error {
 	var next time.Time
+	retry := false
 	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-requests:
+		if !retry {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-requests:
+			}
 		}
 		if delay := time.Until(next); delay > 0 {
 			timer := time.NewTimer(delay)
@@ -51,6 +54,7 @@ func runAdvertisementRefresh(ctx context.Context, requests <-chan struct{}, inte
 		if ctx.Err() != nil {
 			return nil
 		}
+		retry = false
 		if err := pulse(ctx); err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -65,6 +69,9 @@ func runAdvertisementRefresh(ctx context.Context, requests <-chan struct{}, inte
 			if errors.Is(err, errBlueZOwnerChanged) {
 				return fmt.Errorf("refreshing owned BLE advertisement: %w", err)
 			}
+			// Preserve this request until it succeeds. Retry through the same
+			// rate limit, merging any newer admission/capability changes.
+			retry = true
 		}
 		next = time.Now().Add(interval)
 	}
