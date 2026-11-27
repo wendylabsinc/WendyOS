@@ -25,6 +25,30 @@ type liteCompanionClient interface {
 
 var errLiteCompanionOTA = errors.New("applying companion OTA")
 
+// Keep the verified image for the duration of this install, including retry.
+type liteCompanionDownload struct {
+	companion *firmwareCompanion
+	url       string
+	path      string
+}
+
+func (d *liteCompanionDownload) file(ctx context.Context) (string, error) {
+	if d.path == "" {
+		var err error
+		d.path, err = downloadLiteCompanion(ctx, d.url, d.companion)
+		if err != nil {
+			return "", err
+		}
+	}
+	return d.path, nil
+}
+
+func (d *liteCompanionDownload) close() {
+	if d.path != "" {
+		os.Remove(d.path)
+	}
+}
+
 func installLiteCompanion(ctx context.Context, port discovery.SerialPortInfo, interactive bool, companion *firmwareCompanion) (discovery.SerialPortInfo, error) {
 	open := func(port discovery.SerialPortInfo) (discovery.SerialPortInfo, *liteclient.WendyLiteClient, error) {
 		ready, err := waitInstalledLiteUSB(ctx, port, interactive, "companion update", "update")
@@ -55,10 +79,12 @@ func installLiteCompanion(ctx context.Context, port discovery.SerialPortInfo, in
 		return port, fmt.Errorf("companion host returned an empty device identity")
 	}
 
+	download := liteCompanionDownload{companion: companion, url: gcsBaseURL + "/" + companion.Path}
+	defer download.close()
 	const attempts = 2
 	for attempt := 1; attempt <= attempts; attempt++ {
 		updateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-		updated, updateErr := updateLiteCompanion(updateCtx, os.Stdout, client, companion, gcsBaseURL+"/"+companion.Path)
+		updated, updateErr := updateLiteCompanion(updateCtx, os.Stdout, client, &download)
 		cancel()
 		if !updated && !errors.Is(updateErr, errLiteCompanionOTA) {
 			return port, updateErr
@@ -112,7 +138,8 @@ func installLiteCompanion(ctx context.Context, port discovery.SerialPortInfo, in
 	return port, nil
 }
 
-func updateLiteCompanion(ctx context.Context, out io.Writer, client liteCompanionClient, companion *firmwareCompanion, downloadURL string) (bool, error) {
+func updateLiteCompanion(ctx context.Context, out io.Writer, client liteCompanionClient, download *liteCompanionDownload) (bool, error) {
+	companion := download.companion
 	buildID, err := readLiteCompanionBuildID(ctx, client)
 	if err != nil {
 		return false, fmt.Errorf("reading companion build ID over USB: %w", err)
@@ -123,11 +150,10 @@ func updateLiteCompanion(ctx context.Context, out io.Writer, client liteCompanio
 	}
 
 	installNote(out, "Updating the ESP-Hosted companion to %s...", companion.BuildID)
-	path, err := downloadLiteCompanion(ctx, downloadURL, companion)
+	path, err := download.file(ctx)
 	if err != nil {
 		return false, err
 	}
-	defer os.Remove(path)
 	if err := client.PushHostedCompanion(ctx, path, nil); err != nil {
 		return false, fmt.Errorf("%w: %w", errLiteCompanionOTA, err)
 	}
