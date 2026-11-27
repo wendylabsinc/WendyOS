@@ -1,0 +1,105 @@
+name: Go2 chat simulation evals
+
+on:
+  pull_request:
+    paths:
+      - 'go/internal/cli/chat/**'
+      - 'go/internal/cli/mcp/**'
+      - 'evals/go2-chat/**'
+      - '.github/workflows/go2-chat-evals.yml'
+      - 'go.mod'
+      - 'go.sum'
+  schedule:
+    - cron: '41 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go2-chat-evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5
+        with:
+          go-version-file: go.mod
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev pkg-config
+      - name: Test runner boundaries
+        run: python3 -m unittest discover -s evals/go2-chat -v
+      - name: Run scripted simulation regressions
+        run: python3 evals/go2-chat/run.py --output "$RUNNER_TEMP/go2-scripted"
+      - name: Upload traces
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: go2-scripted
+          path: |
+            ${{ runner.temp }}/go2-scripted/run.json
+            ${{ runner.temp }}/go2-scripted/summary.json
+            ${{ runner.temp }}/go2-scripted/attempt-*/
+
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    env:
+      OLLAMA_IMAGE: ollama/ollama:0.32.1@sha256:6345fbc18bd73a1e16404be681dbc6fd291a027cab43ed541abe78c4c81051b0
+      MODEL_DIGEST: 84f7ed8042fa7cdbd902f7dcb7d0370e032095047cc3244179f263b77b5bc318
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5
+        with:
+          go-version-file: go.mod
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev pkg-config
+      - name: Build isolated eval executable
+        run: python3 evals/go2-chat/run.py --prepare-only --mode model --output "$RUNNER_TEMP/go2-model"
+      - name: Download pinned runtime and model before isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/go2-models" "$RUNNER_TEMP/go2-reports"
+          docker pull "$OLLAMA_IMAGE"
+          docker image inspect "$OLLAMA_IMAGE" --format '{{json .RepoDigests}}' > "$RUNNER_TEMP/go2-reports/runtime-digest.json"
+          docker run --rm --name go2-model-download -d \
+            -e OLLAMA_MODELS=/models -v "$RUNNER_TEMP/go2-models:/models" "$OLLAMA_IMAGE"
+          trap 'docker stop go2-model-download >/dev/null 2>&1 || true' EXIT
+          for _ in {1..60}; do
+            if docker exec go2-model-download ollama list; then break; fi
+            sleep 1
+          done
+          docker exec go2-model-download ollama pull qwen3-vl:4b-instruct
+          docker stop go2-model-download
+      - name: Run actual model with all robot actions simulated
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          cases=''
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            cases='find_miss,find_model_phrasing,find_no_motion'
+          fi
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --read-only --tmpfs /tmp:rw,nosuid,size=128m --tmpfs /root/.ollama:rw,nosuid,size=16m \
+            -e OLLAMA_MODELS=/models -e OLLAMA_HOST=127.0.0.1:11434 \
+            -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_CONTEXT_LENGTH=8192 \
+            -e WENDY_GO2_EVAL_MODEL_DIGEST="$MODEL_DIGEST" -e WENDY_GO2_EVAL_CASES="$cases" \
+            -v "$RUNNER_TEMP/go2-models:/models:ro" -v "$RUNNER_TEMP/go2-model:/eval:ro" \
+            -v "$RUNNER_TEMP/go2-reports:/reports" \
+            -v "$PWD/evals/go2-chat/ci-model.sh:/ci-model.sh:ro" \
+            --entrypoint /bin/bash "$OLLAMA_IMAGE" /ci-model.sh
+      - name: Upload model transcripts and simulated actions
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: go2-model
+          path: |
+            ${{ runner.temp }}/go2-model/run.json
+            ${{ runner.temp }}/go2-reports/
