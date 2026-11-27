@@ -176,6 +176,28 @@ func (g Grid) SweepWithMargin(a, b Point, yaw, margin float64) bool {
 	return g.sweptCells(a, b, yaw, margin, func(c Cell) bool { return g.Floor[c] && !g.obstacleOverlaps(c, a, b, yaw, margin) })
 }
 
+// NearestMissingFloorInSweep explains a rejected sweep using exactly the same
+// occupied cells as its clearance check. It does not fill cells or authorize
+// motion. Call only after SweepWithMargin has rejected the path.
+func (g Grid) NearestMissingFloorInSweep(a, b Point, yaw, margin float64) (Point, bool) {
+	if !finite(margin) || margin < 0 || margin > 1 {
+		return Point{}, false
+	}
+	closest := Point{}
+	found := false
+	distance := math.Inf(1)
+	g.sweptCells(a, b, yaw, margin, func(c Cell) bool {
+		if !g.Floor[c] {
+			p := center(c)
+			if d := a.Distance(p); d < distance {
+				closest, found, distance = p, true, d
+			}
+		}
+		return true
+	})
+	return closest, found
+}
+
 // Turn checks the shortest in-place turn used by the controller. Padding bounds
 // every corner's travel between angular samples, so intermediate poses cannot
 // slip between the checks. Translation and rotation are commanded separately.

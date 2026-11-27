@@ -36,7 +36,7 @@ func (r *SiteRobot) forwardLocked(distance float64) error {
 	if r.underBodyAllowance {
 		departure = &sitenav.Departure{Position: p.Position, Yaw: p.Yaw}
 	}
-	if err := discoveryClearanceError(r.observed.Grid.WithDeparture(departure), p.Position, target, p.Yaw); err != nil {
+	if err := discoveryClearanceErrorAtSpeed(r.observed.Grid.WithDeparture(departure), p.Position, target, p.Yaw, sitenav.WalkingSpeed, p.Yaw); err != nil {
 		return err
 	}
 	r.clearMotionFailureLocked()

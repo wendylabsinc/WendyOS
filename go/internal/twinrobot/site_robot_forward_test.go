@@ -51,7 +51,7 @@ func TestCommandForwardMeasuredCompletionWithoutAlignment(t *testing.T) {
 					if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 						t.Fatal("no acknowledged arrival stop")
 					}
-				} else if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE || command.Yaw != 0 || command.Lateral != 0 || command.Forward != discoverySpeed {
+				} else if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE || command.Yaw != 0 || command.Lateral != 0 || command.Forward != sitenav.WalkingSpeed {
 					t.Fatalf("unexpected relative command: %+v", command)
 				}
 			}
