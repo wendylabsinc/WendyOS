@@ -41,6 +41,8 @@ type Room struct {
 	Model        []byte                       `json:"model,omitempty"`
 	VisualMap    json.RawMessage              `json:"visualMap,omitempty"`
 	Points       []Point                      `json:"points,omitempty"`
+	PointLayers  map[string][]Point           `json:"pointLayers,omitempty"`
+	LegacyPoints []Point                      `json:"legacyPoints,omitempty"`
 	Removed      bool                         `json:"removed"`
 	Sources      map[string]uint64            `json:"sources,omitempty"`
 }
@@ -173,6 +175,8 @@ func (s *Store) List() ([]Room, error) {
 		r.Model = nil
 		r.VisualMap = nil
 		r.Points = nil
+		r.PointLayers = nil
+		r.LegacyPoints = nil
 		r.References = nil
 		r.Sources = nil
 		result = append(result, r)
@@ -257,6 +261,8 @@ func (s *Store) Put(r Room) (Room, error) {
 		r.HasVisualMap = old.HasVisualMap
 		r.References = old.References
 		r.Points = old.Points
+		r.PointLayers = old.PointLayers
+		r.LegacyPoints = old.LegacyPoints
 		r.Sources = old.Sources
 	} else {
 		r.HasModel = len(r.Model) > 0
@@ -275,6 +281,8 @@ func (s *Store) Put(r Room) (Room, error) {
 			}
 		}
 		r.Points = nil
+		r.PointLayers = nil
+		r.LegacyPoints = nil
 		r.References = nil
 		r.Sources = nil
 	}
@@ -284,6 +292,7 @@ func (s *Store) Put(r Room) (Room, error) {
 }
 
 type Contribution struct {
+	Replace       bool      `json:"-"` // internal accumulated-map update, never client intent
 	Transform     []float64 `json:"transform,omitempty"`
 	Source        string    `json:"source"`
 	Sequence      uint64    `json:"sequence"`
@@ -336,23 +345,64 @@ func (s *Store) Contribute(id string, c Contribution) error {
 	if len(r.Sources) >= 256 && r.Sources[c.Source] == 0 {
 		return errors.New("too many contributors")
 	}
-	// Ten-centimetre voxels bound persisted geometry. This map is historical
-	// rendering evidence; it never substitutes for fresh navigation observations.
-	voxels := map[[3]int]Point{}
-	for _, p := range append(r.Points, c.Points...) {
-		key := [3]int{int(math.Floor(p.X * 10)), int(math.Floor(p.Y * 10)), int(math.Floor(p.Z * 10))}
-		voxels[key] = p
+	r.initializePointLayers()
+	points := c.Points
+	if !c.Replace {
+		points = append(r.PointLayers[c.Source], points...)
 	}
-	if len(voxels) > 200000 {
+	r.PointLayers[c.Source] = voxelPoints(points)
+	count := len(r.LegacyPoints)
+	for _, layer := range r.PointLayers {
+		count += len(layer)
+	}
+	if count > 400000 {
+		return fmt.Errorf("room exceeds 400000 source voxels")
+	}
+	r.rebuildPoints()
+	if len(r.Points) > 200000 {
 		return fmt.Errorf("room exceeds 200000 voxels")
-	}
-	r.Points = make([]Point, 0, len(voxels))
-	for _, p := range voxels {
-		r.Points = append(r.Points, p)
 	}
 	r.Sources[c.Source] = c.Sequence
 	r.Revision++
 	return s.write(r)
+}
+
+// Legacy mixed-source clouds have no point ownership. Preserve those rather
+// than guessing which observations may be removed. Sole-source rooms migrate
+// exactly, allowing their next accumulated scan to replace old drift trails.
+func (r *Room) initializePointLayers() {
+	if r.PointLayers != nil {
+		return
+	}
+	r.PointLayers = map[string][]Point{}
+	if len(r.Sources) == 1 {
+		for source := range r.Sources {
+			r.PointLayers[source] = r.Points
+		}
+	} else {
+		r.LegacyPoints = r.Points
+	}
+}
+
+func voxelPoints(points []Point) []Point {
+	voxels := map[[3]int]Point{}
+	for _, p := range points {
+		voxels[[3]int{int(math.Floor(p.X * 10)), int(math.Floor(p.Y * 10)), int(math.Floor(p.Z * 10))}] = p
+	}
+	out := make([]Point, 0, len(voxels))
+	for _, p := range voxels {
+		out = append(out, p)
+	}
+	return out
+}
+
+func (r *Room) rebuildPoints() {
+	points := append([]Point(nil), r.LegacyPoints...)
+	for _, layer := range r.PointLayers {
+		points = append(points, layer...)
+	}
+	r.Points = voxelPoints(points)
+	r.FloorTiles = FloorTiles(r.Points)
 }
 
 func (s *Store) Frame(frame string) (Room, error) {

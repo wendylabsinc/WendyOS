@@ -87,7 +87,7 @@ func (a *localInstallAgent) checkArchitecture(arch string) error {
 
 func installDeviceArchitecture(device string) string {
 	switch device {
-	case "raspberry-pi-3", "raspberry-pi-4", "raspberry-pi-5",
+	case "raspberry-pi-3", "raspberry-pi-4", "raspberry-pi-5", "orange-pi-5-pro",
 		"jetson-agx-orin", "jetson-orin-nano", "jetson-agx-thor", "vm-arm64":
 		return "arm64"
 	case "x86_64", "vm-x86-64":

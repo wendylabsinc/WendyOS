@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -100,7 +101,7 @@ func runDataDelete(ctx context.Context, client agentpbv2.DataServiceClient, out 
 		deleted++
 		freed += response.GetEpisode().GetSizeBytes()
 		if jsonOutput {
-			if err := encodeProtoJSON(out, response); err != nil {
+			if err := encodeDeletedJSON(out, response); err != nil {
 				return err
 			}
 			continue
@@ -120,6 +121,24 @@ func runDataDelete(ctx context.Context, client agentpbv2.DataServiceClient, out 
 	return nil
 }
 
+// encodeDeletedJSON writes the --json line for one deleted episode: the agent's
+// response in the shared dialect, led by "deleted":true. The response alone is
+// an episode and its upload state, which reads as a listing of an episode that
+// still exists. The CLI adds the member, not the wire message, and the bytes
+// of the response follow it unchanged.
+func encodeDeletedJSON(out io.Writer, response *agentpbv2.DataDeleteEpisodeResponse) error {
+	var line bytes.Buffer
+	if err := encodeProtoJSON(&line, response); err != nil {
+		return err
+	}
+	rest := strings.TrimPrefix(line.String(), "{")
+	if !strings.HasPrefix(rest, "}") {
+		rest = "," + rest
+	}
+	_, err := io.WriteString(out, `{"deleted":true`+rest)
+	return err
+}
+
 // deleteTargets resolves what the command line asked to delete against the
 // device's own list, before anything is deleted: a mistyped or unfinished
 // episode stops the command, so a typo among several IDs deletes none of them.
@@ -129,7 +148,14 @@ func deleteTargets(ctx context.Context, client agentpbv2.DataServiceClient, out 
 	finalized := listed.GetEpisodes()
 	if all {
 		if len(finalized) == 0 {
-			_, err := fmt.Fprintln(out, "No finalized episodes on this device; nothing to delete.")
+			const reason = "No finalized episodes on this device; nothing to delete."
+			// Under --json stdout carries one line per deleted episode and
+			// nothing else, so the reason is a notice on stderr.
+			if jsonOutput {
+				plainNotice("%s", reason)
+				return nil, nil
+			}
+			_, err := fmt.Fprintln(out, reason)
 			return nil, err
 		}
 		return finalized, nil

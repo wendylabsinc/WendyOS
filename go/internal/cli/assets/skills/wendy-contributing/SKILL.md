@@ -16,6 +16,7 @@ This skill covers internal development and contribution to WendyOS itself, inclu
 WendyOS is an Embedded Linux operating system for edge computing built with Yocto. It supports:
 - NVIDIA Jetson devices (production with OTA updates)
 - Raspberry Pi 4/5 (edge devices)
+- Orange Pi 5 Pro (Rockchip RK3588S)
 - ARM64 VMs (development)
 
 ## Agent Architecture
@@ -35,6 +36,7 @@ selects the machine.
 |-----------|--------|----------|
 | `meta-tegra-extensions*` | NVIDIA Jetson | `jetson-*` |
 | `meta-rpi-extensions` | Raspberry Pi 3/4/5 | `rpi*` |
+| `meta-rockchip-extensions` | Orange Pi 5 Pro | `orange-pi-5-pro` |
 | `meta-x86-extensions` | Generic x86_64 PC | `generic-x86-64` |
 | `meta-vm-extensions` | ARM64 and x86-64 VMs | `vm-arm64`, `vm-x86-64` |
 

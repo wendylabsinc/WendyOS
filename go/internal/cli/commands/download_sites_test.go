@@ -362,3 +362,59 @@ func TestLiteSimulatorDownloadLimitHoldsAcrossResume(t *testing.T) {
 		})
 	}
 }
+
+func TestFirmwareIntegrityAfterResume(t *testing.T) {
+	payload := testDownloadPayload(8 << 10)
+	sum := fmt.Sprintf("%x", sha256.Sum256(payload))
+	for _, tc := range []struct {
+		name      string
+		size      int64
+		checksum  string
+		wantError string
+	}{
+		{name: "valid", size: int64(len(payload)), checksum: sum},
+		{name: "wrong checksum", size: int64(len(payload)), checksum: strings.Repeat("0", 64), wantError: "checksum mismatch"},
+		{name: "oversized", size: 6000, checksum: sum, wantError: "exceeds expected size"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTestDownloadPolicy(t, 200*time.Millisecond)
+			var cut, resumed atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				start := 0
+				if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-", &start); err == nil {
+					resumed.Store(start == 4096)
+					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/*", start, len(payload)-1))
+					w.WriteHeader(http.StatusPartialContent)
+				}
+				// Keep the total size unknown so the limit is checked while streaming.
+				w.(http.Flusher).Flush()
+				if cut.CompareAndSwap(false, true) {
+					_, _ = w.Write(payload[:4096])
+					w.(http.Flusher).Flush()
+					panic(http.ErrAbortHandler)
+				}
+				_, _ = w.Write(payload[start:])
+			}))
+			defer srv.Close()
+			dir := t.TempDir()
+			asset := &firmwareAsset{DownloadURL: srv.URL, Size: tc.size, Checksum: tc.checksum}
+			filename, err := downloadFirmwareInto(t.Context(), asset, dir, nil)
+			if !resumed.Load() {
+				t.Fatal("download did not resume from the interrupted offset")
+			}
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("err = %v, want %q", err, tc.wantError)
+				}
+				assertNoDownloadLeftovers(t, dir)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := os.ReadFile(filename); err != nil || !bytes.Equal(got, payload) {
+				t.Fatalf("resumed firmware differs from the original: %v", err)
+			}
+		})
+	}
+}

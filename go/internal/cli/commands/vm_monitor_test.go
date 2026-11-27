@@ -16,7 +16,7 @@ import (
 )
 
 func TestReadOnlyMonitoringPreservesSelectedVMIdentity(t *testing.T) {
-	cfg := &config.Config{DefaultDevice: "vm:robot"}
+	cfg := &config.Config{}
 	cfg.SetDevicePin("127.0.0.1", 1, "cloud", "other-device", "")
 	cfg.SetDevicePin("vm:robot", 1, "", "robot-device", "")
 	setTempConfig(t, cfg)
@@ -45,18 +45,16 @@ func TestReadOnlyMonitoringPreservesSelectedVMIdentity(t *testing.T) {
 		}
 		return &grpcclient.AgentConnection{IsMTLS: true, CertInfo: &config.CertificateInfo{OrganizationID: 1}, AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{}}}, nil, nil
 	}
-	for _, selected := range []string{"vm:robot", ""} {
-		deviceFlag = selected
-		conn, err := connectToAgent(context.Background(), ReadOnlyMonitoring())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if conn.SimulatorName != "robot" || deviceFlag != selected {
-			t.Fatalf("selection changed: %+v / %q", conn, deviceFlag)
-		}
-		conn.Close()
+	deviceFlag = "vm:robot"
+	conn, err := connectToAgent(context.Background(), ReadOnlyMonitoring())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if dials != 2 {
+	if conn.SimulatorName != "robot" || deviceFlag != "vm:robot" {
+		t.Fatalf("selection changed: %+v / %q", conn, deviceFlag)
+	}
+	conn.Close()
+	if dials != 1 {
 		t.Fatalf("got %d dials", dials)
 	}
 }

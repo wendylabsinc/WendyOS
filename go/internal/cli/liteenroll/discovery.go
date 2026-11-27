@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/asn1"
-	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -16,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/estcacerts"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
 
@@ -23,32 +21,32 @@ import (
 // Only authenticated CA-discovery content and verified TLS trust anchors are
 // provisioned; unverified peer certificates never become roots.
 func DiscoverTrust(ctx context.Context, cfg *litepb.WendyConfEnrollment, endpoint string) (*http.Client, error) {
-	return DiscoverTrustForProfile(ctx, cfg, endpoint, TrustProfile{})
+	return DiscoverTrustForProfile(ctx, cfg, endpoint, TrustProfile{}, nil)
 }
 
 // DiscoverTrustForProfile additionally checks the discovered CA algorithms
 // against the selected board's advertised verifier.
-func DiscoverTrustForProfile(ctx context.Context, cfg *litepb.WendyConfEnrollment, endpoint string, profile TrustProfile) (*http.Client, error) {
+func DiscoverTrustForProfile(ctx context.Context, cfg *litepb.WendyConfEnrollment, endpoint string, profile TrustProfile, reportMeshTrustIssue func(error)) (*http.Client, error) {
 	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return fmt.Errorf("CA discovery redirects are not allowed")
 	}}
-	if err := discoverTrustForProfile(ctx, client, cfg, endpoint, profile); err != nil {
+	if err := discoverTrustForProfile(ctx, client, cfg, endpoint, profile, reportMeshTrustIssue); err != nil {
 		return nil, err
 	}
 	return trustHTTPClient(cfg.HttpsRoots)
 }
 
 func discoverTrust(ctx context.Context, client *http.Client, cfg *litepb.WendyConfEnrollment, endpoint string) error {
-	return discoverTrustForProfile(ctx, client, cfg, endpoint, TrustProfile{})
+	return discoverTrustForProfile(ctx, client, cfg, endpoint, TrustProfile{}, nil)
 }
 
-func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *litepb.WendyConfEnrollment, endpoint string, profile TrustProfile) error {
+func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *litepb.WendyConfEnrollment, endpoint string, profile TrustProfile, reportMeshTrustIssue func(error)) error {
 	for _, bundle := range []struct {
 		name string
 		data []byte
 	}{{"device", cfg.DeviceRoots}, {"HTTPS", cfg.HttpsRoots}} {
 		if len(bundle.data) != 0 {
-			if err := validateTrustBundleForProfile(bundle.data, profile); err != nil {
+			if err := validateTrustDomain(bundle.data, profile, bundle.name == "device"); err != nil {
 				return fmt.Errorf("existing %s roots: %w", bundle.name, err)
 			}
 		}
@@ -58,22 +56,23 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 		tsaRoots = bytes.Clone(defaultTSARoots)
 	}
 	if cfg.TimeUrl != "roughtime" {
-		if err := validateTrustBundleForProfile(tsaRoots, profile); err != nil {
+		if err := validateTrustDomain(tsaRoots, profile, false); err != nil {
 			return fmt.Errorf("RFC 3161 enrollment requires trusted TSA roots; use the default Sigstore endpoint or supply --device-roots, --https-roots and --tsa-roots: %w", err)
 		}
 	}
 	discoverDevice := len(cfg.DeviceRoots) == 0
-	if discoverDevice && endpoint == "" {
-		csr, err := url.Parse(cfg.CsrUrl)
-		if err != nil {
-			return err
-		}
-		suffix, ok := strings.CutPrefix(csr.Host, "csr.")
-		if !ok || suffix == "" {
-			return fmt.Errorf("pass --ca-certs-url for this PKI deployment, or supply --device-roots and --https-roots")
-		}
-		endpoint = "https://est." + suffix + "/.well-known/est/" + cfg.TenantId + "/cacerts"
+	if endpoint == "" {
+		// Automatic discovery can also use the configured EST service and
+		// capture its HTTPS root. An explicit bootstrap URL takes precedence.
+		endpoint = cfg.EstUrl
 	}
+	if endpoint == "" {
+		endpoint = defaultESTURL(cfg.CsrUrl, cfg.TenantId)
+	}
+	if discoverDevice && endpoint == "" {
+		return fmt.Errorf("pass --ca-certs-url for this PKI deployment, or supply --device-roots and --https-roots")
+	}
+	refreshURL := cfg.EstUrl
 	deviceRoots := cfg.DeviceRoots
 	httpsRoots := bytes.Clone(cfg.HttpsRoots)
 	seen := map[string]bool{}
@@ -163,16 +162,116 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 				}
 				return err
 			}
+			// Legacy discovery also accepts PEM and binary CMS. Only save a
+			// discovered URL if its response uses the board's EST transport format.
+			media, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+			payload := bytes.TrimSpace(body)
+			algorithm := profile.chainAlgorithm()
+			algorithms := resp.Header.Values(chainAlgorithmHeader)
+			matchesProfile := len(algorithms) == 0
+			if algorithm != "" {
+				matchesProfile = len(algorithms) == 1 && algorithms[0] == algorithm
+			}
+			if refreshURL == "" && media == "application/pkcs7-mime" &&
+				len(payload) > 0 && payload[0] != 0x30 && !bytes.HasPrefix(payload, []byte("-----")) && matchesProfile {
+				// A bootstrap endpoint may exceed the firmware URL limit.
+				refreshURL, _ = estRefreshURL(endpoint)
+			}
+			if profile.meshTrust {
+				discovered, err := discoveryCertificates(body, resp.Header.Get("Content-Type"))
+				if err != nil {
+					return err
+				}
+				meshRoots, intermediates, meshErr :=
+					discoverMeshTrust(ctx, client, u, cfg.TenantId, profile, discovered, deviceRoots)
+				if meshErr == nil {
+					meshErr = validateTrustBundleForProfile(meshRoots, profile)
+				}
+				if meshErr == nil {
+					deviceRoots, cfg.LiteDeviceIntermediates = meshRoots, intermediates
+				} else if reportMeshTrustIssue != nil {
+					reportMeshTrustIssue(meshErr)
+				}
+			}
 		} else {
 			resp.Body.Close()
 		}
 	}
-	if err := validateTrustBundleForProfile(httpsRoots, profile); err != nil {
+	if err := validateTrustDomain(httpsRoots, profile, false); err != nil {
 		return fmt.Errorf("discovered HTTPS roots: %w", err)
 	}
 	cfg.DeviceRoots, cfg.TsaRoots, cfg.HttpsRoots = deviceRoots, tsaRoots, httpsRoots
+	cfg.EstUrl = refreshURL
 	cfg.ProvisionTrust = true
 	return nil
+}
+
+func defaultESTURL(csrURL, tenant string) string {
+	csr, err := url.Parse(csrURL)
+	if err != nil {
+		return ""
+	}
+	suffix, ok := strings.CutPrefix(csr.Host, "csr.")
+	if !ok || suffix == "" {
+		return ""
+	}
+	return (&url.URL{Scheme: "https", Host: "est." + suffix,
+		Path: "/.well-known/est/" + tenant + "/cacerts"}).String()
+}
+
+func hostedESTURL(csrURL, tenant string) string {
+	u, err := url.Parse(csrURL)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Fragment != "" ||
+		u.EscapedPath() != "/v1/"+tenant || u.RawQuery != "" || u.ForceQuery {
+		return ""
+	}
+	switch u.Host {
+	case "csr.pki.wendy.dev", "csr.dev.pki.wendy.dev", "csr.pki.wendy.sh", "csr.dev.pki.wendy.sh":
+		return defaultESTURL(csrURL, tenant)
+	default:
+		return ""
+	}
+}
+
+// SetESTURL saves an explicit refresh endpoint independently of the URL
+// used to bootstrap the board's trust. An omitted override keeps the default.
+func SetESTURL(cfg *litepb.WendyConfEnrollment, endpoint string) error {
+	if endpoint == "" {
+		return nil
+	}
+	resolved, err := estRefreshURL(endpoint)
+	if err != nil {
+		return fmt.Errorf("--est-url: %w", err)
+	}
+	cfg.EstUrl = resolved
+	return nil
+}
+
+func estRefreshURL(endpoint string) (string, error) {
+	if endpoint == "" {
+		return "", nil
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return "", fmt.Errorf("CA discovery requires an HTTPS URL without credentials or fragment")
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "", fmt.Errorf("invalid CA discovery query: %w", err)
+	}
+	// These two selectors depend on the enrolled identity. Leave deployment
+	// query parameters intact and let the board select its requested chain.
+	query.Del("chain_algorithm")
+	query.Del("full_chain")
+	u.RawQuery = query.Encode()
+	u.ForceQuery = false
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	if len(u.String()) > 256 {
+		return "", fmt.Errorf("CA discovery URL exceeds the board's 256-byte limit")
+	}
+	return u.String(), nil
 }
 
 // EST responses contain untrusted intermediates as well as roots. Install only
@@ -200,66 +299,6 @@ func discoveryRootsForProfile(body []byte, contentType string, profile TrustProf
 	return roots, nil
 }
 
-// discoveryCertificates parses a PEM or EST certs-only CMS cacerts body.
 func discoveryCertificates(body []byte, contentType string) ([]*x509.Certificate, error) {
-	var certs []*x509.Certificate
-	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("-----BEGIN CERTIFICATE-----")) {
-		if err := validateTrustBundle(body); err != nil {
-			return nil, err
-		}
-		for rest := body; len(bytes.TrimSpace(rest)) > 0; {
-			block, tail := pem.Decode(rest)
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return nil, err
-			}
-			certs = append(certs, cert)
-			rest = tail
-		}
-	} else {
-		media, _, err := mime.ParseMediaType(contentType)
-		if err != nil || media != "application/pkcs7-mime" {
-			return nil, fmt.Errorf("CA discovery expected PEM or EST certs-only CMS")
-		}
-		der := body
-		if len(der) == 0 || der[0] != 0x30 {
-			der, err = base64.StdEncoding.DecodeString(strings.TrimSpace(string(body)))
-			if err != nil {
-				return nil, fmt.Errorf("invalid EST base64: %w", err)
-			}
-		}
-		var ci struct {
-			Type    asn1.ObjectIdentifier
-			Content asn1.RawValue
-		}
-		rest, err := asn1.Unmarshal(der, &ci)
-		if err != nil || len(rest) != 0 || !ci.Type.Equal(asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}) {
-			return nil, fmt.Errorf("invalid EST SignedData")
-		}
-		sdDER := ci.Content.FullBytes
-		// Accept RFC 5652 explicit content and the direct SEQUENCE emitted by
-		// existing pki-core deployments.
-		if ci.Content.Class == 2 && ci.Content.Tag == 0 {
-			sdDER = ci.Content.Bytes
-		}
-		var sd struct {
-			Version int
-			Digests []pkix.AlgorithmIdentifier `asn1:"set"`
-			Content struct{ Type asn1.ObjectIdentifier }
-			Certs   []asn1.RawValue `asn1:"optional,tag:0"`
-			Signers []asn1.RawValue `asn1:"set"`
-		}
-		rest, err = asn1.Unmarshal(sdDER, &sd)
-		if err != nil || len(rest) != 0 || sd.Version != 1 || len(sd.Digests) != 0 || !sd.Content.Type.Equal(asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}) || len(sd.Signers) != 0 || len(sd.Certs) > 16 {
-			return nil, fmt.Errorf("invalid EST certs-only SignedData")
-		}
-		for _, raw := range sd.Certs {
-			cert, err := x509.ParseCertificate(raw.FullBytes)
-			if err != nil {
-				return nil, err
-			}
-			certs = append(certs, cert)
-		}
-	}
-	return certs, nil
+	return estcacerts.ParseCertificates(body, contentType)
 }

@@ -124,6 +124,7 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 		r.fusionFrame = request.Frame
 		r.fusionEpoch = epoch
 	}
+	r.roomTracking = &roomTracking{model: model, frame: request.Frame, epoch: epoch}
 	report.Tracking = r.fusionTracker.Update(pose, cloud, fits, time.Now())
 	report.Message = report.Tracking.Message
 	report.Accepted = len(cloud.Surfaces)

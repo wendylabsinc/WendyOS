@@ -8,12 +8,14 @@ import (
 	"fmt"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
 	localoci "github.com/wendylabsinc/wendy/go/internal/agent/oci"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/anypb"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -26,6 +28,7 @@ type deviceSpecStore struct {
 
 // FastRPC bind mounts retain their paths while misc minors change after boot.
 func TestDeviceRefresh_NPUBindMountAfterDeviceRenumber(t *testing.T) {
+	withoutHostAccelerators(t)
 	major, minor, err := localoci.ResolveDeviceNode(os.DevNull, "c", true)
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +51,7 @@ func TestDeviceRefresh_NPUBindMountAfterDeviceRenumber(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := &Client{client: remote, logger: zap.NewNop()}
-	if err := client.refreshAcceleratorDeviceNumbersForStart(context.Background(), ctr, "npu-app", map[string]string{"sh.wendy/entitlement.npu": ""}); err != nil {
+	if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "npu-app", map[string]string{"sh.wendy/entitlement.npu": ""}); err != nil {
 		t.Fatal(err)
 	}
 	var saved localoci.Spec
@@ -85,6 +88,7 @@ func (s *deviceSpecStore) Update(_ context.Context, record containers.Container,
 }
 
 func TestDeviceRefresh_PersistenceThroughContainerdClient(t *testing.T) {
+	withoutHostAccelerators(t)
 	for _, tc := range []struct {
 		name              string
 		stale, writeFails bool
@@ -127,7 +131,7 @@ func TestDeviceRefresh_PersistenceThroughContainerdClient(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := &Client{client: remote, logger: zap.NewNop()}
-			err = client.refreshAcceleratorDeviceNumbersForStart(context.Background(), ctr, "app", map[string]string{"sh.wendy/entitlement." + tc.label: ""})
+			err = client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", map[string]string{"sh.wendy/entitlement." + tc.label: ""})
 			if tc.stale && tc.writeFails {
 				if !errors.Is(err, writeErr) || classifyStartError(err) != exitReasonStartFailed {
 					t.Fatalf("required repair failure hidden: %v", err)
@@ -150,7 +154,7 @@ func TestDeviceRefresh_PersistenceThroughContainerdClient(t *testing.T) {
 					t.Fatal("stored binding not repaired")
 				}
 				store.masks = nil
-				if err := client.refreshAcceleratorDeviceNumbersForStart(context.Background(), ctr, "app", map[string]string{"sh.wendy/entitlement." + tc.label: ""}); err != nil {
+				if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", map[string]string{"sh.wendy/entitlement." + tc.label: ""}); err != nil {
 					t.Fatal(err)
 				}
 				if store.masks != nil {
@@ -192,6 +196,7 @@ func TestMarshalRefreshedDeviceSpec_PreservesUnmodeledFields(t *testing.T) {
 }
 
 func TestDeviceRefresh_UnresolvedSourceLeavesStoredSpecIntact(t *testing.T) {
+	withoutHostAccelerators(t)
 	for _, tc := range []struct {
 		entitlement string
 		invalid     bool
@@ -222,7 +227,7 @@ func TestDeviceRefresh_UnresolvedSourceLeavesStoredSpecIntact(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := &Client{client: remote, logger: zap.NewNop()}
-			err = client.refreshAcceleratorDeviceNumbersForStart(context.Background(), ctr, "app", map[string]string{"sh.wendy/entitlement." + tc.entitlement: ""})
+			err = client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", map[string]string{"sh.wendy/entitlement." + tc.entitlement: ""})
 			if err == nil {
 				t.Fatal("unresolved device accepted")
 			}
@@ -237,6 +242,7 @@ func TestDeviceRefresh_UnresolvedSourceLeavesStoredSpecIntact(t *testing.T) {
 }
 
 func TestDeviceRefresh_NPUCgroupOnlyPinsAfterDeviceRenumbering(t *testing.T) {
+	withoutHostAccelerators(t)
 	// FastRPC is bind-mounted: only the access rules and pin annotation carry
 	// device numbers. Swap two host bindings to model their reboot reordering.
 	paths := []string{os.DevNull, "/dev/zero"}
@@ -272,7 +278,7 @@ func TestDeviceRefresh_NPUCgroupOnlyPinsAfterDeviceRenumbering(t *testing.T) {
 	}
 	client := &Client{client: remote, logger: zap.NewNop()}
 	labels := map[string]string{"sh.wendy/entitlement.npu": ""}
-	if err := client.refreshAcceleratorDeviceNumbersForStart(context.Background(), ctr, "npu-app", labels); err != nil {
+	if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "npu-app", labels); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(store.masks, []string{"spec"}) {
@@ -309,10 +315,218 @@ func TestDeviceRefresh_NPUCgroupOnlyPinsAfterDeviceRenumbering(t *testing.T) {
 		}
 	}
 	store.masks = nil
-	if err := client.refreshAcceleratorDeviceNumbersForStart(context.Background(), ctr, "npu-app", labels); err != nil {
+	if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "npu-app", labels); err != nil {
 		t.Fatal(err)
 	}
 	if store.masks != nil {
 		t.Fatal("current NPU bindings were rewritten")
+	}
+}
+
+// withoutHostAccelerators keeps the refresh from reading this machine's GPU,
+// NPU and Qualcomm runtime.
+func withoutHostAccelerators(t *testing.T) {
+	t.Helper()
+	stubAcceleratorAccess(t, func(*localoci.Spec) []string { return nil })
+}
+
+func stubAcceleratorAccess(t *testing.T, grant func(*localoci.Spec) []string) {
+	t.Helper()
+	orig, origApply, origStage, origExists := addMissingAcceleratorAccess, applyQualcommRuntime, stageQualcommRuntime, qualcommStageExists
+	addMissingAcceleratorAccess = func(spec *localoci.Spec, _, _ bool) []string { return grant(spec) }
+	applyQualcommRuntime = func(*localoci.Spec) cdi.QualcommNPURuntimeResult { return cdi.QualcommNPURuntimeResult{} }
+	stageQualcommRuntime = func(*zap.Logger) {}
+	qualcommStageExists = func() bool { return true }
+	t.Cleanup(func() {
+		addMissingAcceleratorAccess, applyQualcommRuntime, stageQualcommRuntime, qualcommStageExists = orig, origApply, origStage, origExists
+	})
+}
+
+// accelGrant stands in for a host whose NPU node appeared after the app was
+// created: it adds the node once, as the oci top-up does.
+func accelGrant(spec *localoci.Spec) []string {
+	for _, m := range spec.Mounts {
+		if m.Destination == "/dev/accel/accel0" {
+			return nil
+		}
+	}
+	major, minor, err := localoci.ResolveDeviceNode(os.DevNull, "c", true)
+	if err != nil {
+		panic(err)
+	}
+	spec.Mounts = append(spec.Mounts, localoci.Mount{Destination: "/dev/accel/accel0", Source: os.DevNull, Type: "bind", Options: []string{"rbind", "rw", "nosuid", "noexec"}})
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, localoci.LinuxDeviceCgroup{Allow: true, Type: "c", Major: new(major), Minor: new(minor), Access: "rw"})
+	localoci.RecordPinnedDeviceMapping(spec, localoci.PinnedDevice{Path: "/dev/accel/accel0", HostPath: os.DevNull, Type: "c", Major: major, Minor: minor, NoFollow: true})
+	spec.Process.User.AdditionalGids = append(spec.Process.User.AdditionalGids, 998)
+	spec.Process.Env = append(spec.Process.Env, "GRANTED=1")
+	return []string{"/dev/accel/accel0"}
+}
+
+func loadDeviceSpecContainer(t *testing.T, raw []byte) (*Client, containerd.Container, *deviceSpecStore) {
+	t.Helper()
+	store := &deviceSpecStore{record: containers.Container{ID: "app", Spec: &anypb.Any{TypeUrl: "test-spec", Value: raw}}}
+	remote, err := containerd.New("", containerd.WithServices(containerd.WithContainerStore(store)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctr, err := remote.LoadContainer(context.Background(), "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Client{client: remote, logger: zap.NewNop()}, ctr, store
+}
+
+// Access added at start is persisted without dropping fields the agent's spec
+// type does not model, and an unchanged start writes nothing.
+func TestAcceleratorAccessRefresh_PersistsGrantedAccess(t *testing.T) {
+	stubAcceleratorAccess(t, accelGrant)
+	original := []byte(`{"ociVersion":"1.0.2","process":{"user":{"uid":0,"gid":0,"umask":18},"args":["/bin/sh"],"env":["PATH=/bin"],"cwd":"/","apparmorProfile":"keep"},"root":{"path":"rootfs"},"mounts":[{"destination":"/proc","type":"proc","source":"proc","uidMappings":[{"containerID":0,"hostID":1000,"size":1}]}],"linux":{"resources":{"devices":[{"allow":false,"access":"rwm"}]},"sysctl":{"net.ipv4.ip_forward":"0"}},"futureExtension":{"enabled":true}}`)
+	client, ctr, store := loadDeviceSpecContainer(t, original)
+	labels := map[string]string{"sh.wendy/entitlement.npu": ""}
+
+	if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", labels); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(store.masks, []string{"spec"}) {
+		t.Fatalf("unscoped write: %v", store.masks)
+	}
+	var doc struct {
+		Process struct {
+			User            map[string]json.RawMessage `json:"user"`
+			Env             []string                   `json:"env"`
+			ApparmorProfile string                     `json:"apparmorProfile"`
+		} `json:"process"`
+		Mounts          []map[string]json.RawMessage `json:"mounts"`
+		FutureExtension json.RawMessage              `json:"futureExtension"`
+		Linux           map[string]json.RawMessage   `json:"linux"`
+		Annotations     map[string]string            `json:"annotations"`
+	}
+	if err := json.Unmarshal(store.record.Spec.GetValue(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Mounts) != 2 || string(doc.Mounts[0]["uidMappings"]) == "" || string(doc.Mounts[1]["destination"]) != `"/dev/accel/accel0"` {
+		t.Fatalf("mounts: %v", doc.Mounts)
+	}
+	if string(doc.Process.User["umask"]) != "18" || string(doc.Process.User["additionalGids"]) != "[998]" {
+		t.Fatalf("user: %v", doc.Process.User)
+	}
+	if !reflect.DeepEqual(doc.Process.Env, []string{"PATH=/bin", "GRANTED=1"}) || doc.Process.ApparmorProfile != "keep" {
+		t.Fatalf("process: %+v", doc.Process)
+	}
+	if string(doc.FutureExtension) != `{"enabled":true}` || string(doc.Linux["sysctl"]) != `{"net.ipv4.ip_forward":"0"}` {
+		t.Fatal("lost unmodeled fields")
+	}
+	if doc.Annotations["sh.wendy/pinned-devices"] == "" {
+		t.Fatal("granted node not pinned")
+	}
+
+	store.masks = nil
+	if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", labels); err != nil {
+		t.Fatal(err)
+	}
+	if store.masks != nil {
+		t.Fatal("unchanged spec rewritten")
+	}
+}
+
+// Added access is a repair, not a gate: when it cannot be saved the app starts
+// as it would have before.
+func TestAcceleratorAccessRefresh_GrantWriteFailureStillStarts(t *testing.T) {
+	stubAcceleratorAccess(t, accelGrant)
+	raw, err := json.Marshal(localoci.DefaultSpec("/rootfs", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, ctr, store := loadDeviceSpecContainer(t, raw)
+	store.updateErr = errors.New("disk full")
+	if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", map[string]string{"sh.wendy/entitlement.gpu": ""}); err != nil {
+		t.Fatalf("best-effort grant blocked the start: %v", err)
+	}
+	if !bytes.Equal(store.record.Spec.GetValue(), raw) {
+		t.Fatal("stored spec changed despite the failed write")
+	}
+}
+
+// A missing pinned device still refuses the start before anything is added.
+func TestAcceleratorAccessRefresh_MissingDeviceRefusedBeforeGrant(t *testing.T) {
+	called := false
+	stubAcceleratorAccess(t, func(*localoci.Spec) []string { called = true; return nil })
+	spec := localoci.DefaultSpec("/rootfs", nil)
+	spec.Linux.Devices = []localoci.LinuxDevice{{Path: filepath.Join(t.TempDir(), "gone"), Type: "c", Major: 226, Minor: 128}}
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, ctr, _ := loadDeviceSpecContainer(t, raw)
+	err = client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", map[string]string{"sh.wendy/entitlement.gpu": ""})
+	if !errors.Is(err, ErrDeviceUnavailable) || called {
+		t.Fatalf("err=%v grant called=%v", err, called)
+	}
+}
+
+// The DSP came up after the agent staged its runtime: a start stages it, binds
+// the transport and saves it, and the next start writes nothing.
+func TestAcceleratorAccessRefresh_StagesTransportAfterLateDSP(t *testing.T) {
+	withoutHostAccelerators(t)
+	staged, stagings := false, 0
+	stageQualcommRuntime = func(*zap.Logger) { staged = true; stagings++ }
+	qualcommStageExists = func() bool { return staged }
+	applyQualcommRuntime = func(spec *localoci.Spec) cdi.QualcommNPURuntimeResult {
+		result := cdi.QualcommNPURuntimeResult{HasDSP: true, TransportApplied: staged}
+		if staged && !slices.ContainsFunc(spec.Mounts, func(m localoci.Mount) bool { return m.Destination == "/opt/wendyos/npu/lib" }) {
+			spec.Mounts = append(spec.Mounts, localoci.Mount{Destination: "/opt/wendyos/npu/lib", Source: "/run/wendyos/npu/lib", Type: "bind", Options: []string{"rbind", "ro"}})
+			spec.Process.Env = append(spec.Process.Env, "LD_LIBRARY_PATH=/opt/wendyos/npu/lib")
+			result.Mounts = 1
+		}
+		return result
+	}
+	raw, err := json.Marshal(localoci.DefaultSpec("/rootfs", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, ctr, store := loadDeviceSpecContainer(t, raw)
+	labels := map[string]string{"sh.wendy/entitlement.npu": ""}
+	if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", labels); err != nil {
+		t.Fatal(err)
+	}
+	var saved localoci.Spec
+	if err := json.Unmarshal(store.record.Spec.GetValue(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if stagings != 1 || !slices.ContainsFunc(saved.Mounts, func(m localoci.Mount) bool { return m.Destination == "/opt/wendyos/npu/lib" }) ||
+		!slices.Contains(saved.Process.Env, "LD_LIBRARY_PATH=/opt/wendyos/npu/lib") {
+		t.Fatalf("transport not staged and saved: stagings=%d mounts=%+v env=%v", stagings, saved.Mounts, saved.Process.Env)
+	}
+	store.masks = nil
+	if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", labels); err != nil {
+		t.Fatal(err)
+	}
+	if store.masks != nil || stagings != 1 {
+		t.Fatalf("unchanged start rewrote the spec or restaged: masks=%v stagings=%d", store.masks, stagings)
+	}
+}
+
+// An image with a DSP but no transport to stage leaves an empty stage: later
+// starts warn but do not stage again.
+func TestAcceleratorAccessRefresh_NothingToStageIsNotRetried(t *testing.T) {
+	withoutHostAccelerators(t)
+	stageExists, stagings := false, 0
+	stageQualcommRuntime = func(*zap.Logger) { stageExists = true; stagings++ }
+	qualcommStageExists = func() bool { return stageExists }
+	applyQualcommRuntime = func(*localoci.Spec) cdi.QualcommNPURuntimeResult {
+		return cdi.QualcommNPURuntimeResult{HasDSP: true}
+	}
+	raw, err := json.Marshal(localoci.DefaultSpec("/rootfs", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, ctr, _ := loadDeviceSpecContainer(t, raw)
+	for range 3 {
+		if err := client.refreshAcceleratorAccessForStart(context.Background(), ctr, "app", map[string]string{"sh.wendy/entitlement.npu": ""}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stagings != 1 {
+		t.Fatalf("staged %d times, want once", stagings)
 	}
 }

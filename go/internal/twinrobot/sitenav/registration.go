@@ -108,6 +108,19 @@ func topDistance(p Vertex, triangles []Triangle) float64 {
 // search. Furniture is supporting evidence, never equivalent to architecture.
 // Returned alternatives are hypotheses, not permission to align or move.
 func RegisterSurfaces(ctx context.Context, model LayeredRoom, input RegistrationInput) ([]RegistrationFit, error) {
+	return registerSurfaces(ctx, model, input, nil)
+}
+
+// TrackSurfaces refines an already confirmed alignment. The prior limits the
+// search region, but cannot replace architectural evidence or resolve ambiguity.
+func TrackSurfaces(ctx context.Context, model LayeredRoom, input RegistrationInput, prior PoseCandidate) ([]RegistrationFit, error) {
+	if !prior.Position.Valid() || !finite(prior.Rotation) {
+		return nil, errors.New("Invalid tracking prior.")
+	}
+	return registerSurfaces(ctx, model, input, &prior)
+}
+
+func registerSurfaces(ctx context.Context, model LayeredRoom, input RegistrationInput, prior *PoseCandidate) ([]RegistrationFit, error) {
 	if len(input.Cloud.Surfaces) < 24 {
 		return nil, errors.New("Waiting for more observed surface structure.")
 	}
@@ -402,7 +415,13 @@ func RegisterSurfaces(ctx context.Context, model LayeredRoom, input Registration
 		return out
 	}
 	stride := max(1, (len(scan)+179)/180)
-	raw, err := searchRoom(ctx, model.Base, func(c PoseCandidate) PoseCandidate { return evaluate(c, 1, false).Pose }, func(c PoseCandidate) PoseCandidate { return evaluate(c, stride, false).Pose }, func(c PoseCandidate) bool { return c.cost < .09 && c.Coverage >= .25 })
+	var raw []PoseCandidate
+	var err error
+	if prior != nil {
+		raw, err = trackRoom(ctx, *prior, func(c PoseCandidate) PoseCandidate { return evaluate(c, 1, false).Pose })
+	} else {
+		raw, err = searchRoom(ctx, model.Base, func(c PoseCandidate) PoseCandidate { return evaluate(c, 1, false).Pose }, func(c PoseCandidate) PoseCandidate { return evaluate(c, stride, false).Pose }, func(c PoseCandidate) bool { return c.cost < .09 && c.Coverage >= .25 })
+	}
 	if err != nil {
 		return nil, err
 	}

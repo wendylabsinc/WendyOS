@@ -63,8 +63,8 @@ Select your device and press Enter. To create a virtual device, press Tab to ope
 **Simulator**, press **c**, and choose **Generic WendyOS**. This VM runs your web
 server; it does not include a simulated robot.
 
-If Wendy skips the picker because you have a saved default, use
-`wendy device unset-default` and run the command again to choose a different target.
+If Wendy skips the picker because `WENDY_DEVICE` is set in this terminal, run
+`unset WENDY_DEVICE` and run the command again to choose a different target.
 
 Wendy builds and deploys the app, then streams its logs. Wait for `App reachable at`
 and open the printed URL if your browser does not open automatically. You should see:

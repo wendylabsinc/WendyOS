@@ -201,6 +201,42 @@ func TestRenewalSwitchesP256DeviceToMLDSA65(t *testing.T) {
 	}
 }
 
+func TestRenewalFetchesLiteIssuersBeforeRequestingANewIdentity(t *testing.T) {
+	ca := newRenewCA(t)
+	frontend, endpoint, roots := startFakeRenew(t, renewed(t, ca))
+	svc, _, oldLeaf := enrolledForRenewal(t, ca, endpoint, roots)
+	svc.acmeDirectoryURL = "https://acme.pki.test/11111111-1111-4111-8111-111111111111/acme/directory"
+	state, err := svc.readProvisioningState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const oldIssuers = "the previously provisioned issuer path"
+	state.LitePeerIssuers = oldIssuers
+	if err := svc.saveState(state); err != nil {
+		t.Fatal(err)
+	}
+	fetch := fetchLiteIssuers
+	t.Cleanup(func() { fetchLiteIssuers = fetch })
+	var fetching bool
+	fetchLiteIssuers = func(context.Context, *url.URL) (string, error) {
+		fetching = true
+		if calls := frontend.requests.Load(); calls != 0 {
+			t.Errorf("renewal endpoint called %d times before optional EST fetch", calls)
+		}
+		return "", io.EOF
+	}
+	if renewed, err := svc.RenewIfDue(t.Context(), time.Now()); !renewed || err != nil {
+		t.Fatalf("offline optional EST blocked renewal: renewed=%t error=%v", renewed, err)
+	}
+	state, err = svc.readProvisioningState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fetching || state.CertPEM == oldLeaf || state.LitePeerIssuers != oldIssuers {
+		t.Fatalf("renewal did not save new identity with previous issuer path: fetched=%t", fetching)
+	}
+}
+
 // Steady state: an ML-DSA-65 device renews again over mTLS with its ML-DSA-65
 // leaf and stays ML-DSA-65.
 func TestRenewalMLDSA65DeviceRenewsAgain(t *testing.T) {

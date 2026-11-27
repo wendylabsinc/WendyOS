@@ -67,6 +67,10 @@ type CalibratedFrameService struct {
 	logger   *zap.Logger
 	registry *framesource.Registry
 	metadata *CameraMetadataStore
+	// stableNames reads the udev names local cameras are identified by, so the
+	// metadata RPCs can refuse a "by-id:" name two connected cameras share
+	// (see video_stable_id.go). Nil in tests that do not exercise that.
+	stableNames func() map[string]stableNames
 
 	// ctx is cancelled by Shutdown and every hub's context derives from it, so
 	// a SIGTERM ends each capture instead of waiting on subscribers that
@@ -90,6 +94,9 @@ func NewCalibratedFrameService(ctx context.Context, logger *zap.Logger, registry
 		ctx:      svcCtx,
 		cancel:   cancel,
 		hubs:     map[string]*frameHub{},
+		stableNames: func() map[string]stableNames {
+			return readStableNames(v4lByIDDir, v4lByPathDir, v4lSysDir)
+		},
 	}
 }
 

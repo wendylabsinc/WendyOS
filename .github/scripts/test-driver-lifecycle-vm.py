@@ -180,7 +180,7 @@ WantedBy=multi-user.target
 ''')
         (context / "Dockerfile").write_text(f'''FROM {BASE}
 LABEL {LABEL}={self.nonce}
-RUN dnf -y --setopt=install_weak_deps=False install systemd systemd-udev dbus-daemon kernel-core kernel-modules kernel-devel kmod squashfs-tools dracut gcc make elfutils-libelf-devel python3 findutils diffutils procps-ng util-linux e2fsprogs && dnf clean all
+RUN dnf -y --setopt=install_weak_deps=False install systemd systemd-udev dbus-daemon kernel-core kernel-modules kernel-devel kmod squashfs-tools dracut gzip gcc make elfutils-libelf-devel python3 findutils diffutils procps-ng util-linux e2fsprogs && dnf clean all
 COPY . /fixture/
 RUN install -m755 /fixture/wendyos-sysext-apply.sh /usr/sbin/wendyos-sysext-apply.sh && bash /fixture/build-guest.sh
 RUN install -m644 /fixture/driver-fixture.service /etc/systemd/system/driver-fixture.service && systemctl enable driver-fixture.service && systemctl set-default multi-user.target && systemctl mask serial-getty@ttyS0.service console-getty.service && printf '%s\\n' '{self.nonce}' > /etc/machine-id && mkdir -p /data/extensions/enabled && rm -f /fixture/Dockerfile

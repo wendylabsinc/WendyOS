@@ -116,6 +116,7 @@ SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "${SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS[@]}"
     "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"
     "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"
+    "$SHARED_GRPC_API_CONTRACTS_WENDYCOM_PROTO"
 )
 SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
 for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
@@ -267,6 +268,17 @@ RECORDING_PKG="$MODULE/go/proto/gen/recordingpb"
 RECORDING_M_OPTS="--go_opt=Mwendy/agent/apps/v1/recording.proto=$RECORDING_PKG --go-grpc_opt=Mwendy/agent/apps/v1/recording.proto=$RECORDING_PKG"
 ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $CLOUD_V2_M_OPTS $PKI_M_OPTS $SYSTEM_M_OPTS $RECORDING_M_OPTS"
 
+generate_lite_protos() {
+    local output="$1" lite_pkg="$MODULE/go/proto/gen/litepb"
+    # The local exception retains enrollment fields absent from the shared pin.
+    protoc --proto_path="$PROTO_DIR/wendy/lite" --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+        --go_out="$output" --go_opt=module="$MODULE/go/proto/gen" \
+        --go_opt=Mwendy_com_msg.proto="$lite_pkg" \
+        --go_opt=Mwendy_conf.proto="$lite_pkg" \
+        --go_opt=Mwendylite/v1/sensorlink.proto="$SENSORLINK_PKG" \
+        wendy_com_msg.proto wendy_conf.proto
+}
+
 # Explicit partial regeneration remains available; CI checks the complete tree below.
 if [ "${1:-}" = --shared-grpc-api-contracts-only ]; then
     SHARED_GRPC_API_CONTRACTS_OUT="$SHARED_GRPC_API_CONTRACTS_DIR/generated"
@@ -291,13 +303,7 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ]; then
         --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
         --proto_path="$PROTO_DIR" \
         $ALL_M_OPTS "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"
-    # The local Lite envelope imports sensorlink; check that generated edge too.
-    LITE_PKG="$MODULE/go/proto/gen/litepb"
-    protoc --proto_path="$PROTO_DIR/wendy/lite" --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
-        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
-        --go_opt=Mwendy_com_msg.proto="$LITE_PKG" --go_opt=Mwendy_conf.proto="$LITE_PKG" \
-        --go_opt=Mwendylite/v1/sensorlink.proto="$SENSORLINK_PKG" \
-        wendy_com_msg.proto wendy_conf.proto
+    generate_lite_protos "$SHARED_GRPC_API_CONTRACTS_OUT"
     CLOUD_V1_SHARED_INPUTS=()
     for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
         CLOUD_V1_SHARED_INPUTS+=("cloud/$proto")
@@ -386,20 +392,8 @@ protoc \
     --go-grpc_opt=module="$SYSTEM_PKG" \
     ${SYSTEM_PROTOS[@]}
 
-# The local Lite envelope retains its existing fields and imports canonical sensorlink.
 echo "Generating Wendy Lite protos..."
-LITE_PKG="$MODULE/go/proto/gen/litepb"
-mkdir -p "$GEN_DIR/litepb"
-protoc \
-    --proto_path="$PROTO_DIR/wendy/lite" \
-    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
-    --go_out="$GEN_DIR/litepb" \
-    --go_opt=module="$LITE_PKG" \
-    --go_opt=Mwendy_com_msg.proto="$LITE_PKG" \
-    --go_opt=Mwendy_conf.proto="$LITE_PKG" \
-    --go_opt=Mwendylite/v1/sensorlink.proto="$SENSORLINK_PKG" \
-    wendy_com_msg.proto \
-    wendy_conf.proto
+generate_lite_protos "$GEN_DIR"
 
 echo "Generating Wendy Lite sensorlink protos..."
 SENSORLINK_PKG="$MODULE/go/proto/gen/sensorlinkpb"

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -216,5 +217,52 @@ func TestResolveFlashSourceDownloadsWhenNothingCached(t *testing.T) {
 			assertNoSecondImageCopy(t)
 			assertFlashSource(t, s, src, zstPath, tt.bmapMode == bmapServed)
 		})
+	}
+}
+
+func TestResolveFlashSourceReportsCachedImageWithoutPath(t *testing.T) {
+	s, img := newFlashSourceServer(t, bmapServed)
+	zstPath := writeFlashCacheFile(t, ".img.zst", s.zst)
+	out, err := captureCommandStdout(t, func() error {
+		_, err := resolveFlashSource(flashTestDevice, flashTestVersion, flashTestStorage, img, false)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("resolveFlashSource: %v", err)
+	}
+	if !strings.Contains(out, "✓ Image ready (cached)") || strings.Contains(out, zstPath) || strings.Contains(out, "Using cached") {
+		t.Fatalf("output %q; want the cached image reported without its path", out)
+	}
+}
+
+func TestResolveFlashSourceReportsDownload(t *testing.T) {
+	_, img := newFlashSourceServer(t, bmapServed)
+	out, err := captureCommandStdout(t, func() error {
+		_, err := resolveFlashSource(flashTestDevice, flashTestVersion, flashTestStorage, img, false)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("resolveFlashSource: %v", err)
+	}
+	if !strings.Contains(out, "✓ Image downloaded · ") {
+		t.Fatalf("output %q; want the download reported with its size", out)
+	}
+}
+
+func TestResolveFlashSourceFallbackNotesHaveNoPrefix(t *testing.T) {
+	s, img := newFlashSourceServer(t, bmapDown)
+	writeFlashCacheFile(t, ".img.zst", s.zst)
+	out, err := captureCommandStdout(t, func() error {
+		src, err := resolveFlashSource(flashTestDevice, flashTestVersion, flashTestStorage, img, false)
+		if src != nil && src.stream != nil {
+			src.stream.Close()
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("resolveFlashSource: %v", err)
+	}
+	if !strings.Contains(out, "could not fetch block map") || strings.Contains(out, "Note:") {
+		t.Fatalf("output %q; want the fallback reason without a Note: prefix", out)
 	}
 }

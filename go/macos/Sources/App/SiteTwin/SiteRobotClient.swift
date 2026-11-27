@@ -44,6 +44,7 @@ protocol SiteRobotTurning: Sendable {
 }
 
 protocol SiteRobotSearching: Sendable {
+    func confirmLocalization(_ handle: UInt64, sequence: UInt64, matchSequence: UInt64, frame: String, candidate: Int) async throws
     func resetLocalization(_ handle: UInt64, sequence: UInt64, frame: String) async throws
     func fuse(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws -> RobotFusionReport
     func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws
@@ -123,7 +124,20 @@ final class SiteRobotClient: SiteRobotObserving, SiteRobotTurning, SiteRobotSear
             return Data(bytes: bytes, count: p.pointee.count)
         }
     }
-    func align(_ handle: UInt64, sequence: UInt64, frame: String, position: SitePoint, yaw: Double) async throws {
+    func align(_ handle: UInt64, sequence: UInt64, frame: String, position: SitePoint, yaw: Double, geometry: SiteRobotGeometryPacket? = nil) async throws {
+        if let geometry {
+            struct Command: Encodable {
+                var Operation = "align"
+                var Sequence: UInt64
+                var Frame: String
+                var X, Z, Floor, Yaw: Double
+                var Fusion: RobotFusionRequest
+            }
+            let command = Command(Sequence: sequence, Frame: frame, X: position.x, Z: position.z, Floor: position.y, Yaw: yaw,
+                Fusion: RobotFusionRequest(frame: frame, architecture: geometry.architecture, furniture: geometry.furniture, visual: nil, reference: []))
+            _ = try await remoteRequest(handle, data: JSONEncoder().encode(command))
+            return
+        }
         try await perform { try GoClient.withCString(frame) { try GoClient.finish(WDSiteRobotAlign(handle, sequence, $0, position.x, position.z, position.y, yaw)) } }
     }
     func destination(_ handle: UInt64, sequence: UInt64, frame: String, point: SitePoint, move: Bool) async throws {

@@ -273,7 +273,16 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 			out.RoomID = room.Site.ID
 		}
 	case "align":
-		err = robot.Align(q.Sequence, q.Frame, q.X, q.Z, q.Floor, q.Yaw)
+		if len(q.Fusion) == 0 {
+			err = robot.Align(q.Sequence, q.Frame, q.X, q.Z, q.Floor, q.Yaw)
+		} else {
+			var geometry twinrobot.SiteFusionRequest
+			if err = json.Unmarshal(q.Fusion, &geometry); err == nil {
+				if _, err = s.Store.Frame(q.Frame); err == nil {
+					err = robot.AlignWithGeometry(q.Sequence, q.Frame, q.X, q.Z, q.Floor, q.Yaw, geometry)
+				}
+			}
+		}
 	case "destination":
 		err = robot.Destination(q.Sequence, q.Frame, q.X, q.Z, q.Enabled)
 	case "look":
@@ -376,6 +385,6 @@ func (s *Server) contributeMapping(session *robotSession, rooms []Room) {
 		for i, p := range vertices {
 			points[i] = Point{p.X, p.Y, p.Z}
 		}
-		_ = s.Store.Contribute(room.Site.ID, Contribution{Source: "go2:" + session.serial, Sequence: seq, ModelRevision: room.Site.ModelRevision, Points: points})
+		_ = s.Store.Contribute(room.Site.ID, Contribution{Replace: room.HasModel, Source: "go2:" + session.serial, Sequence: seq, ModelRevision: room.Site.ModelRevision, Points: points})
 	}
 }

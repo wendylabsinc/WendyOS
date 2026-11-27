@@ -180,7 +180,15 @@ func (g Grid) SweepWithMargin(a, b Point, yaw, margin float64) bool {
 // every corner's travel between angular samples, so intermediate poses cannot
 // slip between the checks. Translation and rotation are commanded separately.
 func (g Grid) Turn(p Point, from, to float64) bool {
-	return g.turnCellsAt(p, from, to, func(c Cell, yaw, padding float64) bool {
+	return g.TurnWithMargin(p, from, to, 0)
+}
+
+// TurnWithMargin reserves a bounded drift allowance throughout the turn.
+func (g Grid) TurnWithMargin(p Point, from, to, margin float64) bool {
+	if !finite(margin) || margin < 0 || margin > 1 {
+		return false
+	}
+	return g.turnCellsAtMargin(p, from, to, margin, func(c Cell, yaw, padding float64) bool {
 		return g.Floor[c] && !g.obstacleOverlaps(c, p, p, yaw, padding)
 	})
 }
@@ -190,12 +198,16 @@ func (g Grid) turnCells(p Point, from, to float64, visit func(Cell) bool) bool {
 }
 
 func (g Grid) turnCellsAt(p Point, from, to float64, visit func(Cell, float64, float64) bool) bool {
+	return g.turnCellsAtMargin(p, from, to, 0, visit)
+}
+
+func (g Grid) turnCellsAtMargin(p Point, from, to, margin float64, visit func(Cell, float64, float64) bool) bool {
 	if !finite(from) || !finite(to) {
 		return false
 	}
 	delta := math.Remainder(to-from, 2*math.Pi)
 	n := max(1, int(math.Ceil(math.Abs(delta)/(math.Pi/90))))
-	padding := math.Hypot(HalfLength+Clearance, HalfWidth+Clearance) * math.Abs(delta) / float64(n) / 2
+	padding := margin + math.Hypot(HalfLength+Clearance+margin, HalfWidth+Clearance+margin)*math.Abs(delta)/float64(n)/2
 	for i := 0; i <= n; i++ {
 		yaw := from + delta*float64(i)/float64(n)
 		if !g.sweptCells(p, p, yaw, padding, func(c Cell) bool { return visit(c, yaw, padding) }) {

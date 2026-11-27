@@ -44,6 +44,59 @@ The build produces native binaries for the build Mac. It links `libwendydesktop.
 
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
 
+## Publish the macOS app
+
+The [macOS app release workflow](../../.github/workflows/macos-app.yml) builds
+`WendyDesktop.app` for Apple Silicon and macOS 26 or later. It builds both Linux
+digital-twin runtimes from the same commit, signs the app, bundled CLI, libusb and
+VPN extension, then notarizes and staples the app. Publication requires signature,
+staple and Gatekeeper verification. This follows Apple's
+[notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow).
+
+Configure these repository or organization Actions secrets:
+
+| Secret | Value |
+| --- | --- |
+| `DEVELOPER_ID_CERTIFICATE` | Base64 Developer ID Application certificate, using the existing agent release format. |
+| `DEVELOPER_ID_KEY` | Base64 private key for that certificate, importable without a password, as in the agent release. |
+| `WENDY_DESKTOP_MAC_PROVISIONING_PROFILE` | Base64 Developer ID profile for `dev.wendy.desktop`, with System Extension, packet-tunnel system-extension and production push capabilities. |
+| `WENDY_DESKTOP_NETWORK_PROVISIONING_PROFILE` | Base64 Developer ID profile for `dev.wendy.desktop.network`, with the packet-tunnel system-extension capability. |
+| `NOTARY_APPLE_ID` | Apple account used for notarization. |
+| `NOTARY_TEAM_ID` | Apple team that owns the certificate and both profiles. |
+| `NOTARY_PASSWORD` | App-specific password for the Apple account. |
+
+The certificate and notary secrets are shared with the agent release. The two
+desktop profiles must match the desktop bundle IDs, not the agent bundle IDs.
+Encode profile files with `base64 -i profile.provisionprofile | pbcopy`.
+The workflow imports credentials into a temporary keychain and removes them at
+the end of the job.
+
+After merging the workflow, tag the commit to release:
+
+```sh
+git tag macos-v0.1.0 <commit>
+git push origin macos-v0.1.0
+```
+
+Alternatively, dispatch the workflow using an existing release tag as its ref:
+
+```sh
+gh workflow run macos-app.yml --ref macos-v0.1.0
+```
+
+Manual runs from branches are rejected. Both triggers build the commit recorded
+by GitHub for the selected tag, keeping execution in that tag's context. The tag
+supplies the app version; the workflow run number supplies the app and extension
+build number.
+The workflow publishes `wendy-macos-arm64-X.Y.Z.zip` and its `.sha256` checksum
+as a GitHub release. It does not change the repository's latest release.
+The ZIP contains `WendyDesktop.app`, ready to move into `/Applications`.
+
+Existing releases are never overwritten. If uploading or publishing fails after
+the draft is created, inspect and remove that incomplete draft before rerunning.
+Notarization diagnostics remain available as an Actions artifact. A failed
+notarization, staple or Gatekeeper check prevents publication.
+
 ## Nearby setup and enrollment
 
 Connected devices show their Wendy Cloud enrollment status in device Settings. An unenrolled WendyOS device offers **Enroll device**, where you explicitly choose a saved organization account and device name, or sign in to another organization. Enrollment uses that account without changing the global account selection and checks the resulting device organization before reporting success. Failed status reads remain unknown. Wendy Lite offers Bluetooth enrollment from its Settings tab.
@@ -1336,18 +1389,24 @@ Physical lens accuracy and mounting tolerances still need validation on a Go2. T
 
 Position search now defaults to **Move between views during discovery** on
 Apple clients. The Linux service matches the current view first. If it remains
-ambiguous, it checks for a clear 40 cm forward move at the current heading,
-including the initial heading. It matches again after each move and stops as
+ambiguous, a local trajectory planner samples nearby viewpoints 30–60 cm away
+at the current heading and up to 90 degrees to either side. It turns toward a
+reachable viewpoint before advancing, instead of requiring a fixed forward move.
+It matches again after each move and stops as
 soon as a candidate is available. It stops moving after three attempted viewpoints
-if matching is still inconclusive. When a move is blocked, it turns 30 degrees
-to check another heading, considering at most twelve distinct headings without
+if matching is still inconclusive. When a move is blocked, it turns 60 degrees
+to check another heading, considering at most six distinct headings without
 repeating the initial orientation. Discovery is also limited to five minutes.
-Turn the option off for rotation-only discovery, which retains a twelve-turn
-limit. Stop cancels the search and any active movement.
+Turn the option off for rotation-only discovery, which uses six 60-degree
+turns for a full rotation. Each turn pairs two former 30-degree steps, halving
+the stop-and-match cycles. Stop cancels the search and any active movement.
 
 Each move uses the live odometry frame, since the room transform is not yet
-confirmed. The complete body sweep and stopping distance must fit on observed
-clear floor, with a margin for drift. The hidden-floor allowance can cover the
+confirmed. The body sweep uses a 10 cm drift margin. Before every command,
+the target segment and stopping horizon from the current pose must fit on
+observed clear floor. The check does not add a second stopping distance beyond
+the viewpoint. Turning includes its own stopping sweep. Each viewpoint attempt
+is limited to twelve seconds and stops after two seconds without progress. The hidden-floor allowance can cover the
 fixed departure footprint only. The supervised option that permits unobserved
 floor during ordinary navigation does not apply to discovery moves. Blocked
 viewpoints report why they were skipped. Temporary sensor or clearance loss
@@ -1362,16 +1421,24 @@ unacknowledged Stop ends motion recovery.
 The controller avoids recently visited endpoints and stops before rematching.
 New scans must contain new geometry to count as independent evidence. Merely
 moving or replaying an accumulated map does not increase confidence. Camera
-hints from earlier viewpoints are discarded. A candidate position still needs
-confirmation before normal site navigation.
+hints from earlier viewpoints are discarded. The Apple client automatically
+applies a single candidate accepted by the Linux matcher. The existing confirmation
+operation rechecks the command sequence, odometry epoch, scan freshness and pose
+before applying it. Applying a position does not start navigation.
 The room view hides rejected scan-fit hypotheses. An explicit scan preview
 requires a usable candidate and is labeled as unconfirmed in the viewport;
 confirmed scans and previously saved room contributions remain available.
 
 If discovery stops, the original motion fault remains visible when healthy
-telemetry resumes. The client can try up to three passive matches on distinct,
-fresh observations while Go2 is stationary. These retries never restart motion.
-Stop or an explicit new search cancels passive recovery.
+telemetry resumes. While the map is open, the client keeps matching distinct,
+fresh observations while Go2 is stationary, at most once every two seconds.
+A fresh camera frame can trigger another attempt even when the accumulated LiDAR
+geometry is unchanged. Ambiguous fits remain unpositioned; repeated packets do
+not increase confidence. Recovery also runs after telemetry reconnects or an
+established alignment is lost. It never restarts movement. A stale confirmation
+returns to passive matching rather than starting discovery again.
+Stop cancels pending matches and automatic position application. An explicit new
+search replaces passive recovery. The collapsed Go2 controls show position status.
 
 **Restart discovery** is also available after choosing a position. It stops Go2,
 discards the current alignment and that robot's saved localization references
@@ -1399,3 +1466,27 @@ The native Android companion lives in [`../android`](../android/README.md). It
 shares this app's Go backend and has its own Kotlin/Compose UI and Android
 NSD, Bluetooth, camera and VPN adapters. Its README documents build instructions,
 validation and the remaining differences from the Apple apps.
+
+## Automatic Go2 room alignment
+
+After a confirmed LiDAR match or manual placement in an imported room, the Linux
+service refits fresh LiDAR surfaces to the room once per second. Manual placement
+sends the room geometry with the alignment request. Matching runs outside the
+motion watchdog lock and has a 500 ms computation budget. It searches within
+50 cm and 0.20 radians of the current alignment; accepted corrections must stay
+inside 45 cm and 0.18 radians and have broad architectural support in independent
+directions. Parallel walls, fragile matches, competing fits and stale observations
+do not change the alignment. This is local drift correction, not global recovery
+from a wrong initial room or a restarted odometry frame.
+
+The same correction applies to the robot, hazards and LiDAR overlay. An active
+route keeps its site destination, acknowledges STOP, and replans against fresh
+navigation evidence. Refitting never renews the operator lease, extends travel or
+time limits, clears a motion fault, or starts movement. A reset, newer command,
+changed model, pose epoch or alignment invalidates an in-flight fit.
+
+For imported rooms, each Go2 accumulated scan replaces that robot's previous
+rendering contribution so old alignments do not leave ghost walls. Source layers
+preserve other contributors. Old single-source rooms migrate automatically;
+legacy mixed-source points remain because their original ownership is unknown.
+Robot-created rooms without imported geometry retain their accumulated history.

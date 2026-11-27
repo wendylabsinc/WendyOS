@@ -118,11 +118,11 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			session.searchMessage = message
 		}
 	}
-	maxTurns := 12
+	maxTurns := twinrobot.LocalizationTurnCount
 	if input.Explore {
 		// Inspect each heading at most once; returning to the initial heading
 		// adds no new viewpoint when all translations were blocked.
-		maxTurns = 11
+		maxTurns--
 	}
 searchLoop:
 	for turn := 0; turn <= maxTurns; {
