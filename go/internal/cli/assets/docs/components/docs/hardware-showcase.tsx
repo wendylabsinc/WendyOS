@@ -7,8 +7,9 @@ export function HardwareShowcase({ children }: { children: ReactNode }) {
 type HardwareCardProps = {
   title: string;
   href: string;
-  src: string;
-  alt: string;
+  // A board without a photo yet gets a blank panel of the same size.
+  src?: string;
+  alt?: string;
   children: ReactNode;
 };
 
@@ -20,12 +21,16 @@ export function HardwareCard({ title, href, src, alt, children }: HardwareCardPr
       href={href}
       className="flex flex-col overflow-hidden border bg-fd-card transition-colors hover:border-fd-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fd-primary focus-visible:ring-offset-2 focus-visible:ring-offset-fd-background"
     >
-      <img
-        src={src}
-        alt={alt}
-        className="aspect-video w-full bg-fd-muted object-cover object-center"
-        loading="lazy"
-      />
+      {src ? (
+        <img
+          src={src}
+          alt={alt ?? ''}
+          className="aspect-video w-full bg-fd-muted object-cover object-center"
+          loading="lazy"
+        />
+      ) : (
+        <div aria-hidden="true" className="aspect-video w-full bg-fd-muted" />
+      )}
       <div className="flex flex-1 flex-col gap-1 p-5">
         <p className="font-semibold text-fd-card-foreground">{title}</p>
         <p className="text-sm text-fd-muted-foreground">{children}</p>

@@ -4,10 +4,13 @@ package hardware
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 
@@ -24,6 +27,26 @@ type SystemHardwareDiscoverer struct {
 	discoverGPUs       func() []gpudiscovery.Device
 	classifyTransport  func(base string) (camera.Transport, string)
 	enumerateLibcamera func(ctx context.Context) (map[string]string, error)
+	listVideoNodes     func() ([]string, error)
+
+	shareMu       sync.RWMutex
+	shareReporter CameraShareReporter
+}
+
+// CameraShareReporter tells camera discovery which video nodes the agent
+// created for camera sharing, and how each real camera is shared.
+type CameraShareReporter interface {
+	// IsShareNode reports whether path is a share node, which is not a camera.
+	IsShareNode(path string) bool
+	// CameraShareReport returns share properties by device path.
+	CameraShareReport(ctx context.Context) map[string]map[string]string
+}
+
+// SetCameraShareReporter sets the reporter; nil restores plain discovery.
+func (d *SystemHardwareDiscoverer) SetCameraShareReporter(r CameraShareReporter) {
+	d.shareMu.Lock()
+	d.shareReporter = r
+	d.shareMu.Unlock()
 }
 
 func NewSystemHardwareDiscoverer(logger *zap.Logger) *SystemHardwareDiscoverer {
@@ -31,6 +54,7 @@ func NewSystemHardwareDiscoverer(logger *zap.Logger) *SystemHardwareDiscoverer {
 		logger:             logger,
 		classifyTransport:  camera.Classify,
 		enumerateLibcamera: camera.EnumerateLibcamera,
+		listVideoNodes:     func() ([]string, error) { return filepath.Glob("/dev/video*") },
 	}
 }
 
@@ -203,10 +227,26 @@ func (d *SystemHardwareDiscoverer) discoverSPI() []*agentpb.ListHardwareCapabili
 
 // discoverGPIO enumerates GPIO chip devices.
 func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
+	return discoverGPIOChips("/", gpioChipInfo)
+}
+
+// gpioChipInfoFunc reads a chip's label and line count from its character device.
+type gpioChipInfoFunc func(dev string) (label string, lines uint32, ok bool)
+
+// discoverGPIOChips prefers the sysfs class, which needs the deprecated
+// CONFIG_GPIO_SYSFS; kernels without it list only the character devices.
+func discoverGPIOChips(root string, chipInfo gpioChipInfoFunc) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
+	if caps := sysfsGPIOChips(root); len(caps) > 0 {
+		return caps
+	}
+	return cdevGPIOChips(root, chipInfo)
+}
+
+func sysfsGPIOChips(root string) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
 	var caps []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
 
 	gpioPath := "/sys/class/gpio"
-	entries, err := os.ReadDir(gpioPath)
+	entries, err := os.ReadDir(filepath.Join(root, gpioPath))
 	if err != nil {
 		return nil
 	}
@@ -217,8 +257,8 @@ func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabil
 		}
 
 		devPath := filepath.Join(gpioPath, entry.Name())
-		label := readSysfsFile(filepath.Join(devPath, "label"))
-		ngpio := readSysfsFile(filepath.Join(devPath, "ngpio"))
+		label := readSysfsFile(filepath.Join(root, devPath, "label"))
+		ngpio := readSysfsFile(filepath.Join(root, devPath, "ngpio"))
 
 		name := entry.Name()
 		if label != "" {
@@ -235,6 +275,33 @@ func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabil
 	return caps
 }
 
+func cdevGPIOChips(root string, chipInfo gpioChipInfoFunc) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
+	matches, _ := filepath.Glob(filepath.Join(root, "dev", "gpiochip*"))
+	chips := map[int]string{}
+	for _, match := range matches {
+		name := filepath.Base(match)
+		suffix := strings.TrimPrefix(name, "gpiochip")
+		if n, err := strconv.Atoi(suffix); err == nil && strconv.Itoa(n) == suffix {
+			chips[n] = name
+		}
+	}
+
+	var caps []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
+	for _, n := range slices.Sorted(maps.Keys(chips)) {
+		devPath := "/dev/" + chips[n]
+		name := chips[n]
+		if label, lines, ok := chipInfo(filepath.Join(root, devPath)); ok && label != "" {
+			name = fmt.Sprintf("%s (%s, %d lines)", chips[n], label, lines)
+		}
+		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
+			Category:    "gpio",
+			DevicePath:  devPath,
+			Description: name,
+		})
+	}
+	return caps
+}
+
 // discoverCamera enumerates V4L2 video devices and classifies each one as
 // USB, CSI, or unknown. Transport and kernel driver are surfaced via the
 // HardwareCapability.properties map (which is additive, so no proto change is
@@ -243,9 +310,17 @@ func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabil
 func (d *SystemHardwareDiscoverer) discoverCamera(ctx context.Context) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
 	var caps []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
 
-	entries, err := filepath.Glob("/dev/video*")
+	entries, err := d.listVideoNodes()
 	if err != nil {
 		return nil
+	}
+
+	d.shareMu.RLock()
+	reporter := d.shareReporter
+	d.shareMu.RUnlock()
+	var shares map[string]map[string]string
+	if reporter != nil {
+		shares = reporter.CameraShareReport(ctx)
 	}
 
 	libcameraIDs, libErr := d.enumerateLibcamera(ctx)
@@ -260,6 +335,9 @@ func (d *SystemHardwareDiscoverer) discoverCamera(ctx context.Context) []*agentp
 	var pendings []pending
 
 	for _, path := range entries {
+		if reporter != nil && reporter.IsShareNode(path) {
+			continue
+		}
 		base := filepath.Base(path)
 		devNum := strings.TrimPrefix(base, "video")
 
@@ -273,6 +351,9 @@ func (d *SystemHardwareDiscoverer) discoverCamera(ctx context.Context) []*agentp
 		props := map[string]string{"transport": transport.String()}
 		if driver != "" {
 			props["driver"] = driver
+		}
+		for k, v := range shares[path] {
+			props[k] = v
 		}
 
 		c := &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{

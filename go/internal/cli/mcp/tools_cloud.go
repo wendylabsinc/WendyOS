@@ -287,6 +287,9 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	if err != nil {
 		return cloudErrResult(err), nil
 	}
+	if err := checkDeviceInternet(ctx, conn.Conn, cfg.DirectoryURL); err != nil {
+		return cloudErrResult(err), nil
+	}
 	cloudConn, err := mcpDialCloudGRPC(auth)
 	if err != nil {
 		return cloudErrResult(err), nil
@@ -299,7 +302,7 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	hw, hwErr := cloudenroll.ReadHardware(ctx, conn.Conn)
 	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 	if err != nil {
-		return cloudErrResult(err), nil
+		return enrollMintErrResult(name, err), nil
 	}
 
 	resp, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
@@ -307,7 +310,7 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 		EabKeyId: cfg.EABKeyID, EabHmacKey: cfg.EABHMACKey,
 	})
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return reservedEnrollmentFailure(assetID, err), nil
 	}
 	out := map[string]any{
 		"asset_id":      assetID,
@@ -319,6 +322,20 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 		out["hardware_warning"] = hwErr.Error()
 	}
 	return okResult(out), nil
+}
+
+// checkDeviceInternet is cloudenroll.CheckDeviceInternet; a variable so a test
+// can refuse without a device that reports its network.
+var checkDeviceInternet = cloudenroll.CheckDeviceInternet
+
+// reservedEnrollmentFailure reports a device that failed PKI enrollment after
+// Cloud reserved its asset. The EAB is single-use, so the reservation cannot
+// be resumed, and a retry under the same name is refused as taken until the
+// asset is removed. No MCP tool removes one, so the CLI command is named.
+func reservedEnrollmentFailure(assetID string, err error) *mcpgo.CallToolResult {
+	return errResultf(codeFromGRPC(err),
+		"Cloud registered asset %s and reserved the device name, but device PKI enrollment failed: %s. Before enrolling again, remove the reserved asset by running 'wendy cloud device unenroll --device %s' in a terminal.",
+		assetID, grpcErrString(err), assetID)
 }
 
 func (s *mcpServer) handleCloudTunnel(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -524,6 +541,14 @@ func (e *cloudResolveErr) Error() string { return e.msg }
 
 // signInAgainHint ends the message for a session Wendy Cloud no longer accepts.
 const signInAgainHint = "sign in again: call auth_login and show the user the link (or run 'wendy auth login' in a terminal)"
+
+// enrollMintErrResult tells the assistant plainly when the name is the problem.
+func enrollMintErrResult(name string, err error) *mcpgo.CallToolResult {
+	if errors.Is(err, cloudenroll.ErrDeviceNameTaken) {
+		return errResult(errCodeInvalidArgument, fmt.Sprintf("device name %s is already used by another device in this organization; call again with a different name", name))
+	}
+	return cloudErrResult(err)
+}
 
 // cloudErrResult maps an error from the cloud auth/asset-resolution helpers
 // (cloudAuthEntry, pickCloudAsset, connectToCloudAgent, mcpListCloudAssets) to

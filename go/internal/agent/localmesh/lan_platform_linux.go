@@ -14,45 +14,47 @@ import (
 	"time"
 )
 
-func scanLANInterfaces(ethernet, wifi bool) ([]lanInterface, error) {
+func scanLANInterfaces(ethernet, wifi bool) (lanScan, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return nil, err
+		return lanScan{}, err
 	}
-	var result []lanInterface
+	result := lanScan{hardware: make(map[string]bool, 2)}
+	if wifi {
+		// A PHY can exist without a station interface, for example while Wi-Fi
+		// is administratively down. That is waiting, not missing hardware.
+		phys, err := os.ReadDir("/sys/class/ieee80211")
+		result.hardware[CarrierInfrastructureWiFi] = len(phys) > 0 || (err != nil && !os.IsNotExist(err))
+	}
 	for _, iface := range interfaces {
+		cost, transport, physical := classifyLANCarrier(iface.Name, "/sys/class/net", ethernet, wifi, func(string) bool { return true })
+		if physical {
+			result.hardware[transport] = true
+		}
 		if iface.Flags&(net.FlagUp|net.FlagRunning|net.FlagMulticast) != net.FlagUp|net.FlagRunning|net.FlagMulticast {
-			continue
-		}
-		if ethernet {
-			if addresses, err := iface.Addrs(); err == nil {
-				for _, address := range addresses {
-					if ipnet, ok := address.(*net.IPNet); ok {
-						if usb, ok := usbLANInterface(iface, ipnet); ok {
-							result = append(result, usb)
-						}
-					}
-				}
-			}
-		}
-		cost, transport, ok := classifyLANCarrier(iface.Name, "/sys/class/net", ethernet, wifi, managedWiFi)
-		if !ok {
 			continue
 		}
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
 		}
+		eligible := physical && (transport != CarrierInfrastructureWiFi || managedWiFi(iface.Name))
 		for _, addr := range addrs {
 			ipnet, ok := addr.(*net.IPNet)
 			if !ok {
 				continue
 			}
+			if ethernet {
+				if usb, ok := usbLANInterface(iface, ipnet); ok {
+					result.hardware[CarrierEthernet] = true
+					result.interfaces = append(result.interfaces, usb)
+				}
+			}
 			ip := ipnet.IP.To4()
-			if ip == nil || !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() {
+			if !eligible || ip == nil || !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() {
 				continue
 			}
-			result = append(result, lanInterface{iface: iface, ip: append(net.IP(nil), ip...), net: ipnet, cost: cost, transport: transport})
+			result.interfaces = append(result.interfaces, lanInterface{iface: iface, ip: append(net.IP(nil), ip...), net: ipnet, cost: cost, transport: transport})
 		}
 	}
 	return result, nil

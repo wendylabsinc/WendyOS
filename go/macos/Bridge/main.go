@@ -169,7 +169,7 @@ func cameras(items []*pb.VideoDevice, err error) *C.WDCamerasResult {
 	p.status = status(err)
 	p.items, p.count = alloc[C.WDCamera](len(items)), C.size_t(len(items))
 	for i, camera := range items {
-		unsafe.Slice(p.items, len(items))[i] = C.WDCamera{id: C.uint32_t(camera.GetId()), name: C.CString(camera.GetName()), path: C.CString(camera.GetPath()), stable_id: C.CString(camera.GetStableId()), thermal: thermalFlag(camera)}
+		unsafe.Slice(p.items, len(items))[i] = C.WDCamera{id: C.uint32_t(camera.GetId()), name: C.CString(camera.GetName()), path: C.CString(camera.GetPath()), stable_id: C.CString(camera.GetStableId()), thermal: thermalFlag(camera), topic: C.CString(camera.GetTopic()), ros2: boolInt(camera.GetTransport() == pb.VideoTransport_VIDEO_TRANSPORT_ROS2)}
 	}
 	return p
 }
@@ -320,6 +320,7 @@ func WDCamerasFree(p *C.WDCamerasResult) {
 		free(c.name)
 		free(c.path)
 		free(c.stable_id)
+		free(c.topic)
 	}
 	free(p.items)
 	free(p.status.message)

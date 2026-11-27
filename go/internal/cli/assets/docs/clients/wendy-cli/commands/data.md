@@ -175,6 +175,12 @@ exactly as the `.proto` declares them, and unpopulated fields omitted. That
 covers `sources`, `episodes`, `record`, `stop`, `status`, `campaign list`,
 `campaign trigger`, `campaign arm`, `campaign disarm` and `campaign remove`.
 
+Two commands add to that line and change nothing else in it. `episodes` writes
+its lists as `[]` when they are empty, so a script can iterate them without
+testing for the key (see [Episodes in progress](#episodes-in-progress)).
+`delete` prints one line per deleted Episode: the agent's response, led by
+`"deleted":true`.
+
 Some payloads are already a JSON document the device produced, and those bytes
 are written through untouched so they stay checkable against the device:
 `inspect` emits the episode manifest, and `campaign deploy` and
@@ -215,6 +221,10 @@ EPISODE                            STATE      SIZE     NAME           DURATION  
 20261027T115329Z-e4418826f638364e  complete   7245349  manual-test
 ```
 
+On a device with no Episodes, finalized or in progress, it prints
+`No episodes on this device yet. Record one with 'wendy data record'.` in place
+of the table.
+
 `wendy data status` prints each of them in full, including the trigger reason
 and the sources, and prints `No recording in progress.` when there is none.
 
@@ -234,6 +244,18 @@ of `episodes` keeps working. Both commands' responses set `reports_in_progress`
 when the agent fills `in_progress`, so an empty `in_progress` then means nothing
 is in progress. `status` prints the agent's response: every Episode in
 `in_progress`, and `active` for older clients.
+
+`episodes` writes an empty list as `[]`. The `episodes` key is always there.
+`in_progress` is there whenever the agent sets `reports_in_progress`; from an
+older agent an empty `in_progress` is left out, because that agent does not say
+what is in progress. A device with no Episodes prints:
+
+```json
+{"episodes":[],"in_progress":[],"reports_in_progress":true}
+```
+
+`status` is the agent's response unchanged, so it leaves an empty `in_progress`
+out.
 
 An agent that predates `in_progress` reports at most one Episode in progress,
 with no trigger, sources or size. The CLI still shows that one, estimates its
@@ -911,9 +933,16 @@ Deleted 2 episodes, 19.8 MB in all.
   agent next starts; it is never left half done.
 - Removing a campaign with `wendy data campaign remove` keeps its Episodes.
   Delete them separately.
-- With `--json`, each deleted Episode is one line of protobuf JSON: the Episode
-  as it was listed, and its `upload_state` (`uploaded` means a copy exists at
-  its upload destination).
+- With `--json`, each deleted Episode is one line: `"deleted":true`, then the
+  agent's response as protobuf JSON, which is the Episode as it was listed and
+  its `upload_state` (`uploaded` means a copy exists at its upload
+  destination). Nothing else goes to stdout, so no lines means nothing was
+  deleted. `--all` on a device with no finalized Episodes says so on stderr and
+  exits 0.
+
+  ```json
+  {"deleted":true,"episode":{"id":"20261027T104210Z-91ad","name":"c920-yolo-live","state":"complete","started_unix_nanos":"1793097730000000000","size_bytes":"10485760","boot_id":"7c1d9f4e-2b6a-4d0c-9e35-51a8f0b3c2d7"},"upload_state":"pending"}
+  ```
 - An agent that predates `delete` answers with
   `this device's agent does not support \`wendy data delete\`; update it with \`wendy device update\``.
 

@@ -21,6 +21,8 @@
     "kind": { "const": "wendy-e2e-attempt" },
     "version": { "const": 1 },
     "attemptID": { "type": "string", "minLength": 1 },
+    "coverageRequested": { "type": "boolean" },
+    "coverage": { "$ref": "wendy-e2e-coverage.schema.json#/$defs/attemptCoverage" },
     "createdAt": { "type": "string", "format": "date-time" },
     "exitStatus": { "type": "integer" },
     "git": {

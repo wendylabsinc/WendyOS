@@ -5,6 +5,7 @@
         case pi5 = "raspberry-pi-5"
         case pi4 = "raspberry-pi-4"
         case pi3 = "raspberry-pi-3"
+        case orangePi5Pro = "orange-pi-5-pro"
         case orinNano = "jetson-orin-nano"
         case agxOrin = "jetson-agx-orin"
         case thor = "jetson-agx-thor"
@@ -18,6 +19,7 @@
             case .pi5: "Raspberry Pi 5"
             case .pi4: "Raspberry Pi 4"
             case .pi3: "Raspberry Pi 3"
+            case .orangePi5Pro: "Orange Pi 5 Pro"
             case .orinNano: "Jetson Orin Nano developer kit"
             case .agxOrin: "Jetson AGX Orin developer kit"
             case .thor: "Jetson AGX Thor developer kit"
@@ -29,7 +31,7 @@
         }
         var methods: [InstallMethod] {
             switch self {
-            case .pi3, .pi4: [.sd]
+            case .pi3, .pi4, .orangePi5Pro: [.sd]
             case .pi5: [.sd, .nvme]
             case .orinNano: [.recoveryNVMe, .rootfsNVMe, .rootfsSD]
             case .agxOrin: [.recoveryNVMe, .recoveryEMMC, .rootfsNVMe]
@@ -216,6 +218,7 @@
             let path: String
             switch board {
             case .pi3, .pi4, .pi5: path = "installation/wendyos-raspberry-pi-5"
+            case .orangePi5Pro: path = "installation/wendyos-orange-pi-5-pro"
             case .orinNano, .agxOrin: path = "installation/wendyos-nvidia-jetson-orin-nano"
             case .thor: path = "installation/wendyos-nvidia-jetson-agx-thor"
             default: path = "advanced/clients/wendy-cli/commands/install"

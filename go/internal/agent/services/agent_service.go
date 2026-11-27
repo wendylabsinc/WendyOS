@@ -30,6 +30,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/powermode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/internal/supervisor"
@@ -344,22 +345,26 @@ type npuInfo struct {
 	backends []string
 }
 
+// accelNPUs lists the DRM accel NPUs the npu entitlement grants. Behind a var so
+// tests can use a fixture tree.
+var accelNPUs = func() []oci.AccelNPU { return oci.AccelNPUs("/") }
+
 // detectNPUInfo probes on every call, for the same reason detectGPUInfo does: the
-// FastRPC nodes are live state and can appear after the agent starts.
+// FastRPC and accel nodes are live state and can appear after the agent starts.
 //
 // Only the non-secure nodes count. The signed-PD nodes are root:root 0600, so their
 // presence says nothing about whether an app can reach the DSP.
 func detectNPUInfo() npuInfo {
-	nodes, err := filepath.Glob(fastrpcDeviceGlob)
-	if err != nil {
-		return npuInfo{}
-	}
+	nodes, _ := filepath.Glob(fastrpcDeviceGlob)
 	for _, node := range nodes {
 		if strings.HasSuffix(node, fastrpcSecureSuffix) || !isComputeDSPNode(node) {
 			continue
 		}
 		vendor := dspVendor()
 		return npuInfo{hasNPU: true, vendor: vendor, backends: npuBackends(vendor)}
+	}
+	if npus := accelNPUs(); len(npus) > 0 {
+		return npuInfo{hasNPU: true, vendor: npus[0].Vendor, backends: npuBackends(npus[0].Vendor)}
 	}
 	return npuInfo{}
 }
@@ -597,7 +602,7 @@ func advertisedEntitlementTypes() []string {
 }
 
 func detectFeatureset() []string {
-	features := []string{"data-inference-classification"}
+	features := []string{"data-inference-classification", cloudrelay.TCPHalfCloseFeature}
 
 	if _, err := os.Stat("/dev/nvidia0"); err == nil {
 		features = append(features, "gpu")

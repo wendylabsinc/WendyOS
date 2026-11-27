@@ -4,10 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
+	goruntime "runtime"
 	"time"
 
 	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
@@ -49,7 +50,7 @@ func simulatorBackend() wendymcp.SimulatorBackend {
 	return b
 }
 
-type simulatorImageResolver func(context.Context, string) (string, string, func(), error)
+type simulatorImageResolver func(context.Context, vm.Arch, string) (string, string, func(), error)
 
 func newSimulatorBackend(newStore func() (*vm.Store, error), resolve simulatorImageResolver) wendymcp.SimulatorBackend {
 	return wendymcp.SimulatorBackend{
@@ -146,6 +147,7 @@ func readMCPSimulator(store *vm.Store, name string) (*wendymcp.SimulatorInfo, er
 		info.Profile = st.Meta.Profile
 		return info, nil
 	}
+	info.Arch = string(st.Meta.GuestArch())
 	profile, exists, err := store.ReadRobotProfile(name)
 	if err != nil {
 		info.Error = err.Error()
@@ -167,6 +169,10 @@ func createMCPSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Simu
 	if vm.IsLiteProfile(opts.Profile) {
 		return createLiteSimulator(ctx, store, opts)
 	}
+	arch, err := resolveCreateArch(opts.Arch, opts.Image, goruntime.GOOS)
+	if err != nil {
+		return nil, err
+	}
 	diskBytes, err := vmDiskBytes(opts.DiskGiB)
 	if err != nil {
 		return nil, err
@@ -187,7 +193,7 @@ func createMCPSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Simu
 	if path == "" {
 		var cleanup func()
 		var err error
-		path, version, cleanup, err = resolve(ctx, opts.Version)
+		path, version, cleanup, err = resolve(ctx, arch, opts.Version)
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +215,7 @@ func createMCPSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Simu
 	if err := checkVMImageSpace(store.DiskPath(opts.Name), stream.uncompressedSize); err != nil {
 		return nil, err
 	}
-	meta := vm.Meta{ImageVersion: version, ImageSource: source}
+	meta := vm.Meta{Arch: arch, ImageVersion: version, ImageSource: source}
 	reader := simulatorContextReader{ctx: ctx, reader: stream}
 	if err := store.CreateFromWithRobotProfile(opts.Name, reader, stream.uncompressedSize, diskBytes, meta, profile); err != nil {
 		return nil, vmStorageError(err, store.DiskPath(opts.Name), stream.uncompressedSize, diskBytes)
@@ -219,14 +225,15 @@ func createMCPSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Simu
 
 // The standalone CLI's downloader owns a terminal progress program. MCP uses
 // explicit contexts and file streams so stdout remains the JSON-RPC channel.
-func fetchMCPSimulatorImage(ctx context.Context, version string) (string, string, func(), error) {
+func fetchMCPSimulatorImage(ctx context.Context, arch vm.Arch, version string) (string, string, func(), error) {
 	manifest, err := fetchMainManifestContext(ctx)
 	if err != nil {
 		return "", "", nil, err
 	}
-	device, exists := manifest.Devices[vmDeviceKey]
+	board := arch.BoardID()
+	device, exists := manifest.Devices[board]
 	if !exists {
-		return "", "", nil, fmt.Errorf("no published %s image; provide a local image", vmDeviceKey)
+		return "", "", nil, fmt.Errorf("no published %s image; provide a local image", board)
 	}
 	if version == "" {
 		version = device.Latest
@@ -257,23 +264,8 @@ func downloadMCPSimulatorImage(ctx context.Context, dir, url string) (path strin
 }
 
 // A positive maxBytes bounds both the declared response size and streamed data.
+// The transfer has no deadline: it follows imageDownloadPolicy, like an OS image.
 func downloadMCPSimulatorImageWithLimit(ctx context.Context, dir, url string, maxBytes int64) (path string, retErr error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("simulator image download returned HTTP %d", resp.StatusCode)
-	}
-	if maxBytes > 0 && resp.ContentLength > maxBytes {
-		return "", fmt.Errorf("simulator image Content-Length %d exceeds download limit of %d bytes", resp.ContentLength, maxBytes)
-	}
 	f, err := os.CreateTemp(dir, "simulator-*.image")
 	if err != nil {
 		return "", err
@@ -288,21 +280,17 @@ func downloadMCPSimulatorImageWithLimit(ctx context.Context, dir, url string, ma
 			path = ""
 		}
 	}()
-	reader := simulatorContextReader{ctx: ctx, reader: resp.Body}
-	if maxBytes > 0 {
-		if _, err := io.Copy(f, io.LimitReader(reader, maxBytes)); err != nil {
-			return path, err
-		}
-		// Probe without writing another byte, including for chunked responses.
-		if n, err := io.CopyN(io.Discard, reader, 1); n != 0 {
-			return path, fmt.Errorf("simulator image exceeds download limit of %d bytes", maxBytes)
-		} else if err != io.EOF {
-			return path, err
-		}
+	err = downloadResumable(ctx, url, f, maxBytes, nil)
+	var status downloadStatusError
+	switch {
+	case err == nil:
 		return path, nil
+	case errors.As(err, &status):
+		return path, fmt.Errorf("simulator image download returned HTTP %d", int(status))
+	case errors.Is(err, errDownloadTooLarge):
+		return path, fmt.Errorf("simulator image %w", err)
 	}
-	_, err = io.Copy(f, reader)
-	return path, err
+	return path, fmt.Errorf("downloading simulator image: %w", err)
 }
 
 func verifyMCPSimulatorImage(ctx context.Context, path, digest string) error {

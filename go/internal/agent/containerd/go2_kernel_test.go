@@ -131,8 +131,12 @@ func TestGo2KernelRejectsInvalidIdentityAndInsufficientEntitlement(t *testing.T)
 					return read(path)
 				}
 			}
-			if err := prepareGo2KernelModules(context.Background(), labels, spec, deps); err == nil || len(*calls) != 0 {
+			err := prepareGo2KernelModules(context.Background(), labels, spec, deps)
+			if err == nil || len(*calls) != 0 {
 				t.Fatalf("invalid managed preparation was accepted: %v %v", err, *calls)
+			}
+			if scenario == "non-VM host" && !strings.Contains(err.Error(), "only supported on a WendyOS VM") {
+				t.Fatalf("non-VM host error = %q, want it to say the preparation needs a WendyOS VM", err)
 			}
 		})
 	}
@@ -170,6 +174,8 @@ func TestGo2HostIdentityUsesAuthoritativeBoardBeforeMachine(t *testing.T) {
 		"BOARD=raspberrypi5\nMACHINE=vm-arm64-wendyos\n": false,
 		"BOARD=unitree-go2\n":                            false, "vm-arm64-untrusted": false, "": false,
 		"BOARD=unitree-g1\nMACHINE=vm-arm64-wendyos\n": false,
+		"vm-x86-64\n": true, "BOARD=vm-x86-64\n": true, "MACHINE=vm-x86-64-wendyos\n": true,
+		"BOARD=generic-x86-64\nMACHINE=vm-x86-64-wendyos\n": false, "vm-x86-64-untrusted": false,
 	} {
 		if got := go2HostIsVM(content); got != want {
 			t.Fatalf("host identity %q: got %t, want %t", content, got, want)

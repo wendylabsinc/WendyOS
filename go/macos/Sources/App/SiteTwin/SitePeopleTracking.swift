@@ -102,6 +102,7 @@ enum SitePersonProjection {
 /// on a utility queue, so slow inference never queues a backlog of video frames.
 @MainActor struct SitePeopleCapture: View {
     let site: Site
+    let store: SiteStore
     let sources: [UUID: SiteCameraColorSource]
     let geometry: [UUID: SiteCameraGeometry]
     let floorY: Double
@@ -126,7 +127,6 @@ enum SitePersonProjection {
             guard scenePhase == .active else { return }
             let leases = sources.values.map { ($0, $0.acquire()) }
             defer { for (source, lease) in leases { source.release(lease) } }
-            var tracker = SitePeopleTracker()
             var processed: [UUID: Date] = [:]
             var statuses: [UUID: String] = [:]
             while !Task.isCancelled {
@@ -160,8 +160,8 @@ enum SitePersonProjection {
                     } catch is CancellationError { return }
                     catch { statuses[id] = "Person detection failed. Retrying…" }
                 }
-                tracker.update(detections, now: Date())
-                publish(tracker.tracks, statuses)
+                do { publish(try await store.updatePeople(site: site, detections: detections), statuses) }
+                catch { publish([], statuses.mapValues { _ in "The Linux twin is unavailable." }) }
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
             }
         }

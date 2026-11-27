@@ -28,6 +28,9 @@ func resolveLiteInstallEnrollment(ctx context.Context, cfg *config.Config, opts 
 		return nil, err
 	}
 	auth, err := selectEnrollmentAuth(cfg, opts.cloudGRPC, interactive)
+	if err == nil && auth != nil && opts.mode == preEnrollAuto {
+		printPreEnrollAnswer(auth)
+	}
 	if err == nil && auth != nil {
 		auth, err = prepareInstallEnrollmentAuth(ctx, auth)
 		if err == nil && auth == nil {
@@ -124,6 +127,10 @@ func enrollInstalledLite(ctx context.Context, port discovery.SerialPortInfo, aut
 	if errors.Is(err, errLiteNoCloudEnrollment) {
 		return fmt.Errorf("the firmware was flashed and the board works, but it is not enrolled. The firmware image that was installed does not include Wendy Cloud enrollment. Install again and choose an image that supports it, such as %q", wendyLiteCloudImage)
 	}
+	// A stop at the name question is not silent here: the board is flashed but not enrolled.
+	if errors.Is(err, ErrUserCancelled) {
+		return fmt.Errorf("the firmware was flashed, but the board is not enrolled; use 'wendy device enroll --cloud-grpc %s' over native USB to finish setup without reflashing", auth.CloudGRPC)
+	}
 	if err != nil {
 		return fmt.Errorf("firmware was flashed, but Cloud enrollment is not confirmed: %w; use 'wendy device enroll --cloud-grpc %s' over native USB to finish setup without reflashing", err, auth.CloudGRPC)
 	}
@@ -131,8 +138,12 @@ func enrollInstalledLite(ctx context.Context, port discovery.SerialPortInfo, aut
 }
 
 func waitInstalledLite(ctx context.Context, port discovery.SerialPortInfo, interactive bool) (discovery.SerialPortInfo, error) {
+	return waitInstalledLiteUSB(ctx, port, interactive, "enrollment", "enroll")
+}
+
+func waitInstalledLiteUSB(ctx context.Context, port discovery.SerialPortInfo, interactive bool, operation, action string) (discovery.SerialPortInfo, error) {
 	if port.Transport != discovery.SerialTransportNativeUSB {
-		return discovery.SerialPortInfo{}, fmt.Errorf("Wendy Lite enrollment requires native USB")
+		return discovery.SerialPortInfo{}, fmt.Errorf("Wendy Lite %s requires native USB", operation)
 	}
 	if err := waitInstalledLitePort(ctx, port.Port); err == nil {
 		return port, nil
@@ -151,10 +162,13 @@ func waitInstalledLite(ctx context.Context, port discovery.SerialPortInfo, inter
 			}
 		}
 		if !interactive {
-			return discovery.SerialPortInfo{}, fmt.Errorf("USB port %s changed after reboot; select the board with 'wendy device enroll'", port.Port)
+			if action == "enroll" {
+				return discovery.SerialPortInfo{}, fmt.Errorf("USB port %s changed after reboot; select the board with 'wendy device enroll'", port.Port)
+			}
+			return discovery.SerialPortInfo{}, fmt.Errorf("USB port %s changed after reboot; rerun the install interactively to select the board", port.Port)
 		}
 		selected, pickErr := selectESP32InstallDevice(ports, port, true, func(_ string, items []tui.PickerItem) (string, error) {
-			return pickFromItems("Select the newly flashed Wendy Lite device to enroll", items)
+			return pickFromItems("Select the newly flashed Wendy Lite device to "+action, items)
 		})
 		if pickErr != nil {
 			return discovery.SerialPortInfo{}, pickErr

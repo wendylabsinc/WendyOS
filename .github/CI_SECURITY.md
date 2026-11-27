@@ -8,9 +8,11 @@ limited to that repository and contents/pull-request writes.
 
 Swift lint runs PR code without a write token. A separate job posts its bounded
 output as data, without checking out the PR. The E2E analyzer builds and runs its
-tools from the PR base commit. It fetches the proposed commit only as data: the
-review diff and the PR's E2E test sources, copied in as regular files, which the
-report and AI review parse but never compile. A PR's script, Swift, or
+tools from the PR base commit. It materializes the actual tested `github.sha` (including a PR's synthetic
+merge) as validated raw Git blobs in an isolated read-only data repository.
+Private Git metadata disables hooks and working-tree conversions. No tested
+files enter the trusted package; aggregation/review receive `--repo` and report
+also receives `--repo` for tested identities while templates stay trusted. Review harness startup remains in the tooling repository. A PR's script, Swift, or
 dependency changes therefore never run beside the review credentials. This does
 not stop a same-repository PR that edits the workflow itself (see below). The
 base aggregator reads the PR's attempt artifacts, so a change to their format

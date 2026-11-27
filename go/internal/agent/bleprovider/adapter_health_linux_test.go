@@ -4,12 +4,16 @@ package bleprovider
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"go.uber.org/zap"
 )
 
@@ -69,5 +73,19 @@ func testScanLoopPowerLoss(t *testing.T, paused bool) {
 	defer objects.mu.Unlock()
 	if objects.calls != 2 {
 		t.Fatalf("did not inspect the selected adapter's live transition: %d queries", objects.calls)
+	}
+}
+
+func TestBLEStartupDistinguishesMissingControllerFromBlueZFault(t *testing.T) {
+	dir := t.TempDir()
+	unavailable := errors.New("BlueZ service has no owner")
+	if err := bluezStartupError(unavailable, dir); !errors.Is(err, localmesh.ErrNoCarrierHardware) {
+		t.Fatalf("absent HCI adapter: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "hci0"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := bluezStartupError(unavailable, dir); !errors.Is(err, unavailable) {
+		t.Fatalf("controller exists, expected BlueZ failure: %v", err)
 	}
 }

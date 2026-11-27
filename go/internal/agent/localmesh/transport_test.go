@@ -254,14 +254,28 @@ func TestCredentialsPinPeerPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = pinned.VerifyPeerCertificate(b.Certificate.Certificate, nil); err != nil {
+	verify := func(peer *Credentials) error {
+		var state tls.ConnectionState
+		for _, der := range peer.Certificate.Certificate {
+			cert, err := x509.ParseCertificate(der)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.PeerCertificates = append(state.PeerCertificates, cert)
+		}
+		return pinned.VerifyConnection(state)
+	}
+	if err = verify(b); err != nil {
 		t.Fatalf("pinned peer rejected: %v", err)
 	}
-	if err = pinned.VerifyPeerCertificate(sameUUIDOtherTenant.Certificate.Certificate, nil); err == nil {
+	if err = verify(sameUUIDOtherTenant); err == nil {
 		t.Fatal("same device UUID in another tenant satisfied the pin")
 	}
-	if err = pinned.VerifyPeerCertificate(a.Certificate.Certificate, nil); err == nil {
+	if err = verify(a); err == nil {
 		t.Fatal("own certificate satisfied the peer pin")
+	}
+	if err = pinned.VerifyConnection(tls.ConnectionState{}); err == nil {
+		t.Fatal("missing peer certificate satisfied the pin")
 	}
 	verified, err := a.Verify(b.Certificate.Certificate, time.Now())
 	if err != nil || verified.Device.Principal() != b.Device.Principal() {

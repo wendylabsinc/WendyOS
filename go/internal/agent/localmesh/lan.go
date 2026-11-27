@@ -46,6 +46,9 @@ type LANConfig struct {
 	// Status receives local setup readiness/failure, not peer reachability.
 	// The optional callback must return promptly.
 	Status func(CarrierStatus)
+	// TransportStatus reports Ethernet and infrastructure Wi-Fi independently.
+	// Both transports still share the LAN connection budget.
+	TransportStatus func(string, CarrierStatus)
 	// OperatorCandidates supplies untrusted agent-discovery hints to a desktop
 	// operator. Each hint still requires the native QUIC protocol and an exact
 	// same-tenant TLS principal before any mesh traffic is exchanged.
@@ -96,6 +99,11 @@ type lanInterface struct {
 	transport string
 }
 
+type lanScan struct {
+	interfaces []lanInterface
+	hardware   map[string]bool
+}
+
 type lanClaims struct {
 	policy     *ConnectionPolicy
 	candidates CandidateQueue
@@ -113,18 +121,24 @@ func RunLAN(ctx context.Context, cfg LANConfig) error {
 	if cfg.Credentials == nil || cfg.Node == nil {
 		return errors.New("LAN carrier requires credentials and node")
 	}
-	return runLANWithScan(ctx, cfg, func() ([]lanInterface, error) {
+	return runLANWithScan(ctx, cfg, func() (lanScan, error) {
 		return scanLANInterfaces(cfg.Ethernet, cfg.InfrastructureWiFi)
 	})
 }
 
-func runLANWithScan(ctx context.Context, cfg LANConfig, scan func() ([]lanInterface, error)) error {
+func runLANWithScan(ctx context.Context, cfg LANConfig, scan func() (lanScan, error)) error {
 	if cfg.Selection == nil {
 		cfg.Selection = NewPeerSelection(cfg.Node.Snapshot)
 	}
 	claims := &lanClaims{policy: NewConnectionPolicy(cfg.Credentials.Device, true, ConnectionLimits{LANMaxOutgoing, LANMaxOutgoingAttempts, LANMaxConnections})}
 	claims.policy.SetSnapshot(cfg.Node.Snapshot)
-	health := &lanCarrierHealth{report: cfg.Status}
+	health := &lanCarrierHealth{report: cfg.Status, reportTransport: cfg.TransportStatus}
+	if cfg.Ethernet {
+		health.transports = append(health.transports, CarrierEthernet)
+	}
+	if cfg.InfrastructureWiFi {
+		health.transports = append(health.transports, CarrierInfrastructureWiFi)
+	}
 	type worker struct {
 		cancel context.CancelFunc
 		done   chan struct{}
@@ -141,11 +155,12 @@ func runLANWithScan(ctx context.Context, cfg LANConfig, scan func() ([]lanInterf
 	ticker := time.NewTicker(lanInterfacePeriod)
 	defer ticker.Stop()
 	for {
-		interfaces, err := scan()
+		observed, err := scan()
 		if err != nil {
 			return err
 		}
-		health.wanted(interfaces)
+		health.wanted(observed)
+		interfaces := observed.interfaces
 		wanted := make(map[string]lanInterface, len(interfaces))
 		for _, iface := range interfaces {
 			wanted[iface.key()] = iface

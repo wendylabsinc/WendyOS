@@ -65,7 +65,7 @@ struct DeviceManagementView: View {
                 }.disabled(!canManage)
             }
             Section("Software and power") {
-                NavigationLink("Agent update and device info") { DeviceInfoView(session: session, deviceName: deviceName) }
+                NavigationLink("Wendy Agent") { DeviceAgentUpdateView(session: session, deviceName: deviceName) }
                 NavigationLink("OS update") { DeviceOSUpdateView(session: session, deviceName: deviceName) }
                 Text("Remote restart is not supported yet.").font(.footnote).foregroundStyle(.secondary)
             }

@@ -117,3 +117,20 @@ func TestRebootAfterOSUpdatePicksThePathTheOSNeeds(t *testing.T) {
 		})
 	}
 }
+
+// The argument must reach systemd's final reboot(2): "forced-recovery" is what
+// puts a Jetson into USB recovery mode, and without it the device boots normally.
+func TestSystemctlRebootArgs(t *testing.T) {
+	tests := []struct {
+		argument string
+		want     string
+	}{
+		{"", "--no-block reboot"},
+		{"forced-recovery", "--no-block --reboot-argument=forced-recovery reboot"},
+	}
+	for _, test := range tests {
+		if got := strings.Join(systemctlRebootArgs(test.argument), " "); got != test.want {
+			t.Errorf("systemctlRebootArgs(%q) = %q, want %q", test.argument, got, test.want)
+		}
+	}
+}

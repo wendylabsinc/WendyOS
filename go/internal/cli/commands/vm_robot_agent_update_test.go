@@ -209,3 +209,26 @@ func TestRobotAgentUpdatePromptStopsOnFailureWithoutRetryingUpdate(t *testing.T)
 		})
 	}
 }
+
+func TestRobotAgentUpdateIsOfferedOnTheX86VM(t *testing.T) {
+	_, conn := robotAgentUpdateTestConnection(t, vm.RobotKindG1)
+	info := conn.AgentService.(*fakeAgentVersionClient).resp
+	deviceType := "vm-x86-64"
+	info.DeviceType, info.CpuArchitecture = &deviceType, "amd64"
+	prompts := 0
+	robotUpdatePromptTestSetup(t, true, func(string) bool { prompts++; return true })
+	stop := errors.New("update attempted")
+	var gotOS, gotArch string
+	var gotNightly bool
+	robotAgentUpdateFn = func(_ context.Context, _ *grpcclient.AgentConnection, osName, arch string, nightly bool) (string, error) {
+		gotOS, gotArch, gotNightly = osName, arch, nightly
+		return "", stop
+	}
+	_, err := reconcileSimulatorRobotWithAgentUpdate(context.Background(), conn)
+	if !errors.Is(err, stop) || prompts != 1 {
+		t.Fatalf("x86-64 VM without robot support: err=%v prompts=%d, want the update offered", err, prompts)
+	}
+	if gotOS != "wendyos" || gotArch != "amd64" || gotNightly {
+		t.Errorf("update target = %s/%s nightly=%t, want wendyos/amd64 stable", gotOS, gotArch, gotNightly)
+	}
+}

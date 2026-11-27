@@ -81,7 +81,7 @@ func TestDesktopConnectionReuseKeepsCloudPKIBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer one.Close()
-	selector, err := cloudDiscoveryDeviceDefault(auth, device)
+	selector, err := cloudDiscoverySelector(auth, device)
 	if err != nil {
 		t.Fatal(err)
 	}

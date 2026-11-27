@@ -178,8 +178,8 @@ class WindowsVMBootTests(unittest.TestCase):
             overlay=VM.mutant_overlay(Path(tmp));mapping=json.loads(overlay.read_text())['Replace']
             self.assertEqual(list(mapping),[str(source)])
             changed=Path(mapping[str(source)]).read_text()
-            self.assertNotIn('if path, err := FindQEMU(runtime.GOOS); err == nil {',changed)
-            self.assertIn('return "qemu-system-aarch64"',changed)
+            self.assertNotIn('if path, err := FindQEMU(s.Arch, runtime.GOOS); err == nil {',changed)
+            self.assertIn('return s.Arch.QEMUBinary()',changed)
             self.assertEqual(source.read_bytes(),before)
 
 if __name__=='__main__':unittest.main()

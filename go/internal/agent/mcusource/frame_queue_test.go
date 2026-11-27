@@ -18,7 +18,7 @@ import (
 
 func TestCameraFrameQueueKeepsFIFOAndNewestCameraFramesWhileStalled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		q := newCameraFrameQueue([]uint32{1, 2})
+		q := newLiveFrameQueue([]uint32{1, 2}, nil)
 		// A saturated audio/H.264 FIFO must not prevent either camera from
 		// retaining its newest frame or let camera churn evict FIFO frames.
 		for seq := range uint32(sensorFIFOFrames) {
@@ -62,7 +62,7 @@ func TestCameraFrameQueueKeepsFIFOAndNewestCameraFramesWhileStalled(t *testing.T
 }
 
 func TestCameraFrameQueueDeliversFramesThatArriveTogether(t *testing.T) {
-	q := newCameraFrameQueue([]uint32{1})
+	q := newLiveFrameQueue([]uint32{1}, nil)
 	// A network stall releases several frames at once. The consumer is not
 	// behind; it has simply not run yet.
 	for seq := range uint32(5) {
@@ -83,7 +83,7 @@ func TestCameraFrameQueueDeliversFramesThatArriveTogether(t *testing.T) {
 }
 
 func TestCameraFrameQueueBoundsFramesThatArriveTogether(t *testing.T) {
-	q := newCameraFrameQueue([]uint32{1})
+	q := newLiveFrameQueue([]uint32{1}, nil)
 	var discarded int
 	for seq := range uint32(cameraRunFrames + 2) {
 		discarded += q.offer(&sensorlink.SensorFrame{ChannelID: 1, Seq: seq})
@@ -107,7 +107,7 @@ func TestCameraFrameQueueSlowConsumerSharesTurnsOnNewestFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const interval = 33 * time.Millisecond
 		const frames = 90
-		q := newCameraFrameQueue([]uint32{1, 2})
+		q := newLiveFrameQueue([]uint32{1, 2}, nil)
 		start := time.Now()
 		go func() {
 			for seq := range uint32(frames) {
@@ -141,7 +141,7 @@ func TestCameraFrameQueueSlowConsumerSharesTurnsOnNewestFrames(t *testing.T) {
 }
 
 func TestCameraFrameQueueConcurrentDelivery(t *testing.T) {
-	q := newCameraFrameQueue([]uint32{1, 2})
+	q := newLiveFrameQueue([]uint32{1, 2}, nil)
 	var producers sync.WaitGroup
 	for _, ch := range []uint32{1, 2} {
 		producers.Go(func() {
@@ -170,7 +170,7 @@ func TestCameraFrameQueueConcurrentDelivery(t *testing.T) {
 func TestCameraFrameQueueWakesOnCloseAndCancellation(t *testing.T) {
 	for _, cancelContext := range []bool{false, true} {
 		synctest.Test(t, func(t *testing.T) {
-			q := newCameraFrameQueue([]uint32{1})
+			q := newLiveFrameQueue([]uint32{1}, nil)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			result := make(chan bool, 1)
@@ -187,6 +187,57 @@ func TestCameraFrameQueueWakesOnCloseAndCancellation(t *testing.T) {
 				t.Fatal("received a frame after termination")
 			}
 		})
+	}
+}
+
+func TestLiveFrameQueueKeepsGenericAndMediaFIFOSeparate(t *testing.T) {
+	q := newLiveFrameQueue(nil, map[uint32]uint32{3: 2, 4: 2})
+	for range genericFIFOFrames {
+		if q.offer(&sensorlink.SensorFrame{ChannelID: 3, Payload: []byte{1}}) != 0 {
+			t.Fatal("malformed frame counted as a backpressure drop")
+		}
+	}
+	if q.offer(&sensorlink.SensorFrame{ChannelID: 3, Payload: make([]byte, MaxGenericFrameBytes+2)}) != 0 {
+		t.Fatal("oversized batch counted as a backpressure drop")
+	}
+	for seq := range uint32(genericFIFOFrames) {
+		if q.offer(&sensorlink.SensorFrame{ChannelID: 3 + seq%2, Seq: seq, Payload: []byte{1, 2, 3, 4}}) != 0 {
+			t.Fatal("early generic drop")
+		}
+	}
+	if q.offer(&sensorlink.SensorFrame{ChannelID: 3, Seq: genericFIFOFrames, Payload: []byte{1, 2}}) != 1 {
+		t.Fatal("full generic FIFO accepted another frame")
+	}
+	for seq := range uint32(sensorFIFOFrames) {
+		if q.offer(&sensorlink.SensorFrame{ChannelID: 1 + seq%2, Seq: seq}) != 0 {
+			t.Fatal("generic burst consumed media capacity")
+		}
+	}
+	if q.offer(&sensorlink.SensorFrame{ChannelID: 1, Seq: sensorFIFOFrames}) != 1 {
+		t.Fatal("full media FIFO accepted another frame")
+	}
+	q.finish()
+
+	type frameID struct{ channel, seq uint32 }
+	var got []frameID
+	for {
+		frame, ok := q.next(context.Background())
+		if !ok {
+			break
+		}
+		got = append(got, frameID{frame.ChannelID, frame.Seq})
+	}
+	var want []frameID
+	for seq := range uint32(max(sensorFIFOFrames, genericFIFOFrames)) {
+		if seq < sensorFIFOFrames {
+			want = append(want, frameID{1 + seq%2, seq})
+		}
+		if seq < genericFIFOFrames {
+			want = append(want, frameID{3 + seq%2, seq})
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("drained %+v, want %+v", got, want)
 	}
 }
 
@@ -226,7 +277,7 @@ func TestLiveTransportRetainsNewestCompleteCameraFrame(t *testing.T) {
 					send = func(d *sensorlinkpb.SensorData) { client.frames <- d }
 					disconnected = func() { close(client.frames) }
 				}
-				next, closeStream, err := streamLiveFrames(context.Background(), tr, []uint32{1, 2, 3}, []uint32{1, 2})
+				next, closeStream, err := streamLiveFrames(context.Background(), tr, []uint32{1, 2, 3}, []uint32{1, 2}, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -278,7 +329,7 @@ func TestLiveTransportReportsOnlyReplacedCameraFramesAsDrops(t *testing.T) {
 					tr = &grpcTransport{logger: zap.New(core), client: client}
 					send = func(d *sensorlinkpb.SensorData) { client.frames <- d }
 				}
-				next, closeStream, err := streamLiveFrames(context.Background(), tr, []uint32{1}, []uint32{1})
+				next, closeStream, err := streamLiveFrames(context.Background(), tr, []uint32{1}, []uint32{1}, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -308,7 +359,7 @@ type liveSelectionTransport struct {
 }
 
 func (tr *liveSelectionTransport) streamFrames(_ context.Context, channels []uint32, sink frameSink) (func() error, error) {
-	for id := range sink.(*cameraFrameQueue).latest {
+	for id := range sink.(*liveFrameQueue).latest {
 		tr.latest = append(tr.latest, id)
 	}
 	for _, id := range channels {

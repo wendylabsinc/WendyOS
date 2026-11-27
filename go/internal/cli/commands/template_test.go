@@ -454,6 +454,97 @@ func TestDownloadTemplateArchiveFromURL_RetriesTransientTimeout(t *testing.T) {
 	}
 }
 
+// A slow link that keeps delivering bytes must not time out: the attempt
+// timeout bounds the wait for the next bytes, not the whole download.
+func TestDownloadTemplateArchiveFromURL_SlowLinkDoesNotTimeOut(t *testing.T) {
+	archive := buildTestTarball(t, "templates-main", "python", "simple-api", map[string]string{
+		"template.json": `{"name":"simple-api"}`,
+		"app.py":        "print('hi')\n",
+	})
+
+	origTimeout := templateArchiveAttemptTimeout
+	origAttempts := templateArchiveMaxAttempts
+	origDelay := templateArchiveRetryDelay
+	templateArchiveAttemptTimeout = 100 * time.Millisecond
+	templateArchiveMaxAttempts = 2
+	templateArchiveRetryDelay = 10 * time.Millisecond
+	t.Cleanup(func() {
+		templateArchiveAttemptTimeout = origTimeout
+		templateArchiveMaxAttempts = origAttempts
+		templateArchiveRetryDelay = origDelay
+	})
+
+	// 30 writes 10ms apart: never quiet for long, but three attempt timeouts in all.
+	const pieces = 30
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
+		for i := 0; i < pieces; i++ {
+			if _, err := w.Write(archive[i*len(archive)/pieces : (i+1)*len(archive)/pieces]); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			time.Sleep(10 * time.Millisecond)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	started := time.Now()
+	files, _, err := downloadTemplateArchiveFromURL(context.Background(), srv.URL, "main", "python", "simple-api", nil)
+	if err != nil {
+		t.Fatalf("slow but live download failed after %s: %v", time.Since(started), err)
+	}
+	if string(files["app.py"]) != "print('hi')\n" {
+		t.Fatalf("app.py = %q", files["app.py"])
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("attempts = %d, want the first one to finish", got)
+	}
+	if elapsed := time.Since(started); elapsed <= templateArchiveAttemptTimeout {
+		t.Fatalf("transfer took %s, which does not outlast the %s attempt timeout", elapsed, templateArchiveAttemptTimeout)
+	}
+}
+
+// A server that stops sending fails every attempt after the attempt timeout,
+// and the error says that no data arrived.
+func TestDownloadTemplateArchiveFromURL_StallFailsAfterIdleTimeout(t *testing.T) {
+	archive := buildTestTarball(t, "templates-main", "python", "simple-api", map[string]string{
+		"template.json": `{"name":"simple-api"}`,
+		"app.py":        "print('hi')\n",
+	})
+
+	origTimeout := templateArchiveAttemptTimeout
+	origAttempts := templateArchiveMaxAttempts
+	origDelay := templateArchiveRetryDelay
+	templateArchiveAttemptTimeout = 50 * time.Millisecond
+	templateArchiveMaxAttempts = 2
+	templateArchiveRetryDelay = 10 * time.Millisecond
+	t.Cleanup(func() {
+		templateArchiveAttemptTimeout = origTimeout
+		templateArchiveMaxAttempts = origAttempts
+		templateArchiveRetryDelay = origDelay
+	})
+
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
+		_, _ = w.Write(archive[:len(archive)/2])
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // never sends the rest
+	}))
+	t.Cleanup(srv.Close)
+
+	_, _, err := downloadTemplateArchiveFromURL(context.Background(), srv.URL, "main", "python", "simple-api", nil)
+	if !errors.Is(err, errDownloadStalled) || !strings.Contains(err.Error(), "no data received for 50ms") {
+		t.Fatalf("err = %v, want a stall error that names the timeout", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+}
+
 func TestDownloadTemplateArchiveFromURL_CancelledDuringRetryWaitReturnsContextError(t *testing.T) {
 	origTimeout := templateArchiveAttemptTimeout
 	origAttempts := templateArchiveMaxAttempts

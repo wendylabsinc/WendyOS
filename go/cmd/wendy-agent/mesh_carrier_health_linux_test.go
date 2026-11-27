@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
@@ -31,7 +30,7 @@ func TestCarrierRecoveryFailureStopsStartup(t *testing.T) {
 	if !errors.Is(err, want) || *calls != 1 {
 		t.Fatalf("recovery failure lost: calls=%d error=%v", *calls, err)
 	}
-	if state := sharing.Status(); state.Available || state.State != "" {
+	if state := sharing.Status(); !state.Available || state.State != "failed" || len(state.Carriers) != 0 {
 		t.Fatalf("started carriers after failed recovery: %+v", state)
 	}
 }
@@ -54,18 +53,18 @@ func TestCarrierStartupFailureAndConfigurationRemoval(t *testing.T) {
 			t.Fatal("invalid identity was accepted")
 		}
 		state := sharing.Status()
-		if state.State != "failed" || !strings.Contains(state.Detail, "NAN: failed") {
+		if state.State != "failed" || state.Carriers["nan"] == "" {
 			t.Fatalf("startup failure masked: %+v", state)
 		}
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := runConfiguredNetCarriers(context.Background(), dir, localmesh.TCPIdentity{}, zap.NewNop(), nil, nil, sharing, nil); err != nil {
-		t.Fatal(err)
+	if err := runConfiguredNetCarriers(context.Background(), dir, localmesh.TCPIdentity{}, zap.NewNop(), nil, nil, sharing, nil); err == nil {
+		t.Fatal("invalid identity was accepted for default carriers")
 	}
-	if state := sharing.Status(); state.Available || state.State != "" {
-		t.Fatalf("removed config retained failure: %+v", state)
+	if state := sharing.Status(); state.State != "failed" || state.Carriers[localmesh.CarrierEthernet] == "" || state.Carriers["ble"] == "" || state.Carriers["nan"] == "" {
+		t.Fatalf("removed config did not restore the carrier defaults: %+v", state)
 	}
 }
 
@@ -77,9 +76,11 @@ func TestParticipationOverridesEnabledCarriersBeforeIdentityOrNetwork(t *testing
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "nan-mesh.json"), []byte(`{"participate":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	sharing := &meshSharingManager{}
-	// No policy file means participation off, even with explicit carriers and
-	// invalid credentials. There must be no attempt at identity/network setup.
+	// An explicit opt-out blocks carriers before any identity or network setup.
 	if err := runConfiguredNetCarriers(context.Background(), dir, localmesh.TCPIdentity{}, zap.NewNop(), nil, nil, sharing, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +108,7 @@ func TestCarrierStartupFailureWithoutEnabledCarrierNames(t *testing.T) {
 				t.Fatal("invalid startup accepted")
 			}
 			state := sharing.Status()
-			if !state.Available || state.State != "failed" || !strings.Contains(state.Detail, "Local net: failed") {
+			if !state.Available || state.State != "failed" || state.Carriers["local-net"] == "" {
 				t.Fatalf("startup failure hidden without named carriers: %+v", state)
 			}
 		})

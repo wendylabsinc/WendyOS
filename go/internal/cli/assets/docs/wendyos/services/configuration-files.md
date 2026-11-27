@@ -58,7 +58,7 @@ See [logging.md](./logging.md) for the full journald configuration and how to ac
 | `USB_VID` | `0x1d6b` | USB Vendor ID (Linux Foundation) |
 | `USB_PID` | `0x0104` | USB Product ID (Multifunction Composite Gadget) |
 | `USB_MFR` | `Wendy Labs Inc` | Manufacturer string |
-| `USB_PROD` | `WendyOS Device <name>` | Product string shown on host |
+| `USB_PROD` | `WendyOS <name>` | Product string shown on host |
 | `USB_SERIAL` | device serial number | Serial number string |
 | `GADGET_FUNC_ORDER` | `ncm ecm` | Network function preference; `ncm` is tried first, `ecm` is the fallback |
 

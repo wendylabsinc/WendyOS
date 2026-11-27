@@ -21,12 +21,10 @@ wendy --version
 wendy --json info
 ```
 
-If the MCP server should connect to a device on startup, either set a default device or use `--device` when launching the server:
+If the MCP server should connect to a device on startup, find its hostname and pass it with `--device` when launching the server, or set `WENDY_DEVICE` in the MCP host's `env` block:
 
 ```bash
 wendy discover --json --timeout 5s
-wendy device set-default <hostname>
-wendy device get-default
 ```
 
 ## Automatic setup
@@ -69,7 +67,7 @@ wendy mcp serve
 wendy mcp serve --device <hostname>
 ```
 
-`--device` can also be written as `-d`. If omitted, the server attempts to use the configured default device.
+`--device` can also be written as `-d`. If omitted, the server uses `WENDY_DEVICE` when it is set, and otherwise starts without a device.
 
 Only core tools are advertised at first. `--tool-groups` chooses the initial
 groups (`core`, `setup`, `simulator`, `hardware`, `robotics`, `observability`,
@@ -106,7 +104,7 @@ wendy --json device version --device <hostname>
 wendy --json device hardware list --device <hostname>
 ```
 
-If `wendy mcp serve` logs a warning that it could not connect to a device, set a default device or configure the MCP host to launch `wendy mcp serve --device <hostname>`.
+If `wendy mcp serve` logs a warning that it could not connect to a device, configure the MCP host to launch `wendy mcp serve --device <hostname>` or to set `WENDY_DEVICE`.
 
 ## Safety
 

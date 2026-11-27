@@ -42,7 +42,7 @@ typedef struct {
     WDService *services; size_t service_count;
     uint32_t http_port;
 } WDApp;
-typedef struct { uint32_t id; char *name, *path, *stable_id; int32_t thermal; } WDCamera;
+typedef struct { uint32_t id; char *name, *path, *stable_id; int32_t thermal; char *topic; int32_t ros2; } WDCamera;
 typedef struct {
  char *model_revision, *provenance;
  double x, y, z, qx, qy, qz, qw;

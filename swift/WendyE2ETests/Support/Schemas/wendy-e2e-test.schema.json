@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wendy.build/schemas/wendy-e2e-test.schema.json",
+  "title": "E2E observation metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "sourceFilePath", "sourceFileName", "suiteName", "testName", "functionName", "line"],
+  "properties": {
+    "schema": {"const": "wendy.e2e.test.v1"},
+    "sourceFilePath": {"type": "string"},
+    "sourceFileName": {"type": "string"},
+    "suiteName": {"type": "string"},
+    "testName": {"type": "string"},
+    "functionName": {"type": "string"},
+    "line": {"type": "integer", "minimum": 1},
+    "declarationLine": {"type": "integer", "minimum": 1},
+    "sourceStartLine": {"type": "integer", "minimum": 1},
+    "sourceEndLine": {"type": "integer", "minimum": 1},
+    "coverage": {"$ref": "wendy-e2e-coverage.schema.json#/$defs/record"}
+  }
+}

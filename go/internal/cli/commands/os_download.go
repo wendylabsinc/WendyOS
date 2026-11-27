@@ -84,16 +84,21 @@ func downloadOSVersion(selectedKey string, dev deviceInfo, version, flagStorage 
 		return fmt.Errorf("getting image info: %w", err)
 	}
 
-	// Check if already cached — zip format (new) or legacy extracted img.
+	// Check if already cached, under the name `wendy os install` reads: the
+	// seekable image when the manifest publishes one, else zip format (new) or
+	// legacy extracted img. A cached file that is not the image the manifest
+	// publishes now does not count: it is replaced without asking.
 	cached := ""
-	if zipPath, zpErr := osCachedZipPath(selectedKey, version, storage); zpErr == nil {
-		if info, statErr := os.Stat(zipPath); statErr == nil && info.Size() > 0 {
+	if imgInfo.ZstURL != "" {
+		if zstPath, zstErr := osCachedZstPath(selectedKey, version, storage); zstErr == nil && cachedImageUsable(zstPath, imgInfo.ZstChecksum) {
+			cached = zstPath
+		}
+	} else {
+		if zipPath, zpErr := osCachedZipPath(selectedKey, version, storage); zpErr == nil && cachedImageUsable(zipPath, imgInfo.Checksum) {
 			cached = zipPath
 		}
-	}
-	if cached == "" {
-		if imgPath, ipErr := osCachedImagePath(selectedKey, version, storage); ipErr == nil {
-			if info, statErr := os.Stat(imgPath); statErr == nil && info.Size() > 0 {
+		if cached == "" {
+			if imgPath, ipErr := osCachedImagePath(selectedKey, version, storage); ipErr == nil && cachedImageUsable(imgPath, imgInfo.Checksum) {
 				cached = imgPath
 			}
 		}
@@ -117,17 +122,30 @@ func downloadOSVersion(selectedKey string, dev deviceInfo, version, flagStorage 
 			}
 		}
 
+		_ = os.Remove(imageStampPath(cached))
 		if err := os.Remove(cached); err != nil {
 			return fmt.Errorf("removing cached image: %w", err)
 		}
 	}
 
 	cliLogln("\nDownloading %s %s...", dev.Name, version)
-	path, err := resolveOSImage(selectedKey, imgInfo)
+	path, err := cacheInstallImage(selectedKey, imgInfo)
 	if err != nil {
 		return err
 	}
 
 	cliSuccess("\nCached at: %s", path)
 	return nil
+}
+
+// cacheInstallImage downloads into the cache the file `wendy os install`
+// flashes for img. Install prefers the seekable image whenever the manifest
+// publishes one, with or without a block map, and looks for it under its own
+// cache name; caching the image under any other name would have install
+// download the same bytes again.
+func cacheInstallImage(deviceKey string, img *imageInfo) (string, error) {
+	if img.ZstURL != "" {
+		return resolveSeekableZst(deviceKey, img.Version, img.Storage, img.ZstURL, img.ZstChecksum)
+	}
+	return resolveOSImage(deviceKey, img)
 }

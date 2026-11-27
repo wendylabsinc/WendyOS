@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/estcacerts"
 	"github.com/wendylabsinc/wendy/go/internal/shared/literelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
@@ -50,6 +51,8 @@ type DeviceIdentity struct {
 	// EnrolledDeviceID is the enrolled device UUID; empty when the board is
 	// unenrolled or its firmware predates the field.
 	EnrolledDeviceID string
+	// TenantID is populated by USB discovery's optional enrollment status read.
+	TenantID string
 }
 
 type DeviceInfo struct {
@@ -427,7 +430,52 @@ func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(
 	default:
 		return fmt.Errorf("unknown app type %d", appType)
 	}
+	return c.pushFile(context.Background(), path, onProgress, uploadCommands{
+		begin: func(size uint32) *wendypb.WendyComCommand {
+			return &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_AppPushBegin{
+				AppPushBegin: &wendypb.WendyComAppPushBeginParams{Size: size, AppType: pbAppType},
+			}}
+		},
+		write: func(offset uint32, data []byte) *wendypb.WendyComCommand {
+			return &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_AppPushData{
+				AppPushData: &wendypb.WendyComAppPushDataParams{Offset: offset, Data: data},
+			}}
+		},
+		end: &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_AppPushEnd{
+			AppPushEnd: &wendypb.WendyComAppPushEndParams{},
+		}},
+	})
+}
 
+// PushHostedCompanion streams a radio OTA image through the P4's physical link.
+func (c *WendyLiteClient) PushHostedCompanion(ctx context.Context, path string, onProgress func(written, total uint32)) error {
+	return c.pushFile(ctx, path, onProgress, uploadCommands{
+		begin: func(size uint32) *wendypb.WendyComCommand {
+			return &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_HostedCompanionOtaBegin{
+				HostedCompanionOtaBegin: &wendypb.WendyComHostedCompanionOtaBeginParams{Size: size},
+			}}
+		},
+		write: func(offset uint32, data []byte) *wendypb.WendyComCommand {
+			return &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_HostedCompanionOtaWrite{
+				HostedCompanionOtaWrite: &wendypb.WendyComHostedCompanionOtaWriteParams{Offset: offset, Data: data},
+			}}
+		},
+		end: &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_HostedCompanionOtaEnd{
+			HostedCompanionOtaEnd: &wendypb.WendyComHostedCompanionOtaEndParams{},
+		}},
+		// A missing USB reply must not consume the entire OTA budget.
+		timeout: 15 * time.Second,
+	})
+}
+
+type uploadCommands struct {
+	begin   func(size uint32) *wendypb.WendyComCommand
+	write   func(offset uint32, data []byte) *wendypb.WendyComCommand
+	end     *wendypb.WendyComCommand
+	timeout time.Duration
+}
+
+func (c *WendyLiteClient) pushFile(ctx context.Context, path string, onProgress func(written, total uint32), commands uploadCommands) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
@@ -439,21 +487,23 @@ func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(
 		return fmt.Errorf("stat: %w", err)
 	}
 	if info.Size() > math.MaxUint32 {
-		return fmt.Errorf("app file too large: %d bytes exceeds 4 GiB limit", info.Size())
+		return fmt.Errorf("upload file too large: %d bytes exceeds 4 GiB limit", info.Size())
 	}
 	size := uint32(info.Size())
 
-	resp, err := c.sendCommand(&wendypb.WendyComCommand{
-		RequestId: c.requestIdGen.Add(1),
-		Params: &wendypb.WendyComCommand_AppPushBegin{
-			AppPushBegin: &wendypb.WendyComAppPushBeginParams{Size: size, AppType: pbAppType},
-		},
-	}, 0)
-	if err != nil {
-		return fmt.Errorf("push begin: %w", err)
+	send := func(cmd *wendypb.WendyComCommand) error {
+		cmd.RequestId = c.requestIdGen.Add(1)
+		resp, err := c.sendCommandContext(ctx, cmd, commands.timeout)
+		if err != nil {
+			return err
+		}
+		if err := resultToError(resp.Result); err != nil {
+			return fmt.Errorf("device returned error: %w", err)
+		}
+		return nil
 	}
-	if err := resultToError(resp.Result); err != nil {
-		return fmt.Errorf("push begin: device returned error: %w", err)
+	if err := send(commands.begin(size)); err != nil {
+		return fmt.Errorf("push begin: %w", err)
 	}
 
 	buf := make([]byte, c.link.preferredChunkSize())
@@ -461,20 +511,8 @@ func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
-			resp, serr := c.sendCommand(&wendypb.WendyComCommand{
-				RequestId: c.requestIdGen.Add(1),
-				Params: &wendypb.WendyComCommand_AppPushData{
-					AppPushData: &wendypb.WendyComAppPushDataParams{
-						Offset: offset,
-						Data:   buf[:n],
-					},
-				},
-			}, 0)
-			if serr != nil {
-				return fmt.Errorf("push data at offset %d: %w", offset, serr)
-			}
-			if err := resultToError(resp.Result); err != nil {
-				return fmt.Errorf("push data at offset %d: device returned error: %w", offset, err)
+			if err := send(commands.write(offset, buf[:n])); err != nil {
+				return fmt.Errorf("push data at offset %d: %w", offset, err)
 			}
 			offset += uint32(n)
 			if onProgress != nil {
@@ -489,19 +527,35 @@ func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(
 		}
 	}
 
-	resp, err = c.sendCommand(&wendypb.WendyComCommand{
+	if err := send(commands.end); err != nil {
+		return fmt.Errorf("push end: %w", err)
+	}
+	return nil
+}
+
+var ErrHostedCompanionUnavailable = errors.New("ESP-Hosted companion unavailable")
+
+func (c *WendyLiteClient) HostedCompanionBuildID(ctx context.Context) (string, error) {
+	resp, err := c.sendCommandContext(ctx, &wendypb.WendyComCommand{
 		RequestId: c.requestIdGen.Add(1),
-		Params: &wendypb.WendyComCommand_AppPushEnd{
-			AppPushEnd: &wendypb.WendyComAppPushEndParams{},
+		Params: &wendypb.WendyComCommand_GetHostedCompanion{
+			GetHostedCompanion: &wendypb.WendyComGetHostedCompanionParams{},
 		},
 	}, 0)
 	if err != nil {
-		return fmt.Errorf("push end: %w", err)
+		return "", err
+	}
+	if resp.Result == wendypb.WendyComResult_WENDY_COM_RESULT_BAD_STATE {
+		return "", ErrHostedCompanionUnavailable
 	}
 	if err := resultToError(resp.Result); err != nil {
-		return fmt.Errorf("push end: device returned error: %w", err)
+		return "", err
 	}
-	return nil
+	info := resp.GetHostedCompanion()
+	if info == nil {
+		return "", fmt.Errorf("missing ESP-Hosted companion information")
+	}
+	return info.BuildId, nil
 }
 
 // PushConf writes a configuration to the device's wendy_conf partition. The
@@ -911,6 +965,8 @@ func resultToError(result wendypb.WendyComResult) error {
 		return errors.New("WiFi is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_BLE:
 		return errors.New("BLE is not supported by this device")
+	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_ESPNOW:
+		return errors.New("ESP-NOW is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_NAN:
 		return errors.New("NAN is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_BLE_PROFILE_UNSUPPORTED:
@@ -1070,6 +1126,13 @@ func (c *WendyLiteClient) failAll(err error) {
 // sendCommand subscribes for the matching response, sends the command, and
 // waits for the response or the timeout. A timeout <= 0 means no deadline.
 func (c *WendyLiteClient) sendCommand(cmd *wendypb.WendyComCommand, timeout time.Duration) (*wendypb.WendyComResponse, error) {
+	return c.sendCommandContext(context.Background(), cmd, timeout)
+}
+
+func (c *WendyLiteClient) sendCommandContext(ctx context.Context, cmd *wendypb.WendyComCommand, timeout time.Duration) (*wendypb.WendyComResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Subscribe before sending so a fast reply can't slip past us.
 	sub, err := c.subscribe(func(m *wendypb.WendyComMessage) bool {
 		r := m.GetResponse()
@@ -1098,6 +1161,8 @@ func (c *WendyLiteClient) sendCommand(cmd *wendypb.WendyComCommand, timeout time
 		return msg.GetResponse(), nil
 	case <-timer:
 		return nil, fmt.Errorf("timeout waiting for response to request %d", cmd.RequestId)
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -1152,12 +1217,22 @@ func (c *WendyLiteClient) handshakeWithin(budget time.Duration) error {
 // Firmware controls which transports support bootstrap challenges.
 // statusOnly observes completion without replacing the bootstrap nonce.
 func (c *WendyLiteClient) EnrollmentChallenge(statusOnly bool) (*wendypb.WendyComEnrollmentChallenge, error) {
+	return c.enrollmentChallenge(statusOnly, 5*time.Second)
+}
+
+// EnrollmentStatus reads enrollment without rotating the bootstrap nonce.
+// Discovery uses a short timeout so older firmware remains discoverable.
+func (c *WendyLiteClient) EnrollmentStatus(timeout time.Duration) (*wendypb.WendyComEnrollmentChallenge, error) {
+	return c.enrollmentChallenge(true, timeout)
+}
+
+func (c *WendyLiteClient) enrollmentChallenge(statusOnly bool, timeout time.Duration) (*wendypb.WendyComEnrollmentChallenge, error) {
 	resp, err := c.sendCommand(&wendypb.WendyComCommand{
 		RequestId: c.requestIdGen.Add(1),
 		Params: &wendypb.WendyComCommand_EnrollmentChallenge{
 			EnrollmentChallenge: &wendypb.WendyComEnrollmentChallengeParams{StatusOnly: statusOnly},
 		},
-	}, 5*time.Second)
+	}, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -1287,10 +1362,16 @@ const SensorSourceSetupTimeout = sensorSourceTCPDialTimeout + sensorSourceTLSSet
 // ConnectSensorSource authenticates a pinned SensorLink source using this
 // consumer's device identity. The source limits device callers to SensorLink.
 func (c *WendyLiteClient) ConnectSensorSource(ctx context.Context, address string, cert tls.Certificate, chain, principal string) error {
-	return c.connectSensorSourceWithBudgets(ctx, address, cert, chain, principal, sensorSourceTCPDialTimeout, sensorSourceTLSSetupTimeout)
+	return c.ConnectSensorSourceWithLiteIssuers(ctx, address, cert, chain, principal, "")
 }
 
-func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, address string, cert tls.Certificate, chain, principal string, tcpBudget, tlsBudget time.Duration) error {
+// ConnectSensorSourceWithLiteIssuers adds provisioned, untrusted issuer
+// candidates for a classical source and enables leaf-only WendyCom TLS.
+func (c *WendyLiteClient) ConnectSensorSourceWithLiteIssuers(ctx context.Context, address string, cert tls.Certificate, chain, principal, liteIssuers string) error {
+	return c.connectSensorSourceWithBudgets(ctx, address, cert, chain, principal, liteIssuers, sensorSourceTCPDialTimeout, sensorSourceTLSSetupTimeout)
+}
+
+func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, address string, cert tls.Certificate, chain, principal, liteIssuers string, tcpBudget, tlsBudget time.Duration) error {
 	if len(cert.Certificate) == 0 {
 		return fmt.Errorf("missing consumer certificate")
 	}
@@ -1317,7 +1398,21 @@ func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, ad
 	if err != nil {
 		return err
 	}
-	meshalpn.NewCertificates(cert, known).ConfigureClient(cfg, meshalpn.WendyCom)
+	material := meshalpn.NewCertificates(cert, known)
+	if liteIssuers != "" {
+		now := time.Now()
+		bundle, err := certs.ParseCertsFromPEM([]byte(liteIssuers))
+		if err == nil {
+			if path, window, err := estcacerts.LitePathForEnrolledPeer(bundle, chain, own.TenantUUID, now); err == nil {
+				material.SetLiteIssuers(path, window.NotBefore, window.NotAfter)
+				// This pinned source's candidates were validated independently.
+				// A failure learning issuers for another peer must not push the
+				// constrained source back into a full certificate exchange.
+				material.SetRecovery(&meshalpn.Recovery{})
+			}
+		}
+	}
+	material.ConfigureClient(cfg, meshalpn.WendyCom)
 	dialCtx, cancelDial := context.WithTimeout(ctx, tcpBudget)
 	raw, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", address)
 	cancelDial()
@@ -1344,6 +1439,8 @@ func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, ad
 		c.link = nil
 		if setup.Err() != nil {
 			err = setup.Err()
+		} else if rejection := sourceCertificateRejection(err); rejection != nil {
+			return fmt.Errorf("SensorLink handshake: %w (%s): %w", rejection, describeRejection(leaf, conn.ConnectionState().PeerCertificates), err)
 		}
 		return fmt.Errorf("SensorLink handshake: %w", err)
 	}

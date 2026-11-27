@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
 
@@ -63,8 +64,17 @@ func (b *Backend) EnrollDevice(session uint64, account, organization, name strin
 		return err
 	}
 	if next != conn {
-		b.conn = next
-		conn.Close()
+		b.replaceEnrolledConnection(next)
 	}
 	return nil
+}
+
+// Enrollment may upgrade the selected connection to mTLS without changing its
+// device session. Publish the replacement before closing the previous transport.
+// The caller holds b.mu.
+func (b *Backend) replaceEnrolledConnection(next *grpcclient.AgentConnection) {
+	previous := b.conn
+	b.conn = next
+	b.publishDeviceRPCSession()
+	previous.Close()
 }

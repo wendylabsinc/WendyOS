@@ -40,7 +40,8 @@ func TestDirectorySyncBundleOnceAndMissingBundleRecovery(t *testing.T) {
 	}
 	dest, _ := NewDirectory(testTenant(t), 10, cache)
 	sender, receiver := NewSynchronizer(source, source.cache), NewSynchronizer(dest, cache)
-	msgs := sender.Reconcile(now)
+	sender.seedAnnouncements("", now)
+	msgs := sender.drainAnnouncements(now, 2)
 	if len(msgs) != 2 || msgs[0].Kind != "certificate" || msgs[1].Kind != "manifest" {
 		t.Fatal(msgs)
 	}
@@ -57,7 +58,7 @@ func TestDirectorySyncBundleOnceAndMissingBundleRecovery(t *testing.T) {
 	if len(changed) != 1 || len(dest.Snapshot(now)) != 1 {
 		t.Fatal("bundle recovery failed", err)
 	}
-	if len(sender.Reconcile(now)) != 1 {
+	if len(sender.Record(w, now)) != 1 {
 		t.Fatal("certificate repeated unnecessarily")
 	}
 	_, changed, err = receiver.Receive(msgs[1], now)
@@ -106,7 +107,7 @@ func TestSyncIdentityRequestIsPrincipalScoped(t *testing.T) {
 	}
 }
 
-func TestBoundedReconcileDoesNotConsumeUnqueuedBundleHint(t *testing.T) {
+func TestBoundedInventoryDoesNotConsumeUnqueuedBundleHint(t *testing.T) {
 	source, chain, key, device, now := directoryFixture(t)
 	w, err := SignManifest(routeManifest(device, now), chain, key, now)
 	if err != nil {
@@ -116,15 +117,16 @@ func TestBoundedReconcileDoesNotConsumeUnqueuedBundleHint(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender := NewSynchronizer(source, source.cache)
-	if got := sender.ReconcileBounded(now, 1); len(got) != 0 {
+	sender.seedAnnouncements("", now)
+	if got := sender.drainAnnouncements(now, 1); len(got) != 0 {
 		t.Fatal("split a bundle and its manifest across an insufficient queue budget")
 	}
-	got := sender.ContinueReconcile(now, 2)
+	got := sender.drainAnnouncements(now, 2)
 	if len(got) != 2 || got[0].Kind != "certificate" || got[1].Kind != "manifest" {
 		t.Fatalf("unqueued bundle was suppressed: %#v", got)
 	}
-	if got := sender.ContinueReconcile(now, 2); len(got) != 0 {
-		t.Fatal("finished repair pass repeated records")
+	if got := sender.drainAnnouncements(now, 2); len(got) != 0 {
+		t.Fatal("finished inventory repeated records")
 	}
 }
 

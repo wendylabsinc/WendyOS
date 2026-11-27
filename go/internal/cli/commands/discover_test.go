@@ -14,7 +14,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -110,6 +109,83 @@ func TestDiscoverModel_UpdateReturnsDelayedCmd(t *testing.T) {
 				t.Error("expected non-nil cmd (delayed rescan)")
 			}
 		})
+	}
+}
+
+func TestDiscoverRefreshKeepsSelectedDeviceWhenRowsMove(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.collection.LANDevices = []models.LANDevice{
+		{ID: "first", DisplayName: "Robot", Hostname: "first.local"},
+		{ID: "selected", DisplayName: "Robot", Hostname: "selected.local"},
+	}
+	m.refreshTable()
+	m.table.SetCursor(1)
+
+	m.collection.LANDevices = append(m.collection.LANDevices,
+		models.LANDevice{ID: "new", DisplayName: "Alpha", Hostname: "alpha.local"})
+	m.refreshTable()
+
+	if cursor := m.table.Cursor(); cursor != 2 || m.tableItems[cursor].lanKey != "selected" {
+		t.Fatalf("cursor = %d, want the selected device at row 2", cursor)
+	}
+}
+
+func TestDiscoverRefreshKeepsSelectedDeviceWhenMarkerColumnChanges(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.collection.USBDevices = []models.USBDevice{
+		{DisplayName: "First", SerialNumber: "first", USBVersion: "3.0"},
+		{DisplayName: "Selected", SerialNumber: "selected", USBVersion: "3.0"},
+	}
+	m.refreshTable()
+	m.table.SetCursor(1)
+	columnsWithoutMarker := len(m.table.Columns())
+
+	m.collection.LANDevices = []models.LANDevice{{ID: "lan", DisplayName: "LAN", Hostname: "lan.local", IsMTLS: true}}
+	m.refreshTable()
+	if columns := len(m.table.Columns()); columns != columnsWithoutMarker+1 {
+		t.Fatalf("columns = %d, want a marker column added to %d columns", columns, columnsWithoutMarker)
+	}
+	if cursor := m.table.Cursor(); cursor != 1 || m.tableItems[cursor].info.Name != "Selected" {
+		t.Errorf("cursor = %d, want the selected USB device at row 1 after the marker appeared", cursor)
+	}
+
+	m.table.SetCursor(1)
+	m.collection.LANDevices = nil
+	m.refreshTable()
+	if columns := len(m.table.Columns()); columns != columnsWithoutMarker {
+		t.Fatalf("columns = %d, want %d after the marker disappeared", columns, columnsWithoutMarker)
+	}
+	if cursor := m.table.Cursor(); cursor != 1 || m.tableItems[cursor].info.Name != "Selected" {
+		t.Errorf("cursor = %d, want the selected USB device at row 1 after the marker disappeared", cursor)
+	}
+}
+
+func TestDiscoverRefreshKeepsSelectedDeviceVisibleAfterReordering(t *testing.T) {
+	m := newDiscoverModel(context.Background(), defaultOpts(), true)
+	m.windowHeight = 9
+	for _, name := range []string{"Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf"} {
+		m.collection.LANDevices = append(m.collection.LANDevices, models.LANDevice{
+			ID: name, DisplayName: name, Hostname: strings.ToLower(name) + ".local",
+		})
+	}
+	m.refreshTable()
+	for i := 0; i < 3; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(discoverModel)
+	}
+	if cursor := m.table.Cursor(); cursor != 3 || !strings.Contains(m.tableView(), "Echo") {
+		t.Fatalf("expected Echo to be highlighted and visible before the refresh, got row %d in:\n%s", cursor, m.tableView())
+	}
+
+	renamed := m.collection.LANDevices[3]
+	renamed.DisplayName = "Aardvark"
+	updated, _ := m.Update(lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: renamed}})
+	m = updated.(discoverModel)
+	if cursor := m.table.Cursor(); cursor != 0 || m.tableItems[cursor].lanKey != "echo" {
+		t.Fatalf("cursor = %d, want the renamed device at row 0", cursor)
+	}
+	if view := m.tableView(); !strings.Contains(view, "Aardvark") {
+		t.Fatalf("highlighted device is outside the viewport:\n%s", view)
 	}
 }
 
@@ -249,45 +325,6 @@ func TestDiscoverModel_LeftRightScrollsWithoutBreakingVerticalNavigation(t *test
 
 	if m.table.ScrollOffset() != 0 {
 		t.Fatalf("expected left arrow to return to zero offset, got %d", m.table.ScrollOffset())
-	}
-}
-
-func TestDiscoverModel_DKeySetsDefaultAndMarksSelectedDevice(t *testing.T) {
-	setTempConfig(t, &config.Config{})
-
-	m := newDiscoverModel(context.Background(), defaultOpts(), true)
-	updated, _ := m.Update(lanFoundEvent(models.LANDevice{
-		DisplayName: "ubuntu",
-		Hostname:    "ubuntu.local",
-		Port:        defaultAgentPort,
-	}))
-	m = updated.(discoverModel)
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	um := updated.(discoverModel)
-
-	if um.flashMessage != "Default device set to: ubuntu.local" {
-		t.Fatalf("flash message = %q, want default device confirmation", um.flashMessage)
-	}
-	if cmd == nil {
-		t.Fatal("expected clearFlashAfter cmd")
-	}
-	if !strings.Contains(um.table.View(), "✦") {
-		t.Fatalf("expected selected default device to show marker, got %q", um.table.View())
-	}
-
-	// 'd' toggles: on the default row it clears the default, as on the
-	// Simulator and Cloud tabs. There is no separate 'x' any more.
-	updated, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	um = updated.(discoverModel)
-	if got := defaultKey(t); got != "" {
-		t.Fatalf("second d left default %q, want it cleared", got)
-	}
-	if um.flashMessage != "Default device cleared." || strings.Contains(um.table.View(), "✦") {
-		t.Fatalf("second d: flash=%q table=%q", um.flashMessage, um.table.View())
-	}
-	if view := um.View(); !strings.Contains(view, "d toggle default") || strings.Contains(view, "x unset default") {
-		t.Fatalf("hint does not describe the toggle: %q", view)
 	}
 }
 
@@ -477,7 +514,7 @@ func TestDiscoverTableItemsProvisionedStateAndProbeHint(t *testing.T) {
 	}
 
 	_, rows := tui.PickerDeviceTableData(discoverPickerItems(items), "", true)
-	// Columns: 0=marker (provisioned glyph + ✦ default) 1=Name 2=Type 3=Address 4=Agent 5=OS.
+	// Columns: 0=marker (provisioned glyph) 1=Name 2=Type 3=Address 4=Agent 5=OS.
 	if rows[0][0] != "●" {
 		t.Fatalf("provisioned marker cell = %q, want \"●\"", rows[0][0])
 	}

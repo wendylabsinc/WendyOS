@@ -87,17 +87,18 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceAttachCmd(),
 		newDeviceShellCmd(),
 		newDeprecatedDeviceVersionCmd(),
-		newDeviceSetDefaultCmd(),
-		newDeviceGetDefaultCmd(),
-		newDeviceUnsetDefaultCmd(),
 		newDeviceUnpinCmd(),
 		newDeviceBuildHostCmd(),
+		newRemovedDeviceDefaultCmd("set-default"),
+		newRemovedDeviceDefaultCmd("get-default"),
+		newRemovedDeviceDefaultCmd("unset-default"),
 		newDeviceSetupCmd(),
 		newDeviceEnrollCmd(),
 		newDeviceUnenrollCmd(),
 		newDeviceEnrollmentStatusCmd(),
 		newDeviceRenameCmd(),
 		newDevicePowerModeCmd(),
+		newDeviceRebootCmd(),
 		newDeviceUpdateCmd(),
 		newLegacyDeviceLocalMeshCmd(),
 		newDeviceSyncTimeCmd(),
@@ -597,176 +598,6 @@ func yesNo(v bool) string {
 	return "no"
 }
 
-func newDeviceSetDefaultCmd() *cobra.Command {
-	return &cobra.Command{
-		Hidden: true,
-		Use:    "set-default [device]",
-		Short:  "Set a local, cloud or simulator device as the default",
-		Args:   cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			device := ""
-			if len(args) > 0 {
-				device = strings.TrimSpace(args[0])
-			}
-			if device == "" {
-				// The picker needs a terminal. Without one it fails with "could
-				// not open a new TTY"; say what to run instead. A blank argument
-				// lands here too rather than silently clearing the default.
-				if jsonOutput || !isInteractiveTerminal() {
-					return setDefaultNeedsDeviceError()
-				}
-				sel, err := pickDeviceForDefaultFn(cmd.Context())
-				if err != nil {
-					return err
-				}
-				device = sel
-			}
-			_, isCloud, selectorErr := parseCloudDeviceSelector(device)
-			if selectorErr != nil {
-				return selectorErr
-			}
-			if !isCloud {
-				if err := rejectNumericDeviceName(device); err != nil {
-					return err
-				}
-			}
-
-			if err := saveDefaultDevice(device); err != nil {
-				return err
-			}
-
-			fmt.Printf("Default device set to: %s\n", tui.Device(device))
-			// Cloud identity is scoped by endpoint, organization and asset ID.
-			// It has no LAN hostname pin to clear or repopulate.
-			if isCloud || strings.HasPrefix(device, "mesh:") {
-				return nil
-			}
-
-			// Naming a device here is an explicit assertion that this is the one
-			// the user means, so any pin recorded for it is dropped first: that
-			// makes the connect below a first use, and gives a device whose
-			// identity changed a way back (otherwise this connect would hit the
-			// same refusal and never re-pin).
-			//
-			// dialPinKeyForDevice, not the raw argument: `set-default
-			// my-mac.local:50051` is a legal default, and enforcement keys that
-			// host under "my-mac.local"; `set-default 127.0.0.1` is dialled as
-			// 127.0.0.1:50051, which is checked under vm:<name> while a running VM
-			// forwards that port. Clearing any other key would leave the refusal
-			// with no way out.
-			clearDevicePinForRepin(dialPinKeyForDevice(device))
-
-			// WDY-1149: pin the device's (organisation, cloud host, asset)
-			// identity now if it is reachable, so later connections detect a
-			// swapped device or MITM. Best-effort and non-interactive: an offline
-			// device is pinned instead on its first successful connection. The pin
-			// itself is established inside connectToAgent's default-device path.
-			//
-			// Without --device and WENDY_DEVICE: this confirms the device just
-			// saved, which an override in effect would otherwise replace.
-			withoutDeviceOverride(func() {
-				if conn, connErr := connectToAgent(cmd.Context(), SuppressProvisioningHint(), SuppressUpdateCheck(), NonInteractive()); connErr == nil {
-					_ = conn.Close()
-				}
-			})
-			return nil
-		},
-	}
-}
-
-func newDeviceGetDefaultCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "get-default",
-		Short:  "Show the current default device",
-		Hidden: true,
-		Args:   cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
-			if err != nil {
-				return fmt.Errorf("loading config: %w", err)
-			}
-
-			if jsonOutput {
-				data, err := json.MarshalIndent(map[string]string{"defaultDevice": cfg.DefaultDevice}, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(cmd.OutOrStdout(), string(data))
-				return nil
-			}
-
-			if cfg.DefaultDevice == "" {
-				fmt.Fprintln(cmd.OutOrStdout(), "No default device set. Set one with 'wendy device set-default'.")
-				return nil
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Default device: %s\n", cfg.DefaultDevice)
-			return nil
-		},
-	}
-}
-
-// pickDeviceForDefault runs the interactive device picker and returns a
-// hostname or provider key suitable for storing as the default device.
-func pickDeviceForDefault(ctx context.Context) (string, error) {
-	selected, err := pickDevice(ctx, nil, false, false, false)
-	if err != nil {
-		return "", err
-	}
-	defer selected.Close()
-
-	return defaultDeviceNameFor(selected)
-}
-
-// defaultDeviceNameFor is the name a picker selection should be saved as the
-// default device under.
-//
-// PinKey, not Agent.Host, whenever there is one. Agent.Host is the address the
-// picker actually dialled, which on a LAN row is an IP: saving that would make
-// the default device a DHCP lease, and — worse — would file every later
-// connection's pin under the IP while the picker had just pinned the device
-// under its hostname seconds earlier. pinCandidateKeys cannot map an IP back to
-// a hostname row, so the hostname pin would never be consulted again and
-// enforcement would be off for what is probably the most common configuration.
-// It is also the failure pinKeyForAddr's own comment warns about, arriving by a
-// different door.
-//
-// Agent.Host remains the fallback for a selection with no pin key at all
-// (nothing else identifies it) — that is exactly today's behaviour for those,
-// and they are already left unenforced by enforceSelectedDevicePin.
-func defaultDeviceNameFor(selected *SelectedDevice) (string, error) {
-	if selected == nil {
-		return "", fmt.Errorf("no device selected")
-	}
-	if selected.DefaultSelector != "" {
-		return selected.DefaultSelector, nil
-	}
-	if selected.Agent != nil {
-		if selected.PinKey != "" {
-			return selected.PinKey, nil
-		}
-		return selected.Agent.Host, nil
-	}
-	if selected.External != nil {
-		return selected.External.ProviderKey, nil
-	}
-	return "", fmt.Errorf("no device selected")
-}
-
-func newDeviceUnsetDefaultCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "unset-default",
-		Short: "Clear the default device",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := saveDefaultDevice(""); err != nil {
-				return err
-			}
-
-			fmt.Println("Default device cleared.")
-			return nil
-		},
-	}
-}
-
 func newDeviceSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "setup",
@@ -912,6 +743,7 @@ func newDeviceEnrollCmd() *cobra.Command {
 	cmd.Flags().StringVar(&liteOptions.csrURL, "csr-url", "", "CSR enrollment base URL override for Wendy Lite on self-hosted PKI")
 	cmd.Flags().StringVar(&liteOptions.timeURL, "time-url", "", "RFC 3161 signed-time endpoint for Wendy Lite (defaults to Sigstore)")
 	cmd.Flags().StringVar(&liteOptions.caCertsURL, "ca-certs-url", "", "HTTPS CA-discovery URL for Wendy Lite (defaults to the selected PKI instance's EST endpoint)")
+	cmd.Flags().StringVar(&liteOptions.estURL, "est-url", "", "HTTPS EST cacerts URL for Wendy Lite peer CA refresh and automatic discovery unless --ca-certs-url or explicit root bundles are supplied")
 	cmd.Flags().StringVar(&liteOptions.deviceRoots, "device-roots", "", "Provision this device identity PEM CA bundle over USB (also requires --https-roots)")
 	cmd.Flags().StringVar(&liteOptions.tsaRoots, "tsa-roots", "", "Signed-time PEM CA bundle (Sigstore's TSA root is bundled for the default endpoint)")
 	cmd.Flags().StringVar(&liteOptions.httpsRoots, "https-roots", "", "Provision this HTTPS/broker PEM CA bundle over USB")
@@ -1013,13 +845,22 @@ func defaultEnrollmentName(host string) string {
 	return strings.ToLower(strings.TrimSuffix(h, ".local"))
 }
 
-func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string, error) {
-	return enrollmentName(conn.Host, name)
+func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string, taken func(string) bool, org string) (string, error) {
+	return enrollmentName(conn.Host, name, taken, org)
 }
 
-func enrollmentName(host, name string) (string, error) {
+// enrollmentName falls back to the device's own name for a blank one, unless
+// another device in the organization holds it.
+func enrollmentName(host, name string, taken func(string) bool, org string) (string, error) {
 	if name == "" {
 		defaultName := defaultEnrollmentName(host)
+		if defaultName != "" && taken(defaultName) {
+			if !isInteractiveTerminal() {
+				return "", takenNameRefusal(defaultName, org, noTTYHintEnroll)
+			}
+			printTakenName(os.Stdout, defaultName, org)
+			defaultName = suggestFreeName(defaultName, maxHostnameLen, taken)
+		}
 		if !isInteractiveTerminal() {
 			if defaultName != "" {
 				name = defaultName
@@ -1056,7 +897,7 @@ func enrollmentName(host, name string) (string, error) {
 }
 
 func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) error {
-	identity, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
+	identity, name, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
 	if err != nil {
 		return err
 	}
@@ -1067,19 +908,19 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	return err
 }
 
-func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, error) {
+func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, string, error) {
 	if auth == nil || len(auth.Certificates) == 0 {
-		return nil, validateEnrollmentCertificate(auth)
+		return nil, "", validateEnrollmentCertificate(auth)
 	}
 	acmeDirectoryURL := ""
 	if len(acmeDirectoryURLs) > 0 {
 		acmeDirectoryURL = acmeDirectoryURLs[0]
 	}
 	if auth.OAuthIssuer == "" && acmeDirectoryURL != "" {
-		return nil, fmt.Errorf("--acme-directory-url requires an OIDC login session")
+		return nil, "", fmt.Errorf("--acme-directory-url requires an OIDC login session")
 	}
 	if err := validateEnrollmentCertificate(auth); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Only the new login flow uses direct PKI enrollment. Imported certificates
 	// and legacy sessions retain the Cloud enrollment contract.
@@ -1087,27 +928,28 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		return runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURL)
 	}
 
-	name, err := enrollmentDeviceName(conn, name)
+	// Legacy sessions cannot list the organization's devices; Cloud's own check decides.
+	name, err := enrollmentDeviceName(conn, name, func(string) bool { return false }, "")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	cert := auth.Certificates[0]
 
 	cloudCreds, err := clouddefaults.CloudTransportCredentials(auth.CloudGRPC, &cert)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	dialOptions := append([]grpc.DialOption{grpc.WithTransportCredentials(cloudCreds)}, dpopDialOptions(auth)...)
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to cloud: %w", err)
+		return nil, "", fmt.Errorf("connecting to cloud: %w", err)
 	}
 	defer cloudConn.Close()
 
 	tokenCtx, err := cloudContext(ctx, auth)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// The selected session already identifies the enrollment organization.
@@ -1124,10 +966,10 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		TtlSeconds:     600,
 	})
 	if status.Code(err) == codes.Unimplemented {
-		return nil, fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
+		return nil, "", fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("creating enrollment token: %w", err)
+		return nil, "", fmt.Errorf("creating enrollment token: %w", err)
 	}
 
 	fmt.Println("Enrolling device...")
@@ -1138,12 +980,12 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		CloudHost:       auth.CloudGRPC,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("enrolling device: %w", err)
+		return nil, "", fmt.Errorf("enrolling device: %w", err)
 	}
 
 	fmt.Printf("Device enrolled (org: %s, asset: %d).\n",
 		orgLabel(auth.CloudGRPC, tokenResp.GetOrganizationId()), tokenResp.GetAssetId())
-	return &certs.WendyIdentity{OrgID: tokenResp.GetOrganizationId(), EntityType: certs.EntityAsset, EntityID: strconv.FormatInt(int64(tokenResp.GetAssetId()), 10)}, nil
+	return &certs.WendyIdentity{OrgID: tokenResp.GetOrganizationId(), EntityType: certs.EntityAsset, EntityID: strconv.FormatInt(int64(tokenResp.GetAssetId()), 10)}, name, nil
 }
 
 func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
@@ -1268,18 +1110,18 @@ func newDeviceUnenrollCmd() *cobra.Command {
 				}
 			}
 			defer target.Close()
-			if _, scoped, parseErr := parseCloudDeviceSelector(target.DefaultSelector); scoped {
+			if _, scoped, parseErr := parseCloudDeviceSelector(target.Selector); scoped {
 				if parseErr != nil {
 					return parseErr
 				}
-				return runCloud(target.DefaultSelector)
+				return runCloud(target.Selector)
 			}
 			if target.External != nil && target.External.ProviderKey == "wendy-lite" {
 				if uuidAssetID != "" || checkOnly || force {
 					return fmt.Errorf("--asset-id, --check and --force require a directly connected WendyOS device with v2 UUID enrollment")
 				}
 				if target.External.ConnectionType() == "Cloud" {
-					selector := target.DefaultSelector
+					selector := target.Selector
 					if selector == "" {
 						info := target.External.ConnectionInfo
 						selector = (cloudDeviceSelector{Endpoint: info["cloud"], TenantUUID: info["tenantId"], AssetUUID: info["assetId"]}).String()
@@ -2327,20 +2169,14 @@ func fetchAgentRelease(nightly bool) (*githubReleaseFull, error) {
 // downloadReleaseAssetBytes downloads asset and returns its raw bytes,
 // unmodified. Callers that need the extracted linux ELF (rather than the raw
 // tarball) call extractAgentFromTarGz on the result themselves.
-func downloadReleaseAssetBytes(asset githubReleaseAsset) ([]byte, error) {
-	client := &http.Client{Timeout: 5 * time.Minute}
-
-	resp, err := client.Get(asset.BrowserDownloadURL)
-	if err != nil {
+// The transfer has no deadline: it follows imageDownloadPolicy, like an OS
+// image. Every attempt asks GitHub again, so it gets a fresh CDN URL.
+func downloadReleaseAssetBytes(ctx context.Context, asset githubReleaseAsset) ([]byte, error) {
+	var raw downloadBuffer
+	if err := downloadResumable(ctx, asset.BrowserDownloadURL, &raw, 0, nil); err != nil {
 		return nil, fmt.Errorf("downloading asset: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
+	return raw, nil
 }
 
 // reconnectAgentAfterRestart re-establishes a connection to the SAME device
@@ -2789,7 +2625,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 						fmt.Println(tui.InfoMessage(fmt.Sprintf("Fetching latest %s agent for %s...", releaseType, agentPlatformLabel(osName, arch))))
 					}
 					var actualAgentVersion string
-					binaryData, actualAgentVersion, _, err = resolveAgentArtifactFn(osName, arch, nightly)
+					binaryData, actualAgentVersion, _, err = resolveAgentArtifactFn(ctx, osName, arch, nightly)
 					if err != nil {
 						return fmt.Errorf("resolving agent binary: %w", err)
 					}
@@ -3601,9 +3437,9 @@ func updatedAgentReconnectFunc(ctx context.Context, previous *grpcclient.AgentCo
 		}
 	}
 
-	if addr, hostname, _, err := resolveDeviceAddress(); err == nil {
+	if addr, hostname, err := resolveDeviceAddress(); err == nil {
 		return func(waitCtx context.Context) (*grpcclient.AgentConnection, error) {
-			return connectResolvedAgentWithProvisionedHint(waitCtx, hostname, addr, false, deferProvisionedMTLSCheck(waitCtx, addr))
+			return connectResolvedAgentWithProvisionedHint(waitCtx, hostname, addr, deferProvisionedMTLSCheck(waitCtx, addr))
 		}
 	}
 
@@ -3613,7 +3449,7 @@ func updatedAgentReconnectFunc(ctx context.Context, previous *grpcclient.AgentCo
 			addr = hostPort(previous.Host, defaultAgentPort)
 		}
 		return func(waitCtx context.Context) (*grpcclient.AgentConnection, error) {
-			return connectResolvedAgentWithProvisionedHint(waitCtx, previous.Host, addr, false, func() bool { return false })
+			return connectResolvedAgentWithProvisionedHint(waitCtx, previous.Host, addr, func() bool { return false })
 		}
 	}
 

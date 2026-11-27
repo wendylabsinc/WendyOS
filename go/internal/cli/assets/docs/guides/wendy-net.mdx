@@ -9,7 +9,7 @@ ordinary Wi-Fi; Bluetooth is useful when a faster connection is unavailable.
 The numbered setup below is for WendyOS. For Wendy Lite firmware with Wendy Net
 support, use the [Lite configuration instructions](#configure-wendy-net-on-wendy-lite).
 
-Run these commands in an interactive terminal. Select the intended device when prompted and check any automatically selected default.
+Run these commands in an interactive terminal. Select the intended device when prompted, or check the target `WENDY_DEVICE` selects automatically.
 
 ## 1. Prepare your devices
 
@@ -18,17 +18,12 @@ same Wendy Cloud organization. Sign in with `wendy cloud login`;
 `wendy auth login` is an equivalent command. Keep a working management connection
 while changing network settings.
 
-## 2. Enable the connections you want
+## 2. Choose connection types
 
-For devices on the same Ethernet or ordinary Wi-Fi network, run this for each one:
-
-```sh
-wendy net configure \
-  --participate=true --ethernet=true --infrastructure-wifi=true
-```
-
-For Bluetooth, add `--ble=true`.
-For supported Wi-Fi Aware hardware, add `--nan=true`.
+Enrolled WendyOS devices try Ethernet, ordinary Wi-Fi, Bluetooth and Wi-Fi
+Aware by default. Saved participation and connection settings take precedence.
+To use a Bluetooth or Wi-Fi Aware adapter added after the agent has started,
+restart the agent or change its Wendy Net carrier settings.
 
 Start with the normal Bluetooth profile and firmware/controller-default power.
 Supported WendyOS adapters and Lite C5/C6 firmware also offer coded profiles,
@@ -42,8 +37,8 @@ You can enable more than one connection type. Only the options you supply change
 other saved settings are preserved.
 
 `configure` confirms saved settings, including when you repeat the same command.
-It reports `pending-runtime` when participation is enabled and `disabled` when
-it is off, with no runtime observations. Use `status` to check runtime state
+It reports `pending-runtime` while an enabled configuration awaits runtime
+observations and `disabled` when participation is off. Use `status` to check runtime state
 after the agent has had time to apply the settings.
 
 Changing settings restarts local routing and may interrupt existing connections.
@@ -59,9 +54,12 @@ wendy net status
 wendy net topology
 ```
 
-`status` shows saved settings and current runtime state. `topology` shows the
-selected device's observed peers and routes. Check each device you are testing;
-one local view does not prove that every device is reachable.
+For each carrier, `status` shows whether it is disabled, operating, missing
+hardware, or experiencing a fault. A carrier can also be starting or waiting
+for an eligible interface. A ready carrier can operate while others are
+missing or waiting. `topology` shows each device's observed peers and routes.
+Check the devices whose reachability you need to verify. The JSON response
+keeps the carrier breakdown in its human-readable `detail` field.
 
 If no peer appears, confirm that both devices participate, belong to the same
 organization, and share an enabled connection type. On Ethernet or ordinary
@@ -73,8 +71,10 @@ For slow or missing Bluetooth connections, see
 ## Configure Wendy Net on Wendy Lite
 
 `wendy net configure` and `wendy net status` also work
-with Wendy Lite devices. Select the board explicitly, for example with
-`--device wendy-lite:<device>`, and read its current status before changing it.
+with Wendy Lite devices. Firmware with a supported carrier enables Wendy Net
+by default. The device joins after enrollment when a peer is reachable.
+Select the board explicitly, for example with `--device wendy-lite:<device>`,
+and read its current status before changing it.
 
 For Lite, `--participate`, `--ble`, `--infrastructure-wifi` and `--nan` update the
 saved configuration. The CLI reads the current desired configuration first and
@@ -129,16 +129,22 @@ Both devices still need enabled Wendy Net connection types and a working route
 between them; the route can pass through other participating devices. A healthy
 Internet connection on the travelling device takes priority. It uses a shared
 gateway only when no healthy independent uplink is available.
+[Reach the Internet through another device](/docs/wendy-net/internet-sharing)
+explains how the borrowed connection travels and how a gateway is chosen.
 
 Sharing and roaming are independent opt-ins. Enabling a Bluetooth or Wi-Fi link
 does not share Internet access. A device cannot offer an Internet connection it
 is itself borrowing from Wendy Net. The selected gateway carries Internet traffic
 and DNS, so choose one you trust to provide that service.
 
-Check `State` and `Gateway principal` in status. Allow time for connectivity checks
-and route recovery after a change; a saved setting is not a connectivity test.
+Check `Gateway principal` and the Internet sharing state in status. While any
+Wendy Net connection type is running, `State` summarizes those connections
+(for example `Local peers active`), and the sharing state appears in the line
+below it as `Internet sharing: <value>`. Otherwise `State` shows the sharing
+value itself. Allow time for connectivity checks and route recovery after a
+change; a saved setting is not a connectivity test.
 
-| State | What it means |
+| Internet sharing | What it means |
 | --- | --- |
 | `local` | The device has a healthy Internet connection of its own. It offers it if sharing is enabled. |
 | `relay` | It participates in Wendy Net, but Internet roaming is off. |

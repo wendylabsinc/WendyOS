@@ -140,6 +140,9 @@ type PKIAdminServiceClient interface {
 	ListAuditLog(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[pkicorepb.AuditLogEntry], error)
 	// Gate: `pki:tenant-offboard`. Signed, op "offboard_tenant".
 	// Signed; payload_type "wendycloud.v2.OffboardTenantRequest".
+	// Deprecated (WDY-3543): `pki:tenant-offboard` is retired and held by no role, so cloud refuses
+	// every call with PERMISSION_DENIED. A tenant's PKI is offboarded by the wendy-auth realm purge
+	// (auth -> pki-core fabric); the break-glass path is pki-core's own admin command.
 	OffboardTenant(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*pkicorepb.OffboardTenantResponse, error)
 }
 
@@ -467,6 +470,9 @@ type PKIAdminServiceServer interface {
 	ListAuditLog(*SignedRequest, grpc.ServerStreamingServer[pkicorepb.AuditLogEntry]) error
 	// Gate: `pki:tenant-offboard`. Signed, op "offboard_tenant".
 	// Signed; payload_type "wendycloud.v2.OffboardTenantRequest".
+	// Deprecated (WDY-3543): `pki:tenant-offboard` is retired and held by no role, so cloud refuses
+	// every call with PERMISSION_DENIED. A tenant's PKI is offboarded by the wendy-auth realm purge
+	// (auth -> pki-core fabric); the break-glass path is pki-core's own admin command.
 	OffboardTenant(context.Context, *SignedRequest) (*pkicorepb.OffboardTenantResponse, error)
 	mustEmbedUnimplementedPKIAdminServiceServer()
 }

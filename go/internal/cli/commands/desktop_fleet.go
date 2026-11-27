@@ -61,7 +61,7 @@ func (r *DesktopFleetReader) Overview(assets, online []*cloudpbv2.Asset, presenc
 	}
 	out := DesktopFleet{PresenceError: cloudError(presenceErr)}
 	for _, a := range assets {
-		selector, err := cloudDiscoveryDeviceDefault(auth, cloudDiscoveryDevice{cloudAssetMetadata: a, v2: a, key: a.GetId()})
+		selector, err := cloudDiscoverySelector(auth, cloudDiscoveryDevice{cloudAssetMetadata: a, v2: a, key: a.GetId()})
 		if err != nil {
 			return DesktopFleet{}, err
 		}

@@ -304,7 +304,8 @@ func testIPCameraOutputQueue(t *testing.T, lifecycle bool) {
 	select {
 	case errno := <-done:
 		drained = true
-		if errno != unix.EAGAIN {
+		// As vb2: a blocking DQBUF on a stopped queue returns EINVAL.
+		if errno != unix.EINVAL {
 			t.Fatalf("STREAMOFF waiter result: %v", errno)
 		}
 	case <-time.After(time.Second):
