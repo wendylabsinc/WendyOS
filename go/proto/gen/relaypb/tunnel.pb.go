@@ -1244,18 +1244,14 @@ type EncryptedDialInstructionEnvelope struct {
 	EncapsulatedKey []byte `protobuf:"bytes,2,opt,name=encapsulated_key,json=encapsulatedKey,proto3" json:"encapsulated_key,omitempty"`
 	// Exact HPKE info bytes. CanonicalEncode is defined below:
 	// CanonicalEncode("wendycloud.tunnel.v1/hpke-info/1", session_id,
-	//
-	//	routing_handle,
-	//	SHA-256(agent_key_agreement_spki_der)).
-	//
+	//                 routing_handle,
+	//                 SHA-256(agent_key_agreement_spki_der)).
 	// This is exactly TunnelHPKEContext.info. The final component is 32 raw
 	// digest bytes, not base64url text.
 	Info []byte `protobuf:"bytes,3,opt,name=info,proto3" json:"info,omitempty"`
 	// Exact AEAD associated data bytes:
 	// CanonicalEncode("wendycloud.tunnel.v1/hpke-aad/1", session_id,
-	//
-	//	SHA-256(exact decoded §4.1 request-descriptor payload)).
-	//
+	//                 SHA-256(exact decoded §4.1 request-descriptor payload)).
 	// This is exactly TunnelHPKEContext.aad. The request digest is 32 raw bytes.
 	Aad []byte `protobuf:"bytes,4,opt,name=aad,proto3" json:"aad,omitempty"`
 	// HPKE Seal output over exactly 4096 plaintext bytes: ciphertext followed by
