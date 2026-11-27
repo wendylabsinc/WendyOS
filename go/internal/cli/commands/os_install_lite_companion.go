@@ -23,6 +23,8 @@ type liteCompanionClient interface {
 	PushHostedCompanion(context.Context, string, func(written, total uint32)) error
 }
 
+var errLiteCompanionOTA = errors.New("applying companion OTA")
+
 func installLiteCompanion(ctx context.Context, port discovery.SerialPortInfo, interactive bool, companion *firmwareCompanion) (discovery.SerialPortInfo, error) {
 	open := func(port discovery.SerialPortInfo) (discovery.SerialPortInfo, *liteclient.WendyLiteClient, error) {
 		ready, err := waitInstalledLiteUSB(ctx, port, interactive, "companion update", "update")
@@ -44,42 +46,69 @@ func installLiteCompanion(ctx context.Context, port discovery.SerialPortInfo, in
 	if err != nil {
 		return port, err
 	}
-	defer client.Close()
-	updateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	updated, err := updateLiteCompanion(updateCtx, os.Stdout, client, companion, gcsBaseURL+"/"+companion.Path)
-	if err != nil || !updated {
-		return port, err
+	defer func() { client.Close() }()
+	identity, err := client.GetDeviceIdentity(5 * time.Second)
+	if err != nil {
+		return port, fmt.Errorf("identifying companion host: %w", err)
+	}
+	if identity.ID == "" {
+		return port, fmt.Errorf("companion host returned an empty device identity")
 	}
 
-	// The companion reboots after activation. Restart the P4 to re-establish
-	// the Hosted transport, as in Espressif's OTA example.
-	select {
-	case <-time.After(2 * time.Second):
-	case <-ctx.Done():
-		return port, ctx.Err()
-	}
-	if err := client.ResetTargetDevice(true, 0); err != nil {
-		return port, fmt.Errorf("restarting P4 after companion activation: %w", err)
-	}
-	client.WaitReboot(ctx)
-	if err := client.Close(); err != nil {
-		return port, err
-	}
+	const attempts = 2
+	for attempt := 1; attempt <= attempts; attempt++ {
+		updateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		updated, updateErr := updateLiteCompanion(updateCtx, os.Stdout, client, companion, gcsBaseURL+"/"+companion.Path)
+		cancel()
+		if !updated && !errors.Is(updateErr, errLiteCompanionOTA) {
+			return port, updateErr
+		}
+		if err := ctx.Err(); err != nil {
+			return port, err
+		}
+		if updateErr != nil && attempt < attempts {
+			installNote(os.Stdout, "Companion transfer failed. Restarting the P4 and checking before retrying...")
+		}
 
-	port, verified, err := open(port)
-	if err != nil {
-		return port, err
+		// Legacy Hosted schedules a reboot five seconds after End. Allow it
+		// time to switch slots even if the last USB reply was lost.
+		select {
+		case <-time.After(6 * time.Second):
+		case <-ctx.Done():
+			return port, ctx.Err()
+		}
+		if err := client.ResetTargetDevice(true, 0); err != nil {
+			return port, errors.Join(updateErr, fmt.Errorf("restarting the P4 after companion transfer: %w", err))
+		}
+		client.WaitReboot(ctx)
+		if err := client.Close(); err != nil {
+			return port, errors.Join(updateErr, err)
+		}
+
+		ready, verified, err := open(port)
+		if err != nil {
+			return ready, errors.Join(updateErr, err)
+		}
+		port, client = ready, verified
+		rebootedIdentity, err := client.GetDeviceIdentity(5 * time.Second)
+		if err != nil {
+			return port, errors.Join(updateErr, fmt.Errorf("identifying rebooted companion host: %w", err))
+		}
+		if rebootedIdentity.ID != identity.ID {
+			return port, errors.Join(updateErr, fmt.Errorf("reconnected to device %q, expected companion host %q", rebootedIdentity.ID, identity.ID))
+		}
+		buildID, err := readLiteCompanionBuildID(ctx, client)
+		if err != nil {
+			return port, errors.Join(updateErr, fmt.Errorf("reading updated companion build ID: %w", err))
+		}
+		if buildID == companion.BuildID {
+			installNote(os.Stdout, "ESP-Hosted companion firmware updated to %s.", buildID)
+			return port, nil
+		}
+		if updated || attempt == attempts {
+			return port, errors.Join(updateErr, fmt.Errorf("companion booted build %q, expected %q", buildID, companion.BuildID))
+		}
 	}
-	defer verified.Close()
-	buildID, err := readLiteCompanionBuildID(ctx, verified)
-	if err != nil {
-		return port, fmt.Errorf("reading updated companion build ID: %w", err)
-	}
-	if buildID != companion.BuildID {
-		return port, fmt.Errorf("companion booted build %q, expected %q", buildID, companion.BuildID)
-	}
-	installNote(os.Stdout, "ESP-Hosted companion firmware updated to %s.", buildID)
 	return port, nil
 }
 
@@ -100,7 +129,7 @@ func updateLiteCompanion(ctx context.Context, out io.Writer, client liteCompanio
 	}
 	defer os.Remove(path)
 	if err := client.PushHostedCompanion(ctx, path, nil); err != nil {
-		return false, fmt.Errorf("applying companion OTA: %w", err)
+		return false, fmt.Errorf("%w: %w", errLiteCompanionOTA, err)
 	}
 	return true, nil
 }

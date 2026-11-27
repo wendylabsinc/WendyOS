@@ -899,6 +899,7 @@ func dragonwingBundleFrom(dm *deviceManifest, board dragonwingBoard, version str
 
 // firmwareManifest contains version info for a specific chip.
 type firmwareManifest struct {
+	ChipID     string                         `json:"chip_id"`
 	FirmwareID string                         `json:"firmware_id"`
 	Versions   map[string]firmwareVersionInfo `json:"versions"`
 }
