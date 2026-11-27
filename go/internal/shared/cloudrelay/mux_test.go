@@ -7,11 +7,17 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 )
 
@@ -74,4 +80,65 @@ func TestMuxCapableAgentServesRawCaller(t *testing.T) {
 		},
 		exercise: func(func(string)) {},
 	})
+}
+
+// A device service that stops reading one connection's upload must not stall
+// the other connections of the session.
+func TestMuxStalledStreamLeavesOthersMoving(t *testing.T) {
+	svc, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	var accepted atomic.Int32
+	go func() {
+		for {
+			c, err := svc.Accept()
+			if err != nil {
+				return
+			}
+			if accepted.Add(1) == 1 {
+				t.Cleanup(func() { c.Close() }) // accepts, never reads
+				continue
+			}
+			go func() { defer c.Close(); _, _ = io.Copy(c, c) }()
+		}
+	}()
+	port := strconv.Itoa(svc.Addr().(*net.TCPAddr).Port)
+	device, caller := net.Pipe()
+	go muxServer(64).ServeConn(device, &http2.ServeConnOpts{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwardStream(w, r, "127.0.0.1", port, zap.NewNop())
+	})})
+	m, err := NewMuxClient(caller, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	stalled, err := m.Dial(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stalled.Close()
+	go func() { _, _ = stalled.Write(make([]byte, 256<<20)) }()
+	time.Sleep(2 * time.Second) // let the stalled upload fill every buffer it can
+	moving, err := m.Dial(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer moving.Close()
+	got := make(chan string, 1)
+	go func() {
+		_, _ = io.WriteString(moving, "hello")
+		buf := make([]byte, 5)
+		_, _ = io.ReadFull(moving, buf)
+		got <- string(buf)
+	}()
+	select {
+	case g := <-got:
+		if g != "hello" {
+			t.Fatalf("got %q", g)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second connection stalled behind the first one's unread upload")
+	}
 }

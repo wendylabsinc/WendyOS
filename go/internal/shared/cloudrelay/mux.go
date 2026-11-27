@@ -137,12 +137,20 @@ func (a *Agent) serveMux(session *Session, c claims, d *pb.DialInstruction) erro
 	}
 	host, port := d.Host, strconv.Itoa(int(d.Port))
 	log := a.Logger.With(zap.String("session_id", c.Session), zap.String("service", string(d.ServiceDescriptor)))
-	// One session carries at most as many connections as the agent has
-	// relay sessions, the bound a caller had with a tunnel per connection.
-	(&http2.Server{MaxConcurrentStreams: uint32(cap(a.slots))}).ServeConn(conn, &http2.ServeConnOpts{Context: session.ctx, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	muxServer(cap(a.slots)).ServeConn(conn, &http2.ServeConnOpts{Context: session.ctx, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		forwardStream(w, r, host, port, log)
 	})})
 	return nil
+}
+
+// muxStreamBuffer is how many upload bytes one stream may have in flight.
+const muxStreamBuffer = 256 << 10
+
+// muxServer serves at most streams connections in one session. The session's
+// receive window holds every stream's full window, so a device service that
+// stops reading stalls only its own connection.
+func muxServer(streams int) *http2.Server {
+	return &http2.Server{MaxConcurrentStreams: uint32(streams), MaxUploadBufferPerStream: muxStreamBuffer, MaxUploadBufferPerConnection: int32(streams) * muxStreamBuffer}
 }
 
 // forwardStream relays one stream to a new local connection and records its
