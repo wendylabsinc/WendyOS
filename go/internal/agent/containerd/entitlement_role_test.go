@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -94,5 +95,37 @@ func TestPushOverAnAppNeedsTheRoleItsEntitlementsNeed(t *testing.T) {
 	// Open and Enrolled devices carry no role and look nothing up.
 	if err := ImageReplaceError(bg, nil, "localhost/app:latest"); err != nil {
 		t.Errorf("open or enrolled: %v", err)
+	}
+}
+
+// fakeLister answers containerd's exact-match image filter the way containerd
+// does: only the name a container recorded matches.
+type fakeLister struct {
+	image string
+	ctrs  []containerd.Container
+}
+
+func (f fakeLister) Containers(_ context.Context, filters ...string) ([]containerd.Container, error) {
+	if len(filters) == 1 && filters[0] == fmt.Sprintf("image==%q", f.image) {
+		return f.ctrs, nil
+	}
+	return nil, nil
+}
+
+// Containers record the normalized image name, so every spelling of that
+// reference must find the app. The CLI sends "<appid>:latest".
+func TestPushOverAnAppMatchesEverySpellingOfItsImage(t *testing.T) {
+	keyless := trustedkeys.WithCallerRole(context.Background(), trustedkeys.RoleNone)
+	admin := []containerd.Container{retirementContainerForTest{id: "cam", labels: wendyLabels("cam", "", "1", nil,
+		[]appconfig.Entitlement{{Type: appconfig.EntitlementAdmin}}, "", nil)}}
+	for stored, spellings := range map[string][]string{
+		"docker.io/library/cam:latest": {"cam", "cam:latest", " cam:latest", "docker.io/cam:latest", "docker.io/library/cam:latest", "index.docker.io/library/cam"},
+		"localhost:5000/cam:latest":    {"localhost:5000/cam", "localhost:5000/cam:latest"},
+	} {
+		for _, name := range spellings {
+			if err := ImageReplaceError(keyless, fakeLister{image: stored, ctrs: admin}, name); err == nil {
+				t.Errorf("keyless push to %q over an admin app stored as %q: allowed, want refused", name, stored)
+			}
+		}
 	}
 }

@@ -6178,16 +6178,23 @@ func deniedEntitlement(role trustedkeys.Role, cfg *appconfig.AppConfig) (string,
 // ImageReplaceError refuses, on a Closed device, pointing imageName at new
 // content while an app made from it holds an entitlement the caller's role
 // could not deploy: the app's next restart would run the new image with that
-// entitlement. Open and Enrolled devices are not checked.
-func ImageReplaceError(ctx context.Context, client *containerd.Client, imageName string) error {
+// entitlement. Open and Enrolled devices are not checked. imageName is
+// normalized first, because containers record the normalized name.
+func ImageReplaceError(ctx context.Context, client containerLister, imageName string) error {
 	if _, closed := trustedkeys.CallerRole(ctx); !closed {
 		return nil
 	}
+	imageName = normalizeImageName(imageName)
 	ctrs, err := client.Containers(ctx, fmt.Sprintf("image==%q", imageName))
 	if err != nil {
 		return fmt.Errorf("finding the apps made from %s: %w", imageName, err)
 	}
 	return imageReplaceError(ctx, ctrs)
+}
+
+// containerLister is the part of *containerd.Client ImageReplaceError uses.
+type containerLister interface {
+	Containers(ctx context.Context, filters ...string) ([]containerd.Container, error)
 }
 
 func imageReplaceError(ctx context.Context, ctrs []containerd.Container) error {
