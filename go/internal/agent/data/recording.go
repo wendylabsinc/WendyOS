@@ -215,7 +215,7 @@ func (m *Manager) bufferStreamLocked(r *recordingpb.StoredRecord) {
 		first := m.streamPreRoll[0]
 		m.streamPreRollSize -= first.size
 		if first.record.ReceiptBoottimeNanos >= cutoff {
-			m.preRollEvicted = append(m.preRollEvicted, first.record.ReceiptBoottimeNanos)
+			m.preRollEvicted.add(first.record.ReceiptBoottimeNanos)
 		}
 		m.streamPreRoll[0] = bufferedStreamRecord{}
 		m.streamPreRoll = m.streamPreRoll[1:]

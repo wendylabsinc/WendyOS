@@ -112,7 +112,7 @@ type Manager struct {
 	// supposed to name what THAT episode's window lost. A cumulative counter
 	// reported every episode's number as the agent's total since boot, which
 	// grows forever and is never that episode's loss.
-	preRollEvicted []int64
+	preRollEvicted receiptHistory
 	downloads      map[string]int
 	sourceProvider func(context.Context) []Source
 	appObserver    func(string, ApplicationRecord)
@@ -1262,21 +1262,17 @@ func (m *Manager) evictPreRoll(now int64) {
 	cutoff := now - preRollWindow.Nanoseconds()
 	for len(m.preRoll) > 0 && (m.preRoll[0].receiptNanos < cutoff || m.preRollBytes > preRollLimit) {
 		if m.preRoll[0].receiptNanos >= cutoff {
-			m.preRollEvicted = append(m.preRollEvicted, m.preRoll[0].receiptNanos)
+			m.preRollEvicted.add(m.preRoll[0].receiptNanos)
 		}
 		m.preRollBytes -= len(m.preRoll[0].encoded)
+		// Slicing alone leaves the payload reachable through the backing array.
+		m.preRoll[0] = bufferedRecord{}
 		m.preRoll = m.preRoll[1:]
 	}
 	// The eviction log is itself a pre-roll window's worth of history: an
 	// eviction older than the widest window an episode can ask for can no
 	// longer be any episode's loss, so it is forgotten rather than accumulated.
-	kept := m.preRollEvicted[:0]
-	for _, receipt := range m.preRollEvicted {
-		if receipt >= cutoff {
-			kept = append(kept, receipt)
-		}
-	}
-	m.preRollEvicted = kept
+	m.preRollEvicted.expireBefore(cutoff)
 }
 
 // preRollLostInWindowLocked counts the records the ring dropped, while they
