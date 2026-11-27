@@ -21,7 +21,7 @@ Options:
   --package-dir DIR  Swift package directory containing swift-e2e-testing;
                      defaults to $DEFAULT_PACKAGE_DIR.
   --tests-dir DIR    Isolated tested Swift sources; parsed as data.
-  --repo DIR  Tested repository for source identities; tooling stays trusted.
+  --repo DIR         Tested repository for test identities and Go coverage views.
   --help             Show this help message.
 EOF
 }

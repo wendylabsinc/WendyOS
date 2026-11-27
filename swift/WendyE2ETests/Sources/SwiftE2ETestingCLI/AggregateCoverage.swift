@@ -108,16 +108,65 @@ struct AggregateCoverageAttempt {
     }
 }
 
+/// A run and its targets share Git work and diagnostics, but score their own profiles.
+struct RunCoverageAggregation {
+    let run: URL
+    private let repo: URL?
+    let diff: String?
+    private var comparisons: [String: Result<E2EGitComparison, any Error>] = [:]
+    private var diagnostics = Set<String>()
+
+    init(run: URL, repo: URL?, diff: String?) {
+        self.run = run
+        self.repo = repo
+        self.diff = diff
+    }
+
+    fileprivate mutating func comparison(inputs: [URL], range: String) throws -> E2EGitComparison {
+        guard let repo else {
+            throw ValidationError("Comparison needs the matching source repository")
+        }
+        let revisions = try Set(
+            inputs.compactMap { input in
+                CoverageIO.recordedRevision(
+                    try CoverageIO.read(input.appendingPathComponent("attempt.json"))
+                )
+            }
+        )
+        guard revisions.count == 1, let revision = revisions.first else {
+            throw ValidationError("Comparison needs one immutable tested revision")
+        }
+        if let cached = comparisons[revision] { return try cached.get() }
+        let result = Result {
+            try E2EGitComparison(repo: repo, range: range, testedRevision: revision)
+        }
+        comparisons[revision] = result
+        return try result.get()
+    }
+
+    fileprivate mutating func logOnce(_ message: String) {
+        if diagnostics.insert(message).inserted {
+            FileHandle.standardError.write(Data((message + "\n").utf8))
+        }
+    }
+}
+
 func aggregateGoCoverage(
     inputs: [URL],
     captured: [AggregateCoverageAttempt],
     errors initialErrors: [String],
-    run: URL,
-    repo: URL?,
-    diff: String?
+    context: inout RunCoverageAggregation,
+    target: String? = nil
 ) throws -> Bool {
-    let destination = run.appendingPathComponent("coverage")
-    try CoverageIO.remove(run.appendingPathComponent("comparison.json"))
+    let run = context.run
+    let diff = context.diff
+    let coverage = run.appendingPathComponent("coverage")
+    let destination =
+        try target.map { try CoverageIO.evidence("targets/" + $0, in: coverage) } ?? coverage
+    if target == nil {
+        try CoverageIO.remove(run.appendingPathComponent("comparison.json"))
+        try CoverageIO.remove(run.appendingPathComponent("diff.json"))
+    }
     // Never reuse a profile/totals left by another set of attempts.
     try CoverageIO.remove(destination)
     var errors = initialErrors
@@ -197,32 +246,19 @@ func aggregateGoCoverage(
     if let diff {
         var comparison = E2ERunComparison(status: "unavailable", range: diff)
         do {
-            guard let repo else {
-                throw ValidationError("Comparison needs the matching source repository")
-            }
-            let revisions = try Set(
-                inputs.compactMap { input in
-                    CoverageIO.recordedRevision(
-                        try CoverageIO.read(input.appendingPathComponent("attempt.json"))
-                    )
-                }
-            )
-            guard revisions.count == 1, let revision = revisions.first else {
-                throw ValidationError("Comparison needs one immutable tested revision")
-            }
-            let git = try E2EGitComparison(repo: repo, range: diff, testedRevision: revision)
+            let git = try context.comparison(inputs: inputs, range: diff)
             comparison.status = "compared"
             comparison.baseRevision = git.base
             comparison.sourceRevision = git.head
-            do {
-                comparison.specs = try git.specs()
-                comparison.specsStatus = "compared"
-            } catch {
-                comparison.specsStatus = "unavailable"
-                comparison.specsReason = String(describing: error)
-                FileHandle.standardError.write(
-                    Data("WARNING: E2E aggregate spec comparison unavailable: \(error)\n".utf8)
-                )
+            if target == nil {
+                do {
+                    comparison.specs = try git.specs()
+                    comparison.specsStatus = "compared"
+                } catch {
+                    comparison.specsStatus = "unavailable"
+                    comparison.specsReason = String(describing: error)
+                    context.logOnce("WARNING: E2E aggregate spec comparison unavailable: \(error)")
+                }
             }
             do {
                 if let first {
@@ -269,22 +305,22 @@ func aggregateGoCoverage(
             detail["status"] as? String == "unavailable"
         {
             let reason = detail["reason"] as? String ?? "No comparison result"
-            FileHandle.standardError.write(
-                Data("WARNING: E2E aggregate comparison unavailable: \(reason)\n".utf8)
+            context.logOnce("WARNING: E2E aggregate comparison unavailable: \(reason)")
+        }
+        if target == nil {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            try encoder.encode(comparison).write(
+                to: run.appendingPathComponent("diff.json"),
+                options: .atomic
             )
         }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try encoder.encode(comparison).write(
-            to: run.appendingPathComponent("comparison.json"),
-            options: .atomic
-        )
     }
     if !captured.isEmpty || !errors.isEmpty || diff != nil {
         try CoverageIO.write(result, to: destination.appendingPathComponent("summary.json"))
     }
     for error in errors {
-        FileHandle.standardError.write(Data("ERROR: E2E aggregate coverage: \(error)\n".utf8))
+        context.logOnce("ERROR: E2E aggregate coverage: \(error)")
     }
     return !errors.isEmpty
 }

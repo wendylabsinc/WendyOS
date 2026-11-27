@@ -1,28 +1,51 @@
 import Foundation
 
-func e2eAttemptGoDiffCoverageTotal(at attemptURL: URL) -> String {
+enum ReportCoverageValue {
+    case status(String)
+    case measured(Double, context: String = "")
+
+    var detail: String {
+        switch self {
+        case .status(let message): return message
+        case .measured(let percent, let context):
+            return String(format: "%.3f%%", locale: Locale(identifier: "en_US_POSIX"), percent)
+                + context
+        }
+    }
+
+    var visible: String {
+        switch self {
+        case .status(let message): return message.hasPrefix("Incomplete") ? "Partial" : "—"
+        case .measured(let percent, _): return "\(Int(percent.rounded()))%"
+        }
+    }
+}
+
+func e2eAttemptGoDiffCoverageTotal(at attemptURL: URL) -> ReportCoverageValue {
     guard let info = e2eAttemptJSON(at: attemptURL),
         let coverage = info["coverage"] as? [String: Any],
         let diff = coverage["diff"] as? [String: Any]
-    else { return "Not compared" }
+    else { return .status("Not compared") }
     return e2eGoDiffCoverageTotal(
         diff,
         revision: (info["git"] as? [String: Any])?["commit"] as? String
     )
 }
 
-func e2eGoDiffCoverageTotal(_ value: [String: Any]?, revision: String?) -> String {
-    guard let diff = value, let status = diff["status"] as? String else { return "Not compared" }
+func e2eGoDiffCoverageTotal(_ value: [String: Any]?, revision: String?) -> ReportCoverageValue {
+    guard let diff = value, let status = diff["status"] as? String else {
+        return .status("Not compared")
+    }
     let provenance = diff["provenance"] as? [String: Any]
     if status != "unavailable" {
         guard let base = provenance?["baseRevision"] as? String, base.count == 40,
             let current = provenance?["sourceRevision"] as? String, current.count == 40
-        else { return "Unavailable: missing comparison provenance" }
+        else { return .status("Unavailable: missing comparison provenance") }
     }
     if let current = provenance?["sourceRevision"] as? String,
         revision != current
     {
-        return "Unavailable: comparison revision differs from the run"
+        return .status("Unavailable: comparison revision differs from the run")
     }
     let revisionLabel: String
     if let base = provenance?["baseRevision"] as? String,
@@ -34,14 +57,15 @@ func e2eGoDiffCoverageTotal(_ value: [String: Any]?, revision: String?) -> Strin
     }
     switch status {
     case "not-applicable":
-        return "Not applicable (no eligible changed Go statements)" + revisionLabel
+        return .status("Not applicable (no eligible changed Go statements)" + revisionLabel)
     case "unavailable":
-        return "Unavailable: \(diff["reason"] as? String ?? "comparison unavailable")"
+        return .status("Unavailable: \(diff["reason"] as? String ?? "comparison unavailable")")
     case "incomplete":
         let missing = (diff["missingFiles"] as? [String] ?? []).joined(separator: ", ")
-        return
+        return .status(
             "Incomplete\(missing.isEmpty ? "" : ": source absent from measured build: " + missing)"
-            + revisionLabel
+                + revisionLabel
+        )
     case "collected":
         guard let percent = diff["percent"] as? Double,
             let covered = diff["covered"] as? Int, let statements = diff["statements"] as? Int,
@@ -52,10 +76,13 @@ func e2eGoDiffCoverageTotal(_ value: [String: Any]?, revision: String?) -> Strin
             let base = provenance["baseRevision"] as? String,
             let current = provenance["sourceRevision"] as? String,
             revision == current
-        else { return "Unavailable: invalid comparison totals or revision" }
-        return String(format: "%.3f%%", percent)
-            + " (\(covered)/\(statements) statements in \(blocks) blocks; \(base.prefix(9)) → \(current.prefix(9)))"
-    default: return "Unavailable: unknown comparison status"
+        else { return .status("Unavailable: invalid comparison totals or revision") }
+        return .measured(
+            percent,
+            context:
+                " (\(covered)/\(statements) statements in \(blocks) blocks; \(base.prefix(9)) → \(current.prefix(9)))"
+        )
+    default: return .status("Unavailable: unknown comparison status")
     }
 }
 
@@ -91,27 +118,27 @@ func e2eAttemptExitStatus(at attemptURL: URL) -> Int? {
     return object["exitStatus"] as? Int
 }
 
-func e2eAttemptGoCoverageTotal(at attemptURL: URL) -> String {
+func e2eAttemptGoCoverageTotal(at attemptURL: URL) -> ReportCoverageValue {
     guard let coverage = e2eAttemptJSON(at: attemptURL)?["coverage"] as? [String: Any] else {
-        return "Not collected"
+        return .status("Not collected")
     }
     return e2eGoCoverageTotal(coverage)
 }
 
-func e2eGoCoverageTotal(_ coverage: [String: Any]) -> String {
+func e2eGoCoverageTotal(_ coverage: [String: Any]) -> ReportCoverageValue {
     switch coverage["status"] as? String {
     case "not-collected":
-        return "Not collected"
+        return .status("Not collected")
     case "no-data":
-        return "No data"
+        return .status("No data")
     case "collected":
         guard let summary = coverage["summary"] as? [String: Any],
             let percent = summary["percent"] as? Double,
             percent.isFinite, (0...100).contains(percent)
-        else { return "Incomplete" }
-        return String(format: "%.3f%%", locale: Locale(identifier: "en_US_POSIX"), percent)
+        else { return .status("Incomplete") }
+        return .measured(percent)
     default:
-        return "Incomplete"
+        return .status("Incomplete")
     }
 }
 

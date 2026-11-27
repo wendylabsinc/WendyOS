@@ -188,29 +188,30 @@ tar -xzf coverage/go-native.tar.gz
 Reaggregation reads an existing native archive in scratch space, so it requires
 no new test execution or permanent unpack. Supply all raw attempts for a run
 when reaggregating coverage; use a fresh output directory for a subset. The
-embedded run report and AI inputs retain logs, recordings, test results and
-derived metadata without duplicating native archives or profiles. Standard Go
-tools can derive additional profiles or an optional source HTML view; HTML is not produced during collection:
+aggregate stores `coverage/coverage.out` and `coverage/functions.txt` for the run.
+For multiple targets it also merges attempts by target under
+`coverage/targets/<target>/`. For multiple attempts it retains the individual
+profiles in `attempts/<target>/<attempt>/coverage/`. A
+single-attempt run shares its run artifacts with that attempt and target.
 
-```bash
-go tool cover -html=/path/to/run/coverage/coverage.out -o=/path/to/coverage.html
-```
+Report reads saved totals and renders `source.html` for complete run and target
+profiles. Hover or focus a target row for the source report and plain-text
+function list. To generate a missing function list, reaggregate the attempts.
+If a source refresh fails, report preserves the previous page and omits its link.
+Diff appears in comparison mode. Older runs can display saved totals even when
+the matching source checkout is unavailable.
 
-For split checkouts, `aggregate --repo TESTED_REPO` and `review --repo TESTED_REPO`
-validate source against recorded revisions. Run the tool from the trusted
-package (`--package-dir`); the tested repository is read-only investigation data,
-not a source of scripts or package/dependency execution. For split report rendering,
-`report --package-dir TRUSTED_PACKAGE --repo TESTED_REPO` uses
-trusted templates with tested package-relative recording identities. `--tests-dir` can narrow the sources within `TESTED_REPO/swift/WendyE2ETests`.
-Review harness startup
-stays in the trusted tooling repository. The workflow materializes the actual tested SHA (including synthetic merges)
-from validated raw Git blobs before aggregation; no checkout conversion or
-archive filters run, and tested files never enter the trusted package.
-
-`report` only displays the saved aggregation results. It requires no Git access
-to calculate coverage or spec changes. Existing noncoverage runs remain readable;
-not-collected, no-data and incomplete results retain honest labels. Existing
-per-test/command timings and product assertions are unchanged.
+For split checkouts, pass `--repo TESTED_REPO` to aggregate, review, and report.
+Report uses the measured Go source for source views and
+`TESTED_REPO/swift/WendyE2ETests` to join Swift tests to outcomes and recordings.
+`--tests-dir` can narrow that source selection. When attempts record a revision,
+report checks the selected checkout revision and verifies the selected
+`*Tests.swift` files against its Git blobs before joining test cards.
+Changes elsewhere in the checkout do not affect this check. Templates, prompts and executed
+tools come from the trusted `--package-dir`. The review harness starts in the
+trusted tooling repository. The workflow materializes the tested revision,
+including a synthetic merge, from validated raw Git blobs without running
+checkout or archive filters.
 
 ### Optional Git comparison
 
@@ -224,7 +225,7 @@ swift run swift-e2e-testing aggregate --package-dir . --output-dir /path/to/runs
 `BASE...TESTED` resolves an immutable merge base; `BASE..TESTED` uses the explicit
 base. TESTED must match the recorded run revision. Reaggregate with another base
 to change the comparison without rerunning tests. The run saves revisions,
-source/profile identity, metric results and spec entries in `comparison.json`
+source/profile identity, metric results and spec entries in `diff.json`
 and `coverage/summary.json`. No patch, patch archive or whole-patch AI prompt is
 stored. The unreleased earlier patch-file/reference-comparison interface has
 been removed; full reference generation remains independent.
@@ -237,7 +238,9 @@ blocks (including several blocks on one physical line) contribute. No semantic
 Go lexer or AST filter is used. Removed lines, `_test.go`, `testdata`, the
 repository’s `go/internal/testfixture/` test helpers, generated files (header or
 `linguist-generated` attribute), nonproduction paths and test-only
-hooks are excluded. Production `go/` paths such as simulator code remain eligible.
+hooks are excluded. The Closed-device CLI test helper
+(`go/internal/cli/closedtest/closedtest.go`) is also excluded when it is absent
+from the measured binaries. Production `go/` paths such as simulator code remain eligible.
 Changed eligible files absent from the measured build are explicitly incomplete;
 no eligible blocks means **Not applicable**, never 100%. Wrong revisions or an
 unresolvable range produce an unavailable comparison and a stderr warning,
@@ -552,7 +555,7 @@ has the spec/test source that produced them.
 
 AI review files are Markdown. Top-level `review.md` is the compact aggregate
 that can be posted as a CI comment. Attempt, overview, and AI review JSON
-schemas live in `Support/Schemas/`.
+schemas live in `Support/Schemas/`. The coverage schema describes the source manifest, captured test records, and attempt and aggregate summaries. The diff and test schemas describe the saved comparison and observation metadata.
 
 ### Reference directory
 

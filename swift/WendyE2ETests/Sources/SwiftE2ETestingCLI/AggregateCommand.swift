@@ -47,12 +47,16 @@ struct AggregateCommand: ParsableCommand {
             fileURLWithPath: packageDir ?? FileManager.default.currentDirectoryPath,
             isDirectory: true
         ).standardizedFileURL
-        let outputURL = URL(
+        let requestedOutput = URL(
             fileURLWithPath: outputDir ?? firstAttemptURL.deletingLastPathComponent().path,
             isDirectory: true
         ).standardizedFileURL
 
-        try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: requestedOutput,
+            withIntermediateDirectories: true
+        )
+        let outputURL = requestedOutput.resolvingSymlinksInPath()
 
         var planned: [URL: Set<String>] = [:]
         for input in attemptURLs {
@@ -81,7 +85,7 @@ struct AggregateCommand: ParsableCommand {
         var runURLs: Set<URL> = []
         var inputsByRun: [URL: [URL]] = [:]
         var coverageByRun: [URL: [AggregateCoverageAttempt]] = [:]
-        var errorsByRun: [URL: [String]] = [:]
+        var errorsByInput: [URL: [String]] = [:]
         var repositories: [URL: URL] = [:]
         var scratch: [URL] = []
         defer { for url in scratch { try? FileManager.default.removeItem(at: url) } }
@@ -128,11 +132,11 @@ struct AggregateCommand: ParsableCommand {
                         scratch.append(capture.scratch)
                         coverageByRun[runURL, default: []].append(capture)
                     }
-                } catch { errorsByRun[runURL, default: []].append(String(describing: error)) }
+                } catch { errorsByInput[attemptURL, default: []].append(String(describing: error)) }
             }
             if CoverageIO.exists(attemptURL.appendingPathComponent("coverage/source.json")) {
                 do { try GoCoverage.pack(run: attemptURL) } catch {
-                    errorsByRun[runURL, default: []].append(String(describing: error))
+                    errorsByInput[attemptURL, default: []].append(String(describing: error))
                 }
             }
 
@@ -147,20 +151,63 @@ struct AggregateCommand: ParsableCommand {
         }
 
         for root in runURLs.sorted(by: { $0.path < $1.path }) {
+            let inputs = inputsByRun[root] ?? []
+            let captures = coverageByRun[root] ?? []
+            var coverage = RunCoverageAggregation(run: root, repo: repositories[root], diff: diff)
             if try aggregateGoCoverage(
-                inputs: inputsByRun[root] ?? [],
-                captured: coverageByRun[root] ?? [],
-                errors: errorsByRun[root] ?? [],
-                run: root,
-                repo: repositories[root],
-                diff: diff
+                inputs: inputs,
+                captured: captures,
+                errors: inputs.flatMap { errorsByInput[$0] ?? [] },
+                context: &coverage
             ) {
                 failed = true
+            }
+            let groups = try Dictionary(grouping: inputs) {
+                try AttemptID($0.lastPathComponent).targetName
+            }
+            if groups.count > 1 {
+                for (target, members) in groups {
+                    let memberURLs = Set(members)
+                    if try aggregateGoCoverage(
+                        inputs: members,
+                        captured: captures.filter { memberURLs.contains($0.input) },
+                        errors: members.flatMap { errorsByInput[$0] ?? [] },
+                        context: &coverage,
+                        target: target
+                    ) {
+                        failed = true
+                    }
+                }
+            }
+            if inputs.count > 1 {
+                for capture in captures {
+                    let id = try AttemptID(capture.input.lastPathComponent)
+                    let profile = capture.scratch.appendingPathComponent("coverage/coverage.out")
+                    if CoverageIO.exists(profile) {
+                        let attempt = e2eAttemptArtifactsURL(
+                            in: root,
+                            targetName: id.targetName,
+                            attempt: id.attempt
+                        )
+                        try copyItem(
+                            at: profile,
+                            to: attempt.appendingPathComponent("coverage/coverage.out")
+                        )
+                    }
+                }
             }
             for input in inputsByRun[root] ?? [] {
                 if CoverageIO.exists(input.appendingPathComponent("coverage/source.json")) {
                     try CoverageIO.remove(input.appendingPathComponent("coverage/coverage.out"))
                 }
+            }
+            if !captures.isEmpty {
+                _ = try GoCoverageReports(
+                    run: root,
+                    package: packageURL,
+                    repo: repositories[root],
+                    stage: .aggregate
+                )
             }
             _ = try writeRunOverview(in: root)
             try writeRunSourceIndex(in: root)
@@ -472,7 +519,8 @@ private func copyAttemptLevelArtifacts(from attemptURL: URL, to destinationURL: 
                 to: destinationURL.appendingPathComponent("coverage"),
                 excluding: [
                     "bin", "bootstrap", "go-native.tar.gz", "native.sha256", "coverage.out",
-                    "index.html", "diff.patch", "diff.patch.gz", "diff.json",
+                    "index.html", "source.html", "functions.txt", "diff.patch", "diff.patch.gz",
+                    "diff.json",
                 ]
             )
             continue

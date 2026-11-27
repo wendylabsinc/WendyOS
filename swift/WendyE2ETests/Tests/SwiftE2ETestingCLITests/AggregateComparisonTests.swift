@@ -139,7 +139,10 @@ struct `aggregate Git comparison` {
     {
         let f = try GoCoverageFixture(build: false)
         let base = try f.git(["rev-parse", "HEAD"])
-        for path in ["go/simulator/new.go", "go/scripts/new.go"] {
+        let unmeasured = [
+            "go/internal/cli/closedtest/other.go", "go/scripts/new.go", "go/simulator/new.go",
+        ]
+        for path in unmeasured {
             try f.write(path, "package production\nfunc New() int { return 1 }\n")
         }
         let (git, source, profile) = try measure(f, base: base)
@@ -147,7 +150,7 @@ struct `aggregate Git comparison` {
         #expect(missing["status"] as? String == "incomplete")
         #expect(missing["percent"] is NSNull)
         #expect(
-            missing["missingFiles"] as? [String] == ["go/scripts/new.go", "go/simulator/new.go"]
+            missing["missingFiles"] as? [String] == unmeasured
         )
         let excluded = try GoCoverageFixture(build: false)
         let original = try excluded.git(["rev-parse", "HEAD"])
@@ -159,6 +162,8 @@ struct `aggregate Git comparison` {
             "go/internal/sample/testdata/helper.go": "package data\nfunc New() int {return 9}\n",
             "go/internal/testfixture/helper.go":
                 "package fixture\nfunc Helper() int { return 9 }\n",
+            "go/internal/cli/closedtest/closedtest.go":
+                "package closedtest\nfunc Helper() int { return 9 }\n",
             "Examples/main.go": "package main\nfunc main() {}\n",
         ] { try excluded.write(path, text) }
         try excluded.write(
@@ -170,6 +175,25 @@ struct `aggregate Git comparison` {
             try comp.goCoverage(source: files, profile: output, complete: true)["status"] as? String
                 == "not-applicable"
         )
+    }
+
+    @Test
+    func `closed device helper counts if a measured binary imports it`() throws {
+        let f = try GoCoverageFixture(build: false)
+        let helper = "go/internal/cli/closedtest/closedtest.go"
+        try f.write(helper, "package closedtest\nfunc Helper() int { return 1 }\n")
+        try f.write(
+            "go/internal/sample/branch.go",
+            "package sample\nimport \"example.test/coverage/go/internal/cli/closedtest\"\n"
+                + "func Branch(value string) int { return closedtest.Helper() }\n"
+        )
+        let base = try f.commit()
+        try f.write(helper, "package closedtest\nfunc Helper() int { return 2 }\n")
+        let (comparison, source, profile) = try measure(f, base: base)
+        let diff = try comparison.goCoverage(source: source, profile: profile, complete: true)
+        #expect(diff["status"] as? String == "collected")
+        #expect(diff["covered"] as? Int == 1)
+        #expect(diff["statements"] as? Int == 1)
     }
 
     @Test

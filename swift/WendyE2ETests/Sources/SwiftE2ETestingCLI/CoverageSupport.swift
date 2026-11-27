@@ -219,8 +219,18 @@ enum CoverageIO {
         }
     }
     static func relative(_ url: URL, to root: URL) throws -> String {
-        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
-        let base = root.resolvingSymlinksInPath().standardizedFileURL.path
+        // Foundation may leave the entire path unresolved when the leaf is missing.
+        // Resolve its deepest existing ancestor before appending any new components.
+        func canonical(_ url: URL) throws -> URL {
+            if exists(url) { return url.resolvingSymlinksInPath().standardizedFileURL }
+            let parent = url.deletingLastPathComponent()
+            guard parent.path != url.path,
+                (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) == nil
+            else { throw ValidationError("Unresolvable evidence path: " + url.path) }
+            return try canonical(parent).appendingPathComponent(url.lastPathComponent)
+        }
+        let path = try canonical(url).path
+        let base = try canonical(root).path
         guard path.hasPrefix(base + "/") else {
             throw ValidationError("Evidence path outside attempt: \(path)")
         }

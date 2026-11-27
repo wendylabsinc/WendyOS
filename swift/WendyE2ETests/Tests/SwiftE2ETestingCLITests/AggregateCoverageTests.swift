@@ -113,21 +113,24 @@ struct `aggregate saved coverage` {
         var report = try ReportCommand.parse([
             "--package-dir", package.path, "--template", template.path, "--run-dir", run.path,
         ])
+        #expect(CoverageIO.exists(run.appendingPathComponent("coverage/functions.txt")))
+        #expect(!CoverageIO.exists(run.appendingPathComponent("coverage/source.html")))
         try report.run()
+        #expect(CoverageIO.exists(run.appendingPathComponent("coverage/source.html")))
         var html = try String(contentsOf: run.appendingPathComponent("index.html"), encoding: .utf8)
         #expect(!html.contains("data-spec-change="))
         #expect(!html.contains("data-comparison-removed"))
         #expect(!html.contains("Removed specs"))
         // Saved Removed entries never enter current test counts/outcomes.
         #expect(html.components(separatedBy: "<summary class=\"test-summary\">").count - 1 == 2)
-        let savedComparison = try Data(contentsOf: run.appendingPathComponent("comparison.json"))
+        let savedComparison = try Data(contentsOf: run.appendingPathComponent("diff.json"))
         // Separate trusted templates/tooling from the tested source identity root.
         var splitReport = try ReportCommand.parse([
             "--package-dir", f.product.appendingPathComponent("swift/WendyE2ETests").path,
             "--tests-dir", package.appendingPathComponent("Tests/WendyE2ETests").path,
             "--run-dir", run.path,
         ])
-        // Rendering has no spec identity or source-hash validation gate.
+        // Verify the selected declarations independently of the saved spec comparison.
         try splitReport.run()
         splitReport.repo = f.repo.path
         try splitReport.run()
@@ -137,14 +140,40 @@ struct `aggregate saved coverage` {
         )
         #expect(!splitHTML.contains("data-spec-change="))
         #expect(!splitHTML.contains("data-comparison-removed"))
-        try f.write(file, after + "\n// source hash for deferred spec annotations is irrelevant\n")
-        try splitReport.run()
+        try f.write(
+            file,
+            after.replacingOccurrences(of: "func `added`", with: "func `never executed`")
+        )
+        #expect(throws: ValidationError.self) { try splitReport.run() }
         #expect(
-            try Data(contentsOf: run.appendingPathComponent("comparison.json")) == savedComparison
+            try Data(contentsOf: run.appendingPathComponent("diff.json")) == savedComparison
         )
         try f.write(file, after)
-        // A renderer has no Git access; it displays saved coverage results.
-        try f.write("fake-bin/git", "#!/bin/sh\nexit 99\n")
+        let addedFile = "swift/WendyE2ETests/Tests/WendyE2ETests/UnrecordedTests.swift"
+        try f.write(addedFile, after)
+        #expect(throws: ValidationError.self) { try splitReport.run() }
+        try CoverageIO.remove(f.repo.appendingPathComponent(addedFile))
+        try CoverageIO.remove(f.repo.appendingPathComponent(file))
+        #expect(throws: ValidationError.self) { try splitReport.run() }
+        try f.write(file, after)
+        splitReport.repo = f.product.path
+        #expect(throws: ValidationError.self) { try splitReport.run() }
+        #expect(
+            try String(contentsOf: run.appendingPathComponent("index.html"), encoding: .utf8)
+                == splitHTML
+        )
+        // Permit source verification but ensure report never recomputes the diff.
+        try f.write(
+            "fake-bin/git",
+            """
+            #!/bin/sh
+            case "$1 $2" in
+              'rev-parse HEAD'|'--literal-pathspecs ls-tree'|'cat-file --batch') ;;
+              *) exit 99 ;;
+            esac
+            command -p git "$@"
+            """
+        )
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755],
             ofItemAtPath: f.repo.appendingPathComponent("fake-bin/git").path
@@ -207,8 +236,117 @@ struct `aggregate saved coverage` {
         // Saved wrong-head Go comparisons still fail provenance validation.
         var bad = comparison
         bad.sourceRevision = base
-        try JSONEncoder().encode(bad).write(to: run.appendingPathComponent("comparison.json"))
+        try JSONEncoder().encode(bad).write(to: run.appendingPathComponent("diff.json"))
         #expect(throws: (any Error).self) { try E2ERunComparison.load(in: run) }
+    }
+
+    @Test
+    func `missing coverage outputs resolve within their existing parent`() throws {
+        let scratch = try CoverageIO.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let root = scratch.appendingPathComponent("coverage")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let alias = scratch.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: root)
+        let output = try CoverageIO.evidence("targets/local", in: alias)
+        #expect(try CoverageIO.relative(output, to: root) == "targets/local")
+
+        let targets = root.appendingPathComponent("targets")
+        for destination in [scratch, scratch.appendingPathComponent("missing")] {
+            try FileManager.default.createSymbolicLink(at: targets, withDestinationURL: destination)
+            #expect(throws: (any Error).self) {
+                try CoverageIO.evidence("targets/local", in: alias)
+            }
+            try FileManager.default.removeItem(at: targets)
+        }
+    }
+
+    @Test
+    func `target coverage unions retries and links the matching target profile`() throws {
+        let f = try GoCoverageFixture(build: false)
+        try f.write(
+            "go/internal/sample/branch.go",
+            GoCoverageFixture.branch.replacingOccurrences(of: "return 2", with: "return 3")
+        )
+        try f.commit()
+        try f.buildBinaries()
+        try f.attempt()
+        let location = "observations/sample/branch"
+        var inputs: [String] = []
+        for (id, argument) in [("a.0001", "left"), ("a.0002", "right"), ("b.0001", "left")] {
+            let native = try f.native(location + "/coverage/go")
+            try f.invoke(native, argument)
+            try f.records([f.record(argument, directory: location)])
+            let input = f.repo.appendingPathComponent("run-input/swift.123." + id)
+            try FileManager.default.createDirectory(
+                at: input.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.copyItem(at: f.run, to: input)
+            inputs.append(input.path)
+            try CoverageIO.remove(native)
+        }
+        let physical = f.repo.appendingPathComponent("run-output")
+        try FileManager.default.createDirectory(at: physical, withIntermediateDirectories: true)
+        let output = f.repo.appendingPathComponent("output-link")
+        try FileManager.default.createSymbolicLink(at: output, withDestinationURL: physical)
+        var aggregate = try AggregateCommand.parse(
+            ["--repo", f.repo.path, "--diff", "HEAD^..HEAD", "--output-dir", output.path] + inputs
+        )
+        try aggregate.run()
+        let run = output.appendingPathComponent("swift.123")
+        func measured(_ directory: String) throws -> Int {
+            let summary = try CoverageIO.read(
+                run.appendingPathComponent(directory + "/summary.json")
+            )
+            return try #require((summary["summary"] as? [String: Any])?["covered"] as? Int)
+        }
+        let a = try measured("coverage/targets/a")
+        let b = try measured("coverage/targets/b")
+        #expect(a > b)
+        #expect(try measured("coverage") == a)
+        let scopes = ["coverage", "coverage/targets/a", "coverage/targets/b"]
+        for scope in scopes {
+            let summary = try CoverageIO.read(run.appendingPathComponent(scope + "/summary.json"))
+            let diff = try #require(summary["diff"] as? [String: Any])
+            #expect(diff["statements"] as? Int == 1)
+            #expect(diff["covered"] as? Int == (scope == "coverage/targets/b" ? 0 : 1))
+            #expect(CoverageIO.exists(run.appendingPathComponent(scope + "/functions.txt")))
+            #expect(!CoverageIO.exists(run.appendingPathComponent(scope + "/source.html")))
+        }
+        let exports = try GoCoverageReports(run: run, package: f.product, repo: f.repo)
+        for target in ["a", "b"] {
+            let links = exports.links(directory: try exports.directory(for: target), icons: true)
+            #expect(links.contains("coverage/targets/" + target + "/source.html"))
+            #expect(links.contains("coverage/targets/" + target + "/functions.txt"))
+        }
+        for scope in scopes {
+            #expect(CoverageIO.exists(run.appendingPathComponent(scope + "/source.html")))
+        }
+        for attempt in ["a/0001", "a/0002", "b/0001"] {
+            let directory = run.appendingPathComponent("attempts/" + attempt + "/coverage")
+            for name in ["source.json", "summary.json", "coverage.out"] {
+                #expect(CoverageIO.exists(directory.appendingPathComponent(name)))
+            }
+            for name in ["source.html", "functions.txt"] {
+                #expect(!CoverageIO.exists(directory.appendingPathComponent(name)))
+            }
+        }
+        let sourcePage = run.appendingPathComponent("coverage/source.html")
+        let archivedPage = try Data(contentsOf: sourcePage)
+        let missingList = run.appendingPathComponent("coverage/targets/a/functions.txt")
+        try CoverageIO.remove(missingList)
+        let legacy = try GoCoverageReports(run: run, package: f.product, repo: f.repo)
+        let legacyLinks = legacy.links(directory: try legacy.directory(for: "a"), icons: true)
+        #expect(legacyLinks.contains("coverage/targets/a/source.html"))
+        #expect(!legacyLinks.contains("coverage/targets/a/functions.txt"))
+        #expect(!CoverageIO.exists(missingList))
+        try f.write("go/internal/sample/branch.go", GoCoverageFixture.branch + "// edited\n")
+        let mismatch = try GoCoverageReports(run: run, package: f.product, repo: f.repo)
+        let offlineLinks = mismatch.links(directory: mismatch.root, icons: false)
+        #expect(!offlineLinks.contains("source.html"))
+        #expect(offlineLinks.contains("functions.txt"))
+        #expect(try Data(contentsOf: sourcePage) == archivedPage)
     }
 
     @Test
@@ -239,14 +377,13 @@ struct `aggregate saved coverage` {
         defer { try? FileManager.default.removeItem(at: second.scratch) }
         let run = f.repo.appendingPathComponent("run-combined")
         try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+        var aggregation = RunCoverageAggregation(run: run, repo: f.repo, diff: nil)
         #expect(
             try aggregateGoCoverage(
                 inputs: [f.run, other],
                 captured: [first, second],
                 errors: [],
-                run: run,
-                repo: f.repo,
-                diff: nil
+                context: &aggregation
             )
         )
         let bad = try CoverageIO.read(run.appendingPathComponent("coverage/summary.json"))
@@ -319,14 +456,13 @@ struct `aggregate coverage boundaries` {
         }
         let run = f.repo.appendingPathComponent("run-union")
         try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+        var aggregation = RunCoverageAggregation(run: run, repo: f.repo, diff: nil)
         #expect(
             try !aggregateGoCoverage(
                 inputs: captures.map(\.input),
                 captured: captures,
                 errors: [],
-                run: run,
-                repo: f.repo,
-                diff: nil
+                context: &aggregation
             )
         )
         let combined =

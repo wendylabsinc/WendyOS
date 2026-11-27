@@ -161,14 +161,13 @@ struct `reviewed coverage corrections` {
             )
             let run = f.repo.appendingPathComponent("run-" + name)
             try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+            var aggregation = RunCoverageAggregation(run: run, repo: f.repo, diff: nil)
             #expect(
                 try !aggregateGoCoverage(
                     inputs: [missing, f.run],
                     captured: [capture],
                     errors: [],
-                    run: run,
-                    repo: f.repo,
-                    diff: nil
+                    context: &aggregation
                 )
             )
             let result = try CoverageIO.read(run.appendingPathComponent("coverage/summary.json"))
@@ -289,18 +288,17 @@ struct `reviewed coverage corrections` {
         }
         let run = f.repo.appendingPathComponent("run-comparison")
         try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+        var aggregation = RunCoverageAggregation(run: run, repo: f.repo, diff: base + "..." + head)
         #expect(
             try !aggregateGoCoverage(
                 inputs: [f.run],
                 captured: [capture],
                 errors: [],
-                run: run,
-                repo: f.repo,
-                diff: base + "..." + head
+                context: &aggregation
             )
         )
         let summary = try CoverageIO.read(run.appendingPathComponent("coverage/summary.json"))
-        let comparison = try CoverageIO.read(run.appendingPathComponent("comparison.json"))
+        let comparison = try CoverageIO.read(run.appendingPathComponent("diff.json"))
         let diff = try #require(summary["diff"] as? [String: Any])
         #expect(comparison["status"] as? String == "compared")
         if brokenSpecs {

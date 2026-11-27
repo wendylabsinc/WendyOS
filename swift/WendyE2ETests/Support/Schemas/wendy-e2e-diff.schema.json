@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wendy.build/schemas/wendy-e2e-diff.schema.json",
+  "title": "E2E saved Git comparison",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "range", "specs"],
+  "properties": {
+    "status": {"enum": ["compared", "unavailable"]},
+    "range": {"type": "string"},
+    "reason": {"type": "string"},
+    "baseRevision": {"type": "string", "pattern": "^[a-fA-F0-9]{40}$"},
+    "sourceRevision": {"type": "string", "pattern": "^[a-fA-F0-9]{40}$"},
+    "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+    "profileSHA256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+    "specsStatus": {"enum": ["compared", "unavailable"]},
+    "specsReason": {"type": "string"},
+    "specs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "line", "suite", "name", "change", "sourceSHA256"],
+        "properties": {
+          "path": {"type": "string"},
+          "line": {"type": "integer", "minimum": 1},
+          "suite": {"type": "string"},
+          "name": {"type": "string"},
+          "change": {"enum": ["Added", "Changed", "Removed"]},
+          "sourceSHA256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"}
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "status": {"const": "compared"}
+    }
+  },
+  "then": {"required": ["baseRevision", "sourceRevision"]}
+}

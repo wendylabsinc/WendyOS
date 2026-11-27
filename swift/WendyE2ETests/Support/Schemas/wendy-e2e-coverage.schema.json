@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wendy.build/schemas/wendy-e2e-coverage.schema.json",
+  "title": "Go coverage source, test records, attempt summary or aggregate summary",
+  "oneOf": [
+    {"$ref": "#/$defs/source"},
+    {"$ref": "#/$defs/tests"},
+    {"$ref": "#/$defs/attemptSummary"},
+    {"$ref": "#/$defs/runSummary"}
+  ],
+  "$defs": {
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statements", "covered"],
+      "properties": {
+        "statements": {"type": "integer", "minimum": 0},
+        "covered": {"type": "integer", "minimum": 0}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statements", "covered", "percent", "packages"],
+      "properties": {
+        "statements": {"type": "integer", "minimum": 0},
+        "covered": {"type": "integer", "minimum": 0},
+        "percent": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+        "packages": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/counts"}
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test", "sourceID", "status"],
+      "properties": {
+        "test": {"type": "string"},
+        "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+        "status": {"enum": ["collected", "incomplete", "no-data", "skipped"]},
+        "agentPID": {"type": "integer", "minimum": 0},
+        "agentExported": {"type": "boolean"},
+        "testExitStatus": {"type": "integer"},
+        "directory": {"type": "string"},
+        "cliInvocations": {"type": "integer", "minimum": 0},
+        "cli": {"type": "string"},
+        "error": {"type": "string"},
+        "nativeValidated": {"type": "boolean"},
+        "agent": {"type": "string"},
+        "summary": {"$ref": "#/$defs/summary"}
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/record"}
+    },
+    "diffCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "percent"],
+      "properties": {
+        "status": {"enum": ["collected", "unavailable", "incomplete", "not-applicable"]},
+        "reason": {"type": "string"},
+        "percent": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+        "blocks": {"type": "integer", "minimum": 0},
+        "statements": {"type": "integer", "minimum": 0},
+        "covered": {"type": "integer", "minimum": 0},
+        "missingFiles": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "granularity": {"type": "string"},
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseRevision", "sourceRevision", "sourceID", "profileSHA256"],
+          "properties": {
+            "baseRevision": {"type": "string", "pattern": "^[a-fA-F0-9]{40}$"},
+            "sourceRevision": {"type": "string", "pattern": "^[a-fA-F0-9]{40}$"},
+            "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+            "profileSHA256": {"anyOf": [{"type": "string", "pattern": "^[a-fA-F0-9]{64}$"}, {"type": "null"}]}
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {"const": "collected"}
+        }
+      },
+      "then": {
+        "required": ["covered", "statements", "blocks", "provenance"],
+        "properties": {
+          "percent": {"type": "number"},
+          "statements": {"minimum": 1}
+        }
+      }
+    },
+    "attemptCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "sourceID", "agent", "errors"],
+      "properties": {
+        "status": {"enum": ["captured", "collected", "incomplete", "not-collected", "no-data"]},
+        "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+        "agent": {"type": "string"},
+        "errors": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "summary": {"$ref": "#/$defs/summary"},
+        "diff": {"$ref": "#/$defs/diffCoverage"}
+      },
+      "if": {
+        "properties": {
+          "status": {"const": "collected"}
+        }
+      },
+      "then": {
+        "required": ["summary"],
+        "properties": {
+          "summary": {
+            "properties": {
+              "percent": {"type": "number"},
+              "statements": {"minimum": 1}
+            }
+          }
+        }
+      }
+    },
+    "attemptSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "sourceID", "agent", "errors", "tests"],
+      "properties": {
+        "status": {"enum": ["captured", "collected", "incomplete", "not-collected", "no-data"]},
+        "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+        "agent": {"type": "string"},
+        "errors": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "summary": {"$ref": "#/$defs/summary"},
+        "diff": {"$ref": "#/$defs/diffCoverage"},
+        "tests": {"$ref": "#/$defs/tests"}
+      },
+      "if": {
+        "properties": {
+          "status": {"const": "collected"}
+        }
+      },
+      "then": {
+        "required": ["summary"],
+        "properties": {
+          "summary": {
+            "properties": {
+              "percent": {"type": "number"},
+              "statements": {"minimum": 1}
+            }
+          }
+        }
+      }
+    },
+    "runSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "attempts", "errors"],
+      "properties": {
+        "status": {"enum": ["captured", "collected", "incomplete", "not-collected", "no-data"]},
+        "attempts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["attempt", "status"],
+            "oneOf": [
+              {"required": ["sourceID", "revision"]},
+              {
+                "properties": {
+                  "status": {"enum": ["not-collected", "incomplete"]},
+                  "sourceID": false,
+                  "revision": false
+                }
+              }
+            ],
+            "properties": {
+              "attempt": {"type": "string"},
+              "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+              "revision": {"type": "string", "pattern": "^[a-fA-F0-9]{40}$"},
+              "status": {"enum": ["captured", "collected", "incomplete", "not-collected", "no-data"]}
+            }
+          }
+        },
+        "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+        "sourceRevision": {"type": "string", "pattern": "^[a-fA-F0-9]{40}$"},
+        "errors": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "scope": {"type": "string"},
+        "summary": {"$ref": "#/$defs/summary"},
+        "diff": {"$ref": "#/$defs/diffCoverage"}
+      },
+      "if": {
+        "properties": {
+          "status": {"const": "collected"}
+        }
+      },
+      "then": {
+        "required": ["summary"],
+        "properties": {
+          "summary": {
+            "properties": {
+              "percent": {"type": "number"},
+              "statements": {"minimum": 1}
+            }
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceID", "revision", "counterMode", "goVersion", "agent", "scope", "nonGo", "files", "packages"],
+      "properties": {
+        "sourceID": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+        "revision": {"type": "string", "pattern": "^[a-fA-F0-9]{40}$"},
+        "counterMode": {"const": "atomic"},
+        "capture": {
+          "type": "object",
+          "oneOf": [
+            {
+              "required": ["status"],
+              "additionalProperties": false,
+              "properties": {"status": {"const": "running"}}
+            },
+            {
+              "required": ["status", "cases"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "completed"},
+                "cases": {"type": "integer", "minimum": 0}
+              }
+            },
+            {
+              "required": ["status", "error", "unexecuted"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "incomplete"},
+                "error": {"type": "string"},
+                "unexecuted": {"type": "string"}
+              }
+            }
+          ]
+        },
+        "goVersion": {"type": "string"},
+        "agent": {"type": "string"},
+        "scope": {"type": "string"},
+        "nonGo": {"type": "string"},
+        "files": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "generated", "testHarness"],
+            "properties": {
+              "path": {"type": "string"},
+              "generated": {"type": "boolean"},
+              "testHarness": {"type": "boolean"}
+            }
+          }
+        },
+        "packages": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        },
+        "binaries": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["buildInfo", "sha256"],
+            "properties": {
+              "buildInfo": {"type": "string"},
+              "buildInfoError": {"type": "string"},
+              "sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

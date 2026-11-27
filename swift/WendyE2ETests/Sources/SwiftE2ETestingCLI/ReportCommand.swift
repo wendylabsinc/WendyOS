@@ -22,7 +22,8 @@ struct ReportCommand: ParsableCommand {
 
     @Option(
         name: .long,
-        help: "Tested repository for source identities; templates remain under --package-dir."
+        help:
+            "Tested repository for test identities and Go coverage views. Templates use --package-dir."
     )
     var repo: String?
 
@@ -42,25 +43,34 @@ struct ReportCommand: ParsableCommand {
             ?? packageURL
         let testsURL = URL(
             fileURLWithPath: testsDir ?? defaultTestsDir(packageURL: sourcePackageURL).path
-        )
+        ).standardizedFileURL
         let templateURL = URL(
             fileURLWithPath: template
                 ?? packageURL.appendingPathComponent("Support/e2e-report.template.html")
                 .path
         )
-        let runURL = URL(fileURLWithPath: runDir, isDirectory: true)
+        let runURL = URL(fileURLWithPath: runDir, isDirectory: true).resolvingSymlinksInPath()
         guard try isRunDirectory(runURL) else {
             throw ValidationError("Report input must be a Swift E2E run directory: \(runURL.path)")
         }
 
+        let repoURL = repo.map { URL(fileURLWithPath: $0).standardizedFileURL }
+        let selectionRoot =
+            testsURL.hasDirectoryPath ? testsURL : testsURL.deletingLastPathComponent()
+        let revision = try recordedReportSourceRevision(
+            in: runURL,
+            directories: [repoURL, testsDir.map { _ in selectionRoot }].compactMap { $0 }
+        )
+
+        let sources = try reportTestSources(in: testsURL, repo: repoURL, revision: revision)
         let outputURL = runURL.appendingPathComponent("index.html")
         let records = try loadRecords(in: runURL)
         let aiReviews = try loadRunAIReviews(in: runURL)
         let testResults = try loadRunTestResults(in: runURL)
         // Validate saved Go comparison provenance; spec annotations are not rendered.
-        _ = try E2ERunComparison.load(in: runURL)
-        let files = try parseTests(
-            in: testsURL,
+        let hasComparison = try E2ERunComparison.load(in: runURL) != nil
+        let files = parseTests(
+            sources: sources,
             packageURL: sourcePackageURL,
             runURL: runURL,
             records: records,
@@ -69,9 +79,12 @@ struct ReportCommand: ParsableCommand {
         )
         try renderReport(
             templateURL: templateURL,
+            packageURL: packageURL,
+            repo: repoURL,
             runURL: runURL,
             files: files,
             aiReviews: aiReviews,
+            hasComparison: hasComparison,
             reviewOutcome: ProcessInfo.processInfo.environment["WENDY_E2E_REVIEW_OUTCOME"],
             outputURL: outputURL
         )
@@ -919,18 +932,15 @@ private func stripBackticks(_ value: String) -> String {
 }
 
 private func parseTests(
-    in testsURL: URL,
+    sources: [(URL, String)],
     packageURL: URL,
     runURL: URL,
     records: [E2ETestIdentityKey: [CommandRun]],
     aiReviews: RunAIReviews,
     testResults: [E2ETestIdentityKey: ReportRunTestResult]
-) throws -> [ReportTestFile] {
-    let sourceURLs = try swiftTestFiles(in: testsURL)
+) -> [ReportTestFile] {
     var files: [ReportTestFile] = []
-
-    for sourceURL in sourceURLs {
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+    for (sourceURL, source) in sources {
         let lines = source.components(separatedBy: .newlines)
         var suite = sourceURL.deletingPathExtension().lastPathComponent
         var pendingTest: (line: Int, disabled: String?)?
@@ -1026,6 +1036,64 @@ private func parseTests(
     }
 
     return files
+}
+
+/// Compare exactly the files used for cards to raw blobs, including the set of selected paths.
+private func reportTestSources(
+    in selected: URL,
+    repo: URL?,
+    revision: String?
+) throws -> [(URL, String)] {
+    let files = try swiftTestFiles(in: selected)
+    guard let revision else {
+        return try files.map { ($0, try String(contentsOf: $0, encoding: .utf8)) }
+    }
+    let directory: URL
+    let selection: String
+    // Anchor the Git selection at the supplied checkout even if a directory below it was replaced.
+    let components = selected.standardizedFileURL.pathComponents
+    if let repo, components.starts(with: repo.pathComponents) {
+        directory = repo
+        let relative = components.dropFirst(repo.pathComponents.count).joined(separator: "/")
+        selection = relative.isEmpty ? "." : relative
+    } else {
+        directory = selected.hasDirectoryPath ? selected : selected.deletingLastPathComponent()
+        selection = selected.hasDirectoryPath ? "." : selected.lastPathComponent
+    }
+    let tree = try CoverageIO.command(
+        ["git", "--literal-pathspecs", "ls-tree", "-rz", revision, "--", selection],
+        cwd: directory
+    )
+    var entries: [(url: URL, hash: String)] = []
+    for row in tree.split(separator: "\0") {
+        let fields = row.split(separator: "\t", maxSplits: 1)
+        guard fields.count == 2 else { throw ValidationError("Invalid tested Git tree entry") }
+        guard fields[1].hasSuffix("Tests.swift") else { continue }
+        let object = fields[0].split(separator: " ")
+        guard object.count == 3, ["100644", "100755"].contains(object[0]), object[1] == "blob"
+        else {
+            throw ValidationError("Expected a regular recorded test source: " + fields[1])
+        }
+        entries.append((directory.appendingPathComponent(String(fields[1])), String(object[2])))
+    }
+    guard Set(entries.map(\.url)) == Set(files) else {
+        throw ValidationError(
+            "Selected test files differ from the recorded tested revision " + revision
+        )
+    }
+    entries.sort { $0.url.path < $1.url.path }
+    var result: [(URL, String)] = []
+    try CoverageIO.readSourceBlobs(entries.map(\.hash), in: directory) { index, blob in
+        let url = entries[index].url
+        let working = try Data(contentsOf: url)
+        guard let source = String(data: blob, encoding: .utf8), working == blob else {
+            throw ValidationError(
+                "Test source differs from the recorded tested revision: " + url.path
+            )
+        }
+        result.append((url, source))
+    }
+    return result
 }
 
 private func swiftTestFiles(in testsURL: URL) throws -> [URL] {
@@ -1147,11 +1215,46 @@ func runAttemptArtifactURLsByTarget(in runURL: URL) throws -> [String: [URL]] {
     return urlsByTarget
 }
 
+private func recordedReportSourceRevision(in runURL: URL, directories: [URL]) throws -> String? {
+    guard !directories.isEmpty else { return nil }
+    let attempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
+    let revisions = try Set(
+        attempts.compactMap { attempt -> String? in
+            let manifest = attempt.appendingPathComponent("attempt.json")
+            guard CoverageIO.exists(manifest) else { return nil }
+            return CoverageIO.recordedRevision(try CoverageIO.read(manifest))
+        }
+    )
+    // Older runs may have no recorded revision to compare.
+    guard !revisions.isEmpty else { return nil }
+    guard revisions.count == 1, let revision = revisions.first else {
+        throw ValidationError("Explicit report sources require one recorded tested revision")
+    }
+    for directory in directories {
+        let result = try CoverageIO.execute(
+            ["git", "rev-parse", "HEAD"],
+            cwd: directory
+        )
+        guard result.status == 0,
+            result.text.trimmingCharacters(in: .whitespacesAndNewlines) == revision
+        else {
+            throw ValidationError(
+                "Report source at " + directory.path + " must match the recorded tested revision "
+                    + revision
+            )
+        }
+    }
+    return revision
+}
+
 private func renderReport(
     templateURL: URL,
+    packageURL: URL,
+    repo: URL?,
     runURL: URL,
     files: [ReportTestFile],
     aiReviews: RunAIReviews,
+    hasComparison: Bool,
     reviewOutcome: String?,
     outputURL: URL
 ) throws {
@@ -1185,13 +1288,13 @@ private func renderReport(
     try renderReviewAggregateHTMLIfPresent(runURL: runURL)
 
     let reviewHTML = renderRunAIReview(aiReviews.root)
-    let targetOverview = try renderTargetOverview(buildTargetOverview(runURL: runURL, files: files))
+    let targetRows = try buildTargetOverview(runURL: runURL, files: files)
     let coverageAttempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
     let savedCoverageURL = runURL.appendingPathComponent("coverage/summary.json")
     let savedCoverage =
         try CoverageIO.exists(savedCoverageURL) ? CoverageIO.read(savedCoverageURL) : nil
-    let goCoverageTotal: String
-    let goDiffCoverageTotal: String
+    let goCoverageTotal: ReportCoverageValue
+    let goDiffCoverageTotal: ReportCoverageValue
     if let savedCoverage {
         goCoverageTotal = e2eGoCoverageTotal(savedCoverage)
         goDiffCoverageTotal = e2eGoDiffCoverageTotal(
@@ -1201,13 +1304,36 @@ private func renderReport(
     } else {
         goCoverageTotal =
             coverageAttempts.count > 1
-            ? "Multiple attempts"
-            : coverageAttempts.first.map { e2eAttemptGoCoverageTotal(at: $0) } ?? "Not collected"
+            ? .status("Multiple attempts")
+            : coverageAttempts.first.map { e2eAttemptGoCoverageTotal(at: $0) }
+                ?? .status("Not collected")
         goDiffCoverageTotal =
             coverageAttempts.count > 1
-            ? "Multiple attempts"
-            : coverageAttempts.first.map { e2eAttemptGoDiffCoverageTotal(at: $0) } ?? "Not compared"
+            ? .status("Multiple attempts")
+            : coverageAttempts.first.map { e2eAttemptGoDiffCoverageTotal(at: $0) }
+                ?? .status("Not compared")
     }
+    let coverage = try GoCoverageReports(run: runURL, package: packageURL, repo: repo)
+    let comparing =
+        hasComparison || savedCoverage?["diff"] != nil
+        || (coverageAttempts.count == 1 && goDiffCoverageTotal.detail != "Not compared")
+    let runValues = coverageValues(
+        total: goCoverageTotal,
+        diff: comparing ? goDiffCoverageTotal : nil
+    )
+    let runLinks = coverage.links(directory: coverage.root, icons: false)
+    let runCounts = ReportTargetOutcomeCounts(
+        passed: passed,
+        flaked: flaked,
+        skipped: skipped,
+        failed: failed,
+        unknown: unknown
+    )
+    let targetOverview = try renderTargetOverview(
+        targetRows,
+        artifacts: coverage,
+        comparing: comparing
+    )
     let testCards = renderCards(files: files)
 
     template.replaceSubrange(
@@ -1223,8 +1349,11 @@ private func renderReport(
         "{{RUN_ID}}": runID(outputURL: outputURL),
         "{{REVIEW_AGGREGATE_LINK}}": renderReviewAggregateLink(runURL: runURL),
         "{{TARGET_OVERVIEW}}": targetOverview,
-        "{{GO_COVERAGE_TOTAL}}": goCoverageTotal,
-        "{{GO_DIFF_COVERAGE_TOTAL}}": goDiffCoverageTotal,
+        "{{RUN_OUTCOMES}}": outcomePill(runCounts, labeled: true),
+        "{{RUN_COVERAGE_LINKS}}": runLinks,
+        "{{RUN_COVERAGE_VALUES}}": runValues,
+        "{{GO_COVERAGE_TOTAL}}": goCoverageTotal.detail,
+        "{{GO_DIFF_COVERAGE_TOTAL}}": goDiffCoverageTotal.detail,
         "{{TESTS_PASSED_COUNT}}": String(passed),
         "{{TESTS_FLAKED_COUNT}}": String(flaked),
         "{{TESTS_SKIPPED_COUNT}}": String(skipped),
@@ -1246,7 +1375,8 @@ private func renderReport(
         "{{VISIBLE_TEST_COUNT}}",
         "{{TOTAL_TEST_COUNT}}",
         "{{REVIEW_AGGREGATE_LINK}}",
-        "{{TARGET_OVERVIEW}}",
+        "{{TARGET_OVERVIEW}}", "{{RUN_OUTCOMES}}", "{{RUN_COVERAGE_LINKS}}",
+        "{{RUN_COVERAGE_VALUES}}",
     ]
 
     for (placeholder, value) in replacements {
@@ -1509,45 +1639,70 @@ private func displayOutcomeCounts(for test: ReportTestCase) -> ReportTargetOutco
     test.targetOutcomes.isEmpty ? .fallback(for: test.status) : test.targetOutcomes
 }
 
-private func renderTargetOverview(_ rows: [ReportTargetOverviewRow]) -> String {
+private func outcomePill(_ counts: ReportTargetOutcomeCounts, labeled: Bool) -> String {
+    let segments = [
+        ("pass", "passed", counts.passed), ("flaked", "flaked", counts.flaked),
+        ("fail", "failed", counts.failed), ("skipped", "skipped", counts.skipped),
+        ("unknown", "unknown", counts.unknown),
+    ]
+    let description = segments.map { "\($0.2) \($0.1)" }.joined(separator: ", ")
+    let badges = segments.map { style, label, count in
+        let caption = labeled ? "<span>\(label)</span>" : ""
+        return
+            "<span class=\"badge \(style)\" title=\"\(count) \(label)\"><b>\(count)</b>\(caption)</span>"
+    }.joined()
+    return
+        "<span class=\"outcome-pill\" role=\"img\" aria-label=\"\(description)\">\(badges)</span>"
+}
+
+private func renderTargetOverview(
+    _ rows: [ReportTargetOverviewRow],
+    artifacts: GoCoverageReports,
+    comparing: Bool
+) throws -> String {
     guard !rows.isEmpty else {
         return ""
     }
 
-    let tableRows = rows.map { row in
+    let largestCount = rows.map { max($0.tests, $0.counts.failed) }.max() ?? 0
+    let countWidth = max(3, String(largestCount).count)
+    let tableRows = try rows.map { row in
         let outcome = row.outcome
         let escapedTarget = escapeHTML(row.target)
         let route = renderTargetRoute(row.route, escapedTitle: escapedTarget)
+        let directory = try artifacts.directory(for: row.target)
+        let values = try artifacts.values(
+            for: row.target,
+            directory: directory,
+            comparing: comparing
+        )
+        let status =
+            row.tests == 0
+            ? " <span class=\"badge \(outcome.statusClass)\">\(outcome.statusText)</span>" : ""
         return """
             <tr>
-              <td><span class="target-overview-target">\(route)<span>\(escapedTarget)</span></span></td>
-              <td><span class="badge \(outcome.statusClass)">\(outcome.statusText)</span></td>
+              <td><span class="target-overview-target">\(route)<span>\(escapedTarget)</span></span>\(status)</td>
               <td class="numeric">\(row.attempts)</td>
               <td class="numeric">\(row.tests)</td>
-              <td class="numeric">\(row.counts.passed)</td>
-              <td class="numeric">\(row.counts.flaked)</td>
-              <td class="numeric">\(row.counts.failed)</td>
-              <td class="numeric">\(row.counts.skipped)</td>
-              <td class="numeric">\(row.counts.unknown)</td>
+              <td class="target-outcomes">\(outcomePill(row.counts, labeled: false))</td>
+              <td class="target-action-cell">\(artifacts.links(directory: directory, icons: true))</td>
+              <td class="numeric target-coverage">\(values)</td>
             </tr>
             """
     }.joined(separator: "\n")
 
     return """
-        <section class="target-overview" aria-label="CLI to Agent run overview">
+        <section id="target-overview" class="target-overview" aria-label="CLI to Agent run overview">
           <div class="target-overview-table-wrapper">
-            <table class="target-overview-table">
+            <table class="target-overview-table" style="--count-width: \(countWidth)ch">
               <thead>
                 <tr>
-                  <th scope="col" aria-label="CLI to Agent"></th>
-                  <th scope="col" aria-label="Outcome"></th>
+                  <th scope="col">Target</th>
                   <th class="numeric" scope="col">Attempts</th>
                   <th class="numeric" scope="col">Tests</th>
-                  <th class="numeric" scope="col">Passed</th>
-                  <th class="numeric" scope="col">Flaked</th>
-                  <th class="numeric" scope="col">Failed</th>
-                  <th class="numeric" scope="col">Skipped</th>
-                  <th class="numeric" scope="col">Unknown</th>
+                  <th scope="col" aria-label="Outcomes"></th>
+                  <th scope="col" aria-label="Coverage reports"></th>
+                  <th class="numeric" scope="col">Coverage</th>
                 </tr>
               </thead>
               <tbody>
@@ -2260,7 +2415,7 @@ private func replacingFirstMatch(
     return text
 }
 
-private func escapeHTML(_ value: String) -> String {
+func escapeHTML(_ value: String) -> String {
     value
         .replacingOccurrences(of: "&", with: "&amp;")
         .replacingOccurrences(of: "<", with: "&lt;")
