@@ -179,15 +179,19 @@ name, use its UUID or local hostname where supported. A missing, invalid, or
 ambiguous Cloud label leaves the local advertisement unchanged.
 
 One unambiguous binding from either source is enough. If both sources bind the
-name, they must identify the same device. Follow the
-[Wendy Net setup guide](/docs/guides/wendy-net) to establish an application route.
+name, they must identify the same device.
 
 The calling host allocates virtual IPs from the app's `serviceCIDR`, the
 `10.99.0.0/16` range configured in [step 1](#1-give-the-publishing-app-wendy-net-access).
-The connection still needs a route, must authenticate the exact tenant/device
-principal, and must pass the destination's running-app port authorization.
-Keep the hostname in configuration because the virtual IP belongs to the
-calling host.
+The connection still needs a usable local mesh or Cloud route, must authenticate
+the exact tenant/device principal, and must pass the destination's running-app
+port authorization. Keep the hostname in configuration because the virtual IP
+belongs to the calling host. Follow the
+[Wendy Net setup guide](/docs/guides/wendy-net) to establish a local mesh route.
+
+For Cloud fallback, both agents need `wendy-app` support and the source
+device needs a `tunnel:request` grant scoped to the destination. See the
+[Cloud relay prerequisites](#connect-through-wendy-cloud).
 
 `device-<uuid>.mesh.wendy.internal` and `device-<uuid>.cloud.wendy.dev` are
 existing UUID aliases. Short DNS support adds `device-<uuid>.wendy.internal`.
@@ -258,6 +262,80 @@ curl --fail http://jetson.wendy.internal:18080/
 
 If DNS returns an address and the request fails, check the route and the
 destination's published port in [Troubleshoot discovery](#troubleshoot-discovery).
+
+### Connect through Wendy Cloud
+
+Cloud app relay requires the source and destination apps to use network mode
+`mesh` in their `wendy.json`. The destination app must publish its incoming port.
+The device's [Wendy Net participation setting](/docs/guides/wendy-net#2-enable-the-connections-you-want)
+controls local peer routes independently of the app's network mode. With
+participation disabled, the source app can still use its `mesh` network and
+virtual IP to reach Cloud.
+
+Wendy Net tries Cloud for TCP or UDP when the source has no active local mesh
+route to the destination. Local connection failures such as an identity or
+published-port refusal end the attempt.
+
+Keep both devices enrolled in the same Wendy Cloud organization. The backend
+must support `wendy-app` device-originated app connections. Both the source
+agent that makes the request and the destination agent that receives it must
+run the WendyOS release that introduces `wendy-app` support or a later release.
+
+Run `wendy device info` against the source device, then against the destination.
+Check **Agent Version** for each device against the release that introduces
+`wendy-app` in the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
+Update the destination agent before updating the source. An older destination
+rejects `wendy-app` connections, including requests from an updated source.
+
+The source device needs an ML-DSA signing certificate. If the Cloud relay
+error says it requires an ML-DSA device request-signing certificate, check
+the source agent's enrollment and renewal logs:
+
+- A device enrolled through pki-core renews automatically. Keep the source
+  agent online with access to Wendy Cloud. It checks at startup and every
+  six hours, and requests an ML-DSA-65 certificate when less than a third of
+  its current certificate's lifetime remains. Retry after the agent logs
+  `device_cert_renewed` and restarts. If it logs
+  `device_cert_renewal_failed`, use the accompanying error to troubleshoot.
+- For a device enrolled through the older Cloud issuer, arrange enrollment
+  through pki-core with your Wendy Cloud administrator. If a pki-core
+  device's certificate has already expired, ask the administrator for
+  certificate recovery.
+
+In Wendy Cloud, grant the **source device** `tunnel:request` permission scoped
+to the **destination device's UUID**. Cloud may return `target device not found`
+when it denies the grant. Check the destination's enrollment and the source's
+active grant for that destination UUID.
+
+To verify Cloud relay, use test devices that can reach Wendy Cloud and have no
+local mesh route to each other. Run
+[`wendy net topology`](/docs/guides/wendy-net#3-check-the-result) against the
+source to confirm it has no route to the destination. Then retry the request
+from the source app to the destination's published port. A successful request
+in this setup verifies the Cloud path. A backend without `wendy-app` support
+returns this relay error.
+
+```text
+Cloud does not offer device-originated application relays; the Cloud backend must support the wendy-app service
+```
+
+If the destination agent version is correct and the connection still fails,
+check its logs for Wendy Net identity or native TLS ingress startup errors,
+`Cloud application admission unavailable`, and
+`Cloud application admission stopped`. These indicate problems preparing or
+serving the app listener. Use the accompanying error to diagnose the cause.
+The destination agent's relay dial can also fail with
+`application relay admission is unavailable` when the app listener is not
+configured. Check that Wendy Net and app relay admission started on the
+destination.
+
+Cloud relay sessions last at most one hour. When Cloud closes an expired
+TCP stream, the app opens a new connection to the same hostname and
+published port. Wendy Net selects a route again for that connection and
+opens a fresh relay if Cloud is still needed.
+
+The app connects through its device's relay grant. The `wendy cloud tunnel`
+command opens an operator session with separate permissions.
 
 ## Try the complete Python example
 

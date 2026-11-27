@@ -112,10 +112,11 @@ func validateService(d *pb.DialInstruction) error {
 		}
 		return nil
 	}
+	// Pin the signed target to the descriptor's catalog port and loopback
+	// address before either the operator socket or app listener can be opened.
 	if d.Port != port || len(d.AuthorizedDatagramDestinations) != 0 {
 		return fmt.Errorf("cloud TCP service port mismatch")
 	}
-	// Cloud's catalog seals exactly 127.0.0.1 for every TCP service.
 	if d.Host != "127.0.0.1" {
 		return fmt.Errorf("cloud dial target is not 127.0.0.1")
 	}

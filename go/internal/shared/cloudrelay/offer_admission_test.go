@@ -297,10 +297,14 @@ func TestFullSessionSlotsKeepPresence(t *testing.T) {
 		a.slots <- struct{}{}
 	})
 
-	first := r.sessionOffer("first", nil, nil)
+	app := &pb.DialInstruction{
+		ServiceDescriptor: []byte(ApplicationService), Transport: pb.DialTransport_DIAL_TRANSPORT_TCP,
+		Host: "127.0.0.1", Port: applicationServicePort,
+	}
+	first := r.sessionOffer("first", app, nil)
 	r.queue(t, ctx, done, offerMessage(first))
 	r.queue(t, ctx, done, acknowledgedMessage(r.nextAck(t, ctx, done)))
-	second := r.sessionOffer("second", nil, nil)
+	second := r.sessionOffer("second", app, nil)
 	r.queue(t, ctx, done, offerMessage(second))
 	// The second acknowledgement follows the first confirmation, which the
 	// agent handled with every slot taken.
@@ -321,4 +325,71 @@ func TestFullSessionSlotsKeepPresence(t *testing.T) {
 		t.Fatalf("presence ended: %v", err)
 	default:
 	}
+}
+
+func TestOperatorRelayReserveIsPerService(t *testing.T) {
+	a := &Agent{
+		slots:        make(chan struct{}, sharedRelayLimit),
+		sshReserve:   make(chan struct{}, operatorRelayReserve),
+		agentReserve: make(chan struct{}, operatorRelayReserve),
+	}
+	for range sharedRelayLimit {
+		if a.takeSessionSlot(ApplicationService) == nil {
+			t.Fatal("app refused within shared capacity")
+		}
+	}
+	if a.takeSessionSlot(ApplicationService) != nil {
+		t.Fatal("app used a reserved slot")
+	}
+	for _, service := range []string{"ssh", "wendy-agent"} {
+		for range operatorRelayReserve {
+			if a.takeSessionSlot(service) == nil {
+				t.Fatalf("%s refused within reserved capacity", service)
+			}
+		}
+		if a.takeSessionSlot(service) != nil {
+			t.Fatalf("%s exceeded reserved capacity", service)
+		}
+	}
+}
+
+func TestOperatorRelayOffersUseSeparateReserves(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	r, _, done, _ := startOfferRelay(t, ctx, nil)
+	send := func(id, service string) *pb.SessionOffer {
+		t.Helper()
+		transport, port, err := serviceTarget(service)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offer := r.sessionOffer(id, &pb.DialInstruction{
+			ServiceDescriptor: []byte(service), Transport: transport, Host: "127.0.0.1", Port: port,
+		}, nil)
+		r.queue(t, ctx, done, offerMessage(offer))
+		return offer
+	}
+	ack := func(offer *pb.SessionOffer) {
+		t.Helper()
+		if got := r.nextAck(t, ctx, done); got.OfferId != offer.OfferId {
+			t.Fatalf("acknowledged %s, want %s", got.OfferId, offer.OfferId)
+		}
+	}
+	var first *pb.SessionOffer
+	for index := range sharedRelayLimit {
+		offer := send(fmt.Sprintf("application-%d", index), ApplicationService)
+		if index == 0 {
+			first = offer
+		}
+		ack(offer)
+	}
+	send("application-overflow", ApplicationService)
+	for _, service := range []string{"ssh", "wendy-agent"} {
+		for index := range operatorRelayReserve {
+			ack(send(fmt.Sprintf("%s-%d", service, index), service))
+		}
+		send(service+"-overflow", service)
+	}
+	r.queue(t, ctx, done, offerMessage(first))
+	ack(first)
 }

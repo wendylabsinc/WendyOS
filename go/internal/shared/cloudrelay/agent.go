@@ -34,15 +34,19 @@ import (
 // Agent owns the authenticated Cloud control connection and an identity-free
 // broker presence stream. Credentials are reloaded on each lease request.
 type Agent struct {
-	dialCloud           func(string, string, string, []byte) (*grpc.ClientConn, error)
-	Endpoint            string
-	Verifier            *Verifier
-	StateDir            string
-	Credentials         func() (string, string, []byte)
-	Logger              *zap.Logger
-	MTLSPort            int
-	OnRegistered        func() // the device is reachable through the relay again
-	OnLost              func() // the relay stayed down after a registration; the device is not reachable
+	dialCloud    func(string, string, string, []byte) (*grpc.ClientConn, error)
+	Endpoint     string
+	Verifier     *Verifier
+	StateDir     string
+	Credentials  func() (string, string, []byte)
+	Logger       *zap.Logger
+	MTLSPort     int
+	OnRegistered func() // the device is reachable through the relay again
+	OnLost       func() // the relay stayed down after a registration; the device is not reachable
+	// ApplicationDial reaches only the dedicated end-to-end authenticated app
+	// admission protocol. An absent callback refuses ApplicationService; it
+	// must never fall through to an administrative or arbitrary local socket.
+	ApplicationDial     func(context.Context) (net.Conn, error)
 	signing, encryption *ecdsa.PrivateKey
 	lease               *pb.IssuePresenceLeaseResponse
 	leaseClaims         claims
@@ -54,6 +58,8 @@ type Agent struct {
 	// reconnecting.
 	leases              map[string]claims
 	slots               chan struct{}
+	sshReserve          chan struct{}
+	agentReserve        chan struct{}
 	sourceAddresses     func() ([]net.Addr, error)
 	sourceCheckInterval time.Duration
 	preferredSource     func(*net.TCPAddr) (net.IP, error)
@@ -150,9 +156,16 @@ func writeState(path string, data []byte) error {
 	defer dir.Close()
 	return dir.Sync()
 }
+
+const sharedRelayLimit, operatorRelayReserve = 64, 4
+
 func (a *Agent) keys() error {
 	if a.slots == nil {
-		a.slots = make(chan struct{}, 64)
+		a.slots = make(chan struct{}, sharedRelayLimit)
+	}
+	if a.sshReserve == nil {
+		a.sshReserve = make(chan struct{}, operatorRelayReserve)
+		a.agentReserve = make(chan struct{}, operatorRelayReserve)
 	}
 	if a.signing != nil {
 		return nil
@@ -715,9 +728,8 @@ func (a *Agent) runOnce(parent context.Context) error {
 					return fmt.Errorf("unknown relay offer acknowledgement")
 				}
 				if !s.started {
-					select {
-					case a.slots <- struct{}{}:
-					default:
+					slot := a.takeSessionSlot(string(s.d.ServiceDescriptor))
+					if slot == nil {
 						// Only this session waits out its grant; presence and
 						// the sessions already running are unaffected.
 						a.Logger.Warn("refused cloud relay session", zap.String("offer_id", s.o.OfferId), zap.String("reason", "too many active relay sessions"))
@@ -726,7 +738,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 					s.started = true
 					broker := lease.Broker
 					go func() {
-						defer func() { <-a.slots }()
+						defer func() { <-slot }()
 						// Sessions belong to the agent, so replacing its presence
 						// connection must not cancel their independent relay streams.
 						if e := a.serve(parent, broker, s.o, s.c, s.d); e != nil && parent.Err() == nil {
@@ -743,10 +755,36 @@ func (a *Agent) runOnce(parent context.Context) error {
 
 // offerState is an offer the agent retained and acknowledged.
 type offerState struct {
-	o       *pb.SessionOffer
-	c       claims
-	d       *pb.DialInstruction
-	started bool
+	o        *pb.SessionOffer
+	c        claims
+	d        *pb.DialInstruction
+	started  bool
+	reserved bool
+}
+
+func operatorReserveService(service string) bool {
+	return service == "ssh" || service == "wendy-agent"
+}
+
+func (a *Agent) takeSessionSlot(service string) chan struct{} {
+	select {
+	case a.slots <- struct{}{}:
+		return a.slots
+	default:
+	}
+	var reserve chan struct{}
+	switch service {
+	case "ssh":
+		reserve = a.sshReserve
+	case "wendy-agent":
+		reserve = a.agentReserve
+	}
+	select {
+	case reserve <- struct{}{}:
+		return reserve
+	default:
+		return nil
+	}
 }
 
 var errUnknownPresenceLease = errors.New("relay offer presence lease is not yet known")
@@ -755,7 +793,7 @@ var errUnknownPresenceLease = errors.New("relay offer presence lease is not yet 
 // checks its dial instruction, and retains it durably, as tunnel/v2 requires
 // before an acknowledgement. An error refuses this offer only.
 func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims, leases map[string]claims, pending map[string]*offerState, now time.Time) (*offerState, error) {
-	if len(pending) >= 64 {
+	if len(pending) >= sharedRelayLimit+2*operatorRelayReserve {
 		return nil, status.Error(codes.ResourceExhausted, "too many relay offers")
 	}
 	g, err := a.Verifier.verify(ctx, o.SessionGrantJws, grantType, lease.Aud, now)
@@ -784,10 +822,21 @@ func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims
 	if err != nil {
 		return nil, err
 	}
+	shared, reserved := 0, 0
+	service := string(d.ServiceDescriptor)
 	for _, prior := range pending {
 		if prior.c.Session == g.Session {
 			return nil, fmt.Errorf("duplicate relay session offer")
 		}
+		if !prior.reserved {
+			shared++
+		} else if string(prior.d.ServiceDescriptor) == service {
+			reserved++
+		}
+	}
+	useReserve := shared >= sharedRelayLimit
+	if useReserve && (!operatorReserveService(service) || reserved >= operatorRelayReserve) {
+		return nil, status.Error(codes.ResourceExhausted, "too many relay offers")
 	}
 	raw, err := proto.Marshal(o)
 	if err != nil {
@@ -806,7 +855,7 @@ func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims
 	if err = writeState(path, raw); err != nil {
 		return nil, err
 	}
-	return &offerState{o: o, c: g, d: d}, nil
+	return &offerState{o: o, c: g, d: d, reserved: useReserve}, nil
 }
 
 func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.SessionOffer, c claims, d *pb.DialInstruction) error {
@@ -818,12 +867,7 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 	if d.Transport == pb.DialTransport_DIAL_TRANSPORT_DATAGRAM {
 		return serveDatagrams(session, d)
 	}
-	port := int(d.Port)
-	agentSession := a.isAgentSession(string(d.ServiceDescriptor), port)
-	if agentSession {
-		port = a.MTLSPort
-	}
-	local, err := dialLocalService(ctx, d.Host, strconv.Itoa(port), agentSession)
+	local, err := a.dialInstruction(ctx, d)
 	if err != nil {
 		return err
 	}
@@ -885,6 +929,27 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 	case <-session.ctx.Done():
 		return session.ctx.Err()
 	}
+}
+
+func (a *Agent) dialInstruction(ctx context.Context, instruction *pb.DialInstruction) (net.Conn, error) {
+	// The sealed descriptor selects the TCP port or UDP destination rule.
+	// validateService requires the exact loopback host for every TCP service.
+	// The wendy-app descriptor uses the in-memory listener after validation.
+	if err := validateService(instruction); err != nil {
+		return nil, err
+	}
+	if string(instruction.ServiceDescriptor) == ApplicationService {
+		if a.ApplicationDial == nil {
+			return nil, fmt.Errorf("application relay admission is unavailable")
+		}
+		return a.ApplicationDial(ctx)
+	}
+	port := int(instruction.Port)
+	agentSession := a.isAgentSession(string(instruction.ServiceDescriptor), port)
+	if agentSession {
+		port = a.MTLSPort
+	}
+	return dialLocalService(ctx, instruction.Host, strconv.Itoa(port), agentSession)
 }
 
 // Admission lasts at most 60 seconds. Files older than the maximum relay

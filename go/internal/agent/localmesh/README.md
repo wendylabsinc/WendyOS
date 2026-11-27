@@ -562,6 +562,22 @@ The UUID form uses the enrolled identity and
 VIP table. All supported UUID hostname spellings for a device share one VIP
 allocation.
 
+## Cloud app relay
+
+The VIP dialer prefers the local mesh. A missing local route permits Cloud
+fallback. A local port or identity refusal is terminal.
+
+The device-originated Cloud relay uses the symbolic `wendy-app` service. Cloud
+checks the current same-tenant enrollment, binds the request signature to the
+device certificate, and checks live destination-scoped `tunnel:request`
+access. The destination validates the signed instruction against the service
+catalog and dispatches it to its in-memory application TLS listener.
+The listener verifies the peer and looks up a live published app port.
+The existing operator relay has separate authorization and dispatch.
+See the [Cloud admission design](https://github.com/wendylabsinc/cloud/blob/de2ef3c6999db2bab6a0f3be0417e5835fc58ee0/docs/tunnel-port-forwarding.md#device-application-sessions)
+and the [receiver-first rollout contract](https://github.com/wendylabsinc/service-protos/blob/95aac79ceeaf3bf62ee586f711e225af4c39cd75/docs/contract-ledger.md)
+for version and deployment requirements.
+
 ## Cloud relay presence
 
 Cloud relay presence checks its TCP source address every ten seconds. If that
