@@ -18,6 +18,9 @@ type Options struct {
 	// for a source whose clock is its own, as a board's is. Nil stamps frames
 	// with the wall clock.
 	TsUs func(seq uint32) uint64
+	// TsUncertaintyUs is what the source reports about how well it knows
+	// those times. Nil reports nothing, as firmware that predates the field.
+	TsUncertaintyUs *uint32
 }
 
 // Serve accepts sensorlink connections until ctx is cancelled or ln closes.
@@ -79,7 +82,7 @@ func handleConn(ctx context.Context, conn net.Conn, opts Options) {
 				tsUs = opts.TsUs(seq)
 			}
 			for _, ch := range sub.ChannelId {
-				data := &sensorlinkpb.SensorData{ChannelId: ch, FrameSeq: seq, TsUs: tsUs, Flags: sensorlink.FlagKeyframe | sensorlink.FlagLastChunk, Payload: payload}
+				data := &sensorlinkpb.SensorData{ChannelId: ch, FrameSeq: seq, TsUs: tsUs, TsUncertaintyUs: opts.TsUncertaintyUs, Flags: sensorlink.FlagKeyframe | sensorlink.FlagLastChunk, Payload: payload}
 				if err := sensorlink.WriteMessage(conn, &sensorlinkpb.Envelope{Msg: &sensorlinkpb.Envelope_Data{Data: data}}); err != nil {
 					return
 				}

@@ -16,8 +16,13 @@ type SensorFrame struct {
 	ChannelID uint32
 	Seq       uint32 // SensorData.frame_seq
 	TsUs      uint64 // from the frame's first chunk
-	Flags     uint32 // the first chunk's flags, without FlagLastChunk
-	Payload   []byte
+	// TsUncertaintyUs is how far TsUs may be from the instant the frame's
+	// first sample was taken, as the source measured it. It is nil when the
+	// source made no claim, which is not the same as zero. Like TsUs it comes
+	// from the frame's first chunk.
+	TsUncertaintyUs *uint32
+	Flags           uint32 // the first chunk's flags, without FlagLastChunk
+	Payload         []byte
 }
 
 // Assembler reassembles SensorData chunks into SensorFrames, one frame in
@@ -46,6 +51,11 @@ func (a *Assembler) Add(d *sensorlinkpb.SensorData) *SensorFrame {
 			Seq:       d.GetFrameSeq(),
 			TsUs:      d.GetTsUs(),
 			Flags:     d.GetFlags() &^ FlagLastChunk,
+		}
+		if d.TsUncertaintyUs != nil {
+			// A copy: the frame outlives the message it was read from.
+			uncertainty := d.GetTsUncertaintyUs()
+			f.TsUncertaintyUs = &uncertainty
 		}
 		if last {
 			f.Payload = d.GetPayload()

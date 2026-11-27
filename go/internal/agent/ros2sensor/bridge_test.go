@@ -855,3 +855,32 @@ func TestReadingsGetAWriterBeforeAnyTimingTopicDoes(t *testing.T) {
 		t.Fatalf("%d reading and %d timing topics with room for 2 writers, want both readings and no timing", len(lease.open()), len(lease.timing()))
 	}
 }
+
+func TestSourcesOwnUncertaintyBoundsTheStamp(t *testing.T) {
+	b, d := testBridge(isolatedApp("robot", 4242, 17))
+	clock := &testClock{t: time.Unix(1_700_000_000, 0)}
+	b.now = clock.now
+	ch, _ := b.OpenChannel("asset:7", "porch", temperatureChannel(3, "temperature"))
+	b.reconcile(context.Background())
+	timings := d.openLeases()[0].timing()[0]
+
+	// The board read its sensor between two readings of its clock 300 us
+	// apart, and says so. Older firmware says nothing.
+	measured := uint32(150)
+	ch.WriteFrame(&sensorlink.SensorFrame{Seq: 1, TsUs: 5_000_000, TsUncertaintyUs: &measured, Payload: f32le(20)})
+	clock.advance(time.Second)
+	ch.WriteFrame(&sensorlink.SensorFrame{Seq: 2, TsUs: 6_000_000, Payload: f32le(21)})
+
+	with, without := decodeTiming(t, timings.samples[0]), decodeTiming(t, timings.samples[1])
+	if with.values["native_uncertainty_nanos"] != "150000" || with.values["confidence"] != "source_reported" || with.level != 0 {
+		t.Fatalf("frame with a reported uncertainty: level %d, values %v", with.level, with.values)
+	}
+	// On the first frame the offset in use is the best estimate there is, so
+	// the bound on the stamp is the source's own.
+	if with.values["mapping_uncertainty_nanos"] != "0" || with.values["timestamp_uncertainty_nanos"] != "150000" {
+		t.Fatalf("frame with a reported uncertainty: values %v", with.values)
+	}
+	if without.values["native_uncertainty_nanos"] != "unreported" || without.values["confidence"] != "unbounded" || without.level != 1 {
+		t.Fatalf("frame without one: level %d, values %v", without.level, without.values)
+	}
+}
