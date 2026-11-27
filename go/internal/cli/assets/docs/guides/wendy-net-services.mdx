@@ -209,8 +209,10 @@ explicitly.
 ### Select a device in the CLI
 
 Use the same `*.wendy.internal` hostname with `--device` on the Wendy CLI.
-The CLI authenticates the selected device using your organization's operator
-certificate from personal Cloud sign-in. CLI device selection does not require
+First sign in through the browser with `wendy cloud login`, then select the
+device's organization with `wendy auth use` if you have multiple contexts.
+This obtains the operator certificate used to authenticate the CLI connection;
+a service-account login does not provide it. CLI device selection does not require
 a desktop VPN or an app network entitlement on your computer. See the
 [CLI device selection guide](/docs/advanced/clients/wendy-cli/device-selection).
 
@@ -234,6 +236,9 @@ For a device with only a numeric ID, use a Cloud selector in the CLI or try
 the friendly-name DNS check below from an app.
 
 ### Verify short DNS from the client app
+
+{/* Keep this heading's existing #verify-short-dns-from-the-client-app anchor.
+    UUID inventory lookup has its own heading above; existing DNS links still land here. */}
 
 First [look up the destination's UUID](#look-up-a-device-uuid) in Cloud inventory.
 
