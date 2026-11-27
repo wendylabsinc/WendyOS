@@ -389,7 +389,7 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 		}
 		return false, ErrInvalidManifestSignature
 	}
-	binding := manifestSignatureBinding{leafHash: certificateHash(chain[0]), valid: true}
+	binding := manifestSignatureBinding{leafHash: certificateHash(chain[0]), valid: true, notBefore: leaf.NotBefore, notAfter: leaf.NotAfter}
 	hash := manifestHash(w.Body)
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -503,11 +503,15 @@ func validManifestSignature(w SignedManifest, leaf *x509.Certificate) bool {
 type manifestSignatureBinding struct {
 	leafHash string
 	valid    bool
+	// Immutable syntax from the exact leaf, not a cached trust/path decision.
+	// Keeping just the dates avoids retaining a full parsed certificate.
+	notBefore, notAfter time.Time
 }
 
 func (b *manifestSignatureBinding) matches(leafHash string, verify func() bool) bool {
 	if b.leafHash != leafHash {
 		b.leafHash, b.valid = leafHash, verify()
+		b.notBefore, b.notAfter = time.Time{}, time.Time{}
 	}
 	return b.valid
 }
@@ -533,10 +537,15 @@ func (d *Directory) CurrentRecordChain(w SignedManifest, now time.Time) ([][]byt
 	if !ok || !bytes.Equal(w.Body, e.wire.Body) || !bytes.Equal(w.Signature, e.wire.Signature) {
 		return nil, false
 	}
-	return d.currentEntryChain(owner, e, now)
+	chain, ok := d.currentEntryChain(owner, e, now)
+	if !ok {
+		return nil, false
+	}
+	return cloneChain(chain), true
 }
 
-// currentEntryChain requires d.mu and updates only the entry's signature memo.
+// currentEntryChain requires d.mu and updates only syntax/signature memos.
+// Its chain is borrowed and must not be mutated or exported without a copy.
 // It never removes a replay floor, extends a lease, or renews retention.
 func (d *Directory) currentEntryChain(principal string, e directoryEntry, now time.Time) ([][]byte, bool) {
 	chain, _, ok := d.currentEntryIdentity(principal, e, now)
@@ -551,13 +560,26 @@ func (d *Directory) currentEntryIdentity(principal string, e directoryEntry, now
 	if !ok || id.Device.Principal() != e.wire.Principal || time.UnixMilli(e.manifest.Expires).After(id.NotAfter) {
 		return nil, Identity{}, false
 	}
-	leaf, err := x509.ParseCertificate(chain[0])
-	if err != nil || time.UnixMilli(e.manifest.Issued).Before(leaf.NotBefore) || time.UnixMilli(e.manifest.Expires).After(leaf.NotAfter) {
+	leafHash := certificateHash(chain[0])
+	notBefore, notAfter := e.signature.notBefore, e.signature.notAfter
+	var leaf *x509.Certificate
+	if e.signature.leafHash != leafHash || notAfter.IsZero() {
+		var err error
+		leaf, err = x509.ParseCertificate(chain[0])
+		if err != nil {
+			return nil, Identity{}, false
+		}
+		notBefore, notAfter = leaf.NotBefore, leaf.NotAfter
+	}
+	if time.UnixMilli(e.manifest.Issued).Before(notBefore) || time.UnixMilli(e.manifest.Expires).After(notAfter) {
 		return nil, Identity{}, false
 	}
-	valid := e.signature.matches(certificateHash(chain[0]), func() bool {
+	valid := e.signature.matches(leafHash, func() bool {
+		// A changed hash always parsed the current leaf above. An unchanged
+		// hash reuses only the exact signature result and never calls this.
 		return validManifestSignature(e.wire, leaf)
 	})
+	e.signature.notBefore, e.signature.notAfter = notBefore, notAfter
 	if valid {
 		e = d.restrictEntryCertificate(e, id, now)
 	}
