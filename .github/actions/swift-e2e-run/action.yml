@@ -296,6 +296,8 @@ runs:
         DEVICE_ADDRESS: ${{ inputs.device_address }}
         TRANSPORT: ${{ inputs.transport }}
       run: |
+        printf '%s\tstart\t%s\n' "host_setup" "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"
+        trap 'phase_status=$?; printf "host_setup\tend\t%s\t%s\n" "$(date --iso-8601=ns)" "$phase_status" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"' EXIT
         set -euo pipefail
         run_dir="${RUNNER_TEMP}/wendy/${RUN_ID}"
         # Successful setup must leave the attempt directory for the runner to
@@ -392,6 +394,15 @@ runs:
           version="$(swift --version | head -n 1 | tr -cs '[:alnum:]._-' '-')"
         fi
         echo "version=$version" >> "$GITHUB_OUTPUT"
+        {
+          swift --version
+          go version
+          git --version
+          clang --version
+          pkg-config --modversion libusb-1.0
+          if command -v swiftly >/dev/null; then swiftly --version; fi
+          go env GOTOOLCHAIN GOCACHE GOMODCACHE
+        } > "$RUNNER_TEMP/runtime-comparison/tool-versions.txt" 2>&1
 
     - name: Capture Swift toolchain version (Windows)
       if: runner.os == 'Windows'
@@ -403,6 +414,8 @@ runs:
         "version=$version" >> $env:GITHUB_OUTPUT
 
     - name: Cache SwiftPM package resolution
+      # Disposable cold-run comparison: identical no-restore/no-save policy in both arms.
+      if: false
       uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: |
@@ -432,6 +445,8 @@ runs:
         MANAGED_AGENT: ${{ steps.validate-unix.outputs.managed_agent }}
         DEVICE_ADDRESS: ${{ steps.validate-unix.outputs.device_address }}
       run: |
+        printf '%s\tstart\t%s\n' "e2e_test" "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"
+        trap 'phase_status=$?; printf "e2e_test\tend\t%s\t%s\n" "$(date --iso-8601=ns)" "$phase_status" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"' EXIT
         set -euo pipefail
         output_dir="${RUNNER_TEMP}/wendy"
         args=(--output-dir "$output_dir")
@@ -475,6 +490,8 @@ runs:
         RUN_ID: ${{ steps.e2e-run-unix.outputs.run_id }}
         DIFF_BASE_REF: ${{ inputs.diff_base_ref }}
       run: |
+        printf '%s\tstart\t%s\n' "aggregate_report" "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"
+        trap 'phase_status=$?; printf "aggregate_report\tend\t%s\t%s\n" "$(date --iso-8601=ns)" "$phase_status" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"' EXIT
         set -euo pipefail
         attempt_dir="${RUNNER_TEMP}/wendy/${RUN_ID}"
         report_staging="${RUNNER_TEMP}/wendy-report/${RUN_ID}"
@@ -494,6 +511,11 @@ runs:
         [[ "$aggregate_status" == 0 ]] || exit "$aggregate_status"
         exit "$report_status"
 
+    - name: Mark raw upload start
+      if: always()
+      shell: bash
+      run: printf 'raw_upload\tstart\t%s\n' "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"
+
     - name: Upload Swift E2E run (Unix)
       if: always() && runner.os != 'Windows'
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -502,6 +524,11 @@ runs:
         path: ${{ runner.temp }}/wendy/${{ steps.e2e-run-unix.outputs.run_id }}/**
         if-no-files-found: warn
         retention-days: 14
+
+    - name: Mark raw upload end
+      if: always()
+      shell: bash
+      run: printf 'raw_upload\tend\t%s\n' "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"
 
     - name: Upload Swift E2E run (Windows)
       if: always() && runner.os == 'Windows'
