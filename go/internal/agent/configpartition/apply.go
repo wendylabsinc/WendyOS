@@ -854,6 +854,11 @@ func updateWendyOSServicePort(content string, port int, tls bool, principal stri
 			"    <txt-record>tls="+tlsValue+"</txt-record>\n  </service>", 1)
 	}
 
+	if principal == "" || !strings.Contains(block, "<txt-record>principal="+principal+"</txt-record>") {
+		// Discard the previous enrollment's Cloud name before advertising a
+		// new enrollment or returning the device to local discovery.
+		block = regexp.MustCompile(`\s*<txt-record>cloud-name=[^<]*</txt-record>`).ReplaceAllString(block, "")
+	}
 	block = updatePrincipalTXTRecord(block, principal)
 
 	return content[:serviceStart] + block + content[serviceEnd:]

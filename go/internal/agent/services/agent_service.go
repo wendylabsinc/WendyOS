@@ -48,6 +48,7 @@ type AgentService struct {
 	installer                *AgentInstaller
 	isWendyOSHost            func() bool
 	osUpdateStateDir         string
+	meshRoster               *MeshRoster
 
 	// powerModes, isJetson and rebootFn back GetPowerMode/SetPowerMode;
 	// settable within-package so tests need neither nvpmodel nor a reboot.
@@ -88,6 +89,9 @@ type AgentService struct {
 	rootMediumOnce sync.Once
 	rootMediumName string
 }
+
+// SetMeshRoster connects hostname updates to the Cloud roster before serving.
+func (s *AgentService) SetMeshRoster(roster *MeshRoster) { s.meshRoster = roster }
 
 func NewAgentService(
 	logger *zap.Logger,
@@ -274,6 +278,9 @@ func (s *AgentService) SetHostname(_ context.Context, req *agentpb.SetHostnameRe
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		return nil, status.Errorf(codes.Internal, "applying hostname: %v", err)
+	}
+	if s.meshRoster != nil {
+		s.meshRoster.RequestSync()
 	}
 
 	return &agentpb.SetHostnameResponse{Hostname: hostname}, nil

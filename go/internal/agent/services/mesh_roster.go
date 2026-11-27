@@ -12,6 +12,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -20,6 +21,7 @@ import (
 // for existing Cloud RPC adapters, never a second identity or address input.
 type RosterEntry struct {
 	Name       string // normalized DNS label
+	ShortName  string // Cloud label with exact hyphens preserved
 	DeviceUUID string // canonical lowercase device UUID; "" = no mesh identity
 	AssetUUID  string // alias of DeviceUUID for Cloud asset_id adapters
 
@@ -45,27 +47,36 @@ type MeshRoster struct {
 	keyPEM   string
 	chainPEM string
 
-	mu         sync.RWMutex
-	generation uint64
-	identity   string        // proof identity read from the leaf cert; "" until provisioned
-	tenant     meshid.Tenant // tenant that identity authenticates; valid when hasTenant
-	hasTenant  bool
-	slug       string
-	byName     map[string]RosterEntry
-	byAsset    map[string]RosterEntry // canonical asset UUID -> entry
-	ambiguous  map[string]struct{}
+	mu             sync.RWMutex
+	generation     uint64
+	identity       string        // proof identity read from the leaf cert; "" until provisioned
+	tenant         meshid.Tenant // tenant that identity authenticates; valid when hasTenant
+	hasTenant      bool
+	slug           string
+	byName         map[string]RosterEntry
+	byAsset        map[string]RosterEntry // canonical asset UUID -> entry
+	ambiguous      map[string]struct{}
+	byExactName    map[string]RosterEntry
+	exactAmbiguous map[string]struct{}
+	localNameFile  string
+	localName      registeredDeviceName
+	nameNeedsSave  bool
+	refresh        chan struct{}
 }
 
 func NewMeshRoster(logger *zap.Logger, cloudURL, certPEM, keyPEM, chainPEM string) *MeshRoster {
 	r := &MeshRoster{
-		logger:    logger,
-		cloudURL:  cloudURL,
-		certPEM:   certPEM,
-		keyPEM:    keyPEM,
-		chainPEM:  chainPEM,
-		byName:    make(map[string]RosterEntry),
-		byAsset:   make(map[string]RosterEntry),
-		ambiguous: make(map[string]struct{}),
+		logger:         logger,
+		cloudURL:       cloudURL,
+		certPEM:        certPEM,
+		keyPEM:         keyPEM,
+		chainPEM:       chainPEM,
+		byName:         make(map[string]RosterEntry),
+		byAsset:        make(map[string]RosterEntry),
+		ambiguous:      make(map[string]struct{}),
+		byExactName:    make(map[string]RosterEntry),
+		exactAmbiguous: make(map[string]struct{}),
+		refresh:        make(chan struct{}, 1),
 	}
 	r.loadIdentity()
 	return r
@@ -120,6 +131,7 @@ func (r *MeshRoster) OwnTenant() (meshid.Tenant, bool) {
 func (r *MeshRoster) UpdateIdentity(cloudURL, certPEM, keyPEM, chainPEM string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	previous := r.identity
 	r.generation++
 	r.cloudURL, r.certPEM, r.keyPEM, r.chainPEM = cloudURL, certPEM, keyPEM, chainPEM
 	r.loadIdentity()
@@ -127,18 +139,49 @@ func (r *MeshRoster) UpdateIdentity(cloudURL, certPEM, keyPEM, chainPEM string) 
 	r.byName = make(map[string]RosterEntry)
 	r.byAsset = make(map[string]RosterEntry)
 	r.ambiguous = make(map[string]struct{})
+	r.byExactName = make(map[string]RosterEntry)
+	r.exactAmbiguous = make(map[string]struct{})
+	if r.identity != previous {
+		r.restoreLocalName()
+		if r.identity == "" && r.localNameFile != "" {
+			if err := os.Remove(r.localNameFile); err != nil && !os.IsNotExist(err) {
+				r.logger.Warn("wendy net: clearing cached Cloud device name failed", zap.Error(err))
+			}
+		}
+	}
 }
 
 // Lookup returns the roster entry for a normalized device name. Unknown and
 // ambiguous (duplicate-normalized) names return ok=false.
 func (r *MeshRoster) Lookup(name string) (RosterEntry, bool) {
+	entry, found, ambiguous := r.lookup(name)
+	return entry, found && !ambiguous
+}
+
+func (r *MeshRoster) lookup(name string) (RosterEntry, bool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if _, dup := r.ambiguous[name]; dup {
-		return RosterEntry{}, false
+		return RosterEntry{}, false, true
 	}
 	entry, ok := r.byName[name]
-	return entry, ok
+	return entry, ok, false
+}
+
+// LookupExact looks up a short private DNS name. Valid device labels are
+// compared without changing hyphens. Legacy display names may still have a
+// sanitized alias, but collisions with either legacy or exact names fail closed.
+func (r *MeshRoster) LookupExact(name string) (RosterEntry, bool) {
+	entry, found, ambiguous := r.lookupExact(name)
+	return entry, found && !ambiguous
+}
+
+func (r *MeshRoster) lookupExact(name string) (RosterEntry, bool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ambiguous := r.exactAmbiguous[name]
+	entry, found := r.byExactName[name]
+	return entry, found, ambiguous
 }
 
 // LookupAsset returns the roster entry for a Cloud asset UUID. Asset UUIDs
@@ -186,6 +229,8 @@ func (r *MeshRoster) applyResponse(generation uint64, resp *cloudpbv2.GetMeshRos
 	byName := make(map[string]RosterEntry, len(resp.GetEntries()))
 	byAsset := make(map[string]RosterEntry, len(resp.GetEntries()))
 	ambiguous := make(map[string]struct{})
+	byExactName := make(map[string]RosterEntry, len(resp.GetEntries()))
+	exactAmbiguous := make(map[string]struct{})
 	for _, e := range resp.GetEntries() {
 		n := mesh.Normalize(e.GetName())
 
@@ -197,6 +242,14 @@ func (r *MeshRoster) applyResponse(generation uint64, resp *cloudpbv2.GetMeshRos
 		}
 		if !canonicalRosterUUID(entry.DeviceUUID) {
 			continue
+		}
+		if exact, valid := meshname.ShortDeviceLabel(e.GetName()); valid {
+			entry.ShortName = exact
+			if existing, ok := byExactName[exact]; ok && existing.AssetUUID != entry.AssetUUID {
+				exactAmbiguous[exact] = struct{}{}
+			} else {
+				byExactName[exact] = entry
+			}
 		}
 		byAsset[entry.AssetUUID] = entry
 		if n == "" {
@@ -212,6 +265,15 @@ func (r *MeshRoster) applyResponse(generation uint64, resp *cloudpbv2.GetMeshRos
 	r.byName = byName
 	r.byAsset = byAsset
 	r.ambiguous = ambiguous
+	r.byExactName = byExactName
+	r.exactAmbiguous = exactAmbiguous
+	if self, err := meshid.DeviceFromPrincipal(r.identity); err == nil {
+		name := byAsset[self.UUID().String()].ShortName
+		if _, ambiguous := exactAmbiguous[name]; ambiguous {
+			name = ""
+		}
+		r.rememberLocalName(registeredDeviceName{Principal: r.identity, Name: name})
+	}
 }
 
 func canonicalRosterUUID(text string) bool {
@@ -258,22 +320,55 @@ func (r *MeshRoster) Sync(ctx context.Context) error {
 }
 
 // RunSync refreshes immediately, then every interval, until ctx is done.
-// Failures are logged and retried on the next tick; the cache keeps its last
-// good contents so a transient cloud outage never breaks LAN-cached names.
-func (r *MeshRoster) RunSync(ctx context.Context, interval time.Duration) {
-	if err := r.Sync(ctx); err != nil {
-		r.logger.Warn("wendy net roster initial sync failed", zap.Error(err))
+// Failures retry sooner with bounded backoff, preserving confirmed names.
+func (r *MeshRoster) RunSync(ctx context.Context, interval time.Duration, publishName func(principal, name string)) {
+	publish := func() {
+		r.mu.RLock()
+		principal, local := r.identity, r.localName
+		r.mu.RUnlock()
+		if principal == "" || publishName == nil {
+			return
+		}
+		name := ""
+		if local.Principal == principal {
+			name = local.Name
+		}
+		publishName(principal, name)
 	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
+	publish()
+	const firstRetry = 5 * time.Second
+	retry := firstRetry
 	for {
+		err := r.Sync(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		delay := interval
+		if err != nil {
+			r.logger.Warn("wendy net roster sync failed", zap.Error(err))
+			delay = min(retry, interval)
+			retry = min(2*retry, time.Minute)
+		} else {
+			retry = firstRetry
+		}
+		publish()
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
-			return
-		case <-t.C:
-			if err := r.Sync(ctx); err != nil {
-				r.logger.Warn("wendy net roster sync failed", zap.Error(err))
-			}
+		case <-timer.C:
+		case <-r.refresh:
 		}
+		timer.Stop()
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+// RequestSync wakes the roster worker after enrollment or a local rename.
+func (r *MeshRoster) RequestSync() {
+	select {
+	case r.refresh <- struct{}{}:
+	default:
 	}
 }

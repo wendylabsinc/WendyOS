@@ -89,6 +89,8 @@ type LANDevice struct {
 	// MeshName is the device's friendly mesh name from the `name` TXT record
 	// (e.g. "brave-dolphin"); empty when unadvertised or pre-mesh.
 	MeshName string `json:"meshName,omitempty"`
+	// CloudName is the optional Cloud label from the live LAN advertisement.
+	CloudName string `json:"cloudName,omitempty"`
 	// OrgID is the legacy cloud organization id from the `orgid` TXT record;
 	// 0 when absent, including devices enrolled directly with a PKI identity.
 	OrgID int32 `json:"orgId,omitempty"`

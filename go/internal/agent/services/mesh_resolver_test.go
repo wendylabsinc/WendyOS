@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -34,7 +35,7 @@ func mustTenant(t *testing.T, tenant string) meshid.Tenant {
 	return parsed
 }
 
-func TestResolverMDNSHitShortCircuits(t *testing.T) {
+func TestLegacyResolverPrefersExistingLANBinding(t *testing.T) {
 	roster := provisionedRoster(t)
 	roster.applyResponse(roster.generation, &cloudpbv2.GetMeshRosterResponse{
 		OrgSlug: "acme",
@@ -44,6 +45,9 @@ func TestResolverMDNSHitShortCircuits(t *testing.T) {
 		MeshName:     "Brave Dolphin",
 		PrincipalURI: certs.DeviceSPIFFEURI(rosterTenant, rosterDeviceB),
 	}))
+	r.SetMeshSnapshot(func() localmesh.NodeSnapshot {
+		return namedMeshSnapshot(t, map[string]string{rosterDevice: "brave-dolphin"})
+	})
 	got, ok := r.Resolve("brave-dolphin")
 	if !ok || got != mustDevice(t, rosterTenant, rosterDeviceB) {
 		t.Fatalf("mDNS hit = %v,%v want the LAN device principal", got, ok)
@@ -98,6 +102,21 @@ func TestResolverAmbiguousDifferentDevicesOnLAN(t *testing.T) {
 	}
 }
 
+func TestLegacyResolverFallsBackToRosterOnLANCollision(t *testing.T) {
+	roster := provisionedRoster(t)
+	roster.applyResponse(roster.generation, &cloudpbv2.GetMeshRosterResponse{
+		Entries: []*cloudpbv2.MeshRosterEntry{{Name: "brave-dolphin", AssetId: rosterAssetA}},
+	})
+	r := NewMeshResolver(zaptest.NewLogger(t), roster, lanBrowse(
+		models.LANDevice{MeshName: "brave-dolphin", PrincipalURI: certs.DeviceSPIFFEURI(rosterTenant, rosterDevice)},
+		models.LANDevice{MeshName: "brave dolphin", PrincipalURI: certs.DeviceSPIFFEURI(rosterTenant, rosterDeviceB)},
+	))
+	got, ok := r.Resolve("brave-dolphin")
+	if !ok || got != mustDevice(t, rosterTenant, rosterDevice) {
+		t.Fatalf("roster fallback = %v,%v want the Cloud device principal", got, ok)
+	}
+}
+
 func TestResolverSameDeviceRepeatedNotAmbiguous(t *testing.T) {
 	roster := provisionedRoster(t)
 	device := certs.DeviceSPIFFEURI(rosterTenant, rosterDeviceB)
@@ -143,5 +162,22 @@ func TestResolverBrowseErrorFallsBackToRoster(t *testing.T) {
 	got, ok := r.Resolve("calm-otter")
 	if !ok || got != mustDevice(t, rosterTenant, rosterDeviceB) {
 		t.Fatalf("browse failure fallback = %v,%v want roster entry", got, ok)
+	}
+}
+
+func TestLegacyResolverKeepsConfirmedLANNamesAtDeadline(t *testing.T) {
+	roster := provisionedRoster(t)
+	r := NewMeshResolver(zaptest.NewLogger(t), roster, func(context.Context) ([]models.LANDevice, error) {
+		return []models.LANDevice{{
+			MeshName:     "install-name",
+			CloudName:    "cloud-name",
+			PrincipalURI: certs.DeviceSPIFFEURI(rosterTenant, rosterDeviceB),
+		}}, context.DeadlineExceeded
+	})
+	if got, ok := r.Resolve("install-name"); !ok || got != mustDevice(t, rosterTenant, rosterDeviceB) {
+		t.Fatalf("legacy LAN lookup at browse deadline = %v,%v", got, ok)
+	}
+	if _, ok := r.Resolve("cloud-name"); ok {
+		t.Fatal("the new Cloud TXT field displaced the local legacy name")
 	}
 }

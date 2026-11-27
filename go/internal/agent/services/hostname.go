@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 )
 
 // explicitHostnamePath holds a literal hostname set via SetHostname. It lives in
@@ -42,8 +44,8 @@ const deviceNamePath = "/etc/wendyos/device-name"
 // title-cased ("orin-nano-pr319" as "Orin Nano Pr319").
 //
 // A host that is not a WendyOS image has neither file and goes by its
-// hostname. The name the device has in Wendy Cloud is not consulted: the agent
-// is never told it. 'wendy device rename' sets both, but 'wendy device enroll'
+// hostname. The name the device has in Wendy Cloud is not consulted: the Cloud label
+// is advertised separately. 'wendy device rename' sets both, but 'wendy device enroll'
 // names the Cloud record without renaming the device, so the two can differ.
 //
 // It returns "" when the host has no name to give.
@@ -271,22 +273,80 @@ func avahiContentForHostname(content, hostname string) string {
 	return replaceAvahiTXTRecord(content, "fqdn", "sh.wendy."+hostname)
 }
 
+// CloudNameAdvertisement returns the roster worker's publisher for the LAN
+// friendly name in its own TXT field.
+func CloudNameAdvertisement(logger *zap.Logger) func(principal, name string) {
+	var retryPrincipal string
+	return func(principal, name string) {
+		if publishCloudName(avahiServiceFile, principal, name, retryPrincipal == principal, func() bool {
+			return avahiServiceAction(logger, "reload", "avahi-daemon")
+		}, logger) {
+			retryPrincipal = ""
+		} else {
+			retryPrincipal = principal
+		}
+	}
+}
+
+func publishCloudName(serviceFile, principal, name string, retry bool, reload func() bool, logger *zap.Logger) bool {
+	unlock := LockAvahiServiceFile()
+	defer unlock()
+
+	data, err := os.ReadFile(serviceFile)
+	if os.IsNotExist(err) {
+		return true
+	}
+	if err != nil {
+		logger.Warn("Reading the mDNS advertisement for the Cloud device name failed", zap.Error(err))
+		return false
+	}
+	previous := string(data)
+	matchesPrincipal := false
+	content := editWendyOSServiceBlock(previous, func(block string) string {
+		// An in-flight sync can outlive its enrollment.
+		if !strings.Contains(block, "<txt-record>principal="+principal+"</txt-record>") {
+			return block
+		}
+		matchesPrincipal = true
+		if label, valid := meshname.FriendlyLabel(name); valid {
+			return setAvahiTXTRecord(block, "cloud-name", label)
+		}
+		return cloudNameTXTRecord.ReplaceAllString(block, "")
+	})
+	if !matchesPrincipal {
+		return true
+	}
+	if content != previous {
+		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
+			logger.Warn("Updating the mDNS Cloud device name failed", zap.Error(err))
+			return false
+		}
+	}
+	return (content == previous && !retry) || reload()
+}
+
+var cloudNameTXTRecord = regexp.MustCompile(`\s*<txt-record>cloud-name=[^<]*</txt-record>`)
+
 // restartAvahiDaemon restarts avahi-daemon so it re-reads both the service file
 // and gethostname(). A full restart is required: --reload (SIGHUP) only
 // refreshes service files, leaving the %h-based records stale.
 func restartAvahiDaemon(logger *zap.Logger) bool {
+	return avahiServiceAction(logger, "restart", "avahi-daemon")
+}
+
+func avahiServiceAction(logger *zap.Logger, args ...string) bool {
 	// A stuck service manager must not hold up the service-file lock's other
 	// writers, among them enrollment, or the agent's shutdown.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	restart := exec.CommandContext(ctx, "/usr/bin/systemctl", "restart", "avahi-daemon")
+	restart := exec.CommandContext(ctx, "/usr/bin/systemctl", args...)
 	restart.Env = systemPathEnv()
 	restart.WaitDelay = time.Second
 	if out, err := restart.CombinedOutput(); err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		logger.Warn("systemctl restart avahi-daemon failed", zap.Error(err), zap.String("output", string(out)))
+		logger.Warn("Avahi service command failed", zap.Strings("args", args), zap.Error(err), zap.String("output", string(out)))
 		return false
 	}
 	return true

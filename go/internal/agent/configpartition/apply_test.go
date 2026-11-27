@@ -648,7 +648,9 @@ func TestUpdateAvahiService_UnprovisioningClearsEnrollment(t *testing.T) {
 	provisioned := strings.Replace(avahiServiceTemplate, "<port>50051</port>", `<port>50052</port>
     <txt-record>tls=true</txt-record>
     <txt-record>principal=`+testPrincipal+`</txt-record>
-    <txt-record>id=device-uuid</txt-record>`, 1)
+    <txt-record>id=device-uuid</txt-record>
+    <txt-record>name=local-name</txt-record>
+    <txt-record>cloud-name=previous-cloud-name</txt-record>`, 1)
 	if err := os.WriteFile(serviceFile, []byte(provisioned), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -664,12 +666,12 @@ func TestUpdateAvahiService_UnprovisioningClearsEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, stale := range []string{"principal=", "tls=true", "<port>50052</port>"} {
+	for _, stale := range []string{"principal=", "tls=true", "<port>50052</port>", "previous-cloud-name"} {
 		if strings.Contains(string(got), stale) {
 			t.Errorf("stale enrollment field %q remains:\n%s", stale, got)
 		}
 	}
-	for _, want := range []string{"<port>50051</port>", "<txt-record>tls=false</txt-record>", "<txt-record>id=device-uuid</txt-record>", "<type>_ssh._tcp</type>", "<port>22</port>"} {
+	for _, want := range []string{"<port>50051</port>", "<txt-record>tls=false</txt-record>", "<txt-record>name=local-name</txt-record>", "<txt-record>id=device-uuid</txt-record>", "<type>_ssh._tcp</type>", "<port>22</port>"} {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("missing setup or unrelated field %q:\n%s", want, got)
 		}
