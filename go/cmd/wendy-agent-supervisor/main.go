@@ -155,7 +155,9 @@ func run() int {
 		// Only settings an older agent must read back: identity, leases and
 		// cursors move forward even when a trial is rejected.
 		SnapshotDirs: []supervisor.SnapshotDir{
-			{Path: "/data/etc/wendy-agent", Only: []string{"local-mesh.json", "nan-mesh.json", "mesh-disabled", "build-host-enabled"}},
+			{Path: "/data/etc/wendy-agent", Only: []string{
+				"local-mesh.json", "local-mesh.json.disabled", "nan-mesh.json", "mesh-disabled", "build-host-enabled",
+			}},
 			{Path: "/data/etc/NetworkManager/system-connections"},
 		},
 		Self:           self,
