@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -150,6 +152,12 @@ func tunnelAuthorizationFor(ctx context.Context, auth *config.AuthConfig) (*tunn
 }
 
 func openAuthorizedTunnel(ctx context.Context, auth *config.AuthConfig, assetID, service string, halfClose bool) (net.Conn, error) {
+	// Held connections and forwards redial with the login they captured. Sign
+	// with the login on disk now, renewed where possible, never an expired one.
+	auth, err := currentCloudLogin(ctx, auth)
+	if err != nil {
+		return nil, err
+	}
 	entry, release, err := tunnelAuthorizationFor(ctx, auth)
 	if err != nil {
 		return nil, err
@@ -166,3 +174,28 @@ func openAuthorizedTunnel(ctx context.Context, auth *config.AuthConfig, assetID,
 	}
 	return open(ctx, cloudCtx, entry.conn, entry.verifier, assetID, service, entry.sign)
 }
+
+// currentCloudLogin returns held as it is on disk now, renewed where possible.
+// Any failure that leaves an expired leaf reads as one sentence, one step.
+func currentCloudLogin(ctx context.Context, held *config.AuthConfig) (*config.AuthConfig, error) {
+	current := *held
+	if err := prepareDefaultCloudCertificate(ctx, &current); err != nil {
+		if errors.Is(err, errCertExpired) || leafExpired(current.Certificates) {
+			return nil, fmt.Errorf("%w; run 'wendy auth login' to sign in again", errCertExpired)
+		}
+		return nil, err
+	}
+	return &current, nil
+}
+
+func leafExpired(certificates []config.CertificateInfo) bool {
+	if len(certificates) == 0 {
+		return false
+	}
+	notAfter, err := leafNotAfterFn(certificates[0].PemCertificate)
+	return err == nil && timeNowFn().After(notAfter)
+}
+
+// errHeldSignInExpired stops a held connection's redial: its device mTLS
+// presents the leaf captured at connect time, which the device refuses.
+var errHeldSignInExpired = errors.New("this connection's sign-in expired; reconnect")

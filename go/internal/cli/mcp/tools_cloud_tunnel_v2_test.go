@@ -1,16 +1,20 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"math/big"
 	"net"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +22,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -52,6 +57,11 @@ func (s *fakeAssetV2Server) ListAssets(req *cloudpbv2.ListAssetsRequest, stream 
 // cloud dial's signer and the tunnel principal signer both need.
 func v2TestAuth(t *testing.T, cloudGRPC string) *config.AuthConfig {
 	t.Helper()
+	return v2TestAuthUntil(t, cloudGRPC, time.Now().Add(time.Hour))
+}
+
+func v2TestAuthUntil(t *testing.T, cloudGRPC string, notAfter time.Time) *config.AuthConfig {
+	t.Helper()
 	keyPEM, err := certs.GenerateMLDSAKeyPair()
 	if err != nil {
 		t.Fatal(err)
@@ -67,8 +77,8 @@ func v2TestAuth(t *testing.T, cloudGRPC string) *config.AuthConfig {
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "operator"},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(time.Hour),
+		NotBefore:    notAfter.Add(-2 * time.Hour),
+		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		URIs:         []*url.URL{principal},
@@ -223,5 +233,113 @@ func TestMCPTunnelServiceMapping(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Errorf("mcpTunnelService(%d) = %q, %v; want %q", tc.port, got, err, tc.want)
 		}
+	}
+}
+
+// WDY-4396: a held connection or forward signs each dial with the login on disk
+// now. An expired one fails locally; a renewed one is used without a restart.
+func TestHeldMCPTunnelSignsWithLoginOnDisk(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signedWith := make(chan []byte, 2)
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		var req relaypb.RequestTunnelRequest
+		if err := stream.RecvMsg(&req); err != nil {
+			return err
+		}
+		var header struct{ X5C [][]byte }
+		raw, _ := base64.RawURLEncoding.DecodeString(strings.Split(string(req.GetPrincipalRequest().GetValue()), ".")[0])
+		_ = json.Unmarshal(raw, &header)
+		signedWith <- header.X5C[0]
+		return status.Error(codes.PermissionDenied, "test refusal")
+	}))
+	go srv.Serve(lis) //nolint:errcheck
+	t.Cleanup(srv.Stop)
+	held := v2TestAuthUntil(t, lis.Addr().String(), time.Now().Add(-time.Minute))
+	onDisk := *held
+	old := reloadConfigFn
+	t.Cleanup(func() { reloadConfigFn = old })
+	reloadConfigFn = func() (*config.Config, error) { return &config.Config{Auth: []config.AuthConfig{onDisk}}, nil }
+	device := mcpCloudDevice{name: "edge-one", key: "11111111-1111-4111-8111-111111111111", isV2: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := device.openTunnel(ctx, nil, held, 50052); err == nil || !strings.Contains(err.Error(), "auth_login") {
+		t.Fatalf("expired login: %v", err)
+	}
+	select {
+	case <-signedWith:
+		t.Fatal("expired login reached Cloud")
+	default:
+	}
+
+	onDisk = *v2TestAuthUntil(t, lis.Addr().String(), time.Now().Add(time.Hour))
+	if _, err := device.openTunnel(ctx, nil, held, 50052); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("renewed login: %v", err)
+	}
+	leaf, err := certs.ParseStoredLeaf(onDisk.Certificates[0].PemCertificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := <-signedWith; !bytes.Equal(got, leaf.Raw) {
+		t.Fatal("held connection signed with its captured leaf, not the renewed one")
+	}
+}
+
+// WDY-4396 review B1: cloud_connect's device mTLS presents the leaf it
+// captured. Once that leaf expires, its redial stops before Cloud, and
+// Reconnect rebuilds with the login on disk, or stops when there is none.
+func TestHeldMCPCloudConnectionReconnectsWithLoginOnDisk(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cloudCalls atomic.Int32
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(any, grpc.ServerStream) error {
+		cloudCalls.Add(1)
+		return status.Error(codes.PermissionDenied, "test refusal")
+	}))
+	go srv.Serve(lis) //nolint:errcheck
+	t.Cleanup(srv.Stop)
+	held := v2TestAuthUntil(t, lis.Addr().String(), time.Now().Add(-time.Minute))
+	onDisk := *v2TestAuthUntil(t, lis.Addr().String(), time.Now().Add(time.Hour))
+	// Any CA; no handshake runs.
+	held.Certificates[0].PemCertificateChain = held.Certificates[0].PemCertificate
+	onDisk.Certificates[0].PemCertificateChain = held.Certificates[0].PemCertificate
+	old := reloadConfigFn
+	t.Cleanup(func() { reloadConfigFn = old })
+	reloadConfigFn = func() (*config.Config, error) { return &config.Config{Auth: []config.AuthConfig{onDisk}}, nil }
+	device := mcpCloudDevice{name: "edge-one", key: "11111111-1111-4111-8111-111111111111", isV2: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, _, err := connectPinnedMCPCloudAgent(ctx, held, device, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, 2*time.Second)
+	_, err = conn.AgentService.GetAgentVersion(rpcCtx, &agentpb.GetAgentVersionRequest{})
+	rpcCancel()
+	if err == nil || !strings.Contains(err.Error(), "this connection's sign-in expired") {
+		t.Fatalf("held connection with an expired leaf: %v", err)
+	}
+
+	next, err := conn.Reconnect(ctx)
+	if err != nil {
+		t.Fatalf("reconnect with a fresh login on disk: %v", err)
+	}
+	next.Close()
+	if next.CertInfo.PemCertificate != onDisk.Certificates[0].PemCertificate {
+		t.Fatal("reconnect rebuilt the connection with its captured login, not the one on disk")
+	}
+
+	onDisk = *held
+	if _, err := conn.Reconnect(ctx); err == nil || !strings.Contains(err.Error(), "auth_login") {
+		t.Fatalf("reconnect with only the expired login: %v", err)
+	}
+	if n := cloudCalls.Load(); n != 0 {
+		t.Fatalf("Cloud got %d tunnel requests; want none", n)
 	}
 }

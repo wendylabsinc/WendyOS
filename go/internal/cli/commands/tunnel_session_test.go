@@ -1,14 +1,22 @@
 package commands
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 	"google.golang.org/grpc"
@@ -35,6 +43,7 @@ func TestTunnelSessionReusesConnectionButAuthorizesEveryDial(t *testing.T) {
 	defer srv.Stop()
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = lis.Addr().String()
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
 	id := "00000000-0000-4000-8000-000000000042"
 	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
 	var session TunnelSession
@@ -153,6 +162,7 @@ func TestTunnelSessionPauseCancelsAuthorization(t *testing.T) {
 	defer srv.Stop()
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = lis.Addr().String()
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
 	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
@@ -214,6 +224,7 @@ func TestTunnelSessionRecoversAsSoonAsCloudReturns(t *testing.T) {
 	defer func() { srv.Stop() }()
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = address
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
 	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
@@ -297,5 +308,169 @@ func TestTunnelSessionReadsSigningFilesOnEveryDial(t *testing.T) {
 	}
 	if _, _, err := tunnelAuthorizationFor(ctx, auth); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dial after the signing key was removed: %v", err)
+	}
+}
+
+// WDY-4396: a held connection signs each dial with the login on disk now. An
+// expired one fails locally; a renewed one is used without a restart.
+func TestHeldCloudTunnelSignsWithLoginOnDisk(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signedWith := make(chan []byte, 2)
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		var req pb.RequestTunnelRequest
+		if err := stream.RecvMsg(&req); err != nil {
+			return err
+		}
+		var header struct{ X5C [][]byte }
+		raw, _ := base64.RawURLEncoding.DecodeString(strings.Split(string(req.GetPrincipalRequest().GetValue()), ".")[0])
+		_ = json.Unmarshal(raw, &header)
+		signedWith <- header.X5C[0]
+		return status.Error(codes.PermissionDenied, "test refusal")
+	}))
+	go srv.Serve(lis)
+	defer srv.Stop()
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = lis.Addr().String()
+	auth.OAuthIssuer = "" // no sign-in re-issue: an expired leaf stays expired
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
+	held := *auth
+	id := "00000000-0000-4000-8000-000000000042"
+	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	later := time.Now().Add(2 * time.Hour) // past the held leaf's NotAfter
+	oldNow := timeNowFn
+	t.Cleanup(func() { timeNowFn = oldNow })
+	timeNowFn = func() time.Time { return later }
+	if _, err := d.openTunnel(ctx, nil, &held, 50052, false); err == nil || !strings.Contains(err.Error(), "wendy auth login") {
+		t.Fatalf("expired login: %v", err)
+	}
+	select {
+	case <-signedWith:
+		t.Fatal("expired login reached Cloud")
+	default:
+	}
+
+	key, err := certs.ParseSigningPrivateKeyPEM([]byte(auth.Certificates[0].PemPrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed := *auth
+	renewed.Certificates = []config.CertificateInfo{auth.Certificates[0]}
+	renewed.Certificates[0].PemCertificate = testLeafPEMUntil(t, key, time.Now().Add(48*time.Hour))
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{renewed}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.openTunnel(ctx, nil, &held, 50052, false); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("renewed login: %v", err)
+	}
+	leaf, err := certs.ParseStoredLeaf(renewed.Certificates[0].PemCertificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := <-signedWith; !bytes.Equal(got, leaf.Raw) {
+		t.Fatal("held connection signed with its captured leaf, not the renewed one")
+	}
+}
+
+// WDY-4396 review B1: a held connection's device mTLS presents the leaf it
+// captured. Once that leaf expires, its redial stops before Cloud, and
+// Reconnect rebuilds with the login on disk, or stops when there is none.
+func TestHeldCloudConnectionReconnectsWithLoginOnDisk(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cloudCalls atomic.Int32
+	srv := grpc.NewServer(grpc.UnknownServiceHandler(func(any, grpc.ServerStream) error {
+		cloudCalls.Add(1)
+		return status.Error(codes.PermissionDenied, "test refusal")
+	}))
+	go srv.Serve(lis)
+	defer srv.Stop()
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = lis.Addr().String()
+	auth.OAuthIssuer = "" // no sign-in re-issue: an expired leaf stays expired
+	auth.Certificates[0].PemCertificateChain = auth.Certificates[0].PemCertificate // any CA; no handshake runs
+	held := *auth
+	key, err := certs.ParseSigningPrivateKeyPEM([]byte(auth.Certificates[0].PemPrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed := *auth
+	renewed.Certificates = []config.CertificateInfo{auth.Certificates[0]}
+	renewed.Certificates[0].PemCertificate = testLeafPEMUntil(t, key, time.Now().Add(48*time.Hour))
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{renewed}})
+	id := "00000000-0000-4000-8000-000000000042"
+	d := cloudDiscoveryDevice{cloudAssetMetadata: &cloudpbv2.Asset{Id: id}, v2: &cloudpbv2.Asset{Id: id}, key: id}
+	ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), cloudTunnelOnlyKey{}, true), 10*time.Second)
+	defer cancel()
+	conn, err := connectCloudDiscoveryTransport(ctx, &held, d, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	later := time.Now().Add(2 * time.Hour) // past the held leaf's NotAfter
+	oldNow, oldDial := timeNowFn, desktopCloudDial
+	t.Cleanup(func() { timeNowFn, desktopCloudDial = oldNow, oldDial })
+	timeNowFn = func() time.Time { return later }
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, 2*time.Second)
+	_, err = conn.AgentService.GetAgentVersion(rpcCtx, &agentpb.GetAgentVersionRequest{})
+	rpcCancel()
+	if err == nil || !strings.Contains(err.Error(), errHeldSignInExpired.Error()) {
+		t.Fatalf("held connection with an expired leaf: %v", err)
+	}
+
+	var dialedWith string
+	desktopCloudDial = func(_ context.Context, auth *config.AuthConfig, _ cloudDiscoveryDevice, _ string) (*grpcclient.AgentConnection, error) {
+		dialedWith = auth.Certificates[0].PemCertificate
+		return &grpcclient.AgentConnection{AgentService: &probeBudgetAgent{}}, nil
+	}
+	next, err := conn.Reconnect(ctx)
+	if err != nil {
+		t.Fatalf("reconnect with a fresh login on disk: %v", err)
+	}
+	next.Close()
+	if dialedWith != renewed.Certificates[0].PemCertificate {
+		t.Fatal("reconnect rebuilt the connection with its captured login, not the one on disk")
+	}
+
+	dialedWith = ""
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{held}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Reconnect(ctx); err == nil || err.Error() != "your certificate has expired; run 'wendy auth login' to sign in again" {
+		t.Fatalf("reconnect with only the expired login: %v", err)
+	}
+	if dialedWith != "" {
+		t.Fatal("reconnect dialed with the expired login")
+	}
+	if n := cloudCalls.Load(); n != 0 {
+		t.Fatalf("Cloud got %d tunnel requests; want none", n)
+	}
+}
+
+// WDY-4396 review N1: an expired login that is not the current context reads
+// as one sentence with one step, like the current one.
+func TestExpiredNonCurrentLoginGivesOneStep(t *testing.T) {
+	held := *oidcEnrollmentAuth(t)
+	held.Name = "a"
+	other := *oidcEnrollmentAuth(t)
+	other.Name = "b"
+	other.CloudGRPC = "other.example:443"
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{held, other}, CurrentContext: "b"})
+	oldNow, oldFresh := timeNowFn, ensureFreshCertificateFn
+	t.Cleanup(func() { timeNowFn, ensureFreshCertificateFn = oldNow, oldFresh })
+	later := time.Now().Add(2 * time.Hour)
+	timeNowFn = func() time.Time { return later }
+	ensureFreshCertificateFn = func(context.Context, *config.AuthConfig) error { return nil }
+	_, err := currentCloudLogin(t.Context(), &held)
+	if err == nil || err.Error() != "your certificate has expired; run 'wendy auth login' to sign in again" {
+		t.Fatalf("expired non-current login: %v", err)
 	}
 }

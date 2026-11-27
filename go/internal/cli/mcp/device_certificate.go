@@ -79,8 +79,8 @@ func (s *mcpServer) runDeviceCertificateWatch(ctx context.Context, interval time
 // a cloud selector, connectFn also renews an expired OAuth login. Before a
 // direct target's reconnect, the login that issued the expired certificate is
 // renewed once per connection (SetLoginRenewer). conn.Reconnect is the
-// fallback for a target connectFn cannot dial: it reuses the login the
-// connection captured, which is the expired one.
+// fallback for a target connectFn cannot dial: a cloud connection's Reconnect
+// reads its login from disk again.
 //
 // A simulator is left alone: connecting to vm:NAME boots it, and the watch
 // must not start a simulator that was stopped outside this server.
@@ -154,7 +154,7 @@ func (s *mcpServer) replaceExpiredDeviceConnection(ctx context.Context, now time
 // before a reconnect to a direct target, once per connection: the watch checks
 // every interval while the device is down, and each renewal spends the
 // session's rotating refresh token. A cloud selector's dial renews its own
-// login, and conn.Reconnect reuses the captured one, so neither gets it.
+// login, and a cloud conn.Reconnect reads the stored one, so neither gets it.
 func (s *mcpServer) renewConnectionLogin(ctx context.Context, conn *grpcclient.AgentConnection, target commandTarget) {
 	s.mu.Lock()
 	renew := s.renewLoginFn

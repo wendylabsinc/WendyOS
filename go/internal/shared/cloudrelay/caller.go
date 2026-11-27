@@ -109,7 +109,12 @@ func PrincipalSigner(certPEM string, keyPEM []byte) (func([]byte) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
+	notAfter := leaves[0].NotAfter
 	return func(payload []byte) ([]byte, error) {
+		// Cloud refuses an expired leaf; don't send it (WDY-4396).
+		if time.Now().After(notAfter) {
+			return nil, fmt.Errorf("operator certificate expired at %s; run 'wendy auth login' to sign in again", notAfter.UTC().Format(time.RFC3339))
+		}
 		input := []byte(b64.EncodeToString(header) + "." + b64.EncodeToString(payload))
 		sig := scheme.Sign(sk, input, &sign.SignatureOpts{Context: ""})
 		if !scheme.Verify(pk, input, sig, &sign.SignatureOpts{Context: ""}) {

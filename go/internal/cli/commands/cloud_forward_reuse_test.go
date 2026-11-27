@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 	"google.golang.org/grpc"
@@ -39,6 +40,7 @@ func TestCloudTunnelForwardReusesAuthorizationConnection(t *testing.T) {
 	tenant, _ := localLiteTestPKI(t)
 	auth.Certificates = tenant.Certificates
 	auth.CloudGRPC = cloud.Addr().String()
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
 	id := "00000000-0000-4000-8000-000000000042"
 	asset := &cloudpbv2.Asset{Id: id}
 	d := cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: id}

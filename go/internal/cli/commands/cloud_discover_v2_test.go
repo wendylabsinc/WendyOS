@@ -238,6 +238,7 @@ func testCloudDiscoveryV2Port(t *testing.T, udp bool, port uint32) {
 	// The v2 path dials auth.CloudGRPC directly (it ignores any passed broker
 	// conn), so point it at the capturing stub.
 	auth.CloudGRPC = lis.Addr().String()
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
