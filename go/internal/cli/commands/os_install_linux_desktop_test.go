@@ -91,6 +91,8 @@ func TestInstallLinuxDesktop_SkipMode_PrintsPlain(t *testing.T) {
 
 func stubLinuxDesktopSingleSessionConfig(t *testing.T) {
 	t.Helper()
+	// Valid for a day: the install checks the certificate before enrolling.
+	certPEM := testCertPEM(t, time.Now().Add(24*time.Hour))
 	origLoad := linuxDesktopConfigLoad
 	linuxDesktopConfigLoad = func() (*config.Config, error) {
 		return &config.Config{
@@ -98,7 +100,7 @@ func stubLinuxDesktopSingleSessionConfig(t *testing.T) {
 				{
 					CloudGRPC: "cloud.wendy.dev:443",
 					Certificates: []config.CertificateInfo{
-						{OrganizationID: 7},
+						{OrganizationID: 7, PemCertificate: certPEM},
 					},
 				},
 			},
@@ -265,5 +267,134 @@ func TestInstallLinuxDesktop_ForcedNonInteractive_TokenError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected error to contain %q, got: %v", "boom", err)
+	}
+}
+
+// stubDesktopEnrollment makes an install on a terminal mint the token
+// "tok-xyz" without Wendy Cloud or the clipboard, and returns the sessions the
+// tokens were minted with.
+func stubDesktopEnrollment(t *testing.T) *[]*config.AuthConfig {
+	t.Helper()
+	stubEnrollPrompts(t)
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	origTok, origClip := linuxDesktopTokenFn, clipboardWriter
+	t.Cleanup(func() { linuxDesktopTokenFn, clipboardWriter = origTok, origClip })
+	var minted []*config.AuthConfig
+	linuxDesktopTokenFn = func(_ context.Context, auth *config.AuthConfig, _ string, _ int32) (string, time.Time, error) {
+		minted = append(minted, auth)
+		return "tok-xyz", time.Date(2026, 7, 7, 15, 0, 0, 0, time.UTC), nil
+	}
+	clipboardWriter = func(string) error { return nil }
+	return &minted
+}
+
+// A Linux desktop or Mac install mints its enrollment token from the CLI's
+// login, so it asks what the other installs ask. With no login it used to
+// print the unenrolled command without a word; it now offers the login and
+// mints the token with the session that login saved.
+func TestInstallDesktopOffersLoginWhenLoggedOut(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		login bool // the answer to "Log in now and enroll this device?"
+	}{
+		{name: "logs in and enrolls", login: true},
+		{name: "login declined"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			minted := stubDesktopEnrollment(t)
+			stubInteractive(t)
+			setTempConfig(t, &config.Config{})
+			asked := 0
+			confirmInstallLogin = func() (bool, error) {
+				asked++
+				return tc.login, nil
+			}
+			logins := 0
+			stubEnrollmentLogin(t, func(context.Context, oidcLoginOptions) error {
+				logins++
+				saved := *oidcEnrollmentAuth(t)
+				saved.CloudGRPC = "cloud.wendy.dev:443"
+				return config.Save(&config.Config{Auth: []config.AuthConfig{saved}})
+			})
+
+			var err error
+			out := captureStdout(t, func() {
+				err = installDesktop(context.Background(), preEnrollOptions{mode: preEnrollAuto}, "my-box", headlessMacMachineLabel)
+			})
+
+			if err != nil {
+				t.Fatalf("installDesktop: %v", err)
+			}
+			if asked != 1 {
+				t.Fatalf("login questions = %d, want 1\n%s", asked, out)
+			}
+			if tc.login {
+				if logins != 1 || len(*minted) != 1 || (*minted)[0].CloudGRPC != "cloud.wendy.dev:443" {
+					t.Fatalf("logins = %d, tokens = %d; want one token from the session the login saved", logins, len(*minted))
+				}
+				if !strings.Contains(out, "WENDY_ENROLLMENT_TOKEN=tok-xyz") {
+					t.Fatalf("the command lacks the enrollment token:\n%s", out)
+				}
+				return
+			}
+			if logins != 0 || len(*minted) != 0 || strings.Contains(out, "WENDY_ENROLLMENT_TOKEN") {
+				t.Fatalf("logins = %d, tokens = %d; want the unenrolled command:\n%s", logins, len(*minted), out)
+			}
+			if !strings.Contains(out, "curl -fsSL https://install.wendy.dev/agent.sh | bash") {
+				t.Fatalf("expected the unenrolled command:\n%s", out)
+			}
+		})
+	}
+}
+
+// With an expired login the token request used to go to Wendy Cloud anyway and
+// come back refused. The install now offers a new sign-in first, as the other
+// installs do, and mints the token with the new certificate.
+func TestInstallDesktopOffersSignInWhenLoginExpired(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		signIn bool // the answer to "Sign in again now and continue enrollment?"
+	}{
+		{name: "signed in again", signIn: true},
+		{name: "sign-in declined"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			minted := stubDesktopEnrollment(t)
+			withStubbedReloginDeps(t, true, false, tc.signIn, nil)
+			auth := expiredEnrollmentAuth(t)
+			auth.CloudGRPC = "cloud.wendy.dev:443"
+			setTempConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
+			confirmPreEnroll = func() (bool, error) { return true, nil }
+			freshPEM := testCertPEM(t, time.Now().Add(time.Hour))
+			logins := 0
+			stubEnrollmentLogin(t, func(context.Context, oidcLoginOptions) error {
+				logins++
+				fresh := *auth
+				fresh.Certificates = append([]config.CertificateInfo(nil), auth.Certificates...)
+				fresh.Certificates[0].PemCertificate = freshPEM
+				return config.Save(&config.Config{Auth: []config.AuthConfig{fresh}})
+			})
+
+			var err error
+			out := captureStdout(t, func() {
+				err = installDesktop(context.Background(), preEnrollOptions{mode: preEnrollAuto}, "my-box", linuxDesktopMachineLabel)
+			})
+
+			if err != nil {
+				t.Fatalf("installDesktop: %v", err)
+			}
+			if tc.signIn {
+				if logins != 1 || len(*minted) != 1 || (*minted)[0].Certificates[0].PemCertificate != freshPEM {
+					t.Fatalf("sign-ins = %d, tokens = %d; want one token minted with the new certificate", logins, len(*minted))
+				}
+				if !strings.Contains(out, "WENDY_ENROLLMENT_TOKEN=tok-xyz") {
+					t.Fatalf("the command lacks the enrollment token:\n%s", out)
+				}
+				return
+			}
+			if logins != 0 || len(*minted) != 0 || strings.Contains(out, "WENDY_ENROLLMENT_TOKEN") {
+				t.Fatalf("sign-ins = %d, tokens = %d; want the unenrolled command:\n%s", logins, len(*minted), out)
+			}
+		})
 	}
 }

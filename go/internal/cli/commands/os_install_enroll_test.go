@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -58,6 +59,11 @@ func stubEnrollPrompts(t *testing.T) {
 		t.Fatal("unexpected device-name prompt")
 		return "", nil
 	}
+	origLogin := confirmInstallLogin
+	confirmInstallLogin = func() (bool, error) {
+		t.Fatal("unexpected login question")
+		return false, nil
+	}
 	origNames := orgDeviceNamesFn
 	orgDeviceNamesFn = func(context.Context, *config.AuthConfig) ([]string, error) { return nil, nil }
 	origNameDefault := promptDeviceNameDefault
@@ -77,6 +83,7 @@ func stubEnrollPrompts(t *testing.T) {
 		preEnrollDeviceFn = origEnroll
 		preEnrollACMEFn = origACME
 		promptDeviceName = origName
+		confirmInstallLogin = origLogin
 		promptDeviceNameDefault = origNameDefault
 		orgDeviceNamesFn = origNames
 		resolveOrgFn = origResolveOrg
@@ -412,7 +419,7 @@ func TestACMEPreEnrollmentBakesEABMaterial(t *testing.T) {
 	var got *acmeEnrollmentBake
 	out, err := captureCommandStdout(t, func() error {
 		var err error
-		got, err = resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
+		got, err = resolveACMEPreEnrollment(context.Background(), validSessionConfig(t),
 			preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
 		return err
 	})
@@ -445,6 +452,15 @@ func TestACMEPreEnrollmentBakesEABMaterial(t *testing.T) {
 			t.Errorf("acme-enrollment.json missing %s; got %s", frag, blob)
 		}
 	}
+}
+
+// validSessionConfig is twoSessionConfig with a certificate valid for a day on
+// the prod.example.com session: the install checks it before enrolling.
+func validSessionConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := twoSessionConfig()
+	cfg.Auth[0].Certificates[0].PemCertificate = testCertPEM(t, time.Now().Add(24*time.Hour))
+	return cfg
 }
 
 // cloudAcceptsDeviceName is EnrollDeviceRequest.name's rule (WDY-3016):
@@ -519,7 +535,7 @@ func TestProvisioningJSONBlankNameReservesTheNameItBakes(t *testing.T) {
 func TestACMEPreEnrollmentForcedNonInteractiveBlankNameNeedsDeviceName(t *testing.T) {
 	stubEnrollPrompts(t) // preEnrollACMEFn and promptDeviceName fail the test if called
 	name := ""
-	_, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
+	_, err := resolveACMEPreEnrollment(context.Background(), validSessionConfig(t),
 		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
 	if err == nil || !strings.Contains(err.Error(), "--device-name") {
 		t.Fatalf("err = %v, want one naming --device-name", err)
@@ -617,11 +633,222 @@ func TestPreEnrollTakenNameStopKeepsTheWayOut(t *testing.T) {
 	}
 }
 
+// An install checks the session's certificate when enrollment is chosen, before
+// anything is downloaded, built or written, as 'wendy device enroll' does: an
+// expired certificate is offered a new sign-in, and declining it installs
+// without enrollment, with no further question.
+func TestInstallEnrollmentChecksTheCertificateWhenChosen(t *testing.T) {
+	resolvers := map[string]func(context.Context, *config.Config, preEnrollOptions, bool) (*config.AuthConfig, error){
+		"full OS": func(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool) (*config.AuthConfig, error) {
+			plan, err := planACMEPreEnrollment(ctx, cfg, opts, interactive)
+			if plan == nil {
+				return nil, err
+			}
+			return plan.auth, err
+		},
+		"Wendy Lite": resolveLiteInstallEnrollment,
+	}
+	for kind, resolve := range resolvers {
+		for _, tc := range []struct {
+			name        string
+			mode        preEnrollMode
+			interactive bool
+			signIn      bool  // the answer to "Sign in again now?"
+			loginErr    error // the sign-in's failure
+			ack         bool  // the answer to "Continue installing without enrollment?"
+		}{
+			{name: "signed in again", mode: preEnrollAuto, interactive: true, signIn: true},
+			{name: "sign-in declined", mode: preEnrollAuto, interactive: true},
+			{name: "sign-in failed", mode: preEnrollAuto, interactive: true, signIn: true, loginErr: errors.New("browser login cancelled"), ack: true},
+			{name: "forced without a terminal", mode: preEnrollForced},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				stubEnrollPrompts(t)
+				withStubbedReloginDeps(t, tc.interactive, false, tc.signIn, nil)
+				auth := expiredEnrollmentAuth(t)
+				auth.CloudGRPC = "grpc.wendy.sh:443"
+				seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
+				freshPEM := testCertPEM(t, time.Now().Add(time.Hour))
+				logins := 0
+				stubEnrollmentLogin(t, func(context.Context, oidcLoginOptions) error {
+					logins++
+					if tc.loginErr != nil {
+						return tc.loginErr
+					}
+					fresh := *auth
+					fresh.Certificates = append([]config.CertificateInfo(nil), auth.Certificates...)
+					fresh.Certificates[0].PemCertificate = freshPEM
+					return config.Save(&config.Config{Auth: []config.AuthConfig{fresh}})
+				})
+				confirmPreEnroll = func() (bool, error) { return true, nil }
+				acks := 0
+				confirmContinueUnenrolled = func() (bool, error) {
+					acks++
+					return tc.ack, nil
+				}
+				names := 0
+				promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) {
+					names++
+					return "lab-box", nil
+				}
+
+				got, err := resolve(context.Background(), &config.Config{Auth: []config.AuthConfig{*auth}}, preEnrollOptions{mode: tc.mode}, tc.interactive)
+
+				wantLogins, wantAcks := 0, 0
+				switch tc.name {
+				case "signed in again":
+					wantLogins = 1
+					if err != nil || got == nil || got.Certificates[0].PemCertificate != freshPEM {
+						t.Fatalf("session = %v, error = %v; want the new certificate", got, err)
+					}
+				case "sign-in declined":
+					if err != nil || got != nil {
+						t.Fatalf("session = %v, error = %v; want the install to go on without enrollment", got, err)
+					}
+					if names != 0 {
+						t.Fatal("asked for a device name to enroll after enrollment was declined")
+					}
+				case "sign-in failed":
+					wantLogins, wantAcks = 1, 1
+					if err != nil || got != nil {
+						t.Fatalf("session = %v, error = %v; want the acknowledged install to go on without enrollment", got, err)
+					}
+				case "forced without a terminal":
+					if got != nil || !errors.Is(err, errCertExpired) || !strings.Contains(err.Error(), "--pre-enroll:") {
+						t.Fatalf("session = %v, error = %v; want the expiry before anything is written", got, err)
+					}
+				}
+				if logins != wantLogins || acks != wantAcks {
+					t.Fatalf("sign-ins = %d, continue-unenrolled questions = %d; want %d and %d", logins, acks, wantLogins, wantAcks)
+				}
+			})
+		}
+	}
+}
+
+// An install on a CLI that holds no Wendy Cloud login used to skip enrollment
+// without a word, or with --pre-enroll to name the command to type. It now
+// offers the login itself, before anything is downloaded, built or written, and
+// enrolls with the session that login saved. Declining installs without
+// enrollment and asks nothing more.
+func TestInstallEnrollmentOffersLoginWhenLoggedOut(t *testing.T) {
+	resolvers := map[string]func(context.Context, *config.Config, preEnrollOptions, bool) (*config.AuthConfig, error){
+		"full OS": func(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool) (*config.AuthConfig, error) {
+			plan, err := planACMEPreEnrollment(ctx, cfg, opts, interactive)
+			if plan == nil {
+				return nil, err
+			}
+			return plan.auth, err
+		},
+		"Wendy Lite": resolveLiteInstallEnrollment,
+	}
+	const savedCloud = "grpc.wendy.sh:443"
+	yes, no := true, false
+	for kind, resolve := range resolvers {
+		for _, tc := range []struct {
+			name        string
+			opts        preEnrollOptions
+			interactive bool
+			login       *bool // the answer to the login question; nil when it must not be asked
+			cancelled   bool  // the login question is closed with Ctrl+C
+			loginErr    error // the login's failure
+			ack         *bool // the answer to "Continue installing without enrollment?"; nil when it must not be asked
+			wantSession bool
+			wantErr     error
+		}{
+			{name: "logs in and enrolls", opts: preEnrollOptions{mode: preEnrollAuto}, interactive: true, login: &yes, wantSession: true},
+			{name: "logs in and enrolls with --pre-enroll", opts: preEnrollOptions{mode: preEnrollForced}, interactive: true, login: &yes, wantSession: true},
+			{name: "login declined", opts: preEnrollOptions{mode: preEnrollAuto}, interactive: true, login: &no},
+			{name: "login question cancelled", opts: preEnrollOptions{mode: preEnrollAuto}, interactive: true, cancelled: true, wantErr: ErrUserCancelled},
+			{name: "login failed and the install goes on", opts: preEnrollOptions{mode: preEnrollAuto}, interactive: true, login: &yes, loginErr: errors.New("browser login timed out"), ack: &yes},
+			{name: "login failed and the install is stopped", opts: preEnrollOptions{mode: preEnrollAuto}, interactive: true, login: &yes, loginErr: errors.New("browser login timed out"), ack: &no, wantErr: ErrUserCancelled},
+			{name: "no terminal", opts: preEnrollOptions{mode: preEnrollAuto}},
+			{name: "--pre-enroll without a terminal", opts: preEnrollOptions{mode: preEnrollForced}, wantErr: config.ErrNotLoggedIn},
+			{name: "--cloud-grpc names a session", opts: preEnrollOptions{mode: preEnrollAuto, cloudGRPC: "dev.example.com:443"}, interactive: true},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				stubEnrollPrompts(t)
+				t.Setenv("WENDY_SECRET_STORE", "file")
+				setTempConfig(t, &config.Config{})
+				asked := 0
+				confirmInstallLogin = func() (bool, error) {
+					asked++
+					if tc.cancelled {
+						return false, ErrUserCancelled
+					}
+					if tc.login == nil {
+						t.Fatal("unexpected login question")
+					}
+					return *tc.login, nil
+				}
+				logins := 0
+				stubEnrollmentLogin(t, func(_ context.Context, opts oidcLoginOptions) error {
+					logins++
+					if opts.CloudGRPC != defaultProdCloudGRPC {
+						t.Errorf("login went to %q, want the production Cloud", opts.CloudGRPC)
+					}
+					if tc.loginErr != nil {
+						return tc.loginErr
+					}
+					saved := *oidcEnrollmentAuth(t)
+					saved.CloudGRPC = savedCloud
+					return config.Save(&config.Config{Auth: []config.AuthConfig{saved}})
+				})
+				acks := 0
+				confirmContinueUnenrolled = func() (bool, error) {
+					acks++
+					if tc.ack == nil {
+						t.Fatal("unexpected continue-unenrolled question")
+					}
+					return *tc.ack, nil
+				}
+				names := 0
+				promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) {
+					names++
+					return "lab-box", nil
+				}
+
+				got, err := resolve(context.Background(), &config.Config{}, tc.opts, tc.interactive)
+
+				if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+					t.Fatalf("error = %v, want %v", err, tc.wantErr)
+				}
+				if tc.wantSession {
+					if got == nil || got.CloudGRPC != savedCloud {
+						t.Fatalf("session = %v, want the one the login saved", got)
+					}
+				} else if got != nil {
+					t.Fatalf("session = %v, want an install without enrollment", got)
+				}
+				wantAsked, wantLogins, wantAcks := 0, 0, 0
+				if tc.login != nil || tc.cancelled {
+					wantAsked = 1
+				}
+				if tc.login != nil && *tc.login {
+					wantLogins = 1
+				}
+				if tc.ack != nil {
+					wantAcks = 1
+				}
+				if asked != wantAsked || logins != wantLogins || acks != wantAcks {
+					t.Fatalf("login questions = %d, logins = %d, continue-unenrolled questions = %d; want %d, %d and %d", asked, logins, acks, wantAsked, wantLogins, wantAcks)
+				}
+				if !tc.wantSession && names != 0 {
+					t.Fatal("asked for a device name to enroll with no session to enroll")
+				}
+				if tc.name == "--pre-enroll without a terminal" && !strings.Contains(err.Error(), "--pre-enroll:") {
+					t.Fatalf("error = %v, want it to name --pre-enroll", err)
+				}
+			})
+		}
+	}
+}
+
 // saveOneSession makes one signed-in Cloud session the install can enroll with.
 func saveOneSession(t *testing.T) {
 	t.Helper()
 	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
-	if err := config.Save(&config.Config{Auth: []config.AuthConfig{{CloudGRPC: "prod.example.com:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}}}); err != nil {
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{{CloudGRPC: "prod.example.com:443", Certificates: []config.CertificateInfo{{OrganizationID: 7, PemCertificate: testCertPEM(t, time.Now().Add(24*time.Hour))}}}}}); err != nil {
 		t.Fatal(err)
 	}
 }

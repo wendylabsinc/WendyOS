@@ -19,28 +19,23 @@ import (
 )
 
 // Lite must boot before it can supply the nonce and trust capabilities needed
-// for Tier C enrollment. Select and validate the session before flashing, but
-// leave credential issuance to the live USB enrollment flow after reboot.
-func resolveLiteInstallEnrollment(cfg *config.Config, opts preEnrollOptions, interactive bool) (*config.AuthConfig, error) {
-	switch opts.mode {
-	case preEnrollSkip:
-		return nil, nil
-	case preEnrollAuto:
-		if !interactive || len(cfg.Auth) == 0 {
-			return nil, nil
-		}
-		ok, err := confirmPreEnroll()
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			printPreEnrollAnswer(nil)
-			return nil, nil
-		}
+// for Tier C enrollment. Select and validate the session before flashing, and
+// log in, renew or sign in again there if it needs it, but leave credential
+// issuance to the live USB enrollment flow after reboot.
+func resolveLiteInstallEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool) (*config.AuthConfig, error) {
+	cfg, err := chooseInstallEnrollment(ctx, cfg, opts, interactive)
+	if err != nil || cfg == nil {
+		return nil, err
 	}
 	auth, err := selectEnrollmentAuth(cfg, opts.cloudGRPC, interactive)
 	if err == nil && auth != nil && opts.mode == preEnrollAuto {
 		printPreEnrollAnswer(auth)
+	}
+	if err == nil && auth != nil {
+		auth, err = prepareInstallEnrollmentAuth(ctx, auth)
+		if err == nil && auth == nil {
+			return nil, nil
+		}
 	}
 	if err == nil && auth != nil {
 		// Validate derived endpoints and the tenant operator identity without

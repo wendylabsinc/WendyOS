@@ -26,7 +26,7 @@ func TestLiteInstallEnrollmentSelectsSessionWithoutLegacyRPCs(t *testing.T) {
 	cfg := &config.Config{Auth: []config.AuthConfig{*auth}}
 	for _, mode := range []preEnrollMode{preEnrollAuto, preEnrollForced} {
 		confirmPreEnroll = func() (bool, error) { return true, nil }
-		got, err := resolveLiteInstallEnrollment(cfg, preEnrollOptions{mode: mode}, mode == preEnrollAuto)
+		got, err := resolveLiteInstallEnrollment(context.Background(), cfg, preEnrollOptions{mode: mode}, mode == preEnrollAuto)
 		if err != nil || got == nil || got.CloudGRPC != auth.CloudGRPC {
 			t.Fatalf("session = %v, error = %v", got, err)
 		}
@@ -55,7 +55,7 @@ func TestLiteInstallEnrollmentSkipAndFailures(t *testing.T) {
 			confirmContinueUnenrolled = func() (bool, error) { return tc.ack, nil }
 			// A legacy session cannot supply the tenant operator identity.
 			cfg := &config.Config{Auth: twoSessionConfig().Auth[:1]}
-			got, err := resolveLiteInstallEnrollment(cfg, preEnrollOptions{mode: tc.mode}, tc.interactive)
+			got, err := resolveLiteInstallEnrollment(context.Background(), cfg, preEnrollOptions{mode: tc.mode}, tc.interactive)
 			if got != nil {
 				t.Fatal("unexpected enrollment session")
 			}

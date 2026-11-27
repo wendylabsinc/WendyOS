@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -201,7 +202,9 @@ func TestConfirmDiskInstallSettlesWiFiBeforeErasing(t *testing.T) {
 func stubDiskPreEnroll(t *testing.T, events *[]string) {
 	t.Helper()
 	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
-	if err := config.Save(&config.Config{Auth: []config.AuthConfig{{CloudGRPC: "prod.example.com:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}}}); err != nil {
+	// A certificate valid for a day: the install checks it when enrollment is chosen.
+	cert := config.CertificateInfo{OrganizationID: 7, PemCertificate: testCertPEM(t, time.Now().Add(24*time.Hour))}
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{{CloudGRPC: "prod.example.com:443", Certificates: []config.CertificateInfo{cert}}}}); err != nil {
 		t.Fatal(err)
 	}
 	stubEnrollPrompts(t)
@@ -293,7 +296,7 @@ func TestPlanProvisioningReservesNothing(t *testing.T) {
 		t.Fatal("the plan reserved the device in Cloud")
 		return nil, nil
 	}
-	plan, err := planProvisioning(preEnrollOptions{mode: preEnrollAuto})
+	plan, err := planProvisioning(context.Background(), preEnrollOptions{mode: preEnrollAuto})
 	if err != nil || plan == nil || !slices.Equal(events, []string{"pre-enroll?"}) {
 		t.Fatalf("got plan %v, events %v, %v; want only the pre-enroll question", plan, events, err)
 	}

@@ -121,9 +121,11 @@ var linuxDesktopConfigLoad = config.Load
 // existing Linux machine or Mac into a managed Wendy device. machineLabel
 // names the target in the printed prose ("Linux machine" or "Mac") and picks
 // the command form: only Linux passes --network-access to agent.sh, while the
-// Mac app asks on first launch. When the user is logged in and does not decline, it mints a
-// short-lived enrollment token and prints the pre-enrollment one-liner. It
-// never writes a drive or downloads an image.
+// Mac app asks on first launch. It asks about enrollment as an install that
+// writes a drive does (see chooseInstallEnrollment): a CLI with no login is
+// offered one, and an expired login a new sign-in. When the person enrolls, it
+// mints a short-lived enrollment token and prints the pre-enrollment
+// one-liner. It never writes a drive or downloads an image.
 func installDesktop(ctx context.Context, preOpts preEnrollOptions, deviceName, machineLabel string) error {
 	interactive := isInteractiveTerminal()
 
@@ -132,26 +134,20 @@ func installDesktop(ctx context.Context, preOpts preEnrollOptions, deviceName, m
 		cfg = &config.Config{} // treat an unreadable config as "not logged in"
 	}
 
-	enroll := false
-	switch preOpts.mode {
-	case preEnrollSkip:
-		enroll = false
-	case preEnrollForced:
-		enroll = true
-	case preEnrollAuto:
-		if interactive && len(cfg.Auth) > 0 {
-			ok, cErr := confirmPreEnroll()
-			if cErr != nil {
-				return cErr
-			}
-			enroll = ok
-		}
+	enrollCfg, err := chooseInstallEnrollment(ctx, cfg, preOpts, interactive)
+	if err != nil {
+		return err
 	}
 
 	var token, cloudHost, orgName string
 	var expiresAt time.Time
-	if enroll {
-		auth, aErr := selectEnrollmentAuth(cfg, preOpts.cloudGRPC, interactive)
+	if enrollCfg != nil {
+		auth, aErr := selectEnrollmentAuth(enrollCfg, preOpts.cloudGRPC, interactive)
+		if aErr == nil && auth != nil {
+			// The token request presents this certificate: renew it, or sign in
+			// again if it has expired, before asking Wendy Cloud.
+			auth, aErr = prepareInstallEnrollmentAuth(ctx, auth)
+		}
 		if aErr != nil {
 			if errors.Is(aErr, ErrUserCancelled) {
 				return aErr

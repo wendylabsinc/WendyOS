@@ -2854,7 +2854,7 @@ func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, devi
 // resolveFirstBootChoices asks whether to enroll in Wendy Cloud, then for the
 // device name, which an enrolling install checks against the organization.
 func resolveFirstBootChoices(ctx context.Context, deviceName string, preOpts preEnrollOptions) (string, *acmePreEnrollPlan, error) {
-	plan, err := planProvisioning(preOpts)
+	plan, err := planProvisioning(ctx, preOpts)
 	if err != nil {
 		return "", nil, err
 	}
@@ -2950,7 +2950,7 @@ func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config
 
 // planProvisioning asks whether and with which session to pre-enroll; it
 // reserves nothing in Cloud.
-func planProvisioning(preOpts preEnrollOptions) (*acmePreEnrollPlan, error) {
+func planProvisioning(ctx context.Context, preOpts preEnrollOptions) (*acmePreEnrollPlan, error) {
 	if preOpts.mode == preEnrollSkip {
 		return nil, nil
 	}
@@ -2961,7 +2961,7 @@ func planProvisioning(preOpts preEnrollOptions) (*acmePreEnrollPlan, error) {
 		}
 		cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 	}
-	return planACMEPreEnrollment(cfg, preOpts, isInteractiveTerminal())
+	return planACMEPreEnrollment(ctx, cfg, preOpts, isInteractiveTerminal())
 }
 
 // mintProvisioningJSON mints plan's credential as acme-enrollment.json; a nil
@@ -3509,7 +3509,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, version, board stri
 			cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 		}
 		var resolveErr error
-		enrollmentAuth, resolveErr = resolveLiteInstallEnrollment(cfg, preOpts, isInteractiveTerminal())
+		enrollmentAuth, resolveErr = resolveLiteInstallEnrollment(ctx, cfg, preOpts, isInteractiveTerminal())
 		if resolveErr != nil {
 			return resolveErr
 		}
