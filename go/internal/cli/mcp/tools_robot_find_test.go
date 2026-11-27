@@ -30,7 +30,7 @@ func TestRobotFindUploadsCameraReceiptAndUsesBoundTransport(t *testing.T) {
 			t.Fatalf("%+v mode%s", body, mode)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"seen":true,"navigable":false,"message":"visible only"}`))
+		w.Write([]byte(`{"seen":true,"navigable":false,"message":"visible only","robot_serial":"different-robot"}`))
 	}))
 	defer srv.Close()
 	calls := 0
@@ -39,7 +39,7 @@ func TestRobotFindUploadsCameraReceiptAndUsesBoundTransport(t *testing.T) {
 		return (&net.Dialer{}).DialContext(ctx, "tcp", srv.Listener.Addr().String())
 	}
 	result, err := requestRobotFind(context.Background(), "robot", "blue chair", "vision", cameraSnapshot{jpeg: []byte("jpeg"), timestampNS: 123}, dial)
-	if err != nil || result["seen"] != true || calls != 1 {
+	if err != nil || result["seen"] != true || result["robot_serial"] != "robot" || calls != 1 {
 		t.Fatalf("%+v %v calls%d", result, err, calls)
 	}
 	if _, err := requestRobotFind(context.Background(), "robot", "chair", "", cameraSnapshot{}, dial); err == nil || calls != 1 {

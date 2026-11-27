@@ -20,7 +20,7 @@ import (
 
 func (s *mcpServer) registerRobotFindTools(srv *server.MCPServer) {
 	opts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Find a described object such as a blue chair using the paired Go2 onboard camera and an already installed vision model on the selected gateway's local Ollama runtime. Captures one fresh frame; no cloud inference and no robot motion. A visual match alone is not navigable: calibrated camera projection, matching 3D LiDAR, a stationary localized robot, and measured clear-floor approach are required. Returns seen/navigable and an opaque evidence_id when an approach is available. For a user-requested approach call robot_command action go_to_object using exactly that evidence_id. If not seen, report the current view only; this tool does not turn or explore. Requires camera approval."),
+		mcpgo.WithDescription("Find a described object such as a blue chair using the paired Go2 onboard camera and an already installed vision model on the selected gateway's local Ollama runtime. Captures one fresh frame; no cloud inference and no robot motion. A visual match alone is not navigable: calibrated camera projection, matching 3D LiDAR, a stationary localized robot, and measured clear-floor approach are required. Returns seen/navigable and an opaque evidence_id when an approach is available. For a user-requested approach call robot_command action go_to_object using exactly that evidence_id. This tool does not turn or explore. Requires camera approval."),
 		mcpgo.WithString("serial", mcpgo.Description("Saved paired Go2 serial; omit only for exactly one paired robot.")),
 		mcpgo.WithString("query", mcpgo.Required(), mcpgo.Description("One object description, including distinguishing color or shape.")),
 		mcpgo.WithString("model", mcpgo.Description("Optional preferred already-installed local vision model name. The gateway chooses an installed vision-capable model if omitted.")),
@@ -55,7 +55,9 @@ func (s *mcpServer) handleRobotFindObject(ctx context.Context, req mcpgo.CallToo
 	if err != nil {
 		return errResult(errCodeInvalidArgument, err.Error()), nil
 	}
-	return okResult(result), nil
+	response := okResult(result)
+	response.Meta = &mcpgo.Meta{AdditionalFields: map[string]any{"robot_serial": serial}}
+	return response, nil
 }
 
 func requestRobotFind(ctx context.Context, serial, query, model string, shot cameraSnapshot, dial func(context.Context) (net.Conn, error)) (map[string]any, error) {
@@ -90,5 +92,11 @@ func requestRobotFind(ctx context.Context, serial, query, model string, shot cam
 	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&result); err != nil {
 		return nil, err
 	}
+	if result == nil {
+		return nil, errors.New("local object search returned an empty result")
+	}
+	// Bind any follow-up search to the robot whose camera was captured, even
+	// when the caller omitted serial because there was one saved pairing.
+	result["robot_serial"] = serial
 	return result, nil
 }
