@@ -512,6 +512,41 @@ latest live digest for each pending origin as space frees up on the
 maintenance tick.
 A temporary signing identity miss leaves that origin pending while other
 origins can still be advertised.
+
+Router QUIC and TLS stream hellos advertise optional `hb: true` when their
+Node accepts compact manifest inventories. Operator-router hello/ready frames
+negotiate the same capability; raw operator-link consumers must explicitly opt
+in with `meshoperatorlink.WithManifestHaveBatches`. Both authenticated endpoints
+must advertise support. Missing/false capabilities retain ordinary singleton
+HAVEs, because older readers consume unknown operations without replying.
+
+After the initial singleton local proof, negotiated carriers pack queued HAVEs
+into `manifest-haves` controls: `a` holds concatenated 32-byte manifest
+SHA-256 digests. Writers group at most two entries to keep individual
+inventory frames short on slow carriers; receivers accept up to eight. A singleton
+retains the ordinary gossip representation.
+Repeated digests, incorrect lengths, more than eight entries and unrelated fields
+are rejected before consuming hints. Each digest follows the same HAVE/WANT
+path and signed-manifest admission rules. This is transport compression only:
+all live origins are advertised on every carrier attach, with no assumption
+that another carrier, a previous session or the receiver still holds them.
+
+The sender retains independent origin, cancellation and deadline ownership for
+each packed entry and rechecks them, including current signing identity trust,
+at queue admission, maintenance pruning and transport write. Invalid entries
+are removed individually; temporary identity failures keep their normal retry.
+The receiver reserves the worst-case one reply per digest before consuming any
+entry. The eight credits kept free from bulk producers cover the maximum accepted
+batch, so paired receivers can progress without waiting for extra credit from
+each other. Its carrier-independent 32-frame/64 KiB reply reserve also covers
+that bound, even with a constrained writer channel. A pressured frame waits
+as the single pending ingress and resumes unchanged once sufficient credit is
+available; it never retries a partly consumed prefix. This can delay the first
+WANT behind older replies, while reducing total inventory bytes and frames. At 8 kB/s a two-entry
+control serializes in 11.25 ms, compared with 8.25 ms for a singleton HAVE.
+This increases the maximum per-frame serialization delay by 3 ms.
+The smaller writer limit preserves interleaving opportunities compared with
+filling every frame to the protocol maximum.
 Full signed records are sent only on request between routers. Duplicate
 revisions do not renew their expiry.
 

@@ -99,7 +99,7 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 	}
 	cfg := s.routerConfig
 	cfg.Router = peer
-	link, err := meshoperatorlink.RouterClient(ctx, secure, cfg)
+	link, err := meshoperatorlink.RouterClient(meshoperatorlink.WithManifestHaveBatches(ctx), secure, cfg)
 	if err != nil {
 		return err
 	}

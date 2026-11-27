@@ -28,6 +28,7 @@ const MaxRouterControl = (64 << 10) + 4
 // Only the routing queues are new: their contents remain opaque here and are
 // validated by the shared localmesh Node. No delegated route is installed.
 type RouterLink struct {
+	haveBatches bool
 	*Link
 	peer                meshid.Device
 	packets             chan []byte
@@ -38,6 +39,22 @@ type RouterLink struct {
 	transmitWake        chan struct{}
 	lastReceivedRouting atomic.Bool
 }
+
+// WithManifestHaveBatches opts a localmesh-capable consumer into compact
+// inventory negotiation. Raw RouterLink consumers retain singleton controls.
+func WithManifestHaveBatches(ctx context.Context) context.Context {
+	return context.WithValue(ctx, manifestHaveBatchesKey{}, true)
+}
+
+type manifestHaveBatchesKey struct{}
+
+func offerManifestHaveBatches(ctx context.Context) bool {
+	enabled, _ := ctx.Value(manifestHaveBatchesKey{}).(bool)
+	return enabled
+}
+
+// ManifestHaveBatches reports support advertised by both authenticated ends.
+func (l *RouterLink) ManifestHaveBatches() bool { return l.haveBatches }
 
 func (l *RouterLink) Peer() meshid.Device                  { return l.peer }
 func (l *RouterLink) ConnectionState() tls.ConnectionState { return l.conn.ConnectionState() }
@@ -86,7 +103,7 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 		return nil, errors.New("missing router identity")
 	}
 	offeredWindow := agentWindowOffer(c)
-	if err = writeControl(c, control{Kind: "operator-router-hello", Instance: cfg.Instance, AgentWindow: offeredWindow}); err != nil {
+	if err = writeControl(c, control{Kind: "operator-router-hello", Instance: cfg.Instance, AgentWindow: offeredWindow, HaveBatches: offerManifestHaveBatches(ctx)}); err != nil {
 		return nil, err
 	}
 	reply, err := readControl(c)
@@ -112,6 +129,7 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 	if err != nil {
 		return nil, err
 	}
+	l.haveBatches = offerManifestHaveBatches(ctx) && reply.HaveBatches
 	ok = true
 	return l, nil
 }
@@ -235,7 +253,7 @@ func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	if err != nil {
 		return nil, err
 	}
-	if err = writeControl(c, control{Kind: "operator-router-ready", AgentWindow: selectedWindow}); err != nil {
+	if err = writeControl(c, control{Kind: "operator-router-ready", AgentWindow: selectedWindow, HaveBatches: offerManifestHaveBatches(ctx)}); err != nil {
 		return nil, err
 	}
 	var clock func() time.Time
@@ -246,6 +264,7 @@ func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	if err != nil {
 		return nil, err
 	}
+	l.haveBatches = offerManifestHaveBatches(ctx) && hello.HaveBatches
 	ok = true
 	return l, nil
 }

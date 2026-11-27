@@ -42,6 +42,11 @@ func (n *Node) sweepAnnouncements(now time.Time) {
 		for range count {
 			select {
 			case m := <-p.control:
+				var keep bool
+				m, keep = n.prepareHaveBatch(p, m, now, func(entry ControlMessage) { p.rememberSkippedHave(entry, now) })
+				if !keep {
+					continue
+				}
 				if n.controlEligible(p, m, now) {
 					retained = append(retained, m)
 				} else {

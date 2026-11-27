@@ -1,6 +1,6 @@
 package netwire
 
-// Key returns a defined schema field's one-letter wire name. There is no old-wire fallback.
+// Key returns a defined schema field's compact wire name. There is no old-wire fallback.
 func Key(name string) string {
 	switch name {
 	case "Expires":
@@ -69,6 +69,10 @@ func Key(name string) string {
 		return "h"
 	case "hashes":
 		return "h"
+	case "haveBatches":
+		return "hb"
+	case "haves":
+		return "a"
 	case "hello":
 		return "h"
 	case "hops":

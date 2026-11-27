@@ -14,13 +14,14 @@ import (
 // full principal, so the hello only has to prove the peer read the pinned
 // identity correctly - there is no numeric identity to announce.
 type LinkHello struct {
-	Owner    *OperatorOwner `json:"owner,omitempty" cbor:"o,omitempty"`
-	Version  int            `json:"version" cbor:"v"`
-	Role     string         `json:"role,omitempty" cbor:"r,omitempty"`
-	Device   uuid.UUID      `json:"device" cbor:"d"`
-	Peer     uuid.UUID      `json:"peer" cbor:"p"`
-	MTU      int            `json:"mtu" cbor:"m"`
-	Datagram int            `json:"datagram" cbor:"g"`
+	HaveBatches bool           `json:"haveBatches,omitempty" cbor:"hb,omitempty"`
+	Owner       *OperatorOwner `json:"owner,omitempty" cbor:"o,omitempty"`
+	Version     int            `json:"version" cbor:"v"`
+	Role        string         `json:"role,omitempty" cbor:"r,omitempty"`
+	Device      uuid.UUID      `json:"device" cbor:"d"`
+	Peer        uuid.UUID      `json:"peer" cbor:"p"`
+	MTU         int            `json:"mtu" cbor:"m"`
+	Datagram    int            `json:"datagram" cbor:"g"`
 	// IPDatagram is router-QUIC-only. Stream peers must leave it zero.
 	IPDatagram int `json:"ipDatagram,omitempty" cbor:"i,omitempty"`
 }
@@ -49,25 +50,30 @@ func OpenControl(ctx context.Context, conn *quic.Conn, self, peer meshid.Device)
 // the authenticated hello succeeds. The local receive limit is independently
 // advertised; it never comes from discovery or from the current outbound PMTU.
 func openRouterControl(ctx context.Context, conn *quic.Conn, self, peer meshid.Device, receiveIP int) (*quic.Stream, int, error) {
+	stream, ip, _, err := openRouterControlFeatures(ctx, conn, self, peer, receiveIP, false)
+	return stream, ip, err
+}
+
+func openRouterControlFeatures(ctx context.Context, conn *quic.Conn, self, peer meshid.Device, receiveIP int, offerBatches bool) (*quic.Stream, int, bool, error) {
 	if !validIPDatagramLimit(receiveIP) {
-		return nil, 0, errors.New("invalid local router IP capability")
+		return nil, 0, false, errors.New("invalid local router IP capability")
 	}
 	if self.Principal() == peer.Principal() {
-		return nil, 0, errors.New("self link")
+		return nil, 0, false, errors.New("self link")
 	}
 	if self.Tenant() != peer.Tenant() {
-		return nil, 0, errors.New("wendy net peer is outside the tenant")
+		return nil, 0, false, errors.New("wendy net peer is outside the tenant")
 	}
 	state := conn.ConnectionState()
 	if ApplicationProtocol(state.TLS.NegotiatedProtocol) != LinkALPN || !state.SupportsDatagrams.Local || !state.SupportsDatagrams.Remote {
-		return nil, 0, errors.New("incompatible wendy net transport")
+		return nil, 0, false, errors.New("incompatible wendy net transport")
 	}
 	capacity, err := conn.CurrentMaxDatagramPayloadSize()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	if capacity < DatagramLimit {
-		return nil, 0, errors.New("router transport cannot carry baseline datagrams")
+		return nil, 0, false, errors.New("router transport cannot carry baseline datagrams")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -78,7 +84,7 @@ func openRouterControl(ctx context.Context, conn *quic.Conn, self, peer meshid.D
 		stream, err = conn.AcceptStream(ctx)
 	}
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	ok := false
 	defer func() {
@@ -89,23 +95,23 @@ func openRouterControl(ctx context.Context, conn *quic.Conn, self, peer meshid.D
 	}()
 	deadline, _ := ctx.Deadline()
 	_ = stream.SetDeadline(deadline)
-	if err = WriteControl(stream, ControlMessage{Kind: "hello", Hello: &LinkHello{Version: LinkProtocolVersion, Device: self.UUID(), Peer: peer.UUID(), MTU: TunnelMTU, Datagram: DatagramLimit, IPDatagram: receiveIP}}); err != nil {
-		return nil, 0, err
+	if err = WriteControl(stream, ControlMessage{Kind: "hello", Hello: &LinkHello{Version: LinkProtocolVersion, Device: self.UUID(), Peer: peer.UUID(), MTU: TunnelMTU, Datagram: DatagramLimit, IPDatagram: receiveIP, HaveBatches: offerBatches}}); err != nil {
+		return nil, 0, false, err
 	}
 	m, err := ReadControl(stream)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	if m.Kind != "hello" || m.Hello == nil {
-		return nil, 0, errors.New("missing wendy net hello")
+		return nil, 0, false, errors.New("missing wendy net hello")
 	}
 	h := m.Hello
 	if !validRouterHello(h, self, peer) {
-		return nil, 0, errors.New("invalid wendy net hello")
+		return nil, 0, false, errors.New("invalid wendy net hello")
 	}
 	_ = stream.SetDeadline(time.Time{})
 	ok = true
-	return stream, h.IPDatagram, nil
+	return stream, h.IPDatagram, offerBatches && h.HaveBatches, nil
 }
 
 func validIPDatagramLimit(limit int) bool {
