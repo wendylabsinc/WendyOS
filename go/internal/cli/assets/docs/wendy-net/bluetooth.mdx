@@ -3,10 +3,10 @@ title: Wendy Net over Bluetooth
 description: How Bluetooth links work, what they can carry, how fast they are, and how a Bluetooth-only device shows up in mDNS.
 ---
 
-Bluetooth reaches devices that nothing else can: a robot with no cable, no
-access point in range and no Wi-Fi Aware radio. It's the slowest kind of link,
-so Wendy Net only uses it when nothing cheaper is available, but it carries the
-same traffic as every other link.
+Bluetooth can reach a robot with no cable, no access point in range and no
+Wi-Fi Aware radio. It's the slowest kind of link, so Wendy Net uses it to
+carry application traffic when it's the cheapest available path. It can
+carry the same types of traffic as every other link.
 
 ## Turn it on
 
@@ -60,10 +60,10 @@ alerts, status updates, sensor readings and small API calls. It doesn't suit
 video, large files or container images: move those over Ethernet, Wi-Fi or
 Wi-Fi Aware.
 
-A Bluetooth link keeps only a short queue: a few kilobytes, and nothing older
-than a few seconds. If an app sends faster than the link can carry, the extra
-packets are dropped instead of piling up into minutes of delay. Use TCP, or
-retry in your app, for data that must arrive.
+Bluetooth buffers only a few kilobytes of app packets, for up to a few seconds.
+If an app sends faster than the link can carry, the extra packets are dropped
+instead of piling up into minutes of delay. Use TCP, or retry in your app,
+for data that must arrive.
 
 ## Does a Bluetooth device show up in mDNS?
 

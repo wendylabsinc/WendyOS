@@ -64,20 +64,23 @@ Neighbors are the devices you can reach directly. Everyone else arrives by word
 of mouth.
 
 Each device writes a short manifest about itself, with its address, its name and
-the app services it offers, and signs it with its own certificate. It gives the
-manifest to its neighbors, they pass it to theirs, and so on, until every device
-has it. A device can relay another device's manifest, but it can't change it or
-write one for anybody else, because the signature would no longer match.
+the app services it offers, and signs it using its enrollment identity.
+Neighbors can relay the signed manifest unchanged. Each recipient checks the
+signature against the identity of the device that wrote it.
 
 <Frames columns={2}>
   <Frame src="/images/wendy-net/signed-manifest.webp" alt="A card titled Manifest listing Address, Name and Services above a chain of six devices" caption="Each device signs a manifest with its address, name and services." />
   <Frame src="/images/wendy-net/relay-not-forge.webp" alt="A chain of six devices with the words Relay it. Can't forge it." caption="Neighbors pass it along. They can relay it, but not forge it." />
 </Frames>
 
+When a link connects or reconnects, WendyOS shares the manifests its neighbor
+needs. While the link is up, WendyOS shares new versions as manifests change.
+On a busy link, the latest version goes out when there is room.
+
 A device only accepts a route to another device when that device's signed
-manifest says the address is really its own. Manifests are refreshed every five
-minutes and are valid for at most fifteen, so a device that disappears without
-a word ages out on its own.
+manifest says the address is really its own. WendyOS renews its own manifest
+after five minutes without a new publication. Each revision is valid for at
+most fifteen minutes, so a device that disappears ages out on its own.
 
 ## Picking a path
 
@@ -97,12 +100,12 @@ than 4096.
 <Figure src="/images/wendy-net/cheapest-path.webp" alt="Two endpoints joined directly by a Bluetooth arc costing 4096, and by three hops below costing 64, 128 and 512, with the sum 704 highlighted" caption="704 beats 4096, so traffic takes the three fast hops." />
 
 When two neighbors share more than one kind of connection, Wendy Net carries
-their traffic on the cheapest one. Ethernet beats Wi-Fi, Wi-Fi beats Wi-Fi
-Aware, and Wi-Fi Aware beats Bluetooth. The other connections stay up as
-standbys while the radios have room, but they carry no traffic: Wendy Net
-doesn't split traffic across links.
-[Re-routing and path choice](/docs/wendy-net/rerouting) covers what happens
-when the chosen link fails, and [Multi-hop routing](/docs/wendy-net/multi-hop)
+their application traffic on the cheapest one. Ethernet beats Wi-Fi, Wi-Fi
+beats Wi-Fi Aware, and Wi-Fi Aware beats Bluetooth. The other connections stay
+up as standbys while the radios have room. Standby links still exchange routing
+and manifest updates.
+[Re-routing and path choice](/docs/wendy-net/rerouting#two-devices-several-connections)
+explains what standby links do, and [Multi-hop routing](/docs/wendy-net/multi-hop)
 covers longer routes.
 
 ## Carrying the traffic
