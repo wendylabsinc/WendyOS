@@ -166,7 +166,40 @@ const (
 // enrolled identity, plus a closeFn the caller must invoke when the pass is
 // done. Production dials the ingest endpoint over mutual TLS; tests inject an
 // in-process client.
-type ingestClientFactory func(ctx context.Context) (client cloudpb.DataIngestServiceClient, closeFn func(), err error)
+// productionIngestHost is the production Wendy Data Platform ingest. It is not a
+// default: a device uploads here only when a campaign asks for it by naming a
+// destination (see resolveDestination). The device's tenant and bucket are
+// resolved from its certificate identity, never from this host or the plan.
+const productionIngestHost = "ingest.data.wendy.dev"
+
+// wendyDestinationAliases name the production platform, so a campaign opts in to
+// uploading to Wendy Cloud with a short, stable word instead of a hostname:
+// `upload.destination: wendy`.
+var wendyDestinationAliases = map[string]bool{"wendy": true, "default": true}
+
+// resolveDestination turns a campaign's upload.destination (or the
+// WENDY_DATA_INGEST_URL dev override) into the host to dial.
+//
+// EMPTY MEANS DO NOT UPLOAD. A device never sends an episode to any platform
+// unless a campaign named a destination, so an episode is not pumped to the
+// cloud just by existing; without a destination it stays on the device. The
+// aliases `wendy`/`default` resolve to the production platform; anything else is
+// treated as a host (its URL scheme and path stripped by normalizeEndpoint).
+func resolveDestination(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if wendyDestinationAliases[strings.ToLower(s)] {
+		return productionIngestHost
+	}
+	return normalizeEndpoint(s)
+}
+
+// ingestClientFactory dials one DataIngestService endpoint. host is the
+// destination to dial, resolved per episode from the campaign's
+// upload.destination or the production default (see destinationFor).
+type ingestClientFactory func(ctx context.Context, host string) (client cloudpb.DataIngestServiceClient, closeFn func(), err error)
 
 // DataTransferWorker uploads sealed episodes to the cloud DataIngestService. It
 // consumes Manifest.Upload as a durable queue: episodes marked "pending" (and,
@@ -184,12 +217,15 @@ type DataTransferWorker struct {
 	// lastBlockedCause is the most recent route-level rejection, so a blocked
 	// endpoint is reported once rather than once a minute forever.
 	lastBlockedCause string
-	// ingestHost is the DataIngestService endpoint (host[:port]) uploads dial,
-	// set from WENDY_DATA_INGEST_URL in main. There is no fallback to the
+	// ingestHost is the device-wide DEFAULT destination uploads dial when a
+	// campaign does not name one. It is EMPTY by default, which means an episode
+	// does not upload unless its campaign set upload.destination; a device does
+	// not send data to any platform just by existing. WENDY_DATA_INGEST_URL in
+	// main may set a default for dev and test. A campaign's upload.destination
+	// overrides it per episode (see destinationFor). There is no fallback to the
 	// enrolled cloud host: the broker does not serve DataIngestService, so
-	// dialling it only ever produced Unimplemented. Empty means uploads are
-	// disabled and Run says so once. Enrollment still provides the device
-	// identity and client certificate; this is only the destination.
+	// dialling it only ever produced Unimplemented. Enrollment still provides the
+	// device identity and client certificate; this is only the destination.
 	ingestHost string
 	// identityLogged makes the "no identity" report a once-per-process event.
 	// Without it a device that is enrolled with Cloud but has no certificate
@@ -220,7 +256,10 @@ func NewDataTransferWorker(logger *zap.Logger, manager *data.Manager, provisioni
 		logger:          logger,
 		manager:         manager,
 		provisioningSvc: provisioningSvc,
-		maxAttempts:     transferMaxAttempts,
+		maxAttempts: transferMaxAttempts,
+		// No default destination: ingestHost stays empty, so an episode uploads
+		// only when its campaign names a destination. main may set a device-wide
+		// default from WENDY_DATA_INGEST_URL for dev and test.
 		requeueInterval: transferRequeueInterval,
 		now:             time.Now,
 		newSleeper:      contextSleeper,
@@ -231,17 +270,18 @@ func NewDataTransferWorker(logger *zap.Logger, manager *data.Manager, provisioni
 	return w
 }
 
-// SetIngestEndpoint sets the DataIngestService endpoint uploads dial. endpoint
-// may be a bare host, host:port, or an http(s):// URL; the scheme and any path
-// are stripped and the default port (443) is applied by the dialer. Empty
-// disables uploads (see Run).
+// SetIngestEndpoint sets the device-wide DEFAULT destination episodes upload to
+// when their campaign does not name one. endpoint may be a bare host, host:port,
+// an http(s):// URL, or an alias (`wendy`/`default`); empty leaves uploads off
+// by default, so a campaign must opt in. main calls this from
+// WENDY_DATA_INGEST_URL for dev and test.
 //
 // Identity is the enrolled device certificate, presented in the TLS handshake
 // and read by the ingest service from the validated leaf. No request header
 // carries identity: the header this worker once attached on the override path
 // was a self-asserted identity, and the service no longer reads it.
 func (w *DataTransferWorker) SetIngestEndpoint(endpoint string) {
-	w.ingestHost = normalizeEndpoint(endpoint)
+	w.ingestHost = resolveDestination(endpoint)
 }
 
 // IngestEndpoint reports the configured endpoint, empty when uploads are
@@ -326,11 +366,11 @@ func (w *DataTransferWorker) ingestIdentity() (certPEM, chainPEM string, keyData
 
 // dialFactory is the production ingestClientFactory: it waits for provisioning,
 // dials the cloud over mTLS, and returns a DataIngestService client.
-func (w *DataTransferWorker) dialFactory(ctx context.Context) (cloudpb.DataIngestServiceClient, func(), error) {
+func (w *DataTransferWorker) dialFactory(ctx context.Context, host string) (cloudpb.DataIngestServiceClient, func(), error) {
 	if _, _, _, enrolled := w.provisioningSvc.ProvisioningInfo(); !enrolled {
 		return nil, nil, errors.New("data transfer worker: not provisioned")
 	}
-	if w.ingestHost == "" {
+	if host == "" {
 		return nil, nil, errors.New("data transfer worker: no ingest endpoint configured")
 	}
 	certPEM, chainPEM, keyData, err := w.ingestIdentity()
@@ -348,13 +388,13 @@ func (w *DataTransferWorker) dialFactory(ctx context.Context) (cloudpb.DataInges
 	// influence.
 	conn, err := func() (*grpc.ClientConn, error) {
 		defer clear(keyData)
-		return cloudrelay.DialCloud(w.ingestHost, certPEM, chainPEM, keyData)
+		return cloudrelay.DialCloud(host, certPEM, chainPEM, keyData)
 	}()
 	if err != nil {
 		return nil, nil, err
 	}
 	w.identityLogged = false
-	w.logger.Debug("data transfer worker: dialled ingest", zap.String("host", w.ingestHost))
+	w.logger.Debug("data transfer worker: dialled ingest", zap.String("host", host))
 	return cloudpb.NewDataIngestServiceClient(conn), func() { _ = conn.Close() }, nil
 }
 
@@ -366,13 +406,10 @@ func (w *DataTransferWorker) Run(ctx context.Context) {
 	if w.factory == nil || w.manager == nil {
 		return
 	}
-	// Uploads are optional. Report missing configuration once, even before
-	// enrollment, and leave sealed episodes queued in the quota-bounded store.
-	if w.ingestHost == "" {
-		w.logger.Info("data transfer worker: WENDY_DATA_INGEST_URL is not set; " +
-			"episode uploads are disabled and sealed episodes stay queued on the device")
-		return
-	}
+	// No destination gate here: the default is the production platform and each
+	// episode's destination is resolved per campaign at upload time (see
+	// destinationFor), so uploads are enabled out of the box. A campaign may
+	// still route its episodes elsewhere with upload.destination.
 	if w.provisioningSvc != nil {
 		for {
 			if _, _, _, enrolled := w.provisioningSvc.ProvisioningInfo(); enrolled {
@@ -492,32 +529,86 @@ func passBackoff(attempt int) time.Duration {
 // backoff); a failure uploading one episode is recorded on that episode's
 // manifest and does not abort the pass.
 func (w *DataTransferWorker) runPass(ctx context.Context) error {
-	client, closeFn, err := w.factory(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire ingest client: %w", err)
-	}
-	defer closeFn()
-
 	episodes, err := w.manager.EpisodesAwaitingUpload()
 	if err != nil {
 		return fmt.Errorf("enumerate upload backlog: %w", err)
 	}
 	now := w.now()
+
+	// Group the ready episodes by the endpoint they upload to, so each distinct
+	// destination is dialled once per pass. A backlog can mix campaigns and
+	// each campaign can route to a different platform (upload.destination), so a
+	// single dial for the whole pass could not serve them all.
+	byDest := map[string][]data.Manifest{}
+	order := make([]string, 0, 1)
 	for _, mf := range episodes {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 		// Honor backoff: a pending episode whose next-attempt time is in the
 		// future is skipped this pass.
 		if mf.Upload.State == uploadStatePending && mf.Upload.NextAttemptUnixNanos > now.UnixNano() {
 			continue
 		}
-		if err := w.processEpisode(ctx, client, mf); err != nil {
-			// Route failure: the rest of the backlog would fail identically.
+		dest := w.destinationFor(mf)
+		if dest == "" {
+			// No destination for this episode's campaign and no device-wide
+			// default: it is not meant to leave the device. Skip it; it stays
+			// sealed in the quota-bounded store, not uploaded anywhere.
+			continue
+		}
+		if _, seen := byDest[dest]; !seen {
+			order = append(order, dest)
+		}
+		byDest[dest] = append(byDest[dest], mf)
+	}
+
+	for _, dest := range order {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		client, closeFn, err := w.factory(ctx, dest)
+		if err != nil {
+			return fmt.Errorf("acquire ingest client for %q: %w", dest, err)
+		}
+		err = func() error {
+			defer closeFn()
+			for _, mf := range byDest[dest] {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if err := w.processEpisode(ctx, client, mf); err != nil {
+					// Route failure: the rest of this destination's backlog
+					// would fail identically.
+					return err
+				}
+			}
+			return nil
+		}()
+		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// destinationFor resolves the ingest endpoint an episode uploads to: its
+// campaign's upload.destination when the author set one, otherwise the worker
+// default (productionIngestHost, or the WENDY_DATA_INGEST_URL override main
+// applied). The destination is only a host; the tenant and bucket come from the
+// device certificate, so a plan never carries a credential or a storage layout.
+// destinationFor resolves the host an episode uploads to: its campaign's
+// upload.destination when the author named one (a host, or the `wendy`/`default`
+// alias for production), otherwise the device-wide default (empty unless
+// WENDY_DATA_INGEST_URL set one). An empty result means the episode does not
+// upload. The destination is only a host; the tenant and bucket come from the
+// device certificate, so a plan never carries a credential or a storage layout.
+func (w *DataTransferWorker) destinationFor(mf data.Manifest) string {
+	if name := mf.Trigger.CampaignName; name != "" {
+		if c, err := w.manager.CampaignForUpload(name); err == nil {
+			if d := resolveDestination(c.Upload.Destination); d != "" {
+				return d
+			}
+		}
+	}
+	return w.ingestHost
 }
 
 // resolveShouldUpload applies the campaign upload.when policy. It returns

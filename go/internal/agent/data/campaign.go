@@ -155,9 +155,14 @@ type CampaignCapture struct {
 type CampaignUpload struct {
 	// When is one of always, wifi, or manual.
 	When string `json:"when" yaml:"when"`
-	// Destination is an optional logical dataset name the fleet backend maps
-	// to storage. It is not a URL; devices never receive storage credentials
-	// or bucket layouts through campaign plans.
+	// Destination names where this campaign's episodes upload. EMPTY (the
+	// default) means they do NOT upload: they stay on the device, so a campaign
+	// never sends data to the cloud without asking. `wendy` (or `default`)
+	// uploads to the production Wendy Data Platform; any other value is a host or
+	// host:port of a staging or self-hosted platform (any URL scheme and path are
+	// stripped). It is never a credential or a bucket layout: the device's tenant
+	// and bucket are resolved from its certificate identity, so a plan carries no
+	// storage secret even when it names where episodes go.
 	Destination string `json:"destination,omitempty" yaml:"destination,omitempty"`
 	// MaxRate caps upload bandwidth in bytes per second. Plain integers and
 	// human-readable rates such as "5MB/s" are accepted.
@@ -424,6 +429,28 @@ func (c Campaign) planDigestInput() map[string]any {
 	return plan
 }
 
+// validateUploadDestination checks the host or host:port (optionally written as
+// an http(s):// URL) that upload.destination may override the ingest endpoint
+// with. It rejects a value that carries no host, whitespace, or a path, so a
+// plan that names a destination names a dialable endpoint and nothing more. The
+// agent strips the same scheme and path at dial time (normalizeEndpoint); this
+// is the author-facing check at deploy.
+func validateUploadDestination(dest string) error {
+	h := strings.TrimSpace(dest)
+	h = strings.TrimPrefix(h, "https://")
+	h = strings.TrimPrefix(h, "http://")
+	if i := strings.IndexByte(h, '/'); i >= 0 {
+		h = h[:i]
+	}
+	if h == "" {
+		return errors.New("names no host")
+	}
+	if strings.ContainsAny(h, " \t\r\n") {
+		return errors.New("contains whitespace")
+	}
+	return nil
+}
+
 func (c Campaign) validate() error {
 	if c.Kind != "" && c.Kind != datadoc.DefaultKind {
 		return fmt.Errorf("kind %q is not a campaign; a campaign has kind collection or no kind", c.Kind)
@@ -511,6 +538,11 @@ func (c Campaign) validate() error {
 	if c.Upload.MaxRate != "" {
 		if _, err := parseByteRate(c.Upload.MaxRate); err != nil {
 			return fmt.Errorf("upload.max_rate: %w", err)
+		}
+	}
+	if c.Upload.Destination != "" {
+		if err := validateUploadDestination(c.Upload.Destination); err != nil {
+			return fmt.Errorf("upload.destination: %w", err)
 		}
 	}
 	if c.Retention.LocalQuota != "" {

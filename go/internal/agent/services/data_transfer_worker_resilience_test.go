@@ -187,14 +187,17 @@ func TestPeriodicRequeueRearmsFailedEpisodes(t *testing.T) {
 
 	tick := make(chan time.Time, 1)
 	w.newTicker = func(time.Duration) (<-chan time.Time, func()) { return tick, func() {} }
-	// Keep the loop off real time, but do not spin: the pass does disk work.
-	w.wait = func(ctx context.Context, _ time.Duration) { waitFor(ctx, time.Millisecond) }
 
 	var passes atomic.Int64
-	inner := w.factory
-	w.factory = func(ctx context.Context) (cloudpb.DataIngestServiceClient, func(), error) {
+	// Count loop iterations by the per-pass wait, not the dial. A pass with an
+	// empty backlog no longer dials: the worker groups ready episodes by
+	// destination and dials each destination once, so when there is nothing to
+	// upload there is no dial and the factory is not a per-pass signal. The
+	// wait runs once per loop iteration regardless. Keep the loop off real time
+	// but do not spin: the pass does disk work.
+	w.wait = func(ctx context.Context, _ time.Duration) {
 		passes.Add(1)
-		return inner(ctx)
+		waitFor(ctx, time.Millisecond)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

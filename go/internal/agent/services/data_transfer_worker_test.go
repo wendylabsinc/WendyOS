@@ -13,12 +13,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -228,8 +226,13 @@ func newTestWorker(mgr *data.Manager, client cloudpb.DataIngestServiceClient) *D
 		maxAttempts: transferMaxAttempts,
 		now:         time.Now,
 		newSleeper:  contextSleeper,
+		// A device-wide default destination, so episodes with no campaign
+		// destination upload in tests that exercise the upload mechanics rather
+		// than the destination policy. The no-upload-by-default behaviour is
+		// pinned separately in TestDefaultIsNoUploadAndWendyAliasIsProduction.
+		ingestHost: "ingest.test",
 	}
-	w.factory = func(context.Context) (cloudpb.DataIngestServiceClient, func(), error) {
+	w.factory = func(context.Context, string) (cloudpb.DataIngestServiceClient, func(), error) {
 		return client, func() {}, nil
 	}
 	return w
@@ -554,7 +557,7 @@ func runEndpointPass(t *testing.T, endpoint string) *fakeIngestServer {
 	}
 	w.SetIngestEndpoint(endpoint)
 	client := startFakeIngest(t, srv)
-	w.factory = func(context.Context) (cloudpb.DataIngestServiceClient, func(), error) {
+	w.factory = func(context.Context, string) (cloudpb.DataIngestServiceClient, func(), error) {
 		return client, func() {}, nil
 	}
 
@@ -583,50 +586,166 @@ func TestIngestCallsCarryNoIdentityHeader(t *testing.T) {
 	}
 }
 
-// TestRunWithoutEndpointDoesNotDial pins the no-fallback rule: with no ingest
-// endpoint configured the worker logs once and stops. It never asks the factory
-// for a client, so it cannot dial the enrolled cloud host, which does not serve
-// DataIngestService and used to answer every pass with Unimplemented.
-func TestRunWithoutEndpointDoesNotDial(t *testing.T) {
+// TestDefaultIsNoUploadAndWendyAliasIsProduction pins the safe default: a device
+// does not upload unless a campaign names a destination, so data is never sent
+// to the cloud just by existing. The `wendy`/`default` aliases are the easy
+// opt-in to the production platform.
+func TestDefaultIsNoUploadAndWendyAliasIsProduction(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	w := NewDataTransferWorker(zap.NewNop(), mgr, nil)
+
+	// No device-wide default and no campaign destination: the episode does not
+	// upload. IngestEndpoint and destinationFor are both empty.
+	if got := w.IngestEndpoint(); got != "" {
+		t.Fatalf("default ingest endpoint = %q, want empty (no upload by default)", got)
+	}
+	if got := w.destinationFor(data.Manifest{}); got != "" {
+		t.Fatalf("destinationFor(no campaign, no default) = %q, want empty (no upload)", got)
+	}
+	// The wendy/default aliases (case-insensitive) resolve to the production
+	// platform.
+	for _, alias := range []string{"wendy", "default", "WENDY", "Default"} {
+		w.SetIngestEndpoint(alias)
+		if got := w.destinationFor(data.Manifest{}); got != productionIngestHost {
+			t.Fatalf("destinationFor(default=%q) = %q, want the production host %q", alias, got, productionIngestHost)
+		}
+	}
+	// WENDY_DATA_INGEST_URL (via SetIngestEndpoint) may set a device-wide default
+	// host for dev; a campaign destination still overrides it per episode.
+	w.SetIngestEndpoint("dev.ingest:443")
+	if got := w.destinationFor(data.Manifest{}); got != "dev.ingest:443" {
+		t.Fatalf("destinationFor(dev default) = %q, want %q", got, "dev.ingest:443")
+	}
+	// Clearing the default returns to no-upload.
+	w.SetIngestEndpoint("")
+	if got := w.destinationFor(data.Manifest{}); got != "" {
+		t.Fatalf("destinationFor(cleared default) = %q, want empty", got)
+	}
+}
+
+// TestDestinationForUsesCampaignOverride proves a campaign's upload.destination
+// routes that campaign's episodes to its own endpoint, overriding the device
+// default, with any URL scheme and path stripped to the dialable host; an
+// episode whose campaign set no destination (or whose campaign is unknown) falls
+// back to the default.
+func TestDestinationForUsesCampaignOverride(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	const routedYAML = `version: 1
+name: routed
+sources:
+  - telemetry: true
+capture:
+  buffer: 0s
+  drain: 0s
+  after_trigger: 1h
+  triggers:
+    - event: go
+upload:
+  when: always
+  destination: https://alt.ingest.example:8443/ignored/path
+export:
+  annotation: cvat
+`
+	if _, err := mgr.DeployCampaign([]byte(routedYAML)); err != nil {
+		t.Fatalf("deploy routed campaign: %v", err)
+	}
+	// A second campaign with no destination: its episodes take the default.
+	const defaultYAML = `version: 1
+name: plain
+sources:
+  - telemetry: true
+capture:
+  buffer: 0s
+  drain: 0s
+  after_trigger: 1h
+  triggers:
+    - event: go
+upload:
+  when: always
+export:
+  annotation: cvat
+`
+	if _, err := mgr.DeployCampaign([]byte(defaultYAML)); err != nil {
+		t.Fatalf("deploy plain campaign: %v", err)
+	}
+	// A third campaign opts in to Wendy Cloud with the alias.
+	const wendyYAML = `version: 1
+name: towendy
+sources:
+  - telemetry: true
+capture:
+  buffer: 0s
+  drain: 0s
+  after_trigger: 1h
+  triggers:
+    - event: go
+upload:
+  when: always
+  destination: wendy
+export:
+  annotation: cvat
+`
+	if _, err := mgr.DeployCampaign([]byte(wendyYAML)); err != nil {
+		t.Fatalf("deploy towendy campaign: %v", err)
+	}
+
+	w := NewDataTransferWorker(zap.NewNop(), mgr, nil)
+
+	routed := data.Manifest{Trigger: data.EpisodeTrigger{CampaignName: "routed"}}
+	if got := w.destinationFor(routed); got != "alt.ingest.example:8443" {
+		t.Fatalf("destinationFor(routed) = %q, want the campaign override %q (scheme and path stripped)", got, "alt.ingest.example:8443")
+	}
+	towendy := data.Manifest{Trigger: data.EpisodeTrigger{CampaignName: "towendy"}}
+	if got := w.destinationFor(towendy); got != productionIngestHost {
+		t.Fatalf("destinationFor(towendy, destination: wendy) = %q, want the production host %q", got, productionIngestHost)
+	}
+	// No destination and no device-wide default: the episode does not upload.
+	plain := data.Manifest{Trigger: data.EpisodeTrigger{CampaignName: "plain"}}
+	if got := w.destinationFor(plain); got != "" {
+		t.Fatalf("destinationFor(plain, no destination) = %q, want empty (no upload)", got)
+	}
+	unknown := data.Manifest{Trigger: data.EpisodeTrigger{CampaignName: "nope"}}
+	if got := w.destinationFor(unknown); got != "" {
+		t.Fatalf("destinationFor(unknown campaign) = %q, want empty (no upload)", got)
+	}
+}
+
+// TestRunPassGroupsByDestination proves a single pass over a backlog that mixes
+// campaigns routing to different destinations dials each distinct destination
+// exactly once: not once per episode, and not one shared dial for the backlog.
+func TestRunPassGroupsByDestination(t *testing.T) {
 	mgr, root := newTestManager(t)
-	writeFixtureEpisode(t, root, "ep-queued", "", "pending", map[string][]byte{"blob.bin": []byte("payload")})
-	core, logs := observer.New(zap.DebugLevel)
+	for _, c := range []struct{ name, dest string }{
+		{"to-alt", "alt.example:8443"},
+		{"to-wendy", "wendy"},
+	} {
+		yaml := "version: 1\nname: " + c.name + "\nsources:\n  - telemetry: true\n" +
+			"capture:\n  buffer: 0s\n  drain: 0s\n  after_trigger: 1h\n  triggers:\n    - event: go\n" +
+			"upload:\n  when: always\n  destination: " + c.dest + "\nexport:\n  annotation: cvat\n"
+		if _, err := mgr.DeployCampaign([]byte(yaml)); err != nil {
+			t.Fatalf("deploy %s: %v", c.name, err)
+		}
+	}
+	// Two episodes for one destination, one for the other: dial count must be
+	// per-destination, not per-episode.
+	writeFixtureEpisode(t, root, "ep-alt-1", "to-alt", "pending", map[string][]byte{"blob.bin": []byte("x")})
+	writeFixtureEpisode(t, root, "ep-alt-2", "to-alt", "pending", map[string][]byte{"blob.bin": []byte("y")})
+	writeFixtureEpisode(t, root, "ep-wendy-1", "to-wendy", "pending", map[string][]byte{"blob.bin": []byte("z")})
 
-	var dials int32
-	w := &DataTransferWorker{
-		logger:          zap.New(core),
-		manager:         mgr,
-		provisioningSvc: &ProvisioningService{}, // disabled uploads must not wait for enrollment
-		maxAttempts:     transferMaxAttempts,
-		now:             time.Now,
-		newSleeper:      contextSleeper,
-	}
-	w.factory = func(context.Context) (cloudpb.DataIngestServiceClient, func(), error) {
-		atomic.AddInt32(&dials, 1)
-		return nil, nil, errors.New("must not be called")
+	w := newTestWorker(mgr, startFakeIngest2(t, newFakeIngestServer()))
+	// runPass processes the backlog in one goroutine, so this map needs no lock.
+	dialed := map[string]int{}
+	inner := w.factory
+	w.factory = func(ctx context.Context, host string) (cloudpb.DataIngestServiceClient, func(), error) {
+		dialed[host]++
+		return inner(ctx, host)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		w.Run(ctx)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		t.Fatal("Run did not return without an endpoint; it must stop rather than retry against nothing")
+	if err := w.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass: %v", err)
 	}
-	if n := atomic.LoadInt32(&dials); n != 0 {
-		t.Fatalf("factory called %d times without an endpoint, want 0", n)
-	}
-	entries := logs.All()
-	if len(entries) != 1 || entries[0].Level != zap.InfoLevel || !strings.Contains(entries[0].Message, "WENDY_DATA_INGEST_URL is not set") {
-		t.Fatalf("disabled uploads should log once at info level, got %v", entries)
-	}
-	if got := uploadState(t, mgr, "ep-queued").State; got != uploadStatePending {
-		t.Fatalf("queued episode state = %q, want %q (nothing may be marked failed)", got, uploadStatePending)
+	if dialed["alt.example:8443"] != 1 || dialed[productionIngestHost] != 1 || len(dialed) != 2 {
+		t.Fatalf("dialed = %v, want alt.example:8443 and %s each dialed exactly once", dialed, productionIngestHost)
 	}
 }
 
