@@ -21,9 +21,9 @@ import (
 
 const tcpConfigName = "local-mesh.json"
 
-// RunConfiguredTCP runs the explicitly configured topology. The configured
-// peer list controls eligibility; crossed authenticated connections converge
-// to one preferred direction. A missing config leaves the local mesh disabled.
+// RunConfiguredTCP starts a node using the saved or default carrier settings.
+// A configured TCP peer list controls eligibility, and crossed authenticated
+// connections converge to one preferred direction.
 func RunConfiguredTCP(parent context.Context, configDir string, id TCPIdentity) error {
 	return RunConfiguredTCPObserved(parent, configDir, id, nil)
 }

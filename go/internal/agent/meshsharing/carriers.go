@@ -17,7 +17,6 @@ func SaveCarrierConfig(path string, self meshid.Device, config localmesh.TCPConf
 	if config.Listen == "" && config.TLSListen == "" && len(config.Peers) == 0 && !config.NAN && !config.BLE && !config.Ethernet && !config.InfrastructureWiFi {
 		// Persist the override before removing the active config. The active
 		// file always wins, so an interrupted write preserves the old state.
-		// Earlier agents ignore the override and see the same empty carrier set.
 		if err := atomicConfigFile(localmesh.DisabledCarrierConfigPath(path), []byte("disabled\n")); err != nil {
 			return err
 		}

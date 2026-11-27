@@ -84,8 +84,7 @@ func ReadTCPConfigFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-// DisabledCarrierConfigPath records an explicit all-carriers-off choice
-// separately so earlier agents still see an absent carrier config.
+// DisabledCarrierConfigPath returns the path of the all-carriers-off marker.
 func DisabledCarrierConfigPath(path string) string { return path + ".disabled" }
 
 // ReadTCPConfigSnapshot returns the effective carrier document. A nil
@@ -124,8 +123,8 @@ func ParseTCPConfig(data []byte, self meshid.Device) (*TCPConfig, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	// Accept retired fields from pre-upgrade files only at the disk boundary.
-	// They no longer enable a carrier and are omitted when settings are saved.
+	// The disk format accepts leaf-only fields. They do not enable a carrier
+	// and are omitted when settings are saved.
 	var stored struct {
 		TCPConfig
 		LeafListen   json.RawMessage `json:"leafListen"`

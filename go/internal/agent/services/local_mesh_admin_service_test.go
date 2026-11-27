@@ -315,7 +315,7 @@ func TestLocalMeshAdminCanDisableLastCarrierWithoutTCPConfig(t *testing.T) {
 	if err != nil || carriers != nil {
 		t.Fatalf("explicitly disabled carriers must stay off: %+v %v", carriers, err)
 	}
-	// The original carrier file is absent, the format older agents expect.
+	// The marker is the only saved carrier policy when every carrier is off.
 	path := filepath.Join(dir, "local-mesh.json")
 	if _, err := localmesh.ReadTCPConfigFile(path); !os.IsNotExist(err) {
 		t.Fatalf("legacy carrier reader did not see absent settings: %v", err)

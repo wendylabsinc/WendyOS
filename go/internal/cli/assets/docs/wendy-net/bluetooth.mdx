@@ -26,9 +26,8 @@ covers radio profiles, transmit power and capacity in more detail.
 <Figure src="/images/wendy-net/find-bluetooth.webp" alt="A device sending a row of 31 small cells, under the words Bluetooth, 31 bytes" caption="Each device announces itself with a 31-byte Bluetooth advertisement." />
 
 1. **Each device advertises.** It sends a small Bluetooth Low Energy
-   advertisement, 31 bytes in all. It carries your organization's ID and the
-   start of the device's ID, and no device name. Anyone nearby can read the
-   organization ID.
+   advertisement with tenant and device identifiers. Anyone nearby can read
+   the tenant ID.
 2. **A neighbor connects.** Data runs over a Bluetooth LE connection-oriented
    channel, a direct stream between the two radios.
 3. **Both prove who they are.** Wendy Net doesn't use Bluetooth pairing. Instead,

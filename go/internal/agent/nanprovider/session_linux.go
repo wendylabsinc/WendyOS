@@ -452,7 +452,7 @@ func (p Provider) runNDIEpoch(parent context.Context, id meshid.Device, logger *
 }
 
 func nanStartupError(output string, err error) error {
-	// Older and current WendyOS helpers report this before changing the radio.
+	// The helper reports this before changing the radio.
 	const missing = "No NAN-capable parent interface is available"
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 1 && strings.TrimSpace(output) == missing {
