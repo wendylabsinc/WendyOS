@@ -81,8 +81,9 @@ only this installation spec is skipped; parsed build settings remain covered.
 
 ### Collect Go source coverage
 
-Local coverage is opt-in. Every active Swift E2E CI run collects Go coverage,
-including manual dispatch and the reusable release/build caller. For example,
+Local coverage is opt-in. CI collects Go coverage in direct nightly (03:17 UTC)
+and manual runs of **Swift E2E Tests**. Main push/build and reusable Build/release
+calls run without coverage, including manual Build dispatches. For example,
 collect two local CLI tests:
 
 ```bash
@@ -251,8 +252,9 @@ Optional AI review keeps its existing `--diff RANGE` behavior and can inspect th
 matching repository plus recorded results; it is not required to collect,
 aggregate or display coverage.
 
-The **Swift E2E Tests** workflow enables coverage on every active Ubuntu route
-and automatically aggregates/renders its artifact, including failed test runs.
+The **Swift E2E Tests** workflow collects coverage on its active Ubuntu route
+only for direct nightly and manual runs. It automatically aggregates/renders
+its artifact, including failed test runs.
 `quiet=true` skips AI/GitHub/Slack reporting; normal reporting remains enabled by
 default. `diff_base_ref` requests the optional aggregate comparison against that
 base and the tested head. Omit `tests` for the full isolated Ubuntu suite. Paused
@@ -270,9 +272,9 @@ The previous process-per-test implementation had a measured execution cost: the 
 [main, Build run45633937865](https://github.com/wendylabsinc/WendyOS/actions/runs/45633937865)
 and 18.1 minutes in
 [coverage run45386626330, Swift E2E Tests](https://github.com/wendylabsinc/WendyOS/actions/runs/45386626330). These are
-observed runs, not a controlled benchmark. Coverage scheduling/defaults are
-unchanged pending Konstantin’s policy decision. These historical timings do not
-measure the current single-suite scenario implementation.
+observed runs, not a controlled benchmark. CI coverage is now limited to direct
+nightly and manual Swift E2E runs. These historical timings do not measure the
+current single-suite scenario implementation.
 
 ### Test against a remote device
 

@@ -1,6 +1,8 @@
 name: Swift E2E Tests
 
 on:
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       quiet:
@@ -172,8 +174,8 @@ jobs:
         with:
           tests: ${{ inputs.tests || '' }}
           target_id: local-ubuntu-24
-          # Every active CI execution measures Go source, including reusable callers.
-          coverage: 'true'
+          # Reusable callers retain their workflow name, including manual Build runs.
+          coverage: ${{ github.workflow == 'Swift E2E Tests' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
           diff_base_ref: ${{ inputs.diff_base_ref || '' }}
           runner_id: ubuntu-24-04
           cli_os: linux

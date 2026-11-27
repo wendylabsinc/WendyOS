@@ -30,15 +30,18 @@ def job_condition(text, job):
     return " ".join(match[1].split()).removeprefix("${{").removesuffix("}}").strip()
 
 
-def evaluate(condition, results, attempt, event, run_cancelled=False, quiet=False):
+def evaluate(condition, results, attempt, event, run_cancelled=False, quiet=False,
+             workflow="Swift E2E Tests"):
     """Translate the small expression subset these gates use into Python."""
     python = re.sub(r"contains\(needs\.\*\.result, ('\w+')\)", r"(\1 in results)", condition)
     python = python.replace("always()", "True").replace("cancelled()", "run_cancelled")
     python = python.replace("github.run_attempt", "attempt").replace("github.event_name", "event")
+    python = python.replace("github.workflow", "workflow")
     python = python.replace("inputs.quiet", "quiet")
     python = python.replace("&&", " and ").replace("||", " or ")
     python = re.sub(r"!(?!=)", " not ", python)
-    names = {"results": results, "attempt": attempt, "event": event, "run_cancelled": run_cancelled, "quiet": quiet}
+    names = {"results": results, "attempt": attempt, "event": event, "run_cancelled": run_cancelled,
+             "quiet": quiet, "workflow": workflow}
     return bool(eval(python, {"__builtins__": {}}, names))
 
 
@@ -91,9 +94,24 @@ class GateTests(unittest.TestCase):
             for condition in (self.analyze, self.passed):
                 self.assertFalse(evaluate(condition, results, attempt, event, quiet=True))
 
-    def test_coverage_is_unconditional_for_the_only_active_ci_route(self):
-        ubuntu = self.text.split("  swift-e2e-local-ubuntu:\n", 1)[1].split("\n  # Physical/future route ledger.", 1)[0]
-        self.assertIn("coverage: 'true'", ubuntu)
+    def test_coverage_is_only_for_direct_nightly_and_manual_runs(self):
+        workflow = yaml.load(self.text, Loader=yaml.BaseLoader)
+        self.assertEqual(workflow["on"]["schedule"], [{"cron": "17 3 * * *"}])
+        ubuntu = workflow["jobs"]["swift-e2e-local-ubuntu"]
+        action = next(step for step in ubuntu["steps"]
+                      if step.get("uses") == "./.github/actions/swift-e2e-run")
+        expression = action["with"]["coverage"]
+        self.assertTrue(expression.startswith("${{") and expression.endswith("}}"))
+        condition = expression.removeprefix("${{").removesuffix("}}").strip()
+        build = yaml.load(WORKFLOW.with_name("build.yml").read_text(), Loader=yaml.BaseLoader)
+        for caller, event, quiet in itertools.product(
+            (workflow["name"], build["name"]),
+            ("schedule", "workflow_dispatch", "push", "pull_request", "workflow_call"),
+            (False, True),
+        ):
+            with self.subTest(caller=caller, event=event, quiet=quiet):
+                expected = caller == workflow["name"] and event in ("schedule", "workflow_dispatch")
+                self.assertEqual(evaluate(condition, (), "1", event, quiet=quiet, workflow=caller), expected)
         self.assertNotIn("inputs.coverage", self.text)
         self.assertNotRegex(self.text, r"(?m)^      coverage:")
         self.assertEqual(len(re.findall(r"(?m)^      quiet:\n(?:        .*\n)*?        default: false$", self.text)), 2)
