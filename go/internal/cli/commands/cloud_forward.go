@@ -2,11 +2,13 @@ package commands
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,8 +20,11 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 func newCloudTunnelCmd() *cobra.Command {
@@ -192,28 +197,180 @@ func cloudTunnelCommand(ctx context.Context, auth *config.AuthConfig, deviceName
 	}))
 }
 
-// serveTunnelForward relays every connection accepted on ln through its own
-// tunnel to remotePort. The connections share one TunnelSession: each still
-// requests its own grant, over the session's authorization connection.
+// serveTunnelForward relays every connection accepted on ln to remotePort.
+// When the device supports it, the connections share one tunnel, renewed
+// before its relay ends (forwardMux); otherwise each opens its own tunnel.
+// They share one TunnelSession, so each grant is requested over the
+// session's authorization connection.
 func (d cloudDiscoveryDevice) serveTunnelForward(ctx context.Context, ln net.Listener, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32, dialFailed func(error), unanswered *unansweredNotice) error {
 	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
 	ctx = session.Context(ctx)
 	dial := func(ctx context.Context) (net.Conn, error) {
-		return d.openTunnel(ctx, brokerConn, auth, remotePort, false)
+		return d.openTunnel(ctx, brokerConn, auth, remotePort, cloudTCPFlow{})
 	}
 	if d.v2 != nil && remotePort != defaultAgentPort+1 {
 		// A single lazy, authenticated management channel checks support for
 		// this forward. Raw ports can work even when management is unavailable.
 		if agent, err := connectCloudDiscoveryTransport(ctx, auth, d, ""); err == nil {
 			defer agent.Close()
-			dial = func(ctx context.Context) (net.Conn, error) {
-				return agent.RegistryDialer(ctx, int(remotePort))
+			mux := &forwardMux{
+				open: func() (*cloudrelay.MuxClient, error) { return d.openForwardMux(ctx, auth, agent, remotePort) },
+				fallback: func(ctx context.Context) (net.Conn, error) {
+					return agent.RegistryDialer(ctx, int(remotePort))
+				},
 			}
+			dial = mux.dial
 		}
 	}
 	return serveTCPForward(ctx, ln, dial, dialFailed, unanswered)
+}
+
+const (
+	// muxRenewBefore is how long before its relay ends a forward opens a new
+	// tunnel in the background; new connections move to it once it is open.
+	// Connections already on the old tunnel run until the relay ends it.
+	muxRenewBefore = 5 * time.Minute
+	// muxRetryAfter spaces attempts to open a forward's tunnel after one
+	// failed; connections each open their own tunnel meanwhile.
+	muxRetryAfter = time.Minute
+)
+
+var errMuxUnsupported = errors.New("the device does not carry several forwarded connections in one tunnel")
+
+// errMuxProbe: the support check itself failed, for example while the
+// management channel is still opening. The next connection checks again.
+var errMuxProbe = errors.New("checking whether the device carries several forwarded connections in one tunnel")
+
+// forwardMux carries a forward's connections in one multiplexed tunnel
+// (cloudrelay.TCPMuxFeature). Without one, a connection uses fallback, a
+// tunnel of its own, and sees no error.
+type forwardMux struct {
+	open     func() (*cloudrelay.MuxClient, error)
+	fallback func(context.Context) (net.Conn, error)
+
+	mu       sync.Mutex
+	current  *cloudrelay.MuxClient
+	renewing bool
+	retryAt  time.Time
+}
+
+func (m *forwardMux) dial(ctx context.Context) (net.Conn, error) {
+	if c := m.client(); c != nil {
+		conn, err := c.Dial(ctx)
+		if err == nil {
+			return conn, nil
+		}
+		m.mu.Lock()
+		if m.current == c {
+			m.replace(nil)
+		}
+		m.mu.Unlock()
+	}
+	return m.fallback(ctx)
+}
+
+// replace makes c the forward's tunnel. The one it replaces closes once its
+// connections end, freeing its relay and agent slot.
+func (m *forwardMux) replace(c *cloudrelay.MuxClient) {
+	if m.current != nil {
+		m.current.Shutdown()
+	}
+	m.current = c
+}
+
+// client returns the forward's tunnel, opening a new one when there is none
+// or the current one is closed. Near its relay end the current one keeps
+// serving while renew opens its replacement.
+func (m *forwardMux) client() *cloudrelay.MuxClient {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := m.current
+	if c != nil && c.Usable(muxRenewBefore) {
+		return c
+	}
+	if c != nil && c.Usable(0) && (m.renewing || !time.Now().Before(m.retryAt)) {
+		if !m.renewing {
+			m.renewing = true
+			go m.renew()
+		}
+		return c
+	}
+	if m.renewing {
+		return nil
+	}
+	m.replace(nil)
+	if time.Now().Before(m.retryAt) {
+		return nil
+	}
+	c, err := m.open()
+	if err != nil {
+		m.failed(err)
+		return nil
+	}
+	m.current = c
+	return c
+}
+
+// failed spaces the next open after err, unless only the support check failed.
+func (m *forwardMux) failed(err error) {
+	if !errors.Is(err, errMuxProbe) {
+		m.retryAt = time.Now().Add(muxRetryAfter)
+	}
+}
+
+func (m *forwardMux) renew() {
+	c, err := m.open()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.renewing = false
+	if err != nil {
+		m.failed(err)
+		return
+	}
+	m.replace(c)
+}
+
+// openForwardMux opens one multiplexed tunnel to remotePort, secured with
+// the agent mTLS policy, when the agent advertises support for it.
+func (d cloudDiscoveryDevice) openForwardMux(ctx context.Context, auth *config.AuthConfig, agent *grpcclient.AgentConnection, remotePort uint32) (*cloudrelay.MuxClient, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, cloudTCPFeatureTimeout)
+	version, err := agent.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errMuxProbe, err)
+	}
+	if !slices.Contains(version.GetFeatureset(), cloudrelay.TCPMuxFeature) {
+		return nil, errMuxUnsupported
+	}
+	service, err := cloudrelay.PortService("tcp", remotePort)
+	if err != nil {
+		return nil, err
+	}
+	entry, release, err := tunnelAuthorizationFor(ctx, auth)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	cloudCtx, err := cloudContext(ctx, auth)
+	if err != nil {
+		return nil, err
+	}
+	conn, expires, err := cloudrelay.OpenTCPMux(ctx, cloudCtx, entry.conn, entry.verifier, d.key, service, entry.sign)
+	if err != nil {
+		return nil, err
+	}
+	expected := cloudDiscoveryIdentity(auth, d)
+	handshakeCtx, cancel := context.WithTimeout(ctx, cloudAgentConnectTimeout)
+	defer cancel()
+	target := fmt.Sprintf("cloud-forward-%x", sha256.Sum256([]byte(expected.IdentityKey())))
+	secured, err := grpcclient.SecureTunnel(handshakeCtx, conn, target, &auth.Certificates[0], &expected)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return cloudrelay.NewMuxClient(secured, expires)
 }
 
 // serveTCPForward accepts connections on ln until ctx ends and relays each one
