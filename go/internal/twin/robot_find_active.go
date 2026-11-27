@@ -266,7 +266,8 @@ func (s *Server) runActiveObject(session *robotSession, job *activeObjectJob) {
 			return
 		}
 		// Try a separated viewpoint on measured floor first. A blocked preflight
-		// may use a safe look turn instead; an executed movement fault ends the job.
+		// may use a safe look turn instead. A recoverable translation stop can
+		// also try another heading after fresh measurements and a confirmed stop.
 		discovery := false
 		var blocked error
 		if moves < 3 {
@@ -328,6 +329,29 @@ func (s *Server) runActiveObject(session *robotSession, job *activeObjectJob) {
 					terminal = state.DiscoveryState
 				}
 				if terminal == 3 {
+					if discovery && !state.Moving && state.MotionRecoveryAllowed && turns < 6 {
+						s.objectProgress(session, job, "Viewpoint move stopped. Waiting for fresh measurements before checking another safe heading. "+searchMotionStopMessage(state))
+						if err := waitObjectSearchRecovery(job.ctx, job.owner, state); err != nil {
+							tick.Stop()
+							fail(err)
+							return
+						}
+						sequence++
+						if err := job.owner.ObjectSearchLook(sequence, direction); err != nil {
+							tick.Stop()
+							fail(fmt.Errorf("Viewpoint move stopped and no safe next heading is available: %w", err))
+							return
+						}
+						// The aborted translation still consumes its attempt budget.
+						// Only a completed translation increments Viewpoints.
+						turns++
+						discovery = false
+						job.mu.Lock()
+						job.progress.Turns = turns
+						job.mu.Unlock()
+						s.objectProgress(session, job, "Turning to inspect another camera view after the blocked viewpoint move.")
+						continue
+					}
 					tick.Stop()
 					fail(errors.New(searchMotionStopMessage(state)))
 					return
@@ -345,6 +369,31 @@ func (s *Server) runActiveObject(session *robotSession, job *activeObjectJob) {
 			}
 		}
 		tick.Stop()
+	}
+}
+
+func waitObjectSearchRecovery(ctx context.Context, owner activeObjectOwner, stopped twinrobot.SiteRobotSnapshot) error {
+	deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	settled := time.Now().Add(2 * time.Second)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-deadline.Done():
+			return fmt.Errorf("Viewpoint recovery ended without fresh stationary measurements: %w", deadline.Err())
+		case <-tick.C:
+			if err := owner.Check(); err != nil {
+				return err
+			}
+			state := owner.Status()
+			if state.Disconnected || !state.MotionRecoveryAllowed || state.Moving {
+				return errors.New("Object search cannot resume after control or Stop confirmation was lost. " + searchMotionStopMessage(state))
+			}
+			if state.MeasurementsReady && state.ScanReceivedUnixNanos > stopped.ScanReceivedUnixNanos && !time.Now().Before(settled) {
+				return nil
+			}
+		}
 	}
 }
 
