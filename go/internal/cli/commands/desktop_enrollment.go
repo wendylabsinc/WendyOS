@@ -110,7 +110,7 @@ func DesktopEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if current.Enrolled {
 		return nil, errors.New("this device is already enrolled")
 	}
-	identity, err := runEnrollDeviceIdentity(ctx, conn, auth, name, 0)
+	identity, name, err := runEnrollDeviceIdentity(ctx, conn, auth, name, 0)
 	if err != nil {
 		return nil, err
 	}

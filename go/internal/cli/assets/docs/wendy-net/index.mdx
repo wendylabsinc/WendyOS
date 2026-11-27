@@ -9,6 +9,16 @@ traffic along for each other, so a robot can reach a server it has no direct
 connection to. Traffic takes the cheapest path, and when a connection drops it
 moves to the next best one by itself.
 
+Discovery announces the tenant and device identifiers on the LAN and over
+enabled radios. Consider this privacy exposure in highly sensitive environments.
+
+To turn off Wendy Net on a WendyOS device, replace `DEVICE` with its hostname
+or address and run this command.
+
+```sh
+wendy --device DEVICE net configure --participate=false --roam=false --share-uplink=false
+```
+
 <YouTubeVideo id="zAoJwEpEK1Q" title="Wendy Net overview" />
 
 ## The idea in five lines
@@ -32,18 +42,12 @@ moves to the next best one by itself.
 
 Wendy Net is part of WendyOS. The router runs inside the Wendy agent that every
 WendyOS image includes, and the image ships with the kernel features it needs.
-There is nothing extra to install, and one command turns it on:
+Enrolled devices join by default using the connections their hardware supports.
+Run `wendy net topology` to see discovered peers. The
+[setup guide](/docs/guides/wendy-net) explains how to choose connection types
+or disable participation.
 
-```sh
-wendy net configure --participate=true --ethernet=true --infrastructure-wifi=true
-```
-
-Run it for each device, then check the devices it found with
-`wendy net topology`. Add `--ble=true` for Bluetooth, and `--nan=true` for
-Wi-Fi Aware on [hardware that supports it](/docs/wendy-net/wifi-aware). The
-[setup guide](/docs/guides/wendy-net) walks through every option.
-
-<Figure src="/images/wendy-net/built-into-wendyos.webp" alt="A seafoam block labelled Wendy Net inside a frame labelled WendyOS, under the title Built into WendyOS" caption="Wendy Net ships inside WendyOS. It is off until you turn it on." />
+<Figure src="/images/wendy-net/built-into-wendyos.webp" alt="A seafoam block labelled Wendy Net inside a frame labelled WendyOS, under the title Built into WendyOS" />
 
 On another Linux distribution, such as Ubuntu with
 [Wendy Agent](/docs/installation/linux), the agent runs the same router. There
@@ -51,9 +55,7 @@ it's up to you to provide the kernel features it needs, such as IPv6 policy
 routing and TUN devices, and drivers for the radios you want to use. These
 guides are written for WendyOS.
 
-Wendy Net stays off until you enable it, and you choose which kinds of
-connection each device may use. Your apps don't need any radio permissions to
-use it: the agent manages the connections, and apps opt in through
+The agent manages the radio connections. Apps opt in through
 [their `wendy.json`](/docs/guides/wendy-net-services).
 
 Your computer can join too. `wendy net connect` starts a router in the Wendy CLI

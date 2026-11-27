@@ -4,9 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -54,19 +53,6 @@ func downloadDriver(ctx context.Context, spec *agentpbv2.DriverSpec, dir string)
 	if err != nil || len(digest) != sha256.Size {
 		return "", fmt.Errorf("driver %q has no valid SHA-256 in the manifest", spec.GetName())
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.GetArtifactUrl(), nil)
-	if err != nil {
-		return "", err
-	}
-	client := &http.Client{Timeout: driverStageTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("downloading driver %s: %w", spec.GetName(), err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("downloading driver %s: HTTP %d", spec.GetName(), resp.StatusCode)
-	}
 	f, err := os.CreateTemp(dir, "wendy-driver-*.raw")
 	if err != nil {
 		return "", err
@@ -78,11 +64,20 @@ func downloadDriver(ctx context.Context, spec *agentpbv2.DriverSpec, dir string)
 			_ = os.Remove(f.Name())
 		}
 	}()
-	hash := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, hash), resp.Body); err != nil {
+	// No deadline on the transfer: it follows imageDownloadPolicy, like an OS image.
+	if err := downloadResumable(ctx, spec.GetArtifactUrl(), f, 0, nil); err != nil {
+		var status downloadStatusError
+		if errors.As(err, &status) {
+			return "", fmt.Errorf("downloading driver %s: HTTP %d", spec.GetName(), int(status))
+		}
 		return "", fmt.Errorf("downloading driver %s: %w", spec.GetName(), err)
 	}
-	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), spec.GetSha256()) {
+	// Hashed once complete: a resumed or restarted download is not one stream.
+	got, err := sha256File(f.Name())
+	if err != nil {
+		return "", fmt.Errorf("downloading driver %s: %w", spec.GetName(), err)
+	}
+	if !strings.EqualFold(got, spec.GetSha256()) {
 		return "", fmt.Errorf("driver %s: downloaded image SHA-256 does not match the manifest", spec.GetName())
 	}
 	if err := f.Close(); err != nil {

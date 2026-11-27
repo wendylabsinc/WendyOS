@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -66,7 +67,7 @@ func TestResolveFirmware_CacheHit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := resolveFirmware(asset)
+	got, err := resolveFirmware(context.Background(), asset)
 	if err != nil {
 		t.Fatalf("resolveFirmware: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestDownloadFirmwareInto(t *testing.T) {
 
 	dir := t.TempDir()
 	var lastDownloaded, lastTotal int64
-	path, err := downloadFirmwareInto(asset, dir, func(downloaded, total int64) {
+	path, err := downloadFirmwareInto(context.Background(), asset, dir, func(downloaded, total int64) {
 		lastDownloaded, lastTotal = downloaded, total
 	})
 	if err != nil {
@@ -176,7 +177,7 @@ func TestDownloadFirmwareIntoValidatesPairedHost(t *testing.T) {
 			defer server.Close()
 			asset := &firmwareAsset{DownloadURL: server.URL, Size: int64(len(expected)), Checksum: sum}
 			dir := t.TempDir()
-			filename, err := downloadFirmwareInto(asset, dir, nil)
+			filename, err := downloadFirmwareInto(t.Context(), asset, dir, nil)
 			if body == expected {
 				if err != nil {
 					t.Fatal(err)

@@ -13,14 +13,16 @@ function Resolve-E2EPath([string]$Path, [switch]$Existing) {
 }
 
 $RunDir = $null
+$repoArgs = @()
 $PackageDir = $DefaultPackageDir
 $i = 0
 while ($i -lt $args.Count) {
     switch ($args[$i]) {
+        '--repo' { $repoArgs = @('--repo', (Resolve-E2EPath $args[$i + 1] -Existing)); $i += 2; continue }
         '--run-dir' { $RunDir = $args[$i + 1]; $i += 2; continue }
         '--package-dir' { $PackageDir = $args[$i + 1]; $i += 2; continue }
-        '--help' { 'Usage: E2EReport.ps1 --run-dir DIR [--package-dir DIR]'; exit 0 }
-        '-h' { 'Usage: E2EReport.ps1 --run-dir DIR [--package-dir DIR]'; exit 0 }
+        '--help' { 'Usage: E2EReport.ps1 --run-dir DIR [--package-dir DIR] [--repo DIR]'; exit 0 }
+        '-h' { 'Usage: E2EReport.ps1 --run-dir DIR [--package-dir DIR] [--repo DIR]'; exit 0 }
         default { throw "Unknown option: $($args[$i])" }
     }
 }
@@ -56,7 +58,7 @@ $resultPaths | Sort-Object | ForEach-Object {
 
 Push-Location $PackageDir
 try {
-    & swift run swift-e2e-testing report --run-dir $script:RunDir
+    & swift run swift-e2e-testing report --run-dir $script:RunDir @repoArgs
     $reportStatus = $LASTEXITCODE
 } finally {
     Pop-Location

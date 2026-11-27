@@ -892,6 +892,41 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
   /// Clears the value of `supervision`. Subsequent reads from it will return its default value.
   public mutating func clearSupervision() {_uniqueStorage()._supervision = nil}
 
+  /// Build label the WendyOS Builder stamped into the running image, from the
+  /// "Build:" line of /etc/issue. os_version names only the release an image
+  /// is based on, which a release, a nightly and a pull-request image share;
+  /// this tells them apart: "pr-<N>" for an image built from Builder pull
+  /// request N (e.g. "pr-343"), "nightly-<YYYYMMDD>T<HHMMSS>" (UTC) for a
+  /// nightly, and the release version itself (e.g. "0.21.0") for a release
+  /// and for an image built outside CI. At most 64 printable ASCII
+  /// characters, without spaces. Absent on hosts that are not WendyOS, on
+  /// images without a readable stamp (WendyOS before 0.17.0), and on agents
+  /// predating this field.
+  public var osBuild: String {
+    get {_storage._osBuild ?? String()}
+    set {_uniqueStorage()._osBuild = newValue}
+  }
+  /// Returns true if `osBuild` has been explicitly set.
+  public var hasOsBuild: Bool {_storage._osBuild != nil}
+  /// Clears the value of `osBuild`. Subsequent reads from it will return its default value.
+  public mutating func clearOsBuild() {_uniqueStorage()._osBuild = nil}
+
+  /// Builder commit the running WendyOS image was built from, from
+  /// /usr/lib/wendyos/commit: the full Git hash in lower-case hexadecimal.
+  /// For a pull-request image it is the head commit of the pull request, so
+  /// it distinguishes two builds of one pull request, which share os_build.
+  /// Absent on hosts that are not WendyOS, on images built outside CI or
+  /// before 0.17.0 (they carry no commit), and on agents predating this
+  /// field.
+  public var osCommit: String {
+    get {_storage._osCommit ?? String()}
+    set {_uniqueStorage()._osCommit = newValue}
+  }
+  /// Returns true if `osCommit` has been explicitly set.
+  public var hasOsCommit: Bool {_storage._osCommit != nil}
+  /// Clears the value of `osCommit`. Subsequent reads from it will return its default value.
+  public mutating func clearOsCommit() {_uniqueStorage()._osCommit = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -2998,7 +3033,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProto
 
 nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0\u{3}npu_backends\0\u{3}power_mode\0\u{3}entitlement_types\0\u{1}supervision\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0\u{3}npu_backends\0\u{3}power_mode\0\u{3}entitlement_types\0\u{1}supervision\0\u{3}os_build\0\u{3}os_commit\0")
 
   fileprivate class _StorageClass {
     var _version: String = String()
@@ -3031,6 +3066,8 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
     var _powerMode: Wendy_Agent_Services_V1_PowerMode? = nil
     var _entitlementTypes: [String] = []
     var _supervision: Wendy_Agent_Services_V1_AgentSupervision? = nil
+    var _osBuild: String? = nil
+    var _osCommit: String? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -3071,6 +3108,8 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       _powerMode = source._powerMode
       _entitlementTypes = source._entitlementTypes
       _supervision = source._supervision
+      _osBuild = source._osBuild
+      _osCommit = source._osCommit
     }
   }
 
@@ -3119,6 +3158,8 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         case 28: try { try decoder.decodeSingularMessageField(value: &_storage._powerMode) }()
         case 29: try { try decoder.decodeRepeatedStringField(value: &_storage._entitlementTypes) }()
         case 30: try { try decoder.decodeSingularMessageField(value: &_storage._supervision) }()
+        case 31: try { try decoder.decodeSingularStringField(value: &_storage._osBuild) }()
+        case 32: try { try decoder.decodeSingularStringField(value: &_storage._osCommit) }()
         default: break
         }
       }
@@ -3221,6 +3262,12 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       try { if let v = _storage._supervision {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 30)
       } }()
+      try { if let v = _storage._osBuild {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 31)
+      } }()
+      try { if let v = _storage._osCommit {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 32)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -3260,6 +3307,8 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         if _storage._powerMode != rhs_storage._powerMode {return false}
         if _storage._entitlementTypes != rhs_storage._entitlementTypes {return false}
         if _storage._supervision != rhs_storage._supervision {return false}
+        if _storage._osBuild != rhs_storage._osBuild {return false}
+        if _storage._osCommit != rhs_storage._osCommit {return false}
         return true
       }
       if !storagesAreEqual {return false}

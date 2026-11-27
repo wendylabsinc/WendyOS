@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,10 +26,27 @@ const (
 // requests for the image and downloads of it.
 type flashSourceServer struct {
 	*httptest.Server
+	mu        sync.Mutex // guards raw, zst and bmap, which publish replaces
 	raw, zst  []byte
 	bmap      *Bmap
 	imageHits atomic.Int32
 	downloads atomic.Int32
+}
+
+// publish replaces the image and block map the server publishes, as a new
+// push to a PR does under its unchanged "pr-N" version.
+func (s *flashSourceServer) publish(t *testing.T, raw []byte, b *Bmap) {
+	t.Helper()
+	zst := encodeSeekable(t, raw, 4096)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.raw, s.zst, s.bmap = raw, zst, b
+}
+
+func (s *flashSourceServer) published() ([]byte, *Bmap) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.zst, s.bmap
 }
 
 // How the server answers block map requests.
@@ -45,10 +63,11 @@ func newFlashSourceServer(t *testing.T, bmapMode int) (*flashSourceServer, *imag
 	raw, b := buildSparseImage()
 	s := &flashSourceServer{raw: raw, zst: encodeSeekable(t, raw, 4096), bmap: b}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zst, b := s.published()
 		switch r.URL.Path {
 		case "/image.img.zst":
 			s.imageHits.Add(1)
-			http.ServeContent(w, r, "image.img.zst", time.Time{}, bytes.NewReader(s.zst))
+			http.ServeContent(w, r, "image.img.zst", time.Time{}, bytes.NewReader(zst))
 		case "/image.img.bmap":
 			switch bmapMode {
 			case bmapDown:

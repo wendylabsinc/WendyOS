@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -23,6 +24,7 @@ type TextPromptModel struct {
 
 	input    textinput.Model
 	err      string // current validation error, empty when valid
+	errHint  string // dimmed line under err, from an error with a Hint() method
 	done     bool
 	quitting bool
 }
@@ -69,11 +71,15 @@ func (m TextPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			value := strings.TrimSpace(m.input.Value())
 			if m.Validate != nil {
 				if err := m.Validate(value); err != nil {
-					m.err = err.Error()
+					m.err, m.errHint = err.Error(), ""
+					var hinted interface{ Hint() string }
+					if errors.As(err, &hinted) {
+						m.errHint = hinted.Hint()
+					}
 					return m, nil
 				}
 			}
-			m.err = ""
+			m.err, m.errHint = "", ""
 			m.done = true
 			return m, tea.Quit
 		case "ctrl+c":
@@ -81,7 +87,7 @@ func (m TextPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		default:
 			// Clear error when user starts editing.
-			m.err = ""
+			m.err, m.errHint = "", ""
 		}
 	}
 
@@ -113,6 +119,9 @@ func (m TextPromptModel) View() string {
 
 	if m.err != "" {
 		sb.WriteString(tpError.Render("Error: "+m.err) + "\n")
+		if m.errHint != "" {
+			sb.WriteString(tpHint.Render("  "+m.errHint) + "\n")
+		}
 	}
 
 	return sb.String()

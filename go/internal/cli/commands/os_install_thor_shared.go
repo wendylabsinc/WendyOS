@@ -115,26 +115,21 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	// bad flag or failed enrollment aborts before anything is written. Written
 	// to the config image in stepProvision, then flashed like a disk install's
 	// config partition.
+	fmt.Println() // the first-boot questions start a new stage
+	wifiAsked := wifiWillBeAsked(wifi)
 	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
 	}
-	name, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
-	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
+	name, provJSON, err := settleRecoveryFirstBoot(ctx, recoveryFlashConfirm{
+		target:   dev.Label,
+		warning:  []string{tui.WarningMessage(thorEraseWarning)},
+		question: fmt.Sprintf("Flash %s?", dev.Label),
+	}, creds, wifiAsked, deviceName, preOpts, force)
 	if err != nil {
 		return err
 	}
 	enrolled := provJSON != nil
-	if err := confirmRecoveryFlash(recoveryFlashConfirm{
-		target:   dev.Label,
-		warning:  []string{tui.WarningMessage(thorEraseWarning)},
-		question: fmt.Sprintf("Flash %s?", dev.Label),
-	}, name, creds, enrolled, force); err != nil {
-		return err
-	}
 
 	// flashCtx aborts in-flight step work (the stage-2 engine) when the user
 	// confirms a ctrl+c cancel in the steps UI.

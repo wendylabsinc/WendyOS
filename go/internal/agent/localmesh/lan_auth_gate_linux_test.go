@@ -48,8 +48,8 @@ func TestLANAuthGatePeer(t *testing.T) {
 			done <- RunConfiguredWithNode(ctx, cfg.Dir, cfg.Identity, func(node *Node, _ *TCPConfig) {
 				if node != nil {
 					nodeReady <- node
-					go runLANWithScan(ctx, LANConfig{Credentials: node.Credentials, Node: node, Ethernet: true}, func() ([]lanInterface, error) {
-						return []lanInterface{{iface: *iface, ip: net.IPv4(10, 201, 0, 2), net: &net.IPNet{IP: net.IPv4(10, 201, 0, 0), Mask: net.CIDRMask(30, 32)}, cost: EthernetLinkCost}}, nil
+					go runLANWithScan(ctx, LANConfig{Credentials: node.Credentials, Node: node, Ethernet: true}, func() (lanScan, error) {
+						return lanScan{interfaces: []lanInterface{{iface: *iface, ip: net.IPv4(10, 201, 0, 2), net: &net.IPNet{IP: net.IPv4(10, 201, 0, 0), Mask: net.CIDRMask(30, 32)}, cost: EthernetLinkCost}}}, nil
 					})
 				}
 			})

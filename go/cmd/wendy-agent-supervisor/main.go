@@ -152,10 +152,12 @@ func run() int {
 		ImageVersion: imageVersion,
 		Arch:         runtime.GOARCH,
 		StatusPath:   supervisor.StatusPath,
-		// Only settings an older agent must read back: identity, leases and
-		// cursors move forward even when a trial is rejected.
+		// Restore settings after a rejected trial. Identity, leases and
+		// cursors continue to move forward.
 		SnapshotDirs: []supervisor.SnapshotDir{
-			{Path: "/data/etc/wendy-agent", Only: []string{"local-mesh.json", "nan-mesh.json", "mesh-disabled", "build-host-enabled"}},
+			{Path: "/data/etc/wendy-agent", Only: []string{
+				"local-mesh.json", "local-mesh.json.disabled", "nan-mesh.json", "mesh-disabled", "build-host-enabled",
+			}},
 			{Path: "/data/etc/NetworkManager/system-connections"},
 		},
 		Self:           self,

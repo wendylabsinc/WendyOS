@@ -10,19 +10,23 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-// SaveCarrierConfig replaces only local-mesh.json. The caller retains the
-// loaded TCP listener and peers while changing NAN/BLE flags. When the last
-// radio is disabled and no TCP topology exists, absence represents disabled.
+// SaveCarrierConfig persists carrier choices independently of participation.
+// An explicit all-off override prevents the defaults from taking effect.
 func SaveCarrierConfig(path string, self meshid.Device, config localmesh.TCPConfig) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	if config.Listen == "" && len(config.Peers) == 0 && !config.NAN && !config.BLE && !config.Ethernet && !config.InfrastructureWiFi {
+	if config.Listen == "" && config.TLSListen == "" && len(config.Peers) == 0 && !config.NAN && !config.BLE && !config.Ethernet && !config.InfrastructureWiFi {
+		// Persist the override before removing the active config. The active
+		// file always wins, so an interrupted write preserves the old state.
+		if err := atomicConfigFile(localmesh.DisabledCarrierConfigPath(path), []byte("disabled\n")); err != nil {
+			return err
+		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		return syncDir(dir)
+		return syncConfigDir(dir)
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
 	}
 	data, err := json.Marshal(config)
 	if err != nil {
@@ -46,13 +50,4 @@ func SaveCarrierConfig(path string, self meshid.Device, config localmesh.TCPConf
 		return err
 	}
 	return atomicConfigFile(path, append(data, '\n'))
-}
-
-func syncDir(dir string) error {
-	handle, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer handle.Close()
-	return handle.Sync()
 }

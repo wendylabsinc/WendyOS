@@ -62,7 +62,7 @@ func TestOSUpdateOutcomeRequiresUBootConfirmation(t *testing.T) {
 							baseline.resultAtUnix = resp.CreatedAtUnix
 						}
 					}
-					msg, err := evaluateOSUpdateOutcomeSince(resp, nil, version, version, baseline, now)
+					msg, err := evaluateOSUpdateOutcomeSince(resp, nil, version, version, osBuild{}, baseline, now)
 					if (err == nil) != tc.wantOK {
 						t.Fatalf("message=%q error=%v; want success=%v", msg, err, tc.wantOK)
 					}

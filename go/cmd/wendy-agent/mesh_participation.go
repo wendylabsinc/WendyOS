@@ -9,8 +9,8 @@ import (
 )
 
 // runWhileMeshParticipating gives all carriers one participation lifetime.
-// Sharing/roaming-only changes do not restart links. Missing, invalid or
-// disabled policy cancels the runner and waits for its owned state to drain.
+// Sharing/roaming-only changes do not restart links. Invalid or disabled
+// policy cancels the runner and waits for its owned state to drain.
 func runWhileMeshParticipating(ctx context.Context, path string, interval time.Duration, run func(context.Context) error) (bool, error) {
 	config, err := meshsharing.LoadConfig(path)
 	if err != nil || !config.Participate {
