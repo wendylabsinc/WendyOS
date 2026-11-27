@@ -103,6 +103,11 @@ The CLI implements the ESP32 ROM bootloader protocol directly over the USB seria
 
 ### 4. Post-flash
 
+For ESP32-P4 releases that include an ESP-Hosted radio image, connect the P4
+over native USB. After flashing and booting the P4, the installer checks the
+radio's build ID. It downloads and installs the companion image over
+ESP-Hosted OTA when the ID differs and verifies the new ID after reboot.
+
 The device reboots automatically using the reset sequence appropriate to its native USB or UART transport. Before flashing, the CLI embeds the selected WiFi credentials, device name, and pre-enrollment state into the firmware image's `wendy_conf` partition.
 
 To provision WiFi after first boot, use `wendy device wifi connect`.

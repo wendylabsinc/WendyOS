@@ -288,7 +288,7 @@ func TestInstallESP32FirmwareScansForBoardBeforeQuestions(t *testing.T) {
 	orig := resolveESP32InstallSerialPortsFn
 	t.Cleanup(func() { resolveESP32InstallSerialPortsFn = orig })
 	resolveESP32InstallSerialPortsFn = func() ([]discovery.SerialPortInfo, error) { return nil, nil }
-	err := installESP32Firmware(context.Background(), false, "esp32c6_generic_native", discovery.SerialPortInfo{},
+	err := installESP32Firmware(context.Background(), false, "", "esp32c6_generic_native", discovery.SerialPortInfo{},
 		wifiCLIOptions{Entries: []string{"not-key-value"}}, "", preEnrollOptions{mode: preEnrollSkip})
 	if err == nil || !strings.Contains(err.Error(), "ESP32 not found") {
 		t.Fatalf("no board: %v; want ESP32 not found before any Wi-Fi question", err)
@@ -317,7 +317,7 @@ func TestWiFiPromptWithMaximumOneDoesNotOfferAnother(t *testing.T) {
 // Too many networks on the flags stop the Lite install before the name question.
 func TestInstallESP32FirmwareRefusesTooManyNetworksBeforeTheNameQuestion(t *testing.T) {
 	stubSessionTerminals(t, false, false, nil)
-	err := installESP32Firmware(context.Background(), false, "esp32c6_generic_native",
+	err := installESP32Firmware(context.Background(), false, "", "esp32c6_generic_native",
 		discovery.SerialPortInfo{Port: "/dev/ttyACM0"},
 		wifiCLIOptions{Entries: []string{"ssid=A,password=pw1", "ssid=B,password=pw2"}}, "", preEnrollOptions{mode: preEnrollSkip})
 	if err == nil || !strings.Contains(err.Error(), "supports one Wi-Fi network") || !IsUsageError(err) {
@@ -329,7 +329,7 @@ func TestInstallESP32FirmwareRefusesTooManyNetworksBeforeTheNameQuestion(t *test
 // question or flashing, and names the image to choose instead.
 func TestInstallESP32FirmwareRefusesPreEnrollForImageWithoutCloudEnrollment(t *testing.T) {
 	stubSessionTerminals(t, false, false, nil)
-	err := installESP32Firmware(context.Background(), false, "esp32c6_net",
+	err := installESP32Firmware(context.Background(), false, "", "esp32c6_net",
 		discovery.SerialPortInfo{Port: "/dev/ttyACM0"},
 		wifiCLIOptions{Entries: []string{"not-key-value"}}, "", preEnrollOptions{mode: preEnrollForced})
 	if err == nil || !strings.Contains(err.Error(), "does not include Wendy Cloud enrollment") ||

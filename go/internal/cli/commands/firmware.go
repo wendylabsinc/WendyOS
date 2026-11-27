@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,7 +22,29 @@ type firmwareAsset struct {
 	Name        string
 	DownloadURL string
 	Size        int64
+	Checksum    string
 	Version     string
+	Companion   *firmwareCompanion
+}
+
+var companionBuildIDPattern = regexp.MustCompile(`^wendy-[0-9a-f]{24}$`)
+
+func (c *firmwareCompanion) validate(hostPath string) error {
+	if !companionBuildIDPattern.MatchString(c.BuildID) {
+		return fmt.Errorf("invalid companion build ID %q", c.BuildID)
+	}
+	if c.Path == "" || c.Path == hostPath || path.Clean(c.Path) != c.Path ||
+		!strings.HasPrefix(c.Path, "firmware/") || path.Dir(c.Path) != path.Dir(hostPath) ||
+		strings.ContainsAny(c.Path, "?#%\\") {
+		return fmt.Errorf("invalid companion artifact path %q", c.Path)
+	}
+	if c.SizeBytes <= 0 || c.SizeBytes > 4<<20 {
+		return fmt.Errorf("invalid companion image size %d", c.SizeBytes)
+	}
+	if checksum, err := hex.DecodeString(c.Checksum); err != nil || len(checksum) != 32 {
+		return fmt.Errorf("invalid companion SHA-256 checksum")
+	}
+	return nil
 }
 
 // deriveAssetName prefers the basename from the manifest URL/path, falling back to the legacy synthesized name.
@@ -34,9 +59,9 @@ func deriveAssetName(downloadURL, firmwareID string) string {
 	return fmt.Sprintf("wendy-lite-%s.bin", firmwareID)
 }
 
-// fetchFirmwareFromManifest finds the latest firmware for a chip from the GCS manifest.
-func fetchFirmwareFromManifest(firmwareID string, nightly bool) (*firmwareAsset, error) {
-	main, err := fetchMainManifest()
+// fetchFirmwareFromManifest resolves an explicit version or the latest in the selected channel.
+func fetchFirmwareFromManifest(ctx context.Context, firmwareID, version string, nightly bool) (*firmwareAsset, error) {
+	main, err := fetchMainManifestContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetching main manifest: %w", err)
 	}
@@ -54,43 +79,58 @@ func fetchFirmwareFromManifest(firmwareID string, nightly bool) (*firmwareAsset,
 		return nil, fmt.Errorf("no manifest path for firmware %s", firmwareID)
 	}
 
-	fm, err := fetchFirmwareManifest(chipEntry.ManifestPath)
+	fm, err := fetchFirmwareManifestContext(ctx, chipEntry.ManifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("fetching firmware manifest for %s: %w", firmwareID, err)
 	}
 
-	// Validate that the firmware manifest matches the requested chip.
-	if fm.FirmwareID != "" && fm.FirmwareID != firmwareID {
-		return nil, fmt.Errorf("firmware manifest firmware ID %q does not match requested firmware %q", fm.FirmwareID, firmwareID)
+	// Accept the publisher's chip_id and the earlier firmware_id field.
+	for _, id := range []string{fm.ChipID, fm.FirmwareID} {
+		if id != "" && id != firmwareID {
+			return nil, fmt.Errorf("firmware manifest ID %q does not match requested firmware %q", id, firmwareID)
+		}
 	}
 
-	// Find the target version
-	var targetVersion string
-	if nightly {
-		targetVersion = chipEntry.LatestNightly
-	} else {
-		targetVersion = chipEntry.Latest
-	}
-
-	if targetVersion == "" {
+	if version == "" {
+		version = chipEntry.Latest
 		buildType := "stable"
 		if nightly {
+			version = chipEntry.LatestNightly
 			buildType = "nightly"
 		}
-		return nil, fmt.Errorf("no %s firmware version available for %s", buildType, firmwareID)
+		if version == "" {
+			return nil, fmt.Errorf("no %s firmware version available for %s", buildType, firmwareID)
+		}
 	}
 
-	info, err := getFirmwareInfo(fm, targetVersion)
+	info, err := getFirmwareInfo(fm, version)
 	if err != nil {
 		return nil, err
 	}
-
-	return &firmwareAsset{
+	entry := fm.Versions[version]
+	asset := &firmwareAsset{
 		Name:        deriveAssetName(info.DownloadURL, firmwareID),
 		DownloadURL: info.DownloadURL,
 		Size:        info.ImageSize,
-		Version:     targetVersion,
-	}, nil
+		Version:     version,
+		Companion:   entry.Companion,
+	}
+	if entry.Companion == nil {
+		return asset, nil
+	}
+	if err := entry.Companion.validate(entry.Path); err != nil {
+		return nil, fmt.Errorf("firmware %s v%s: %w", firmwareID, version, err)
+	}
+	if !strings.HasPrefix(entry.Path, "firmware/"+firmwareID+"/"+version+"/") ||
+		path.Clean(entry.Path) != entry.Path || strings.ContainsAny(entry.Path, "?#%\\") {
+		return nil, fmt.Errorf("invalid paired firmware artifact path %q", entry.Path)
+	}
+	checksum, err := hex.DecodeString(info.Checksum)
+	if err != nil || len(checksum) != 32 || info.ImageSize <= 0 {
+		return nil, fmt.Errorf("firmware %s v%s is missing a valid host size or SHA-256 checksum", firmwareID, version)
+	}
+	asset.Checksum = strings.ToLower(info.Checksum)
+	return asset, nil
 }
 
 // firmwareCacheDir returns (creating it if necessary) the directory where
@@ -122,6 +162,9 @@ func firmwareCachedPath(asset *firmwareAsset) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if asset.Checksum != "" {
+		return filepath.Join(dir, fmt.Sprintf("%s-%s-%s", safeVersion, asset.Checksum, safeName)), nil
+	}
 	return filepath.Join(dir, fmt.Sprintf("%s-%s", safeVersion, safeName)), nil
 }
 
@@ -135,24 +178,35 @@ func resolveFirmware(asset *firmwareAsset) (string, error) {
 		return "", err
 	}
 	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
-		fmt.Printf("Using cached firmware (%s)\n", cached)
-		return cached, nil
+		if asset.Checksum == "" || asset.verifyFile(cached, info.Size()) == nil {
+			fmt.Printf("Using cached firmware (%s)\n", cached)
+			return cached, nil
+		}
 	}
 
-	dir, err := firmwareCacheDir()
+	downloadPath, err := downloadFirmware(asset, filepath.Dir(cached))
 	if err != nil {
 		return "", err
 	}
-	downloadPath, err := downloadFirmware(asset, dir)
-	if err != nil {
-		return "", err
-	}
-	os.Remove(cached) // clear a stale/0-byte file so Rename succeeds on Windows
 	if err := os.Rename(downloadPath, cached); err != nil {
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching firmware: %w", err)
 	}
 	return cached, nil
+}
+
+func (asset *firmwareAsset) verifyFile(filename string, size int64) error {
+	if size != asset.Size {
+		return fmt.Errorf("host firmware has size %d, expected %d", size, asset.Size)
+	}
+	sum, err := sha256File(filename)
+	if err != nil {
+		return err
+	}
+	if sum != asset.Checksum {
+		return fmt.Errorf("host firmware checksum mismatch")
+	}
+	return nil
 }
 
 // downloadFirmware downloads asset's .bin into dir, driving its own progress
@@ -216,6 +270,11 @@ func downloadFirmwareInto(asset *firmwareAsset, dir string, progressFn func(down
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			if asset.Checksum != "" && int64(n) > asset.Size-downloaded {
+				tmpFile.Close()
+				os.Remove(tmpFile.Name())
+				return "", fmt.Errorf("host firmware exceeds expected size %d", asset.Size)
+			}
 			if _, err := tmpFile.Write(buf[:n]); err != nil {
 				tmpFile.Close()
 				os.Remove(tmpFile.Name())
@@ -241,5 +300,11 @@ func downloadFirmwareInto(asset *firmwareAsset, dir string, progressFn func(down
 		return "", fmt.Errorf("closing temp file: %w", err)
 	}
 
+	if asset.Checksum != "" {
+		if err := asset.verifyFile(tmpFile.Name(), downloaded); err != nil {
+			os.Remove(tmpFile.Name())
+			return "", err
+		}
+	}
 	return tmpFile.Name(), nil
 }

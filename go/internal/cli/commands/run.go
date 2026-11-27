@@ -2140,7 +2140,7 @@ func offerLiteReinstallAndRebuild(ctx context.Context, p providers.DeviceProvide
 		Port:      device.ConnectionInfo["serialPort"],
 		Transport: discovery.SerialTransportNativeUSB,
 	}
-	if err := installESP32Firmware(ctx, false, board, serialDevice, wifiCLIOptions{}, "", preEnrollOptions{mode: preEnrollAuto}); err != nil {
+	if err := installESP32Firmware(ctx, false, "", board, serialDevice, wifiCLIOptions{}, "", preEnrollOptions{mode: preEnrollAuto}); err != nil {
 		return nil, fmt.Errorf("reinstalling Wendy Lite: %w", err)
 	}
 

@@ -52,6 +52,26 @@ message WendyComAppPushEndParams {}
 message WendyComAppStartParams {}
 message WendyComAppStopParams {}
 
+message WendyComGetHostedCompanionParams {}
+
+// ESP-Hosted radio install commands are accepted only over the host's physical link.
+message WendyComHostedCompanionOtaBeginParams {
+    uint32 size = 1;
+}
+
+message WendyComHostedCompanionOtaWriteParams {
+    uint32 offset = 1;
+    bytes data = 2;
+}
+
+message WendyComHostedCompanionOtaEndParams {}
+
+message WendyComHostedCompanionInfo {
+    // Version from the running co-processor's ESP-IDF application descriptor.
+    // Empty for a radio whose ESP-Hosted protocol predates that descriptor RPC.
+    string build_id = 1;
+}
+
 // Mode of the conf push started by WENDY_COM_CMD_CONF_PUSH_BEGIN — replace
 // when omitted. REPLACE makes the pushed blob the whole configuration; UPDATE
 // keeps the current value of root fields absent from the pushed blob.
@@ -345,6 +365,10 @@ message WendyComCommand {
         WendyComNetTopologyParams net_topology = 24;
         WendyComBluetoothPowerGetParams bluetooth_power_get = 25;
         WendyComBluetoothPowerSetParams bluetooth_power_set = 26;
+        WendyComGetHostedCompanionParams get_hosted_companion = 28;
+        WendyComHostedCompanionOtaBeginParams hosted_companion_ota_begin = 29;
+        WendyComHostedCompanionOtaWriteParams hosted_companion_ota_write = 30;
+        WendyComHostedCompanionOtaEndParams hosted_companion_ota_end = 31;
     }
 }
 
@@ -379,6 +403,7 @@ message WendyComResponse {
         WendyComNetStatus net_status = 8;
         WendyComNetTopologyPage net_topology = 9;
         WendyComBluetoothPowerStatus bluetooth_power = 10;
+        WendyComHostedCompanionInfo hosted_companion = 12;
     }
 }
 

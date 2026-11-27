@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -762,7 +763,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	device := deviceMap[selected]
 
 	if device.IsESP32 {
-		return installESP32Firmware(ctx, nightly, device.ESP32Board, discovery.SerialPortInfo{}, wifi, deviceName, preOpts)
+		return installESP32Firmware(ctx, nightly, flagVersion, device.ESP32Board, discovery.SerialPortInfo{}, wifi, deviceName, preOpts)
 	}
 	if storageOverride == "emmc" && selected != orinDeviceType {
 		return fmt.Errorf("--storage emmc is supported only for --device-type %s", orinDeviceType)
@@ -3307,7 +3308,7 @@ var resolveESP32InstallSerialPortsFn = discovery.ResolveESP32InstallSerialPorts
 // board is a Wendy Lite catalog board name, e.g. "esp32c6_generic_native". An empty
 // serialDevice means the device should be located by scanning install-capable
 // serial ports. A supplied device carries its already-known transport.
-func installESP32Firmware(ctx context.Context, nightly bool, board string, serialDevice discovery.SerialPortInfo, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
+func installESP32Firmware(ctx context.Context, nightly bool, version, board string, serialDevice discovery.SerialPortInfo, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
 	target, err := WendyLiteTargetForBoard(board)
 	if err != nil {
 		return err
@@ -3408,16 +3409,25 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	}
 	fmt.Println(esp32InstallCandidateMessage(serialDevice))
 
-	installNote(os.Stdout, "Fetching latest Wendy Lite firmware...")
+	installNote(os.Stdout, "Fetching Wendy Lite firmware...")
 	firmwareID, err := WendyLiteFirmwareID(board)
 	if err != nil {
 		return err
 	}
-	asset, err := fetchFirmwareFromManifest(firmwareID, nightly)
+	asset, err := fetchFirmwareFromManifest(ctx, firmwareID, version, nightly)
 	if err != nil {
 		return fmt.Errorf("fetching firmware: %w", err)
 	}
 	installNote(os.Stdout, "Found firmware: %s v%s", asset.Name, asset.Version)
+	if asset.Companion != nil && asset.Size > maxFlashSize {
+		return fmt.Errorf("host firmware is too large (%d bytes, maximum %d)", asset.Size, maxFlashSize)
+	}
+	if asset.Companion != nil && expectedChip != chipESP32P4 {
+		return fmt.Errorf("firmware %s v%s has companion metadata for a board without an ESP32-P4 host", asset.Name, asset.Version)
+	}
+	if asset.Companion != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+		return fmt.Errorf("this firmware includes an ESP-Hosted companion update. Connect the P4's native USB port to install both images")
+	}
 
 	// Reuse a cached download from a previous run when one exists; otherwise
 	// download with a progress bar. The cached file persists across runs and
@@ -3432,6 +3442,11 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	img, err := LoadEspFlashImage(fwPath)
 	if err != nil {
 		return fmt.Errorf("loading firmware image: %w", err)
+	}
+
+	if asset.Checksum != "" && (int64(len(img.Bytes())) != asset.Size ||
+		fmt.Sprintf("%x", sha256.Sum256(img.Bytes())) != asset.Checksum) {
+		return fmt.Errorf("host firmware changed before flashing")
 	}
 
 	confBytes, err := proto.Marshal(wendyConf)
@@ -3474,6 +3489,9 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 
 		if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
 			return fmt.Errorf("ESP32 enrollment requires native USB; select the board's native USB port, or install with --pre-enroll=false")
+		}
+		if asset.Companion != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+			return fmt.Errorf("this firmware includes an ESP-Hosted companion update. Select the P4's native USB port")
 		}
 		if serialDevice.Transport == discovery.SerialTransportUARTBridge {
 			fmt.Fprintln(alsoOnPromptTerminal(os.Stderr), tui.WarningMessage(esp32UARTBridgeInstallWarning(len(provCreds) > 0)))
@@ -3526,6 +3544,12 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		}
 	}
 
+	if asset.Companion != nil {
+		serialDevice, err = installLiteCompanion(ctx, serialDevice, interactive, asset.Companion)
+		if err != nil {
+			return fmt.Errorf("P4 firmware was flashed, but the ESP-Hosted companion install could not be verified: %w", err)
+		}
+	}
 	var enroll func() error
 	if enrollmentAuth != nil {
 		enroll = func() error {
