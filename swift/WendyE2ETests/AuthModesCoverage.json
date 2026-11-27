@@ -553,15 +553,21 @@
       "testDeclarations": [
         {
           "file": "Tests/WendyE2ETests/AuthModesInstallTests.swift",
-          "name": "A27 Orin first boot is Closed with the installed owner"
+          "name": "A27 Orin first boot is Closed with the installed owner",
+          "executionMode": "assisted",
+          "status": "deferred"
         },
         {
           "file": "Tests/WendyE2ETests/AuthModesInstallTests.swift",
-          "name": "A27 Thor first boot is Closed with the installed owner"
+          "name": "A27 Thor first boot is Closed with the installed owner",
+          "executionMode": "assisted",
+          "status": "deferred"
         },
         {
           "file": "Tests/WendyE2ETests/AuthModesInstallTests.swift",
-          "name": "A27 Dragonwing first boot is Closed with the installed owner"
+          "name": "A27 Dragonwing first boot is Closed with the installed owner",
+          "executionMode": "assisted",
+          "status": "deferred"
         },
         {
           "file": "Tests/WendyE2ETests/AuthModesAcceptanceTests.swift",
@@ -570,7 +576,8 @@
       ],
       "externalOperations": [
         "USB flash performed by an explicitly authorized external provisioner"
-      ]
+      ],
+      "assistedDeferral": "The Orin, Thor and Dragonwing USB first-boot checks are manual or assisted and deferred for now. How assisted tests fit into the E2E system will be discussed with the E2E area lane."
     },
     {
       "id": "A28",
