@@ -135,5 +135,5 @@ func resolveTarget(cfg Config) (*resolvedTarget, error) {
 		return nil, err
 	}
 	cfg.namespace = ns
-	return &resolvedTarget{key: poolKey{namespace: ns.identity, iface: iface.Index, domain: cfg.DomainID}, cfg: cfg, ns: ns}, nil
+	return &resolvedTarget{key: poolKey{namespace: ns.identity, iface: iface.Index, domain: cfg.DomainID, publish: cfg.Publish}, cfg: cfg, ns: ns}, nil
 }

@@ -419,6 +419,9 @@ jobs:
       - name: Remove exported ROS fixture image and controls
         if: always()
         run: rm -f "$RUNNER_TEMP/ros-scopes/ros-image.tar" "$RUNNER_TEMP/ros-scopes/old-loopback.test" "$RUNNER_TEMP/ros-scopes/fail-open-routes.test"
+      - name: Require real ROS 2 nodes to receive samples the agent publishes
+        timeout-minutes: 15
+        run: bash .github/scripts/test-rtps-publisher-ros2.sh
       - name: Require real kernel driver install, replacement, rollback and reboot
         if: ${{ !cancelled() && steps.runtimes.outcome == 'success' }}
         timeout-minutes: 30
