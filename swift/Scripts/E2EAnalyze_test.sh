@@ -103,6 +103,76 @@ else
   echo "Skipped E2EAnalyze.ps1: pwsh is not installed"
 fi
 
+# Exercise the full wrapper chain with separate tooling and measured checkouts.
+# Only the final Swift executable is replaced, so a missing hop is visible.
+for script in E2EAggregate.sh E2EReview.{sh,ps1} E2EReport.{sh,ps1} E2ESanitizeXUnit.{sh,ps1}; do
+  cp "$SOURCE_DIR/$script" "$SCRIPTS/"
+done
+export TOOLING_PACKAGE="$TEST_DIR/swift/WendyE2ETests"
+export MEASURED_REPO="$TEST_DIR/tested source"
+mkdir -p "$MEASURED_REPO"
+# Keep report selection deterministic across BSD and GNU stat.
+printf '#!/bin/sh\necho 100\n' > "$TEST_DIR/bin/stat"
+chmod +x "$TEST_DIR/bin/stat"
+cat > "$TEST_DIR/bin/swift" <<'STUB'
+#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+command, product, stage, *args = sys.argv[1:]
+assert (command, product) == ("run", "swift-e2e-testing")
+assert Path.cwd().samefile(os.environ["TOOLING_PACKAGE"])
+has_repo = os.environ["WITH_REPO"] == "yes"
+assert args.count("--repo") == int(has_repo), (stage, args)
+if has_repo:
+    tested = Path(args[args.index("--repo") + 1])
+    assert tested.is_absolute() and tested.samefile(os.environ["MEASURED_REPO"])
+uses_diff = stage in ("aggregate", "review")
+assert args.count("--diff") == int(uses_diff), (stage, args)
+if uses_diff:
+    assert args[args.index("--diff") + 1] == "base...tested"
+with open(os.environ["REPORT_LOG"], "a") as log:
+    print(stage, file=log)
+STUB
+
+check_forwarding() {
+  local label="$1"
+  shift
+  local WITH_REPO status
+  for WITH_REPO in yes no; do
+    export WITH_REPO
+    local repo_args=()
+    [[ "$WITH_REPO" == no ]] || repo_args=(--repo "tested source")
+    : > "$REPORT_LOG"
+    # Existing reports from run_cases also exercise the normal report lookup.
+    status=0
+    (cd "$TEST_DIR" && "$@" --stage all --diff base...tested "${repo_args[@]}" \
+      --output-dir "$OUTPUT_DIR" --run-id "$RUN_ID" --no-open) > "$TEST_DIR/output.log" 2>&1 || status=$?
+    if [[ "$status" -ne 0 || "$(cat "$REPORT_LOG")" != "$(printf 'aggregate\nreview\nreview\nreport\nreport')" ]]; then
+      fail "$label: stages did not receive the expected arguments (with repo: $WITH_REPO)"
+      cat "$TEST_DIR/output.log" >&2
+    fi
+  done
+}
+
+output_alias="$TEST_DIR/output alias"
+ln -s "$OUTPUT_DIR" "$output_alias"
+OUTPUT_DIR="$output_alias" check_forwarding E2EAnalyze.sh bash "$SCRIPTS/E2EAnalyze.sh"
+if command -v pwsh > /dev/null; then
+  check_forwarding E2EAnalyze.ps1 pwsh -NoLogo -NoProfile -File "$SCRIPTS/E2EAnalyze.ps1"
+fi
+
+# Exercise run discovery through the same alias when only the saved report matches.
+mv "$OUTPUT_DIR/$RUN_ID.a" "$OUTPUT_DIR/$RUN_ID.saved"
+: > "$REPORT_LOG"
+if ! WITH_REPO=no bash "$SCRIPTS/E2EAnalyze.sh" --output-dir "$output_alias" \
+  --run-id "$RUN_ID.saved" --stage report --no-open > "$TEST_DIR/output.log" 2>&1 \
+  || [[ "$(cat "$REPORT_LOG")" != report ]]; then
+  fail "E2EAnalyze.sh: did not render the saved run through the output symlink"
+  cat "$TEST_DIR/output.log" >&2
+fi
+
 if [[ "$failures" -ne 0 ]]; then
   echo "$failures E2EAnalyze check(s) failed" >&2
   exit 1

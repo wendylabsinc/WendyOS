@@ -6,16 +6,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
 // Multi-gigabyte OS images, flashpacks and OTA artifacts take hours on a slow
-// link, so no download carries a whole-transfer deadline. An attempt fails
-// only when no byte arrives for idleTimeout, and the next attempt asks for the
-// missing bytes with a Range request instead of starting over.
+// link, and a slow enough link outlasts any fixed limit on the smaller
+// downloads too (agent, firmware, simulator image, driver add-on), so no
+// download carries a whole-transfer deadline. An attempt fails only when no
+// byte arrives for idleTimeout, and the next attempt asks for the missing
+// bytes with a Range request instead of starting over.
 type downloadPolicy struct {
 	// idleTimeout aborts an attempt that receives no response headers or
 	// body bytes for this long.
@@ -39,7 +40,58 @@ var imageDownloadPolicy = downloadPolicy{
 var (
 	errDownloadStalled   = errors.New("no data received")
 	errRangesUnsupported = errors.New("server ignored a range request")
+	errDownloadTooLarge  = errors.New("exceeds download limit")
 )
+
+// downloadStatusError is the HTTP status that failed a download. It is a type
+// so a caller can name its own artifact in the message.
+type downloadStatusError int
+
+func (e downloadStatusError) Error() string {
+	return fmt.Sprintf("download returned status %d", int(e))
+}
+
+// downloadDest receives a download: a file, or a downloadBuffer for a small
+// artifact that is checked and used in memory.
+type downloadDest interface {
+	io.WriterAt
+	Truncate(size int64) error
+}
+
+// downloadBuffer is a downloadDest in memory. A whole-resource download writes
+// in order, so it only ever appends or starts over.
+type downloadBuffer []byte
+
+func (b *downloadBuffer) WriteAt(p []byte, off int64) (int, error) {
+	if off != int64(len(*b)) {
+		return 0, fmt.Errorf("out-of-order write at byte %d of %d", off, len(*b))
+	}
+	*b = append(*b, p...)
+	return len(p), nil
+}
+
+func (b *downloadBuffer) Truncate(size int64) error {
+	if size < 0 || size > int64(len(*b)) {
+		return fmt.Errorf("cannot resize a %d-byte download to %d bytes", len(*b), size)
+	}
+	*b = (*b)[:size]
+	return nil
+}
+
+// downloadResumable downloads the whole of url into dst the way an OS image is
+// downloaded: no deadline on the transfer, an idle timeout on every attempt,
+// and a resume after a dropped connection, or a restart from zero when the
+// server has no range support. maxBytes > 0 refuses a larger resource: by its
+// declared size before any byte is read, else once the body passes the limit.
+// progress may be nil.
+func downloadResumable(ctx context.Context, url string, dst downloadDest, maxBytes int64, progress func(downloaded, total int64)) error {
+	if progress == nil {
+		progress = func(int64, int64) {}
+	}
+	// No Timeout, as in downloadToFile: idleTimeout bounds every request.
+	f := &resumableFetch{client: &http.Client{}, url: url, dst: dst, end: -1, wholeFile: true, size: -1, limit: maxBytes, progress: progress}
+	return f.run(ctx)
+}
 
 // fetchResumable writes the bytes [start, end] of url into dst at their own
 // offsets; end < 0 means through the end of the resource. size is the
@@ -49,10 +101,15 @@ var (
 // resource was asked for and the server ignores the Range, the body restarts
 // from zero; for a partial span that is errRangesUnsupported. progress gets the
 // next offset and the resource size (-1 if unknown) after every write.
-func fetchResumable(ctx context.Context, client *http.Client, url string, dst *os.File, start, end, size int64, progress func(offset, size int64)) error {
-	p := imageDownloadPolicy
+func fetchResumable(ctx context.Context, client *http.Client, url string, dst downloadDest, start, end, size int64, progress func(offset, size int64)) error {
 	f := &resumableFetch{client: client, url: url, dst: dst, end: end, wholeFile: start == 0 && end < 0, offset: start, size: size, progress: progress}
-	furthest, failures := start, 0
+	return f.run(ctx)
+}
+
+// run makes attempts until the wanted bytes are in f.dst or the policy gives up.
+func (f *resumableFetch) run(ctx context.Context) error {
+	p := imageDownloadPolicy
+	furthest, failures := f.offset, 0
 	for {
 		retry, err := f.attempt(ctx, p.idleTimeout)
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -80,11 +137,12 @@ func fetchResumable(ctx context.Context, client *http.Client, url string, dst *o
 type resumableFetch struct {
 	client    *http.Client
 	url       string
-	dst       *os.File
+	dst       downloadDest
 	end       int64 // last byte wanted, or -1 for the end of the resource
 	wholeFile bool  // asked for the whole resource, so a 200 can restart it
 	offset    int64 // next byte to write
 	size      int64 // resource length once known, else -1
+	limit     int64 // largest resource accepted, or 0 for any size
 	validator string
 	progress  func(offset, size int64)
 }
@@ -142,16 +200,27 @@ func (f *resumableFetch) attempt(ctx context.Context, idle time.Duration) (retry
 	case code == http.StatusOK:
 		return false, errRangesUnsupported
 	case code == http.StatusRequestTimeout || code == http.StatusTooManyRequests || code >= 500:
-		return true, fmt.Errorf("download returned status %d", code)
+		return true, downloadStatusError(code)
 	default:
-		return false, fmt.Errorf("download returned status %d", code)
+		return false, downloadStatusError(code)
 	}
 
+	var body io.Reader = resp.Body
+	if f.limit > 0 {
+		if f.size > f.limit {
+			return false, fmt.Errorf("Content-Length %d %w of %d bytes", f.size, errDownloadTooLarge, f.limit)
+		}
+		// One byte past the limit is enough to see that the body exceeds it.
+		body = io.LimitReader(body, f.limit-f.offset+1)
+	}
 	buf := make([]byte, 1*1024*1024)
 	for {
-		n, readErr := resp.Body.Read(buf)
+		n, readErr := body.Read(buf)
 		if n > 0 {
 			watchdog.Reset(idle)
+			if f.limit > 0 && f.offset+int64(n) > f.limit {
+				return false, fmt.Errorf("%w of %d bytes", errDownloadTooLarge, f.limit)
+			}
 			if _, err := f.dst.WriteAt(buf[:n], f.offset); err != nil {
 				return false, fmt.Errorf("writing at offset %d: %w", f.offset, err)
 			}

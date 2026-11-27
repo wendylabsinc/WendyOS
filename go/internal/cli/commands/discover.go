@@ -1239,7 +1239,7 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name, pinKey string) tea.Cmd {
 		}
 		osName := versionResp.GetOs()
 
-		binaryData, actualVer, _, err := resolveAgentArtifact(osName, arch, false)
+		binaryData, actualVer, _, err := resolveAgentArtifact(ctx, osName, arch, false)
 		if err != nil {
 			conn.Close()
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("resolving agent binary: %w", err)}
@@ -1324,6 +1324,7 @@ var deviceTypeNames = map[string]string{
 	"dragonwing-iq-8275": "Dragonwing IQ-8275",
 	"dragonwing-iq-9075": "Dragonwing IQ-9075",
 	"arduino-uno-q":      "Arduino UNO Q",
+	"orange-pi-5-pro":    "Orange Pi 5 Pro",
 	"x86_64":             "x86-64",
 	"vm-arm64":           "ARM64 VM",
 	"vm-x86-64":          "x86-64 VM",

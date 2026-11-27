@@ -15,10 +15,11 @@ $OpenReport = $true
 $Stage = 'all'
 $RunPrefix = $env:WENDY_E2E_ANALYZE_RUN_ID
 $Diff = $null
+$repoArgs = @()
 
 function Show-Usage {
     @"
-Usage: E2EAnalyze.ps1 [--output-dir DIR] [--run-id ID] [--stage STAGE] [--diff RANGE] [--open|--no-open]
+Usage: E2EAnalyze.ps1 [--output-dir DIR] [--run-id ID] [--stage STAGE] [--diff RANGE] [--repo DIR] [--open|--no-open]
 
 Analyze Swift E2E attempts found in an output directory.
 
@@ -36,6 +37,7 @@ while ($i -lt $args.Count) {
         '--output-dir' { $OutputDir = $args[$i + 1]; $i += 2; continue }
         '--run-id' { $RunPrefix = $args[$i + 1]; $i += 2; continue }
         '--stage' { $Stage = $args[$i + 1]; $i += 2; continue }
+        '--repo' { $repoArgs = @('--repo', (Resolve-Path -LiteralPath $args[$i + 1]).Path); $i += 2; continue }
         '--diff' { $Diff = $args[$i + 1]; $i += 2; continue }
         '--open' { $OpenReport = $true; $i += 1; continue }
         '--no-open' { $OpenReport = $false; $i += 1; continue }
@@ -122,7 +124,9 @@ $failedReviews = @{}
 if ($Stage -in @('aggregate', 'all')) {
     Push-Location $PackageDir
     try {
-        & swift run swift-e2e-testing aggregate --output-dir $OutputDir --package-dir $PackageDir @($attemptDirs | ForEach-Object { $_.FullName })
+        $aggregateArgs = $repoArgs
+        if ($Diff) { $aggregateArgs += @('--diff', $Diff) }
+        & swift run swift-e2e-testing aggregate --output-dir $OutputDir --package-dir $PackageDir @aggregateArgs @($attemptDirs | ForEach-Object { $_.FullName })
         $aggregateStatus = $LASTEXITCODE
     } finally {
         Pop-Location
@@ -131,7 +135,7 @@ if ($Stage -in @('aggregate', 'all')) {
 }
 
 if ($Stage -in @('review', 'all')) {
-    $reviewArgs = @()
+    $reviewArgs = $repoArgs
     if ($Diff) { $reviewArgs += @('--diff', $Diff) }
     foreach ($runDir in $runDirs) {
         & (Join-Path $ScriptDir 'E2EReview.ps1') --run-dir $runDir @reviewArgs
@@ -146,7 +150,7 @@ if ($Stage -in @('report', 'all')) {
         $inheritedOutcome = $env:WENDY_E2E_REVIEW_OUTCOME
         # Otherwise the report reads a review that never finished as a clean result.
         if ($failedReviews[$runDir]) { $env:WENDY_E2E_REVIEW_OUTCOME = 'failure' }
-        & (Join-Path $ScriptDir 'E2EReport.ps1') --run-dir $runDir
+        & (Join-Path $ScriptDir 'E2EReport.ps1') --run-dir $runDir @repoArgs
         $reportStatus = $LASTEXITCODE
         $env:WENDY_E2E_REVIEW_OUTCOME = $inheritedOutcome
         if ($status -eq 0 -and $reportStatus -ne 0) { $status = $reportStatus }

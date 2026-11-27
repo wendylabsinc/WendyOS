@@ -25,6 +25,7 @@ import (
 // cgroup permission. Private nodes use the kernel's tun/loop-control devices, so this
 // proves real runtime enforcement without pretending to execute a vendor NPU.
 func TestIntegrationNPUDeviceNumberRestart(t *testing.T) {
+	withoutHostAccelerators(t)
 	c, ctx := newIntegrationClient(t)
 	createReplaceTestImage(t, c, ctx)
 	const app = "npu-renumber"

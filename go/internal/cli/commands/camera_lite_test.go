@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -417,6 +418,73 @@ func TestLiteCameraCancelBeforeFirstFrame(t *testing.T) {
 	default:
 		t.Fatal("connection leaked")
 	}
+}
+
+// Serial shutdown can stall in a write or Drain even after cancellation.
+// Keep these operations blocked until the command has returned, so a fake
+// that closes immediately cannot hide a Ctrl+C regression.
+func TestLiteCameraCancelWithStalledCleanup(t *testing.T) {
+	for _, operation := range []string{"unsubscribe", "close"} {
+		for _, stdout := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stdout=%t", operation, stdout), func(t *testing.T) {
+				c := fakeLiteCamera()
+				stubLiteCameraTarget(t, c)
+				release := make(chan struct{})
+				defer func() {
+					close(release)
+					select {
+					case <-c.Done():
+					case <-time.After(time.Second):
+						t.Error("connection did not close after releasing stalled cleanup")
+					}
+				}()
+				stalled := &stalledLiteCameraClient{fakeLiteCameraClient: c, operation: operation, release: release}
+				connectLiteCameraFn = func(*SelectedDevice) (liteCameraClient, error) { return stalled, nil }
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				c.onSubscribe = cancel
+				cmd := newCameraViewCmd()
+				cmd.SetOut(io.Discard)
+				cmd.SetErr(io.Discard)
+				args := []string{"--non-interactive"}
+				if stdout {
+					args = append(args, "--stdout")
+				}
+				cmd.SetArgs(args)
+				result := make(chan error, 1)
+				go func() { result <- cmd.ExecuteContext(ctx) }()
+				select {
+				case err := <-result:
+					if err != nil {
+						t.Fatalf("cancelled playback: %v", err)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("camera view did not return after cancellation with stalled " + operation)
+				}
+			})
+		}
+	}
+}
+
+type stalledLiteCameraClient struct {
+	*fakeLiteCameraClient
+	operation string
+	release   <-chan struct{}
+}
+
+func (c *stalledLiteCameraClient) SensorLinkUnsubscribe(ids []uint32, timeout time.Duration) error {
+	if c.operation == "unsubscribe" {
+		<-c.release
+	}
+	return c.fakeLiteCameraClient.SensorLinkUnsubscribe(ids, timeout)
+}
+
+func (c *stalledLiteCameraClient) Close() error {
+	// Keep Done open as a real serial client does until its read loop exits.
+	// That also makes the unsubscribe case deterministic when cancellation
+	// races the deferred stream cleanup.
+	<-c.release
+	return c.fakeLiteCameraClient.Close()
 }
 
 func TestLiteCameraConcurrentDeliveryAndClose(t *testing.T) {

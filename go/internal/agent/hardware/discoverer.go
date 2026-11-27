@@ -4,8 +4,10 @@ package hardware
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -225,10 +227,26 @@ func (d *SystemHardwareDiscoverer) discoverSPI() []*agentpb.ListHardwareCapabili
 
 // discoverGPIO enumerates GPIO chip devices.
 func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
+	return discoverGPIOChips("/", gpioChipInfo)
+}
+
+// gpioChipInfoFunc reads a chip's label and line count from its character device.
+type gpioChipInfoFunc func(dev string) (label string, lines uint32, ok bool)
+
+// discoverGPIOChips prefers the sysfs class, which needs the deprecated
+// CONFIG_GPIO_SYSFS; kernels without it list only the character devices.
+func discoverGPIOChips(root string, chipInfo gpioChipInfoFunc) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
+	if caps := sysfsGPIOChips(root); len(caps) > 0 {
+		return caps
+	}
+	return cdevGPIOChips(root, chipInfo)
+}
+
+func sysfsGPIOChips(root string) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
 	var caps []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
 
 	gpioPath := "/sys/class/gpio"
-	entries, err := os.ReadDir(gpioPath)
+	entries, err := os.ReadDir(filepath.Join(root, gpioPath))
 	if err != nil {
 		return nil
 	}
@@ -239,8 +257,8 @@ func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabil
 		}
 
 		devPath := filepath.Join(gpioPath, entry.Name())
-		label := readSysfsFile(filepath.Join(devPath, "label"))
-		ngpio := readSysfsFile(filepath.Join(devPath, "ngpio"))
+		label := readSysfsFile(filepath.Join(root, devPath, "label"))
+		ngpio := readSysfsFile(filepath.Join(root, devPath, "ngpio"))
 
 		name := entry.Name()
 		if label != "" {
@@ -254,6 +272,33 @@ func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabil
 		})
 	}
 
+	return caps
+}
+
+func cdevGPIOChips(root string, chipInfo gpioChipInfoFunc) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
+	matches, _ := filepath.Glob(filepath.Join(root, "dev", "gpiochip*"))
+	chips := map[int]string{}
+	for _, match := range matches {
+		name := filepath.Base(match)
+		suffix := strings.TrimPrefix(name, "gpiochip")
+		if n, err := strconv.Atoi(suffix); err == nil && strconv.Itoa(n) == suffix {
+			chips[n] = name
+		}
+	}
+
+	var caps []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
+	for _, n := range slices.Sorted(maps.Keys(chips)) {
+		devPath := "/dev/" + chips[n]
+		name := chips[n]
+		if label, lines, ok := chipInfo(filepath.Join(root, devPath)); ok && label != "" {
+			name = fmt.Sprintf("%s (%s, %d lines)", chips[n], label, lines)
+		}
+		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
+			Category:    "gpio",
+			DevicePath:  devPath,
+			Description: name,
+		})
+	}
 	return caps
 }
 

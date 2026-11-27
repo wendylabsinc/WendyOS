@@ -177,6 +177,28 @@ func selectLiteCamera(manifest *sensorlinkpb.SensorManifest, opts liteCameraOpti
 	}
 }
 
+// A serial write or Drain can remain blocked after Ctrl+C. Give graceful
+// teardown time to unsubscribe and leave WendyCom mode, but do not keep the
+// CLI alive indefinitely waiting for the USB device. The cleanup goroutine
+// retains ownership of the connection until it finishes or the process exits.
+func closeLiteCameraView(stream *liteCameraStream, closeClient func()) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer closeClient()
+		if stream != nil {
+			stream.Close()
+		}
+	}()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		cliLogln("Camera connection cleanup timed out; exiting.")
+	}
+}
+
 func viewLiteCamera(cmd *cobra.Command, target *SelectedDevice, opts liteCameraOptions) error {
 	if opts.stableID != "" {
 		return fmt.Errorf("Wendy Lite cameras use SensorLink channel IDs; use --id from `wendy device camera list` instead of --stable-id")
@@ -190,7 +212,8 @@ func viewLiteCamera(cmd *cobra.Command, target *SelectedDevice, opts liteCameraO
 	if err != nil {
 		return err
 	}
-	defer closeClient()
+	var stream *liteCameraStream
+	defer func() { closeLiteCameraView(stream, closeClient) }()
 	manifest, err := client.GetSensorManifest(3 * time.Second)
 	if err != nil {
 		return fmt.Errorf("listing SensorLink cameras: %w", err)
@@ -203,11 +226,10 @@ func viewLiteCamera(cmd *cobra.Command, target *SelectedDevice, opts liteCameraO
 	if err != nil {
 		return err
 	}
-	stream, err := subscribeLiteCamera(ctx, client, ch)
+	stream, err = subscribeLiteCamera(ctx, client, ch)
 	if err != nil {
 		return err
 	}
-	defer stream.Close()
 	codec := ch.GetVideo().GetCodec()
 	cliLogln("Streaming SensorLink channel %d (%s, %dx%d, %d fps). Ctrl+C to stop.",
 		ch.GetChannelId(), codec, ch.GetVideo().GetWidth(), ch.GetVideo().GetHeight(), ch.GetVideo().GetFps())

@@ -195,7 +195,7 @@ func refreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
 		return out
 	}
 
-	out.Removed = removePiNVIDIAFallback(spec)
+	out.Removed = removeLegacyNVIDIAFallback(spec)
 
 	// The record is the only way to reach a cgroup-only pin, but device entries
 	// carry their own path, so union the two rather than trusting the record to
@@ -378,13 +378,10 @@ func reconcileDeviceRules(spec *Spec, original, resolved, recorded []PinnedDevic
 	return true, nil
 }
 
-// Older agents added five synthetic NVIDIA entries even on a Pi whose GPU
-// entitlement only supplied VideoCore access. Remove that exact legacy shape;
-// real NVIDIA devices (including an external GPU on a Pi) are left intact.
-func removePiNVIDIAFallback(spec *Spec) []string {
-	if !boardDetect().IsRaspberryPi() || len(discoverNvidiaDeviceNodes()) != 0 {
-		return nil
-	}
+// Older agents added five synthetic NVIDIA entries wherever no NVIDIA node was
+// live, and still do where no GPU driver has loaded yet. Remove that exact shape
+// where the gpu entitlement grants another vendor; real NVIDIA devices stay.
+func removeLegacyNVIDIAFallback(spec *Spec) []string {
 	paths := map[string]bool{
 		"/dev/nvidia0": true, "/dev/nvidiactl": true, "/dev/nvidia-uvm": true,
 		"/dev/nvidia-uvm-tools": true, "/dev/nvidia-modeset": true,
@@ -400,7 +397,8 @@ func removePiNVIDIAFallback(spec *Spec) []string {
 			return nil
 		}
 	}
-	if len(found) != len(paths) {
+	// Probe the host only for a spec with the legacy shape.
+	if len(found) != len(paths) || HostHasNVIDIAGPU() {
 		return nil
 	}
 	var removed []string

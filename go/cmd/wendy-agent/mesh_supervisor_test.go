@@ -21,9 +21,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Exercise the real admin persistence and participation reader together: an
-// absent configuration must not permanently stop the enrolled supervisor.
-func TestMeshSupervisorFirstConfigurationAfterEnrollment(t *testing.T) {
+// Exercise the real admin persistence and participation reader together.
+// Enrolled devices start automatically and can still save settings.
+func TestMeshSupervisorStartsByDefaultAfterEnrollment(t *testing.T) {
 	for _, enrolledAtBoot := range []bool{true, false} {
 		t.Run(map[bool]string{true: "enrolled-at-boot", false: "first-enrollment"}[enrolledAtBoot], func(t *testing.T) {
 			dir := t.TempDir()
@@ -58,14 +58,10 @@ func TestMeshSupervisorFirstConfigurationAfterEnrollment(t *testing.T) {
 			current = device
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			attempted, started, done := make(chan struct{}, 16), make(chan struct{}, 1), make(chan struct{})
+			started, done := make(chan struct{}, 1), make(chan struct{})
 			go func() {
 				defer close(done)
 				runMeshSupervisor(ctx, time.Millisecond, func(ctx context.Context) error {
-					select {
-					case attempted <- struct{}{}:
-					default:
-					}
 					_, err := runWhileMeshParticipating(ctx, filepath.Join(dir, "nan-mesh.json"), time.Millisecond, func(ctx context.Context) error {
 						started <- struct{}{}
 						<-ctx.Done()
@@ -74,25 +70,13 @@ func TestMeshSupervisorFirstConfigurationAfterEnrollment(t *testing.T) {
 					return err
 				}, func(err error) { t.Errorf("supervisor: %v", err) })
 			}()
-			for range 2 {
-				select {
-				case <-attempted:
-				case <-time.After(time.Second):
-					t.Fatal("supervisor stopped before first configuration")
-				}
-			}
-			select {
-			case <-started:
-				t.Fatal("carriers started without opt-in")
-			default:
-			}
-			if _, err := svc.ConfigureLocalMesh(caller, request); err != nil {
-				t.Fatal(err)
-			}
 			select {
 			case <-started:
 			case <-time.After(time.Second):
-				t.Fatal("first configure required restart")
+				t.Fatal("enrolled device needed explicit configuration")
+			}
+			if _, err := svc.ConfigureLocalMesh(caller, request); err != nil {
+				t.Fatal(err)
 			}
 			cancel()
 			select {

@@ -4,6 +4,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"debug/elf"
 	"fmt"
 	"os"
@@ -37,7 +38,8 @@ func seedAgent(seed agentSeed) (binary []byte, version string, err error) {
 	if arch == "" {
 		arch = "arm64"
 	}
-	binary, version, _, err = seedArtifactFn("linux", arch, seed.nightly)
+	// os install passes no context this far, so Ctrl+C cannot stop this download.
+	binary, version, _, err = seedArtifactFn(context.Background(), "linux", arch, seed.nightly)
 	return binary, version, err
 }
 
@@ -85,7 +87,7 @@ func (a *localInstallAgent) checkArchitecture(arch string) error {
 
 func installDeviceArchitecture(device string) string {
 	switch device {
-	case "raspberry-pi-3", "raspberry-pi-4", "raspberry-pi-5",
+	case "raspberry-pi-3", "raspberry-pi-4", "raspberry-pi-5", "orange-pi-5-pro",
 		"jetson-agx-orin", "jetson-orin-nano", "jetson-agx-thor", "vm-arm64":
 		return "arm64"
 	case "x86_64", "vm-x86-64":

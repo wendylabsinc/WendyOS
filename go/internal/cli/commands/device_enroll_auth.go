@@ -76,7 +76,7 @@ func prepareEnrollmentAuth(ctx context.Context, auth *config.AuthConfig) (*confi
 
 	fmt.Fprintln(os.Stderr, tui.WarningMessage("Your certificate has expired. Sign in again to continue enrollment."))
 	if !confirmFn("Sign in again now and continue enrollment?") {
-		return nil, err
+		return nil, enrollmentSignInDeclinedError{err}
 	}
 	// Keep the selected realm and custom deployment settings. The legacy
 	// dashboard login would discard the OIDC session and use a different API.
@@ -97,5 +97,14 @@ func prepareEnrollmentAuth(ctx context.Context, auth *config.AuthConfig) (*confi
 		}
 		return fresh, nil
 	}
-	return nil, fmt.Errorf("sign-in did not replace the selected enrollment session; run 'wendy device enroll' again to select a session")
+	return nil, fmt.Errorf("sign-in did not replace the selected enrollment session; start enrollment again and select the session")
 }
+
+// enrollmentSignInDeclinedError is the expiry error of a session whose owner
+// declined to sign in again. It reads and matches as that error; callers that
+// can go on without enrolling, such as an install, tell it apart from a
+// failure.
+type enrollmentSignInDeclinedError struct{ err error }
+
+func (e enrollmentSignInDeclinedError) Error() string { return e.err.Error() }
+func (e enrollmentSignInDeclinedError) Unwrap() error { return e.err }

@@ -135,6 +135,66 @@ func TestDeviceInfoUsesPersistedStatusAndConnectionVersion(t *testing.T) {
 	}
 }
 
+func TestDeviceInfoShowsTheOSBuild(t *testing.T) {
+	const sha = "4db3514d8971c00739d0831ae04ee6f663e09484"
+	for _, tc := range []struct {
+		name          string
+		build, commit string
+		wantOSLine    string
+	}{
+		{"pull request image", "pr-375", sha, "OS: linux WendyOS-0.21.0 (pr-375, 4db3514)"},
+		{"nightly image", "nightly-20261121T165425", sha, "OS: linux WendyOS-0.21.0 (nightly-20261121T165425, 4db3514)"},
+		// A release is stamped with its own version: the line stays as it was.
+		{"release image", "0.21.0", sha, "OS: linux WendyOS-0.21.0"},
+		{"agent that reports no build", "", "", "OS: linux WendyOS-0.21.0"},
+	} {
+		for _, asJSON := range []bool{false, true} {
+			name := tc.name + "/text"
+			if asJSON {
+				name = tc.name + "/json"
+			}
+			t.Run(name, func(t *testing.T) {
+				osVersion := "WendyOS-0.21.0"
+				version := &agentpb.GetAgentVersionResponse{Version: "2026.11.23", Os: "linux", OsVersion: &osVersion}
+				if tc.build != "" {
+					version.OsBuild = &tc.build
+				}
+				if tc.commit != "" {
+					version.OsCommit = &tc.commit
+				}
+				client := &deviceInfoClient{updateStatus: func(context.Context, *agentpb.GetOSUpdateStatusRequest) (*agentpb.GetOSUpdateStatusResponse, error) {
+					return nil, status.Error(codes.Unimplemented, "no update status")
+				}}
+				out, err := runDeviceInfoWithClient(t, client, version, asJSON, context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !asJSON {
+					if out = ansi.Strip(out); !strings.Contains(out, tc.wantOSLine+"\n") {
+						t.Fatalf("want the line %q in:\n%s", tc.wantOSLine, out)
+					}
+					return
+				}
+				var data map[string]any
+				if err := json.Unmarshal([]byte(out), &data); err != nil {
+					t.Fatal(err)
+				}
+				if data["osVersion"] != "WendyOS-0.21.0" {
+					t.Errorf("osVersion = %v, want it unchanged", data["osVersion"])
+				}
+				// The values as the device reports them, and no key at all
+				// when it reports none.
+				for key, want := range map[string]string{"osBuild": tc.build, "osCommit": tc.commit} {
+					got, present := data[key]
+					if present != (want != "") || (present && got != want) {
+						t.Errorf("%s = %v (present: %v), want %q", key, got, present, want)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestDeviceInfoOptionalStatusFailure(t *testing.T) {
 	for _, code := range []codes.Code{codes.Unimplemented, codes.Unavailable, codes.DeadlineExceeded} {
 		t.Run(code.String(), func(t *testing.T) {

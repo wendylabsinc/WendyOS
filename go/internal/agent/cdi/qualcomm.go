@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -141,6 +142,13 @@ func pruneStagedRuntime(keep map[string]bool, logger *zap.Logger) {
 	}
 }
 
+// QualcommNPURuntimeStageExists reports whether the runtime was staged since boot;
+// an empty stage then means the image has no transport to stage.
+func QualcommNPURuntimeStageExists() bool {
+	_, err := os.Stat(qualcommNPUStageDir)
+	return err == nil
+}
+
 // QualcommNPURuntimeResult distinguishes transport provisioning from board-file mounts.
 type QualcommNPURuntimeResult struct {
 	Mounts           int
@@ -163,13 +171,19 @@ func ApplyQualcommNPURuntime(spec *oci.Spec) (result QualcommNPURuntimeResult) {
 	}
 
 	// An empty stage dir means the host has no transport. Report its application
-	// separately: board files alone cannot supply the missing transport.
-	if dirHasEntries(qualcommNPUStageDir) &&
-		addRuntimeBind(spec, existing, qualcommNPUStageDir, qualcommNPUPrefix) {
-		result.Mounts++
-		result.TransportApplied = true
-		if spec.Process != nil {
-			spec.Process.Env = prependLibraryPath(spec.Process.Env, qualcommNPUPrefix)
+	// separately: board files alone cannot supply the missing transport. A spec
+	// that already binds the staged copy, as on a restart, counts as applied.
+	if dirHasEntries(qualcommNPUStageDir) {
+		if slices.ContainsFunc(spec.Mounts, func(m oci.Mount) bool {
+			return m.Destination == qualcommNPUPrefix && m.Source == qualcommNPUStageDir
+		}) {
+			result.TransportApplied = true
+		} else if addRuntimeBind(spec, existing, qualcommNPUStageDir, qualcommNPUPrefix) {
+			result.Mounts++
+			result.TransportApplied = true
+			if spec.Process != nil {
+				spec.Process.Env = prependLibraryPath(spec.Process.Env, qualcommNPUPrefix)
+			}
 		}
 	}
 

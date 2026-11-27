@@ -98,6 +98,7 @@ var gpuLabels = map[string]string{"sh.wendy/entitlement.gpu": ""}
 // driver file the new image does not have, and the runtime refuses to create
 // the container. The start must leave a spec the runtime can create.
 func TestCDIRefresh_RepairsTheStoredSpecAfterAnOSUpdate(t *testing.T) {
+	stubNVIDIAGPU(t, true)
 	currentNvidiaCDI(t)
 	original := storedGPUSpec(t)
 	store := &deviceSpecStore{record: containers.Container{
@@ -154,6 +155,7 @@ func TestCDIRefresh_RepairsTheStoredSpecAfterAnOSUpdate(t *testing.T) {
 
 // Only apps that were given the driver files have any to refresh.
 func TestCDIRefresh_LeavesOtherContainersAlone(t *testing.T) {
+	stubNVIDIAGPU(t, true)
 	for name, tc := range map[string]struct {
 		labels map[string]string
 		load   func() (*cdi.CDISpecification, string, error)
@@ -186,6 +188,7 @@ func TestCDIRefresh_LeavesOtherContainersAlone(t *testing.T) {
 // The refresh is a repair, not a gate. If it cannot be saved the start goes
 // ahead with the stored spec and the runtime has the last word, as before.
 func TestCDIRefresh_AFailedWriteIsReportedAndDoesNotStopTheStart(t *testing.T) {
+	stubNVIDIAGPU(t, true)
 	currentNvidiaCDI(t)
 	original := storedGPUSpec(t)
 	store := &deviceSpecStore{
@@ -240,6 +243,7 @@ func (s startPathStore) List(context.Context, ...string) ([]containers.Container
 // StartContainer, so that is where the repair has to happen, and before the
 // start reads the stored spec for anything else.
 func TestStartContainer_RefreshesDriverFilesBeforeUsingTheStoredSpec(t *testing.T) {
+	stubNVIDIAGPU(t, true)
 	currentNvidiaCDI(t)
 	stale := "/usr/lib/libgstrtspserver-1.0.so.0.2805.0"
 	spec, err := typeurl.MarshalAny(&specs.Spec{
@@ -288,6 +292,7 @@ func TestStartContainer_RefreshesDriverFilesBeforeUsingTheStoredSpec(t *testing.
 // line: a list that names the containerd socket must not be persisted, even
 // though the host's CDI file is trusted.
 func TestCDIRefresh_RejectsAListThatMountsContainerdsRuntimeDirectory(t *testing.T) {
+	stubNVIDIAGPU(t, true)
 	for _, source := range []string{"/run/containerd/containerd.sock", "/var/run/containerd"} {
 		t.Run(source, func(t *testing.T) {
 			currentNvidiaCDI(t)
@@ -320,6 +325,7 @@ func TestCDIRefresh_RejectsAListThatMountsContainerdsRuntimeDirectory(t *testing
 // it stays visible in the log, but once the files are in line there is
 // nothing to write for it.
 func TestCDIRefresh_ReportsADeviceThatStaysMissingWithoutRewriting(t *testing.T) {
+	stubNVIDIAGPU(t, true)
 	currentNvidiaCDI(t)
 	absent := filepath.Join(t.TempDir(), "nvhost-absent")
 	loadNvidiaCDISpec = func() (*cdi.CDISpecification, string, error) {

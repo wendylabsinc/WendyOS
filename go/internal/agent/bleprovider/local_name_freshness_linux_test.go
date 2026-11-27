@@ -163,7 +163,7 @@ func TestLocalNameIndependentAddressesAndEpochs(t *testing.T) {
 	if got, _ := f.candidates(objects, at); len(got) != 0 {
 		t.Fatal("cross-address correlation")
 	}
-	f.forget(p1)
+	f.forget(p1, at)
 	f.observeReport("AA:BB:CC:DD:EE:01", "public", n, at)
 	if got, _ := f.candidates(objects, at); len(got) != 0 {
 		t.Fatal("removed partial observation retained")

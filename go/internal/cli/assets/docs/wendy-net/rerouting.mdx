@@ -33,19 +33,20 @@ A few details follow from it:
 
 Two devices are often connected more than one way: the same Ethernet network,
 and Bluetooth too. Each connection is a separate link with its own cost, and
-only the cheapest one carries traffic. The others stay connected as standbys
-while the radios have room for them, so a switch doesn't have to wait for a new
-connection to be set up.
+only the cheapest one carries application traffic. The others stay connected
+as standbys while the radios have room for them, so a switch doesn't have to
+wait for a new connection to be set up. Standby links still carry routing
+and manifest updates so both devices can keep their view of the network current.
 
 <Frames columns={2}>
-  <Frame src="/images/wendy-net/one-link-at-a-time.webp" alt="Two devices joined by Ethernet 64, Wi-Fi 128 and Bluetooth 4096, with only the Ethernet link lit" caption="Ethernet is cheapest, so only Ethernet carries traffic." />
+  <Frame src="/images/wendy-net/one-link-at-a-time.webp" alt="Two devices joined by Ethernet 64, Wi-Fi 128 and Bluetooth 4096, with Ethernet highlighted as the link carrying application traffic" caption="Ethernet is cheapest, so it carries the application traffic." />
   <Frame src="/images/wendy-net/fallback-bluetooth.webp" alt="The Ethernet and Wi-Fi links between two devices broken, with traffic now flowing over the Bluetooth link" caption="Lose the others, and traffic falls back to Bluetooth." />
 </Frames>
 
 Standbys share their radio's connection slots. When a radio is full and a new
 device needs a slot, Wendy Net closes an unused standby to make room, starting
-with the most expensive one. It never closes a link that's carrying traffic, and
-it never closes the last link to a neighbor.
+with the most expensive one. It never closes a link that's carrying application
+traffic, and it never closes the last link to a neighbor.
 
 ## When a link goes down
 

@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -482,7 +483,6 @@ func pickWendyLiteBoard(ctx context.Context, target string, nightly bool) (strin
 			Value:   v.Board,
 		})
 	}
-	fmt.Println()
 	return pickFromItems("Select your board model", items)
 }
 
@@ -683,7 +683,6 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		// The rows came from the master manifest alone. The chosen device's own
 		// manifest is read now; when that fails the list opens again.
 		for {
-			fmt.Println()
 			selected, err = pickInstallDeviceFn(items)
 			if err != nil {
 				return err
@@ -762,7 +761,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	device := deviceMap[selected]
 
 	if device.IsESP32 {
-		return installESP32Firmware(ctx, nightly, device.ESP32Board, discovery.SerialPortInfo{}, wifi, deviceName, preOpts)
+		return installESP32Firmware(ctx, nightly, flagVersion, device.ESP32Board, discovery.SerialPortInfo{}, wifi, deviceName, preOpts)
 	}
 	if storageOverride == "emmc" && selected != orinDeviceType {
 		return fmt.Errorf("--storage emmc is supported only for --device-type %s", orinDeviceType)
@@ -1190,19 +1189,31 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// bmap and the actual image). Fall back to a full sequential dd write.
 		// For the seekable-zstd path the .zst is already on disk — open it as a
 		// sequential reader to avoid re-downloading the full image. For the regular
-		// bmap path the zip is also already cached.
+		// bmap path the zip is also already cached. Either file is hashed again
+		// first: the mismatch may be the cached file's, and then it must not be
+		// written in full.
 		var fallbackReader io.Reader
 		var fallbackSize int64
 		var fallbackCloser io.Closer
 		switch {
 		case seekableZst != "":
+			if verr := recheckCachedImage(seekableZst, imgInfo.ZstChecksum); verr != nil {
+				return fmt.Errorf("%w; full-image fallback skipped: %v", primary, verr)
+			}
 			si, ferr := openSeekableZstd(seekableZst)
 			if ferr != nil {
 				return fmt.Errorf("%w; could not open image for full-image fallback: %v", primary, ferr)
 			}
 			fallbackReader, fallbackSize, fallbackCloser = si, si.Size(), si
 		case bmapPath != "":
-			fs, ferr := openOSImageStream(deviceKey, imgInfo)
+			cachePath, ferr := resolveOSImage(deviceKey, imgInfo)
+			if ferr != nil {
+				return fmt.Errorf("%w; could not open image for full-image fallback: %v", primary, ferr)
+			}
+			if verr := recheckCachedImage(cachePath, imgInfo.Checksum); verr != nil {
+				return fmt.Errorf("%w; full-image fallback skipped: %v", primary, verr)
+			}
+			fs, ferr := openLocalImageStream(cachePath)
 			if ferr != nil {
 				return fmt.Errorf("%w; could not open image for full-image fallback: %v", primary, ferr)
 			}
@@ -1336,7 +1347,14 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 	// download only the .zst + bmap and write mapped ranges, skipping holes —
 	// and crucially we do NOT download the full .zip image at all.
 	if !noBmap && img.ZstURL != "" && img.BmapURL != "" {
-		zstPath, zerr := resolveSeekableZst(deviceKey, version, storage, img.ZstURL)
+		zstPath, zerr := resolveSeekableZst(deviceKey, version, storage, img.ZstURL, img.ZstChecksum)
+		// A download that is not the published image is an error, not a reason
+		// to fetch the full image: current manifests publish the same file as
+		// both, so that download would fail the same way.
+		var mismatch *imageChecksumError
+		if errors.As(zerr, &mismatch) {
+			return nil, zerr
+		}
 		bmapCandidate, berr := osCachedBmapPath(deviceKey, version, storage)
 		if zerr == nil {
 			localZst = zstPath
@@ -1368,11 +1386,9 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 		}
 	} else if img.ZstURL != "" {
 		// --no-bmap, or no block map published: a cached .zst is still the image.
-		if cached, err := osCachedZstPath(deviceKey, version, storage); err == nil {
-			if info, err := os.Stat(cached); err == nil && info.Size() > 0 {
-				installDone(os.Stdout, "Image ready", "(cached)")
-				localZst = cached
-			}
+		if cached, err := osCachedZstPath(deviceKey, version, storage); err == nil && cachedImageUsable(cached, img.ZstChecksum) {
+			installDone(os.Stdout, "Image ready", "(cached)")
+			localZst = cached
 		}
 	}
 
@@ -1935,13 +1951,15 @@ var downloadOSImage = downloadImage
 
 // resolveSeekableZst downloads (or cache-hits) the seekable .img.zst for
 // deviceKey+version from zstURL, returning the cached path. Reuses downloadImage
-// (streams to a temp file with progress) then renames into the cache.
-func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, error) {
+// (streams to a temp file with progress) then renames into the cache. checksum
+// is the manifest's checksum for that file, or "" when it publishes none: both
+// a cached file and a download are used only when they match it.
+func resolveSeekableZst(deviceKey, version, storage, zstURL, checksum string) (string, error) {
 	cached, err := osCachedZstPath(deviceKey, version, storage)
 	if err != nil {
 		return "", err
 	}
-	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
+	if cachedImageUsable(cached, checksum) {
 		installDone(os.Stdout, "Image ready", "(cached)")
 		return cached, nil
 	}
@@ -1949,9 +1967,10 @@ func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("downloading seekable image: %w", err)
 	}
-	os.Remove(cached) // clear stale/0-byte so Rename succeeds on Windows
-	if err := os.Rename(downloadPath, cached); err != nil {
-		os.Remove(downloadPath)
+	if err := verifyDownloadedImage(downloadPath, checksum); err != nil {
+		return "", err
+	}
+	if err := moveToImageCache(downloadPath, cached, checksum); err != nil {
 		return "", fmt.Errorf("caching seekable image: %w", err)
 	}
 	installDone(os.Stdout, "Image downloaded", downloadedDetail(cached))
@@ -2027,7 +2046,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if info, statErr := os.Stat(imgCached); statErr == nil && info.Size() > 0 {
+	if cachedImageUsable(imgCached, img.Checksum) {
 		installDone(os.Stdout, "Image ready", "(cached)")
 		return imgCached, nil
 	}
@@ -2038,7 +2057,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		if zipErr != nil {
 			return "", zipErr
 		}
-		if info, statErr := os.Stat(zipCached); statErr == nil && info.Size() > 0 {
+		if cachedImageUsable(zipCached, img.Checksum) {
 			installDone(os.Stdout, "Image ready", "(cached)")
 			return zipCached, nil
 		}
@@ -2047,9 +2066,10 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		if dlErr != nil {
 			return "", fmt.Errorf("downloading image: %w", dlErr)
 		}
-		os.Remove(zipCached) // remove stale/0-byte file if present so Rename succeeds on Windows
-		if renameErr := os.Rename(downloadPath, zipCached); renameErr != nil {
-			os.Remove(downloadPath)
+		if err := verifyDownloadedImage(downloadPath, img.Checksum); err != nil {
+			return "", err
+		}
+		if renameErr := moveToImageCache(downloadPath, zipCached, img.Checksum); renameErr != nil {
 			return "", fmt.Errorf("caching image: %w", renameErr)
 		}
 		installDone(os.Stdout, "Image downloaded", downloadedDetail(zipCached))
@@ -2061,9 +2081,10 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("downloading image: %w", err)
 	}
-	os.Remove(imgCached) // remove stale/0-byte file if present so Rename succeeds on Windows
-	if err := os.Rename(downloadPath, imgCached); err != nil {
-		os.Remove(downloadPath)
+	if err := verifyDownloadedImage(downloadPath, img.Checksum); err != nil {
+		return "", err
+	}
+	if err := moveToImageCache(downloadPath, imgCached, img.Checksum); err != nil {
 		return "", fmt.Errorf("caching image: %w", err)
 	}
 	installDone(os.Stdout, "Image downloaded", downloadedDetail(imgCached))
@@ -2666,7 +2687,6 @@ func selectWifiNetworkStreaming() (wifiScanSelection, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	p := tui.NewProgram(newLocalWifiPickerModel(ctx))
-	fmt.Fprintln(tui.PromptWriter())
 	finalModel, runErr := tui.RunProgram(p)
 	if errors.Is(runErr, tea.ErrInterrupted) {
 		return wifiScanSelection{}, ErrUserCancelled
@@ -2798,8 +2818,23 @@ func resolveDeviceName(flagName string) (string, error) {
 		}
 		return "", fmt.Errorf("device-name prompt: %w", err)
 	}
-	return strings.TrimSpace(name), nil
+	name = strings.TrimSpace(name)
+	printNameAnswer(name)
+	return name, nil
 }
+
+// printNameAnswer leaves the answered device-name question on screen.
+func printNameAnswer(name string) {
+	if name == "" {
+		name = "auto-generated"
+	}
+	printAnswer(alsoOnPromptTerminal(os.Stdout), "Device name", name, false)
+}
+
+// wifiWillBeAsked and nameWillBeAsked say whether the person answers these at a
+// prompt; when both are answered, no first-boot summary repeats them.
+func wifiWillBeAsked(wifi wifiCLIOptions) bool { return !wifi.chosen() && isInteractiveTerminal() }
+func nameWillBeAsked(flagName string) bool     { return flagName == "" && isInteractiveTerminal() }
 
 // resolveProvisioningJSON runs EAB pre-enrollment per preOpts and returns the
 // marshaled acme-enrollment.json, or nil when enrollment is skipped or not
@@ -2808,16 +2843,114 @@ func resolveDeviceName(flagName string) (string, error) {
 // *deviceName is filled in when the device is pre-enrolled, so the caller
 // writes the name Cloud reserved.
 func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, deviceName *string) ([]byte, error) {
-	plan, err := planProvisioning(preOpts, deviceName)
-	if err != nil || plan == nil {
+	name, plan, err := resolveFirstBootChoices(ctx, *deviceName, preOpts)
+	if err != nil {
 		return nil, err
 	}
+	*deviceName = name
 	return mintProvisioningJSON(ctx, plan, deviceName)
 }
 
-// planProvisioning is the question half of resolveProvisioningJSON: it may
-// prompt and fill a blank *deviceName, but reserves nothing in Cloud.
-func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnrollPlan, error) {
+// resolveFirstBootChoices asks whether to enroll in Wendy Cloud, then for the
+// device name, which an enrolling install checks against the organization.
+func resolveFirstBootChoices(ctx context.Context, deviceName string, preOpts preEnrollOptions) (string, *acmePreEnrollPlan, error) {
+	plan, err := planProvisioning(ctx, preOpts)
+	if err != nil {
+		return "", nil, err
+	}
+	var auth *config.AuthConfig
+	if plan != nil {
+		auth = plan.auth
+	}
+	name, err := resolveInstallDeviceName(ctx, deviceName, auth, true)
+	return name, plan, err
+}
+
+// settleRecoveryFirstBoot reserves the name in Cloud only after the flash is
+// confirmed, so a declined flash leaves nothing reserved.
+func settleRecoveryFirstBoot(ctx context.Context, c recoveryFlashConfirm, creds []wendyconf.WifiCredential, wifiAsked bool, requestedName string, preOpts preEnrollOptions, force bool) (string, []byte, error) {
+	summary := !(wifiAsked && nameWillBeAsked(requestedName) && preOpts.mode != preEnrollForced)
+	name, plan, err := resolveFirstBootChoices(ctx, requestedName, preOpts)
+	if err != nil {
+		return "", nil, err
+	}
+	cloud := cloudNotEnrolled
+	if plan != nil {
+		cloud = cloudWillPreEnroll
+	}
+	if err := confirmRecoveryFlash(c, name, creds, cloud, summary, force); err != nil {
+		return "", nil, err
+	}
+	fmt.Println() // the work starts a new stage
+	provJSON, err := mintProvisioningJSON(ctx, plan, &name)
+	return name, provJSON, err
+}
+
+// resolveInstallDeviceName refuses, when auth is set (the install enrolls), a
+// name another device in the organization holds, before anything is erased.
+func resolveInstallDeviceName(ctx context.Context, flagName string, auth *config.AuthConfig, required bool) (string, error) {
+	if auth == nil {
+		return resolveDeviceName(flagName)
+	}
+	taken := newNameChecker(ctx, auth)
+	org := cachedCloudOrganizationName(auth)
+	interactive := isInteractiveTerminal()
+	suggestion := ""
+	if flagName != "" {
+		if err := validateDeviceName(flagName); err != nil {
+			return "", fmt.Errorf("--device-name: %w", err)
+		}
+		if !taken(flagName) {
+			return flagName, nil
+		}
+		if !interactive {
+			return "", takenNameRefusal(flagName, org, noTTYHintInstall)
+		}
+		printTakenName(alsoOnPromptTerminal(os.Stdout), flagName, org)
+		suggestion = suggestFreeName(flagName, maxDeviceNameLen, taken)
+	} else if !interactive {
+		if required {
+			return "", fmt.Errorf("--pre-enroll requires --device-name: Wendy Cloud registers the device under that name")
+		}
+		return "", nil
+	}
+
+	rule := tui.ValidateFunc(validateDeviceName)
+	hint := fmt.Sprintf("(required to pre-enroll; a-z, 0-9 and hyphens, starts with a letter, 3–%d chars)", maxDeviceNameLen)
+	if !required {
+		rule = optionalDeviceNameValidator
+		hint = fmt.Sprintf("(a-z, 0-9 and hyphens, starts with a letter, 3–%d chars; empty = auto-generate)", maxDeviceNameLen)
+	}
+	validate := func(n string) error {
+		if err := rule(n); err != nil {
+			return err
+		}
+		if n = strings.TrimSpace(n); n != "" && taken(n) {
+			return takenNameValidationError{msg: takenNameMessage(n, org) + " Try another name.", hint: takenNameHint(n)}
+		}
+		return nil
+	}
+	var name string
+	var err error
+	if suggestion != "" {
+		name, err = promptDeviceNameDefault("Device name", hint, suggestion, validate)
+	} else {
+		name, err = promptDeviceName("Device name", hint, validate)
+	}
+	if err != nil {
+		if errors.Is(err, tui.ErrCancelled) {
+			return "", ErrUserCancelled
+		}
+		return "", fmt.Errorf("device-name prompt: %w", err)
+	}
+	name = strings.TrimSpace(name)
+	printNameAnswer(name)
+	return name, nil
+}
+
+// planProvisioning asks whether and with which session to pre-enroll; it
+// reserves nothing in Cloud.
+func planProvisioning(ctx context.Context, preOpts preEnrollOptions) (*acmePreEnrollPlan, error) {
 	if preOpts.mode == preEnrollSkip {
 		return nil, nil
 	}
@@ -2828,7 +2961,7 @@ func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnr
 		}
 		cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 	}
-	return planACMEPreEnrollment(cfg, preOpts, isInteractiveTerminal(), deviceName)
+	return planACMEPreEnrollment(ctx, cfg, preOpts, isInteractiveTerminal())
 }
 
 // mintProvisioningJSON mints plan's credential as acme-enrollment.json; a nil
@@ -2889,7 +3022,7 @@ func eraseDriveStep(d drive) string { return fmt.Sprintf("erasing %s (%s)", d.Na
 // confirmEraseDrive asks before d is erased; --force skips the question.
 func confirmEraseDrive(d drive, force bool) error {
 	if !force && isInteractiveTerminal() {
-		fmt.Fprintln(tui.PromptWriter())
+		fmt.Fprintln(alsoOnPromptTerminal(os.Stdout))
 	}
 	ok, err := confirmInstallStep(eraseDriveStep(d),
 		fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", d.Name, d.DevicePath), false, force)
@@ -2917,7 +3050,7 @@ func eraseDriveLabel(d drive) string {
 // resolveFirstBootWiFi resolves first-boot Wi-Fi and, when it was asked,
 // leaves the answer on screen.
 func resolveFirstBootWiFi(wifi wifiCLIOptions) ([]wendyconf.WifiCredential, error) {
-	asked := !wifi.chosen() && isInteractiveTerminal()
+	asked := wifiWillBeAsked(wifi)
 	creds, err := resolveWiFiCredentialsList(wifi)
 	if err == nil && asked {
 		answer := "none"
@@ -2994,7 +3127,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 		return diskInstallSettled{}, err
 	}
 
-	creds, name, plan, err := confirmDiskInstall(d, wifi, deviceName, preOpts, force, yesOverwriteInternal)
+	creds, name, plan, err := confirmDiskInstall(ctx, d, wifi, deviceName, preOpts, force, yesOverwriteInternal)
 	if err != nil {
 		return diskInstallSettled{}, err
 	}
@@ -3011,24 +3144,20 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 // confirmDiskInstall settles what first boot will apply, including whether to
 // pre-enroll, and shows it before asking to erase d, so nothing that changes
 // the result is asked afterwards. The returned plan is minted only after this.
-func confirmDiskInstall(d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
+func confirmDiskInstall(ctx context.Context, d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
+	answered := wifiWillBeAsked(wifi) && nameWillBeAsked(deviceName) && preOpts.mode != preEnrollForced
 	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return nil, "", nil, err
 	}
-	name, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	// Answers to the pre-enrollment questions are wasted if the erase cannot be confirmed.
+	// Answers to the enrollment and name questions are wasted if the erase cannot be confirmed.
 	if err := internalDriveRefusal(d, force, yesOverwriteInternal); err != nil {
 		return nil, "", nil, err
 	}
 	if err := checkInstallConfirmable(eraseDriveStep(d), force); err != nil {
 		return nil, "", nil, err
 	}
-	// It may ask for the name to enroll, which the summary then shows.
-	plan, err := planProvisioning(preOpts, &name)
+	name, plan, err := resolveFirstBootChoices(ctx, deviceName, preOpts)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -3036,7 +3165,9 @@ func confirmDiskInstall(d drive, wifi wifiCLIOptions, deviceName string, preOpts
 	if plan != nil {
 		cloud = cloudWillPreEnroll
 	}
-	printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), name, creds, cloud)
+	if !answered {
+		printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), name, creds, cloud)
+	}
 	if err := confirmOverwriteInternalDrive(d, force, yesOverwriteInternal); err != nil {
 		return nil, "", nil, err
 	}
@@ -3307,7 +3438,7 @@ var resolveESP32InstallSerialPortsFn = discovery.ResolveESP32InstallSerialPorts
 // board is a Wendy Lite catalog board name, e.g. "esp32c6_generic_native". An empty
 // serialDevice means the device should be located by scanning install-capable
 // serial ports. A supplied device carries its already-known transport.
-func installESP32Firmware(ctx context.Context, nightly bool, board string, serialDevice discovery.SerialPortInfo, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
+func installESP32Firmware(ctx context.Context, nightly bool, version, board string, serialDevice discovery.SerialPortInfo, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
 	target, err := WendyLiteTargetForBoard(board)
 	if err != nil {
 		return err
@@ -3326,7 +3457,6 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	autoDiscoverPort := serialDevice.Port == ""
 	interactive := !jsonOutput && isInteractiveTerminal()
 	if autoDiscoverPort {
-		fmt.Println()
 		installNote(os.Stdout, "Scanning for ESP32 devices...")
 
 		// A device that's rebooting on its own can drop off and reappear on
@@ -3363,12 +3493,8 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	}
 
 	wifi.MaxNetworks = liteMaxWiFiNetworks
+	fmt.Println() // the first-boot questions start a new stage
 	provCreds, err := resolveFirstBootWiFi(wifi)
-	if err != nil {
-		return err
-	}
-
-	provDeviceName, err := resolveDeviceName(deviceName)
 	if err != nil {
 		return err
 	}
@@ -3383,7 +3509,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 			cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 		}
 		var resolveErr error
-		enrollmentAuth, resolveErr = resolveLiteInstallEnrollment(cfg, preOpts, isInteractiveTerminal())
+		enrollmentAuth, resolveErr = resolveLiteInstallEnrollment(ctx, cfg, preOpts, isInteractiveTerminal())
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -3392,6 +3518,16 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 				return err
 			}
 		}
+	}
+
+	// A blank name stays allowed: the board then enrolls under its own name,
+	// which only it can report after the flash.
+	provDeviceName, err := resolveInstallDeviceName(ctx, deviceName, enrollmentAuth, false)
+	if err != nil {
+		return err
+	}
+	if !(wifiWillBeAsked(wifi) && nameWillBeAsked(deviceName) && preOpts.mode != preEnrollForced) {
+		printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), provDeviceName, provCreds, "")
 	}
 
 	wendyConf, err := buildWendyConf(provCreds, provDeviceName, nil)
@@ -3406,23 +3542,32 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
 		return fmt.Errorf("ESP32 enrollment requires native USB after flashing; connect the board's native USB port, or install with --pre-enroll=false and run 'wendy device enroll' over native USB later")
 	}
+	fmt.Println() // the work starts a new stage
 	fmt.Println(esp32InstallCandidateMessage(serialDevice))
-
-	installNote(os.Stdout, "Fetching latest Wendy Lite firmware...")
+	installNote(os.Stdout, "Fetching Wendy Lite firmware...")
 	firmwareID, err := WendyLiteFirmwareID(board)
 	if err != nil {
 		return err
 	}
-	asset, err := fetchFirmwareFromManifest(firmwareID, nightly)
+	asset, err := fetchFirmwareFromManifest(ctx, firmwareID, version, nightly)
 	if err != nil {
 		return fmt.Errorf("fetching firmware: %w", err)
 	}
 	installNote(os.Stdout, "Found firmware: %s v%s", asset.Name, asset.Version)
+	if asset.Companion != nil && asset.Size > maxFlashSize {
+		return fmt.Errorf("host firmware is too large (%d bytes, maximum %d)", asset.Size, maxFlashSize)
+	}
+	if asset.Companion != nil && expectedChip != chipESP32P4 {
+		return fmt.Errorf("firmware %s v%s has companion metadata for a board without an ESP32-P4 host", asset.Name, asset.Version)
+	}
+	if asset.Companion != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+		return fmt.Errorf("this firmware includes an ESP-Hosted companion update. Connect the P4's native USB port to install both images")
+	}
 
 	// Reuse a cached download from a previous run when one exists; otherwise
 	// download with a progress bar. The cached file persists across runs and
 	// is only removed via `wendy cache clear`/`cache list`.
-	fwPath, err := resolveFirmware(asset)
+	fwPath, err := resolveFirmware(ctx, asset)
 	if err != nil {
 		return fmt.Errorf("resolving firmware: %w", err)
 	}
@@ -3432,6 +3577,11 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	img, err := LoadEspFlashImage(fwPath)
 	if err != nil {
 		return fmt.Errorf("loading firmware image: %w", err)
+	}
+
+	if asset.Checksum != "" && (int64(len(img.Bytes())) != asset.Size ||
+		fmt.Sprintf("%x", sha256.Sum256(img.Bytes())) != asset.Checksum) {
+		return fmt.Errorf("host firmware changed before flashing")
 	}
 
 	confBytes, err := proto.Marshal(wendyConf)
@@ -3445,8 +3595,6 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	if err := img.SetPartition("wendy_conf", payload); err != nil {
 		return fmt.Errorf("writing config to firmware image: %w", err)
 	}
-
-	printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), provDeviceName, provCreds, "")
 
 	// Flash with progress bar. Retries on failure: a busy port gets an extra
 	// offer to identify and kill whatever holds it; any other failure just
@@ -3474,6 +3622,9 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 
 		if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
 			return fmt.Errorf("ESP32 enrollment requires native USB; select the board's native USB port, or install with --pre-enroll=false")
+		}
+		if asset.Companion != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+			return fmt.Errorf("this firmware includes an ESP-Hosted companion update. Select the P4's native USB port")
 		}
 		if serialDevice.Transport == discovery.SerialTransportUARTBridge {
 			fmt.Fprintln(alsoOnPromptTerminal(os.Stderr), tui.WarningMessage(esp32UARTBridgeInstallWarning(len(provCreds) > 0)))
@@ -3526,6 +3677,12 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		}
 	}
 
+	if asset.Companion != nil {
+		serialDevice, err = installLiteCompanion(ctx, serialDevice, interactive, asset.Companion)
+		if err != nil {
+			return fmt.Errorf("P4 firmware was flashed, but the ESP-Hosted companion install could not be verified: %w", err)
+		}
+	}
 	var enroll func() error
 	if enrollmentAuth != nil {
 		enroll = func() error {

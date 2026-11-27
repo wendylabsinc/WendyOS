@@ -6,6 +6,9 @@ struct ReferenceSourceParser {
     private struct PendingTest {
         var documentation: String
         var availability: StaticAvailability
+        var startLine: Int
+        var attributeLine: Int
+        var attachedDocumentation: String
     }
 
     private let lines: [String]
@@ -14,6 +17,7 @@ struct ReferenceSourceParser {
 
     private var index: Int = 0
     private var pendingDocumentation: String?
+    private var pendingDocumentationLine: Int?
     private var pendingSuiteDocumentation: String?
     private var suiteAvailability = StaticAvailability()
     private var pendingSuiteAvailability = StaticAvailability()
@@ -37,14 +41,17 @@ struct ReferenceSourceParser {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let code = lexer.codeLines[index].trimmingCharacters(in: .whitespaces)
 
+            let documentationLine = index
             if let documentation = parseDocumentationComment() {
                 pendingDocumentation = documentation
+                pendingDocumentationLine = documentationLine
                 continue
             }
 
             if code.hasPrefix("@Suite") {
                 pendingSuiteDocumentation = pendingDocumentation ?? ""
                 pendingDocumentation = nil
+                pendingDocumentationLine = nil
                 pendingSuiteAvailability = parseAttributeAvailability()
                 continue
             }
@@ -72,11 +79,23 @@ struct ReferenceSourceParser {
             }
 
             if code.hasPrefix("@Test") {
+                let attributeLine = index
+                let attached =
+                    pendingDocumentationLine.map { start in
+                        lexer.codeLines[start..<index].allSatisfy {
+                            $0.trimmingCharacters(in: .whitespaces).isEmpty
+                        }
+                    } ?? false
+                let startLine = attached ? pendingDocumentationLine! : index
                 pendingTest = PendingTest(
                     documentation: pendingDocumentation ?? "",
-                    availability: suiteAvailability.merging(parseAttributeAvailability())
+                    availability: suiteAvailability.merging(parseAttributeAvailability()),
+                    startLine: startLine,
+                    attributeLine: attributeLine,
+                    attachedDocumentation: attached ? pendingDocumentation ?? "" : ""
                 )
                 pendingDocumentation = nil
+                pendingDocumentationLine = nil
                 continue
             }
 
@@ -115,14 +134,23 @@ struct ReferenceSourceParser {
         pendingTest: PendingTest,
         functionLine: Int
     ) {
-        skipFunctionBody(startingAt: functionLine)
-        let entry = WendyE2EReference.Entry(
+        let end = skipFunctionBody(startingAt: functionLine)
+        var entry = WendyE2EReference.Entry(
             title: title,
             documentation: pendingTest.documentation,
             sourceLocation: WendyE2EReference.SourceLocation(path: path, line: functionLine + 1),
             availability: pendingTest.availability.state,
             availabilityReason: pendingTest.availability.reason
         )
+        entry.declarationSource =
+            pendingTest.attachedDocumentation + "\u{0}"
+            + (lexer.spelling(
+                of: lexer.tokens.filter {
+                    $0.line >= pendingTest.attributeLine && $0.range.upperBound <= end
+                }
+            ) ?? "")
+        entry.declarationStartLine = pendingTest.startLine + 1
+        entry.declarationEndLine = index
 
         if currentSections.isEmpty {
             currentSections.append(WendyE2EReference.Section(title: "Overview"))
@@ -172,7 +200,7 @@ struct ReferenceSourceParser {
         return nil
     }
 
-    private mutating func skipFunctionBody(startingAt functionLine: Int) {
+    private mutating func skipFunctionBody(startingAt functionLine: Int) -> Int {
         var depth = 0
         var foundBody = false
         for token in lexer.tokens where token.line >= functionLine {
@@ -183,12 +211,13 @@ struct ReferenceSourceParser {
                 depth -= 1
                 if foundBody, depth == 0 {
                     index = token.line + 1
-                    return
+                    return token.range.upperBound
                 }
             }
         }
         // Incomplete input: do not interpret declarations embedded in an unfinished body.
         index = lines.count
+        return lexer.tokens.last?.range.upperBound ?? 0
     }
 
     private mutating func parseAttributeAvailability() -> StaticAvailability {

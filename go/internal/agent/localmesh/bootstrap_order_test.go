@@ -30,8 +30,9 @@ func TestNewNeighbourOwnProofPrecedesBulkWithoutRepeatingIt(t *testing.T) {
 	}
 	sender := NewSynchronizer(directory, directory.cache, netgossip.NewPool())
 	defer sender.Close()
-	first := sender.bootstrapOwn(own.Principal(), now, 1)
-	bulk := sender.ReconcileBounded(now, 1)
+	sender.seedAnnouncements(own.Key(), now)
+	first := sender.drainAnnouncements(now, 1)
+	bulk := sender.drainAnnouncements(now, 1)
 	if len(first) != 1 || len(bulk) != 1 {
 		t.Fatalf("bootstrap=%v bulk=%v", first, bulk)
 	}
@@ -43,7 +44,7 @@ func TestNewNeighbourOwnProofPrecedesBulkWithoutRepeatingIt(t *testing.T) {
 	if bulk[0].Gossip == nil || bulk[0].Gossip.ID() != netgossip.Identify(netgossip.Manifest, foreignBytes) {
 		t.Fatal("bulk pass repeated bootstrap or omitted foreign proof")
 	}
-	if rest := sender.ContinueReconcile(now, 1); len(rest) != 0 {
+	if rest := sender.drainAnnouncements(now, 1); len(rest) != 0 {
 		t.Fatal("finished initial pass repeated records")
 	}
 }

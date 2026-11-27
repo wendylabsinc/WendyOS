@@ -18,7 +18,7 @@ import (
 )
 
 func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, directoryURL string) error {
-	identity, err := runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, directoryURL)
+	identity, name, err := runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, directoryURL)
 	if err != nil {
 		return err
 	}
@@ -29,16 +29,21 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	return err
 }
 
-func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, directoryURL string) (*certs.WendyIdentity, error) {
+func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, directoryURL string) (*certs.WendyIdentity, string, error) {
 	if orgOverride != 0 {
-		return nil, fmt.Errorf("--org is for legacy enrollment; OIDC enrollment uses the selected session's tenant")
+		return nil, "", fmt.Errorf("--org is for legacy enrollment; OIDC enrollment uses the selected session's tenant")
 	}
 	if conn == nil || conn.Conn == nil {
-		return nil, fmt.Errorf("no device connection for ACME enrollment")
+		return nil, "", fmt.Errorf("no device connection for ACME enrollment")
 	}
-	name, err := enrollmentDeviceName(conn, name)
+	// An enrolled board's own name is taken by itself; say it is enrolled instead.
+	if err := cloudenroll.CheckAgentEnrollment(ctx, conn.Conn); err != nil {
+		return nil, "", err
+	}
+	org := cachedCloudOrganizationName(auth)
+	name, err := enrollmentDeviceName(conn, name, newNameChecker(ctx, auth), org)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// The identity is minted here and never derived from the name. device_id is
 	// irreversible -- it becomes the SPIFFE SAN for the life of the device --
@@ -48,17 +53,14 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 	deviceID := uuid.NewString()
 	cfg, err := cloudenroll.EnrollmentConfig(auth, deviceID, directoryURL)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if auth.CloudGRPC == "" {
-		return nil, fmt.Errorf("OIDC session has no Cloud gRPC endpoint")
+		return nil, "", fmt.Errorf("OIDC session has no Cloud gRPC endpoint")
 	}
 
-	if err := cloudenroll.CheckAgentEnrollment(ctx, conn.Conn); err != nil {
-		return nil, err
-	}
 	if err := cloudenroll.CheckDeviceInternet(ctx, conn.Conn, cfg.DirectoryURL); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	agent := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn)
 	hw, err := cloudenroll.ReadHardware(ctx, conn.Conn)
@@ -68,25 +70,26 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 
 	tokenCtx, err := cloudContext(ctx, auth)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	cloudConn, err := dialCloudGRPC(auth)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer cloudConn.Close()
 
 	fmt.Printf("Enrolling %s with PKI...\n", name)
 	var assetID string
-	err = retryTakenDeviceName(&name, isInteractiveTerminal(), "--name", func(name string) (err error) {
+	retry := nameRetry{interactive: isInteractiveTerminal(), noTTYHint: noTTYHintEnroll, validate: validateHostnameArg, maxLen: maxHostnameLen, org: org}
+	err = retryTakenDeviceName(&name, retry, func(name string) (err error) {
 		cfg, assetID, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 		return err
 	})
 	if errors.Is(err, tui.ErrCancelled) {
-		return nil, ErrUserCancelled
+		return nil, "", ErrUserCancelled
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	resp, err := agent.StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
@@ -94,18 +97,18 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 		EabKeyId: cfg.EABKeyID, EabHmacKey: cfg.EABHMACKey,
 	})
 	if status.Code(err) == codes.Unimplemented {
-		return nil, reservedEnrollmentError(auth, assetID, fmt.Errorf("Cloud registered asset %s, but this agent does not support direct PKI enrollment; update the agent (the device name is now reserved in Cloud)", assetID))
+		return nil, "", reservedEnrollmentError(auth, assetID, fmt.Errorf("Cloud registered asset %s, but this agent does not support direct PKI enrollment; update the agent (the device name is now reserved in Cloud)", assetID))
 	}
 	if err != nil {
-		return nil, reservedEnrollmentError(auth, assetID, fmt.Errorf("Cloud registered asset %s, but device PKI enrollment failed (the device name is now reserved in Cloud): %w", assetID, err))
+		return nil, "", reservedEnrollmentError(auth, assetID, fmt.Errorf("Cloud registered asset %s, but device PKI enrollment failed (the device name is now reserved in Cloud): %w", assetID, err))
 	}
 	expected, _ := cfg.PrincipalURI()
 	if resp.GetPrincipalUri() != expected {
-		return nil, fmt.Errorf("agent returned an unexpected enrollment identity")
+		return nil, "", fmt.Errorf("agent returned an unexpected enrollment identity")
 	}
 	fmt.Printf("Device enrolled (name: %s, identity: %s, asset: %s).\n", name, resp.GetPrincipalUri(), assetID)
 	identity, err := certs.ParseDevicePrincipal(expected)
-	return &identity, err
+	return &identity, name, err
 }
 
 // reservedEnrollmentError attaches the command that removes the asset Cloud

@@ -107,15 +107,42 @@ func parseSystemProfilerUSB(out []byte) ([]models.USBDevice, error) {
 	return devices, nil
 }
 
+// darwinPortNameLimit is how many characters of a USB product string macOS
+// keeps when it names the device's network port after it.
+const darwinPortNameLimit = 31
+
+// darwinCutPortName returns name as macOS cuts it to name a network port, and
+// whether name is long enough to be cut. It counts characters, not bytes, so
+// the cut never falls inside a multi-byte character.
+func darwinCutPortName(name string) (string, bool) {
+	characters := 0
+	for i := range name {
+		if characters == darwinPortNameLimit {
+			return name[:i], true
+		}
+		characters++
+	}
+	return name, false
+}
+
 // setUSBNetworkInterfaces records the network interface each device's USB
 // network link appears as. macOS names that hardware port after the USB
 // product string, so a name held by exactly one device and one port joins
 // them. A name that several devices or ports share proves nothing and is left
 // unset.
+//
+// macOS cuts a long product string (see darwinPortNameLimit), so a device
+// that has no port under its whole name is joined by its cut name instead,
+// under the same rule: exactly one port has the cut name, and no other device
+// is cut to it or has it as its whole name.
 func setUSBNetworkInterfaces(devices []models.USBDevice, ports []darwinHardwarePort) {
 	devicesNamed := make(map[string]int, len(devices))
+	devicesCutTo := make(map[string]int)
 	for i := range devices {
 		devicesNamed[devices[i].Name]++
+		if cut, ok := darwinCutPortName(devices[i].Name); ok {
+			devicesCutTo[cut]++
+		}
 	}
 	portsNamed := make(map[string]int, len(ports))
 	interfaceNamed := make(map[string]string, len(ports))
@@ -127,6 +154,14 @@ func setUSBNetworkInterfaces(devices []models.USBDevice, ports []darwinHardwareP
 		name := devices[i].Name
 		if devicesNamed[name] == 1 && portsNamed[name] == 1 {
 			devices[i].NetworkInterface = interfaceNamed[name]
+			continue
+		}
+		cut, ok := darwinCutPortName(name)
+		if !ok || portsNamed[name] != 0 {
+			continue
+		}
+		if devicesCutTo[cut]+devicesNamed[cut] == 1 && portsNamed[cut] == 1 {
+			devices[i].NetworkInterface = interfaceNamed[cut]
 		}
 	}
 }

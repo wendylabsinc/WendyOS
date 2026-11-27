@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -109,6 +111,7 @@ type oidcEnrollmentServer struct {
 	md            metadata.MD
 	err           error
 	response      *cloudpbv2.EnrollDeviceResponse
+	takenName     string // refused as held by another device
 }
 
 // EnrollDevice behaves like the WDY-3458 broker gate: a signature carried in a
@@ -124,6 +127,9 @@ func (s *oidcEnrollmentServer) EnrollDevice(ctx context.Context, in *cloudpbv2.S
 	s.signed, s.req = in, &cloudpbv2.EnrollDeviceRequest{}
 	if err := proto.Unmarshal(in.GetPayload(), s.req); err != nil {
 		return nil, status.Error(codes.PermissionDenied, "payload does not decode")
+	}
+	if s.takenName != "" && s.req.GetName() == s.takenName {
+		return nil, status.Error(codes.AlreadyExists, "another device in this organization is already named "+s.takenName)
 	}
 	// Like Cloud, adopt the requested device UUID as the asset id unless the
 	// test names one.
@@ -247,7 +253,7 @@ func TestOIDCEnrollmentAutomaticCloudRelay(t *testing.T) {
 			auth.CloudGRPC = host
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if _, err := runEnrollDeviceIdentity(ctx, conn, auth, name, 0); err != nil {
+			if _, _, err := runEnrollDeviceIdentity(ctx, conn, auth, name, 0); err != nil {
 				t.Fatal(err)
 			}
 			if name == "" {
@@ -508,12 +514,107 @@ func TestOIDCEnrollmentSendsDeviceHardware(t *testing.T) {
 			auth.CloudGRPC = host
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if _, err := runEnrollDeviceIdentity(ctx, conn, auth, "sim", 0); err != nil {
+			if _, _, err := runEnrollDeviceIdentity(ctx, conn, auth, "sim", 0); err != nil {
 				t.Fatal(err)
 			}
 			if got := cloud.req.GetHardware(); !proto.Equal(got, tc.want) {
 				t.Fatalf("hardware = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// withStdin feeds input to code that reads os.Stdin.
+func withStdin(t *testing.T, input string) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString(input); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	orig := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = orig; r.Close() })
+}
+
+func takenSetOf(names ...string) func(string) bool {
+	return func(n string) bool {
+		for _, m := range names {
+			if strings.EqualFold(m, n) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func TestEnrollmentNameTakenDefaultSuggestsFree(t *testing.T) {
+	setInteractive(t, true)
+	withStdin(t, "\n")
+	var name string
+	var err error
+	out := captureStdout(t, func() {
+		name, err = enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf("wendyos-orin-nano-bk"), "")
+	})
+	if err != nil || name != "wendyos-orin-nano-bk-2" {
+		t.Fatalf("name %q, err %v; want the suggested free name", name, err)
+	}
+	if !strings.Contains(out, "Another device in your organization already uses wendyos-orin-nano-bk.") {
+		t.Fatalf("output %q; want the taken message", out)
+	}
+}
+
+func TestEnrollmentNameTakenDefaultNoTerminal(t *testing.T) {
+	setInteractive(t, false)
+	_, err := enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf("wendyos-orin-nano-bk"), "Wendy Labs, Inc.")
+	want := "Another device in Wendy Labs, Inc. already uses wendyos-orin-nano-bk. Pass a different --name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device wendyos-orin-nano-bk"
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v; want %q", err, want)
+	}
+}
+
+func TestEnrollmentNameFreeDefaultUnchanged(t *testing.T) {
+	setInteractive(t, false)
+	name, err := enrollmentName("wendyos-orin-nano-bk.local", "", takenSetOf(), "")
+	if err != nil || name != "wendyos-orin-nano-bk" {
+		t.Fatalf("name %q, err %v", name, err)
+	}
+}
+
+func TestOIDCEnrollReturnsRetriedName(t *testing.T) {
+	cloud := &oidcEnrollmentServer{takenName: "sim", response: &cloudpbv2.EnrollDeviceResponse{CredentialKind: "eab", EabKeyId: "eab-id", EabHmacKey: strings.Repeat("ab", 32)}}
+	conn, host := enrollmentServers(t, cloud, &acmeProvisioningServer{})
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = host
+	setInteractive(t, true)
+	stubOrgDeviceNames(t, nil, nil)
+	stubPromptDeviceNameDefault(t, func(_, _, def string, _ tui.ValidateFunc) (string, error) { return def, nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var name string
+	var err error
+	captureStdout(t, func() { _, name, err = runEnrollDeviceIdentity(ctx, conn, auth, "sim", 0) })
+	if err != nil || name != "sim-2" || cloud.req.GetName() != "sim-2" {
+		t.Fatalf("name %q, Cloud got %q, err %v; want the retried name returned for saving", name, cloud.req.GetName(), err)
+	}
+}
+
+// An enrolled board still holds its own name in Cloud; it must hear that it is
+// enrolled, not that its name is taken.
+func TestOIDCEnrollAlreadyEnrolledIsNotANameProblem(t *testing.T) {
+	cloud := &oidcEnrollmentServer{response: &cloudpbv2.EnrollDeviceResponse{CredentialKind: "eab", EabKeyId: "eab-id", EabHmacKey: strings.Repeat("ab", 32)}}
+	conn, host := enrollmentServers(t, cloud, &acmeProvisioningServer{enrolled: true})
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = host
+	setInteractive(t, false)
+	stubOrgDeviceNames(t, []string{"sim"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := runEnrollDeviceIdentity(ctx, conn, auth, "", 0)
+	if err == nil || !strings.Contains(err.Error(), "already enrolled") || strings.Contains(err.Error(), "already uses") {
+		t.Fatalf("got %v; want the already-enrolled refusal", err)
 	}
 }

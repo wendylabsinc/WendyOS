@@ -41,7 +41,7 @@ func (s *mcpServer) registerInstallationTools(srv *server.MCPServer) {
 
 func installationOptionSchema() []mcpgo.ToolOption {
 	return []mcpgo.ToolOption{
-		mcpgo.WithString("device_type", mcpgo.Required(), mcpgo.Description("Exact board: raspberry-pi-3/4/5, jetson-orin-nano, jetson-agx-orin, jetson-agx-thor, unitree-g1, or linux-desktop")),
+		mcpgo.WithString("device_type", mcpgo.Required(), mcpgo.Description("Exact board: raspberry-pi-3/4/5, orange-pi-5-pro, jetson-orin-nano, jetson-agx-orin, jetson-agx-thor, unitree-g1, or linux-desktop")),
 		mcpgo.WithString("carrier", mcpgo.Description("Required for Jetson: developer-kit. Custom robot carriers need vendor instructions, not generic Jetson images.")),
 		mcpgo.WithString("version", mcpgo.Description("Exact WendyOS version; omitted resolves latest stable")),
 		mcpgo.WithString("storage", mcpgo.Enum("sd", "nvme", "emmc")),

@@ -80,6 +80,17 @@ systemctl daemon-reload
 systemctl restart serial-getty@ttyS0.service
 ```
 
+## Orange Pi 5 Pro
+
+The debug UART is `ttyS2` (UART2) at **1500000 baud, 8N1**, on the 40-pin header: pin 8 TX, pin 10 RX, pin 6 GND. Use a 3.3 V adapter that supports 1.5 Mbaud, such as an FT232R, CP2102N or CH343; a PL2303 garbles it.
+
+Release images show only U-Boot's output there: `wendyos-rockchip.scr` sends the kernel console to the HDMI console (`console=tty0`). Debug images, such as PR builds, also add `console=ttyS2,1500000n8`. See [uboot.md](./uboot.md#rockchip-orange-pi-5-pro).
+
+```sh
+# FT232R or CP2102N: /dev/ttyUSB0; CH343: /dev/ttyACM0
+picocom -b 1500000 /dev/ttyUSB0
+```
+
 ## Connecting from a host computer
 
 ```sh

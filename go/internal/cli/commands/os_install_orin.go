@@ -83,26 +83,21 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		return err
 	}
 
+	fmt.Println() // the first-boot questions start a new stage
+	wifiAsked := wifiWillBeAsked(opts.WiFi)
 	creds, err := resolveFirstBootWiFi(opts.WiFi)
 	if err != nil {
 		return err
 	}
-	name, err := resolveDeviceName(opts.RequestedName)
-	if err != nil {
-		return err
-	}
-	provJSON, err := resolveProvisioningJSON(ctx, opts.PreEnroll, &name)
+	name, provJSON, err := settleRecoveryFirstBoot(ctx, recoveryFlashConfirm{
+		target:   dev.Describe(),
+		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},
+		question: fmt.Sprintf("Flash %s?", dev.Describe()),
+	}, creds, wifiAsked, opts.RequestedName, opts.PreEnroll, opts.Force)
 	if err != nil {
 		return err
 	}
 	enrolled := provJSON != nil
-	if err := confirmRecoveryFlash(recoveryFlashConfirm{
-		target:   dev.Describe(),
-		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},
-		question: fmt.Sprintf("Flash %s?", dev.Describe()),
-	}, name, creds, enrolled, opts.Force); err != nil {
-		return err
-	}
 
 	if err := preAuthElevation(); err != nil {
 		return err

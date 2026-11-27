@@ -15,8 +15,9 @@ import (
 // Schema-v2 layout parsing rejects any other value.
 const sectorSize = 512
 
-// alignSectors is the partition start alignment, matching sgdisk's default
-// (1 MiB) that the bundle's make-sdcard relies on.
+// alignSectors is the default partition start alignment, matching sgdisk's
+// default (1 MiB) that the bundle's make-sdcard relies on. A partition whose
+// layout entry asks for a larger align_boundary starts on that instead.
 const alignSectors = 2048
 
 // Partition is one rootfs-device partition from initrd-flash.xml, in layout
@@ -32,6 +33,10 @@ type Partition struct {
 	UniqueGuid string `json:"uniqueGuid,omitempty"`
 	FsType     string `json:"fsType"`
 	FillToEnd  bool   `json:"fillToEnd,omitempty"`
+	// AlignSectors is the start alignment the layout asks for with
+	// align_boundary, in sectors: a power of two, or zero when the layout
+	// gives none. Placement never aligns below alignSectors.
+	AlignSectors int64 `json:"alignSectors,omitempty"`
 
 	// StartSector is computed by placement, not read from the XML.
 	StartSector int64 `json:"-"`
@@ -65,6 +70,7 @@ type xmlPartition struct {
 	Size                string `xml:"size"`
 	Filename            string `xml:"filename"`
 	AllocationAttribute string `xml:"allocation_attribute"`
+	AlignBoundary       string `xml:"align_boundary"`
 	TypeGUID            string `xml:"partition_type_guid"`
 	UniqueGUID          string `xml:"unique_guid"`
 }
@@ -169,6 +175,20 @@ func LoadXMLPlan(layoutPath, imagesDir, rootfsDevice string) (*Plan, error) {
 		if err != nil {
 			return nil, fmt.Errorf("partition %s has invalid allocation_attribute %q", xp.Name, xp.AllocationAttribute)
 		}
+		// align_boundary is the start alignment in bytes. NVIDIA's layouts
+		// carry 16 KiB on some partitions, and WendyOS asks for 4 MiB on the
+		// two it adds, config and data. A value no partition can start on is
+		// a defect in the layout. It is refused here, before USB is touched,
+		// rather than dropped: dropping it would place the partition where
+		// the layout did not ask for it, without saying so.
+		var align int64
+		if boundary := strings.TrimSpace(xp.AlignBoundary); boundary != "" {
+			alignBytes, err := parseXMLUint(boundary)
+			if err != nil || alignBytes < sectorSize || alignBytes&(alignBytes-1) != 0 {
+				return nil, fmt.Errorf("partition %s has invalid align_boundary %q (want a power of two in bytes, at least %d)", xp.Name, xp.AlignBoundary, sectorSize)
+			}
+			align = int64(alignBytes / sectorSize)
+		}
 		file := strings.TrimSpace(xp.Filename)
 		if file != "" {
 			clean := filepath.Clean(filepath.FromSlash(file))
@@ -211,7 +231,7 @@ func LoadXMLPlan(layoutPath, imagesDir, rootfsDevice string) (*Plan, error) {
 			}
 		}
 		part := Partition{Number: number, Name: strings.TrimSpace(xp.Name), SizeSectors: int64(sizeBytes / sectorSize), File: file,
-			TypeGuid: typeGUID, UniqueGuid: uniqueGUID, FsType: fsType, FillToEnd: attrs&0x800 != 0}
+			TypeGuid: typeGUID, UniqueGuid: uniqueGUID, FsType: fsType, FillToEnd: attrs&0x800 != 0, AlignSectors: align}
 		if part.Name == "" {
 			return nil, fmt.Errorf("partition id %d has no name", number)
 		}
@@ -238,10 +258,14 @@ func parseXMLUint(s string) (uint64, error) {
 }
 
 // place assigns start sectors in flash-layout order: each partition starts at
-// the next alignSectors-aligned sector after the previous one, the first at
-// alignSectors. This reproduces what sgdisk does for the bundle's make-sdcard
-// (sequential --new with default alignment); gpt_test.go pins it against a
-// real sgdisk run of the AGX Orin eMMC layout.
+// the next aligned sector after the previous one, the first no earlier than
+// alignSectors. The alignment is alignSectors (1 MiB), or the partition's
+// align_boundary when the layout asks for a larger one. A smaller
+// align_boundary changes nothing: both are powers of two, so a 1 MiB start is
+// on that boundary too. Without a larger align_boundary this reproduces what
+// sgdisk does for the bundle's make-sdcard (sequential --new with default
+// alignment); plan_test.go pins it against a real sgdisk run of the AGX Orin
+// eMMC layout.
 func (p *Plan) place() error {
 	next := int64(alignSectors)
 	for i := range p.Partitions {
@@ -249,7 +273,8 @@ func (p *Plan) place() error {
 		if part.SizeSectors <= 0 {
 			return fmt.Errorf("partition %s has invalid size %d", part.Name, part.SizeSectors)
 		}
-		start := (next + alignSectors - 1) / alignSectors * alignSectors
+		align := max(alignSectors, part.AlignSectors)
+		start := (next + align - 1) / align * align
 		part.StartSector = start
 		next = start + part.SizeSectors
 		if part.FillToEnd && i != len(p.Partitions)-1 {

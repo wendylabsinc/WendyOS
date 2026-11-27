@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"time"
 
@@ -120,6 +121,96 @@ func mldsaScheme(oid asn1.ObjectIdentifier) (circlSign.Scheme, error) {
 	default:
 		return nil, fmt.Errorf("unsupported ML-DSA OID: %v", oid)
 	}
+}
+
+// isMLDSACert reports whether cert holds an ML-DSA key and is ML-DSA signed.
+func isMLDSACert(cert *x509.Certificate) bool {
+	keyOID, _, err := issuerPublicKeyBytes(cert)
+	if err != nil {
+		return false
+	}
+	sigOID, err := certSigAlgOID(cert)
+	if err != nil {
+		return false
+	}
+	_, keyErr := mldsaScheme(keyOID)
+	_, sigErr := mldsaScheme(sigOID)
+	return keyErr == nil && sigErr == nil
+}
+
+// oidDeviceTrustTier is pki-core's DeviceTrustTier extension (Wendy PEN, sub
+// 2); its value is the tier as a UTF8String.
+var oidDeviceTrustTier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 65441, 2}
+
+// clientLeafAllowed is the allow-list for client leaves, keyed on what a leaf
+// holds, never on a marker it lacks: an ML-DSA leaf, or a Wendy Lite board.
+// The two exceptions below are temporary and each is deleted in one place.
+func clientLeafAllowed(leaf *x509.Certificate, legacyTrust bool) bool {
+	return isMLDSACert(leaf) || isLiteBoard(leaf) || legacyTrust || tierABFallbackException(leaf)
+}
+
+var errClientLeafRefused = errors.New("this device accepts only post-quantum client certificates; sign in again with 'wendy auth login'")
+
+// CheckClientLeaf runs clientLeafAllowed for a verifier trusting anchors, for
+// client paths that verify their chain outside this package (mesh operators).
+func CheckClientLeaf(leaf *x509.Certificate, anchors []*x509.Certificate) error {
+	if clientLeafAllowed(leaf, legacyCloudException(anchors)) {
+		return nil
+	}
+	return errClientLeafRefused
+}
+
+// isLiteBoard reports a Tier-C device leaf. pki-core sets the tier from the
+// issuing profile and issues tier C only under the tenant's P-256 Lite Device
+// CA, so the leaf is ECDSA-signed, names a device and carries tier "C".
+func isLiteBoard(leaf *x509.Certificate) bool {
+	if leaf.SignatureAlgorithm != x509.ECDSAWithSHA256 || !isDevicePrincipal(leaf) {
+		return false
+	}
+	for _, ext := range leaf.Extensions {
+		if ext.Id.Equal(oidDeviceTrustTier) {
+			var tier string
+			rest, err := asn1.UnmarshalWithParams(ext.Value, &tier, "utf8")
+			return err == nil && len(rest) == 0 && tier == "C"
+		}
+	}
+	return false
+}
+
+// legacyCloudException: DELETE WITH LEGACY CLOUD. A device enrolled with
+// legacy Cloud trusts only its anchors (GCP CAS or the local dev CA), which are
+// never ML-DSA, and legacy operator and device leaves are P-256. The anchors
+// come from this device's own enrollment, never from the peer.
+func legacyCloudException(anchors []*x509.Certificate) bool {
+	for _, anchor := range anchors {
+		if isMLDSACert(anchor) {
+			return false
+		}
+	}
+	return true
+}
+
+// tierABFallbackException: OPEN QUESTION (WDY-3620), delete once ruled out.
+// pki-core may still issue a P-256 Tier A/B device leaf as a config-allowed
+// fallback. Such a leaf names a device and is signed directly by an ML-DSA
+// pki-core CA (the signature is verified with the chain).
+func tierABFallbackException(leaf *x509.Certificate) bool {
+	sigOID, err := certSigAlgOID(leaf)
+	if err != nil {
+		return false
+	}
+	_, err = mldsaScheme(sigOID)
+	return err == nil && isDevicePrincipal(leaf)
+}
+
+// isDevicePrincipal reports whether leaf names exactly one tenant device.
+func isDevicePrincipal(leaf *x509.Certificate) bool {
+	principal, ok := certs.TenantPrincipalFromCert(leaf)
+	if !ok {
+		return false
+	}
+	id, err := certs.ParsePrincipal(principal)
+	return err == nil && principal == "spiffe://wendy.sh/tenant/"+id.TenantUUID+"/device/"+id.EntityID
 }
 
 // verifyMLDSASignature checks that issuer signed cert using ML-DSA.
@@ -267,6 +358,7 @@ func NewPeerCertificateWindowVerifierWithPolicy(chainPEM string, logger *zap.Log
 // connection that presented the chain and is used only in the rejection log;
 // callers that verify a chain outside a handshake pass "".
 func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), cache *peerPathCache, leafOnly bool) func([][]byte, time.Time, string) (certs.CertificateWindow, error) {
+	legacyTrust := legacyCloudException(caCerts)
 	return func(rawCerts [][]byte, realNow time.Time, remote string) (certs.CertificateWindow, error) {
 		if cache != nil {
 			cache.observe()
@@ -293,6 +385,10 @@ func buildPeerCertificateWindowVerifier(caPool *x509.CertPool, caCerts []*x509.C
 		}
 		if !hasClientAuth {
 			return certs.CertificateWindow{}, fmt.Errorf("peer certificate requires explicit clientAuth usage")
+		}
+		if !clientLeafAllowed(leaf, legacyTrust) {
+			logCertRejection(logger, leaf, errClientLeafRefused, realNow, realNow, remote)
+			return certs.CertificateWindow{}, errClientLeafRefused
 		}
 		baseNow, effectiveNow := clockTimes(realNow, leaf.NotBefore)
 		// These checks also run when the cryptographic path is reused. A clock

@@ -87,7 +87,7 @@ enum LocalCLIAssertions {
             ? "python -I -c \(powerQuote(networkCounter)) \(monitorFlag)wendy" : "wendy"
         let result = try await cli.sh(
             posix: """
-                env -i HOME="$HOME" PATH="$PATH" TMPDIR="$TMPDIR" WENDY_CONFIG_DIR="$HOME/.wendy" \
+                env -i HOME="$HOME" PATH="$PATH" TMPDIR="$TMPDIR" GOCOVERDIR="${GOCOVERDIR:-}" WENDY_CONFIG_DIR="$HOME/.wendy" \
                   WENDY_ANALYTICS=false WENDY_NO_UPDATE_CHECK=1 WENDY_SECRET_STORE=file CI=1 NO_COLOR=1 \
                   \(posixCommand) \(posixArgs)
                 code=$?; printf '%s' "$code" > cli-exit; exit "$code"
