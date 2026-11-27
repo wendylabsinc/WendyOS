@@ -61,6 +61,7 @@ type mockContainerdClient struct {
 	declaredVolumes       map[string][]string
 	declaredVolumesErr    error
 	assembleImageCalls    int
+	assembleErr           error
 	createReqs            []*agentpb.CreateContainerRequest
 	validateErr           error
 	validateReqs          []*agentpb.CreateContainerRequest
@@ -112,7 +113,7 @@ func (m *mockContainerdClient) WriteLayer(_ context.Context, digest string, read
 }
 func (m *mockContainerdClient) AssembleImage(_ context.Context, _ string, _ []*agentpb.RunContainerLayerHeader, _ []byte) error {
 	m.assembleImageCalls++
-	return nil
+	return m.assembleErr
 }
 func (m *mockContainerdClient) CreateContainer(_ context.Context, req *agentpb.CreateContainerRequest, _ *appconfig.AppConfig) error {
 	m.createReqs = append(m.createReqs, req)

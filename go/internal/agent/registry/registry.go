@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	digest "github.com/opencontainers/go-digest"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/status"
 
 	agentcontainerd "github.com/wendylabsinc/wendy/go/internal/agent/containerd"
 	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
@@ -797,7 +798,7 @@ func (r containerdRegistry) MountBlob(ctx context.Context, fromRepo, toRepo stri
 func (r containerdRegistry) PushManifest(ctx context.Context, repo string, tag string, contents []byte, mediaType string) (ociregistry.Descriptor, error) {
 	if tag != "" {
 		if err := agentcontainerd.ImageReplaceError(ctx, r.client, r.imageName(repo, tag)); err != nil {
-			return ociregistry.Descriptor{}, ociregistry.NewError(err.Error(), ociregistry.ErrDenied.Code(), nil)
+			return ociregistry.Descriptor{}, ociregistry.NewError(status.Convert(err).Message(), ociregistry.ErrDenied.Code(), nil)
 		}
 	}
 	desc := ociregistry.Descriptor{

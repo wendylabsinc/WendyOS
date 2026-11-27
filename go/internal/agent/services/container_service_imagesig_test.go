@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -24,11 +25,12 @@ import (
 type imagePrepareMock struct {
 	mockContainerdClient
 	prepareCalls int
+	prepareErr   error
 }
 
 func (m *imagePrepareMock) PrepareImage(_ context.Context, _ string, _ []*agentpb.RunContainerLayerHeader, _ []byte) error {
 	m.prepareCalls++
-	return nil
+	return m.prepareErr
 }
 
 // containerImageMldsaKeypairForTest generates an ephemeral ML-DSA65 keypair
@@ -306,4 +308,37 @@ func TestRunContainer_DisabledVerifierProceeds(t *testing.T) {
 	if mock.assembleImageCalls != 1 {
 		t.Errorf("assembleImageCalls = %d, want 1 (disabled verifier must not block assembly)", mock.assembleImageCalls)
 	}
+}
+
+// A push refused for the caller's role reaches the CLI as PermissionDenied
+// with the agent's sentence, not as an Internal agent fault.
+func TestPushRefusalReachesTheCallerAsPermissionDenied(t *testing.T) {
+	const refusal = "app cam has the admin entitlement, so only the operator key can update it; ask the device owner to deploy it, or use another app name"
+	denied := status.Error(codes.PermissionDenied, refusal)
+	check := func(name string, err error) {
+		t.Helper()
+		if st := status.Convert(err); st.Code() != codes.PermissionDenied || st.Message() != refusal {
+			t.Errorf("%s: code=%v message=%q, want PermissionDenied %q", name, st.Code(), st.Message(), refusal)
+		}
+	}
+
+	prep := &imagePrepareMock{prepareErr: fmt.Errorf("assembling prepared image: %w", denied)}
+	client, cleanup := startContainerServerWithVerifier(t, prep, nil)
+	defer cleanup()
+	_, err := client.PrepareImage(context.Background(), &agentpb.RunContainerLayersRequest{ImageName: "cam:latest", ImageConfig: []byte(`{}`)})
+	check("PrepareImage", err)
+
+	run := &mockContainerdClient{assembleErr: denied}
+	client, cleanup = startContainerServerWithVerifier(t, run, nil)
+	defer cleanup()
+	stream, err := client.RunContainer(context.Background(), &agentpb.RunContainerLayersRequest{
+		ImageName:   "cam:latest",
+		AppName:     "cam",
+		Layers:      []*agentpb.RunContainerLayerHeader{{Digest: "sha256:layerdigest", Size: 10, DiffId: "sha256:layerdiffid"}},
+		ImageConfig: []byte(`{}`),
+	})
+	if err == nil {
+		err = drainRunContainerStream(stream)
+	}
+	check("RunContainer", err)
 }

@@ -42,6 +42,8 @@ import (
 	"github.com/opencontainers/image-spec/identity"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/appcgroup"
@@ -6205,7 +6207,7 @@ func imageReplaceError(ctx context.Context, ctrs []containerd.Container) error {
 			return fmt.Errorf("reading the app's entitlements: %w", err)
 		}
 		if name, min, denied := deniedEntitlement(role, &appconfig.AppConfig{Entitlements: parseEntitlementsFromAnnotations(labels)}); denied {
-			return fmt.Errorf("app %s runs this image with the %s entitlement, which needs the %s key, and this push has %s; push under another image name or with the %s key", labels[labelKeyAppID], name, min, describeRole(role), min)
+			return status.Errorf(codes.PermissionDenied, "app %s has the %s entitlement, so only the %s key can update it; ask the device owner to deploy it, or use another app name", labels[labelKeyAppID], name, min)
 		}
 	}
 	return nil

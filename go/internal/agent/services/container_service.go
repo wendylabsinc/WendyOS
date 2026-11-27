@@ -462,6 +462,9 @@ func (s *ContainerService) PrepareImage(ctx context.Context, req *agentpb.RunCon
 		return nil, status.Error(codes.Unimplemented, "image preparation is not supported by this runtime")
 	}
 	if err := preparer.PrepareImage(ctx, req.GetImageName(), req.GetLayers(), req.GetImageConfig()); err != nil {
+		if denied := permissionDenied(err); denied != nil {
+			return nil, denied
+		}
 		return nil, status.Errorf(codes.Internal, "preparing image: %v", err)
 	}
 	return &agentpb.PrepareImageResponse{}, nil
@@ -571,6 +574,9 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 		layerAssembleDur = time.Since(phaseStart)
 		phaseStart = time.Now()
 		if err := s.containerd.AssembleImage(ctx, req.GetImageName(), layers, req.GetImageConfig()); err != nil {
+			if denied := permissionDenied(err); denied != nil {
+				return denied
+			}
 			return status.Errorf(codes.Internal, "failed to assemble image: %v", err)
 		}
 		imageAssembleDur = time.Since(phaseStart)
@@ -1768,4 +1774,14 @@ func (s *ContainerService) forgetDroppedSketch(ctx context.Context, appCfg *appc
 		return
 	}
 	s.sketches.ForgetApp(context.WithoutCancel(ctx), appCfg.AppID)
+}
+
+// permissionDenied returns the PermissionDenied status wrapped in err, or nil,
+// so a refusal reaches the caller as itself rather than as an agent fault.
+func permissionDenied(err error) error {
+	var se interface{ GRPCStatus() *status.Status }
+	if errors.As(err, &se) && se.GRPCStatus().Code() == codes.PermissionDenied {
+		return se.GRPCStatus().Err()
+	}
+	return nil
 }

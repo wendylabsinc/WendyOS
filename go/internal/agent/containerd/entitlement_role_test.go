@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/trustedkeys"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -127,5 +129,10 @@ func TestPushOverAnAppMatchesEverySpellingOfItsImage(t *testing.T) {
 				t.Errorf("keyless push to %q over an admin app stored as %q: allowed, want refused", name, stored)
 			}
 		}
+	}
+	err := ImageReplaceError(keyless, fakeLister{image: "docker.io/library/cam:latest", ctrs: admin}, "cam:latest")
+	const want = "app cam has the admin entitlement, so only the operator key can update it; ask the device owner to deploy it, or use another app name"
+	if st := status.Convert(err); st.Code() != codes.PermissionDenied || st.Message() != want {
+		t.Errorf("refusal: code=%v message=%q, want PermissionDenied %q", st.Code(), st.Message(), want)
 	}
 }
