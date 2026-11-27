@@ -65,6 +65,7 @@ revisions may be coalesced; the final-revision assertion checks eventual deliver
 | Publication benchmark | One changed origin propagated across a warm four-node diamond, including signing, verification, codecs and simulation bookkeeping |
 | Inventory benchmark | Warm inventory production and serialization for 4, 32 and 128 origins through a 16-frame queue, without simulation event bookkeeping |
 | Carrier benchmark | Production `carrierIPSender.sendIP` for 160-byte, whole 1320-byte and fragmented 1320-byte packets; uses the existing bounded mock of QUIC's owned packet copy |
+| Encoding workloads | Publications and inventories with zero or 32 services per origin; the publication gives chunked transfers five virtual seconds to finish |
 | `allocs/op`, `B/op` | Go allocations and allocated bytes, excluding fixture setup |
 | `cpu-ns/op`, `cpu-ns/B` | Process user plus system CPU from `getrusage`; one Go execution thread; CPU includes GC during the measured interval |
 
@@ -84,7 +85,9 @@ virtual results do not substitute for that transport-level measurement.
 
 ## PR #3115 measurements
 
-The pinned revisions above were compared on 2026-11-27 with Go 1.27.4 on an
+These historical measurements used fixture commit `cc858116e`, before the
+additional 32-service encoding workloads. The pinned revisions above were compared
+on 2026-11-27 with Go 1.27.4 on an
 Apple M4 Max, macOS arm64. Seven alternating rounds used 500 ms Go benchmark
 targets and one Go execution thread. All topology and final-state assertions
 passed in every round.
