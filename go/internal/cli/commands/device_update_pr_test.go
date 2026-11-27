@@ -1,6 +1,11 @@
 package commands
 
-import "testing"
+import (
+	"io"
+	"testing"
+
+	"github.com/spf13/cobra"
+)
 
 func TestDeviceUpdatePRFlag(t *testing.T) {
 	cmd := newDeviceUpdateCmd()
@@ -24,11 +29,15 @@ func TestDeviceUpdatePRMutualExclusion(t *testing.T) {
 
 func TestDeviceUpdatePRJSONExclusion(t *testing.T) {
 	const jsonErr = "--pr cannot be combined with --json: the OS-update step is skipped in JSON mode"
-	jsonOutput = true
-	t.Cleanup(func() { jsonOutput = false })
-	cmd := newDeviceUpdateCmd()
-	cmd.SetArgs([]string{"--pr", "123"})
-	err := cmd.Execute()
+	previous := jsonOutput
+	t.Cleanup(func() { jsonOutput = previous })
+	root := &cobra.Command{Use: "wendy"}
+	root.PersistentFlags().BoolVar(&jsonOutput, "json", false, "")
+	root.AddCommand(newDeviceUpdateCmd())
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"--json", "update", "--pr", "123"})
+	err := root.Execute()
 	if err == nil {
 		t.Fatal("expected error for --pr with --json")
 	}

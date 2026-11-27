@@ -2480,17 +2480,23 @@ func shouldReapplyBinary(binaryProvided bool, outcome osUpdateOutcome) bool {
 	return binaryProvided && outcome.applied && outcome.online
 }
 
-// The root command enables JSON automatically when there is no terminal.
-// Device update's JSON path reports agent status and intentionally stops before
-// OS work, so an explicitly requested artifact must use the full update path.
-// An explicit --json request cannot be silently overridden; fail before any
-// agent upload instead. --json=false remains an explicit way to select text.
-func prepareExplicitDeviceOSOutput(cmd *cobra.Command, artifactURL string) error {
-	if artifactURL == "" || !jsonOutput {
+// The root command enables JSON automatically when there is no terminal, and
+// device update's JSON path stops before OS work. --artifact-url, --pr and
+// --yes ask for the OS step, so they switch automatic JSON back to text. An
+// explicit --json stays agent-only: it refuses an OS artifact before any agent
+// upload and keeps --yes agent-only, which scripts rely on.
+func prepareExplicitDeviceOSOutput(cmd *cobra.Command, artifactURL string, prNumber int, assumeYes bool) error {
+	if !jsonOutput || (artifactURL == "" && prNumber <= 0 && !assumeYes) {
 		return nil
 	}
 	if cmd.Root().PersistentFlags().Changed("json") {
-		return fmt.Errorf("--artifact-url cannot be combined with --json: device update JSON mode skips OS updates")
+		switch {
+		case artifactURL != "":
+			return fmt.Errorf("--artifact-url cannot be combined with --json: device update JSON mode skips OS updates")
+		case prNumber > 0:
+			return fmt.Errorf("--pr cannot be combined with --json: the OS-update step is skipped in JSON mode")
+		}
+		return nil
 	}
 	jsonOutput = false
 	return nil
@@ -2507,31 +2513,38 @@ func newDeviceUpdateCmd() *cobra.Command {
 		Use:   "update",
 		Short: "Update the agent binary and WendyOS on the target device",
 		Long: "Updates the agent binary on the device (downloaded from GitHub, or --binary for a local file), then checks for a newer WendyOS image. " +
-			"When an OS update is available it prompts before applying (default no); use --yes to apply without prompting. Non-interactive automatic updates report the available update without applying it. " +
+			"When an OS update is available it prompts before applying (default no); use --yes to apply without prompting. " +
+			"Without a terminal, output is JSON and only the agent is updated unless --yes, --pr or --artifact-url asks for the OS step (--pr and --artifact-url then also need --yes); with --json=false and none of those flags, it reports the available update without applying it. An explicit --json updates only the agent: --yes does not reach the OS step, and --pr or --artifact-url is refused. " +
 			"--nightly selects the nightly channel for both the agent and the OS. " +
 			"--artifact-url applies a specific OS update artifact instead of the manifest's latest; this works over the cloud tunnel (the device downloads the artifact directly from the URL). " +
-			"--pr N applies the OS image built by wendyos-builder PR #N instead of the manifest's latest — an unhardened debug build for testing PRs on hardware; it also works over the cloud tunnel. --pr cannot be combined with --artifact-url or --json. " +
+			"--pr N applies the OS image built by wendyos-builder PR #N instead of the manifest's latest — an unhardened debug build for testing PRs on hardware; it also works over the cloud tunnel. --pr cannot be combined with --artifact-url or an explicit --json. " +
 			"macOS agents receive the signed app-bundle zip (wendy-agent-macos-<arch>.zip) instead of a Linux binary; --binary accepts one of those zips for dev pushes to a Mac agent.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := robotAgentMaintenanceContext(cmd.Context())
 
-			if prNumber > 0 {
-				if artifactURL != "" {
-					return fmt.Errorf("--pr cannot be combined with --artifact-url")
-				}
-				// The OS step is the whole point of --pr, and JSON mode skips it
-				// (see the jsonOutput returns below) — refuse rather than let the
-				// user believe they tested the PR's image.
-				if jsonOutput {
-					return fmt.Errorf("--pr cannot be combined with --json: the OS-update step is skipped in JSON mode")
-				}
-				fmt.Fprintln(cmd.ErrOrStderr(), tui.WarningMessage("PR images are unhardened debug builds (passwordless root, SSH on). Do not use in production."))
+			if prNumber > 0 && artifactURL != "" {
+				return fmt.Errorf("--pr cannot be combined with --artifact-url")
 			}
-			if err := prepareExplicitDeviceOSOutput(cmd, artifactURL); err != nil {
+			autoJSON := jsonOutput && !cmd.Root().PersistentFlags().Changed("json")
+			if err := prepareExplicitDeviceOSOutput(cmd, artifactURL, prNumber, assumeYes); err != nil {
 				return err
 			}
+			// Without a terminal the PR image could only be reported, which
+			// would exit 0 without installing it; fail before touching the device.
+			if prNumber > 0 && !assumeYes && !isInteractiveTerminal() {
+				return usageErrorf("--pr requires --yes when not run from a terminal")
+			}
+			if prNumber > 0 {
+				fmt.Fprintln(cmd.ErrOrStderr(), tui.WarningMessage("PR images are unhardened debug builds (passwordless root, SSH on). Do not use in production."))
+			}
 
-			conn, err := connectToAgent(ctx, ExcludeProviders("local", "docker", "wendy-lite"), SuppressUpdateCheck())
+			connectOpts := []resolveOption{ExcludeProviders("local", "docker", "wendy-lite"), SuppressUpdateCheck()}
+			// Leaving automatic JSON must not open the device picker: like the
+			// JSON run it replaces, a missing --device stays a no_device error.
+			if autoJSON && !jsonOutput {
+				connectOpts = append(connectOpts, NonInteractive())
+			}
+			conn, err := connectToAgent(ctx, connectOpts...)
 			if err != nil {
 				return err
 			}
@@ -2813,7 +2826,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use the latest nightly (prerelease) build for both the agent and the OS")
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "Apply an available OS update without prompting")
 	cmd.Flags().StringVar(&artifactURL, "artifact-url", "", "Apply this OS update artifact URL instead of the manifest's latest")
-	cmd.Flags().IntVar(&prNumber, "pr", 0, "OTA-update the OS to the image built by wendyos-builder PR #N (debug build; mutually exclusive with --artifact-url and --json)")
+	cmd.Flags().IntVar(&prNumber, "pr", 0, "OTA-update the OS to the image built by wendyos-builder PR #N (debug build; mutually exclusive with --artifact-url and an explicit --json)")
 
 	return cmd
 }

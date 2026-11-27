@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
@@ -65,10 +66,12 @@ func (a *refusingAgent) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Upda
 }
 
 type deviceUpdateRun struct {
-	out      string
-	err      error
-	osStep   bool
-	osStepOn *grpcclient.AgentConnection
+	out       string
+	err       error
+	osStep    bool
+	osStepOn  *grpcclient.AgentConnection
+	assumeYes bool
+	prNumber  int
 }
 
 func runDeviceUpdate(t *testing.T, agent *refusingAgent, json bool, args ...string) deviceUpdateRun {
@@ -112,15 +115,20 @@ func runDeviceUpdate(t *testing.T, agent *refusingAgent, json bool, args ...stri
 		return []byte("release agent"), refusalRelease, "test", nil
 	}
 	var run deviceUpdateRun
-	maybeCheckOSUpdateFn = func(_ context.Context, _ *agentpb.GetAgentVersionResponse, conn *grpcclient.AgentConnection, _, _ bool, _ string, _ int) (osUpdateOutcome, error) {
-		run.osStep, run.osStepOn = true, conn
+	maybeCheckOSUpdateFn = func(_ context.Context, _ *agentpb.GetAgentVersionResponse, conn *grpcclient.AgentConnection, _, yes bool, _ string, pr int) (osUpdateOutcome, error) {
+		run.osStep, run.osStepOn, run.assumeYes, run.prNumber = true, conn, yes, pr
 		if _, err := conn.AgentService.GetAgentVersion(context.Background(), &agentpb.GetAgentVersionRequest{}); err != nil {
 			t.Errorf("the OS step got a dead connection: %v", err)
 		}
 		return osUpdateOutcome{}, nil
 	}
 
+	// json=true without "--json" in args is the root's automatic JSON; passing
+	// "--json" marks it as explicitly requested.
+	root := &cobra.Command{Use: "wendy"}
+	root.PersistentFlags().BoolVar(&jsonOutput, "json", json, "")
 	cmd := newDeviceUpdateCmd()
+	root.AddCommand(cmd)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	cmd.SetContext(ctx)
