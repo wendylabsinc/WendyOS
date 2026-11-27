@@ -127,10 +127,11 @@ func isBusyErrno(err error) bool {
 	return errors.Is(err, unix.EBUSY)
 }
 
-// retryWhileBusy re-runs op once, briefly, while it reports EBUSY. The agent's own earlier
-// capture has released the device before this one starts (holdCamera), so the holder is
-// another process: one that is leaving gets a moment, and against one that stays retrying
-// cannot succeed.
+// retryWhileBusy re-runs op once, briefly, while it reports EBUSY, so a holder that is closing
+// the device gets a moment; against one that stays, retrying cannot succeed. A hub's capture
+// starts after the hub's earlier one has released the device (holdCamera), so its holder is
+// another process. A depth capture (captureDepthZ16) takes no such turn, and its holder can be
+// the agent's own earlier capture of the node.
 func retryWhileBusy(ctx context.Context, op func() unix.Errno) unix.Errno {
 	const (
 		retries = 1

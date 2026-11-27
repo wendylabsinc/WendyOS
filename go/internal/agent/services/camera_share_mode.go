@@ -339,8 +339,9 @@ func hubLacksFramesFor(err error) bool {
 // explicit viewers' streams end with a message that names the shared mode, its
 // parameter-less subscribers rejoin, and the camera restarts at defaults.
 //
-// It never waits on a recording, and waits only in a takeover, up to
-// hubTeardownTimeout for the old producer to let go.
+// It never waits: a recording that holds the camera is reported at once, and
+// a takeover's replacement captures once the old producer has released the
+// camera (holdCamera).
 func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID uint32, mode sharedMode, preset appconfig.EncodePreset) (shareSubscription, error) {
 	kind, known := shareFrameKinds[mode.Format]
 	if !known {
@@ -365,7 +366,7 @@ func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID u
 			// takeover would change nothing, so the pump is told why.
 			return nil, err
 		}
-		sub, retry, err := s.takeOverHubForShare(ctx, path, req, mode, kind, preset)
+		sub, retry, err := s.takeOverHubForShare(path, req, mode, kind, preset)
 		if err != nil {
 			return nil, err
 		}
@@ -391,7 +392,7 @@ func (s *VideoService) liveHubAtOtherMode(path string, mode sharedMode) bool {
 // mode. It returns retry when the hub is gone or no longer conflicts, and a
 // *shareWaitError when a recording holds it. The check and the takeover happen
 // under s.mu and the old hub's mu, so no recording can join between them.
-func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req *agentpb.StreamVideoRequest, mode sharedMode, kind frameKind, preset appconfig.EncodePreset) (sub shareSubscription, retry bool, err error) {
+func (s *VideoService) takeOverHubForShare(path string, req *agentpb.StreamVideoRequest, mode sharedMode, kind frameKind, preset appconfig.EncodePreset) (sub shareSubscription, retry bool, err error) {
 	// Read before s.mu: the share records have their own lock, never nested.
 	_, apps, _ := s.sharedModeOf(path)
 	seqKey := s.sampleSeqKey(path)
@@ -452,9 +453,7 @@ func (s *VideoService) takeOverHubForShare(ctx context.Context, path string, req
 	s.logger.Info("camera share restarting camera producer at its shared mode",
 		zap.String("device", path), zap.Strings("containers", apps), zap.Stringer("mode", mode))
 
-	if err := s.startReplacementHub(ctx, path, old, h, req, "camera share takeover"); err != nil {
-		return nil, false, err
-	}
+	s.startProducer(hctx, h, path, req)
 	return &hubShareSubscription{hub: h, id: id, ch: ch}, false, nil
 }
 
@@ -482,4 +481,9 @@ func (s *hubShareSubscription) Leave() {
 	s.leave.Do(func() { s.hub.unsubscribe(s.id) })
 }
 
-var _ shareSubscription = (*hubShareSubscription)(nil)
+func (s *hubShareSubscription) AwaitsCamera() bool { return s.hub.awaitsCamera.Load() }
+
+var (
+	_ shareSubscription = (*hubShareSubscription)(nil)
+	_ cameraAwaiter     = (*hubShareSubscription)(nil)
+)

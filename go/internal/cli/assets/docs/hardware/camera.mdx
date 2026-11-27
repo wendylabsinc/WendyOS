@@ -331,6 +331,10 @@ node.
   `no frames: the real camera is held by another app ("mode": "direct") or
   process`. The agent tries the camera again every 10 seconds, so frames
   return within about 10 seconds of the direct app letting go.
+- **A camera that is slow to stop.** A capture starts only once the camera's
+  previous capture has closed it. An app that opens its node in that time waits
+  for its frames, and until they start its Status says
+  `waiting: the camera's previous capture has not closed it yet`.
 - **Replugging a camera.** The agent re-places each app's node about 2 to 3
   milliseconds after the camera reappears. An app that retries `open()` very
   fast can take the real camera for that moment, and then is not sharing until

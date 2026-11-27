@@ -29,6 +29,17 @@ type shareSubscription interface {
 	Leave()
 }
 
+// cameraAwaiter is the part of a subscription that says its capture has not
+// started because the camera's previous capture has not closed it yet. Reached
+// by type assertion on the subscription.
+type cameraAwaiter interface {
+	AwaitsCamera() bool
+}
+
+// shareAwaitsCameraDetail is the state detail of a node whose app reads it
+// while its capture waits for that.
+const shareAwaitsCameraDetail = "the camera's previous capture has not closed it yet"
+
 // shareWaitError is what a join returns when the camera is held at other
 // parameters (a recording). Done closes when the camera is free.
 type shareWaitError struct {
@@ -94,6 +105,8 @@ type sharePump struct {
 
 	mu    sync.Mutex
 	state shareState
+	// awaiter is the subscription's cameraAwaiter while the pump has one.
+	awaiter cameraAwaiter
 
 	// nudge asks Run to end a backoff at once (Nudge); buffered, so a nudge
 	// never blocks the caller and several in a row count once.
@@ -156,11 +169,22 @@ func monotonicNs() int64 {
 	return ts.Nano()
 }
 
-// State is the pump's phase, for the camera listing.
+// State is the pump's phase, for the camera listing. A pump that reads for
+// its app from a capture that waits for the camera says that instead.
 func (p *sharePump) State() shareState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.state.Phase == shareReading && p.awaiter != nil && p.awaiter.AwaitsCamera() {
+		return shareState{Phase: shareWaiting, Detail: shareAwaitsCameraDetail}
+	}
 	return p.state
+}
+
+func (p *sharePump) setAwaiter(sub shareSubscription) {
+	awaiter, _ := sub.(cameraAwaiter)
+	p.mu.Lock()
+	p.awaiter = awaiter
+	p.mu.Unlock()
 }
 
 func (p *sharePump) setState(phase sharePhase, detail string) {
@@ -304,6 +328,7 @@ func (p *sharePump) start(ctx context.Context) {
 		return
 	}
 	p.sub, p.frames = sub, sub.Frames()
+	p.setAwaiter(sub)
 	p.writeLogged, p.writeFailed = false, false
 	p.awaitRandomAccess = true
 	if p.blocked == "" {
@@ -362,6 +387,7 @@ func (p *sharePump) captureEnded(ctx context.Context) {
 	if sub == nil {
 		return
 	}
+	p.setAwaiter(nil)
 	restarted, cerr := sub.Restarted(), sub.Err()
 	sub.Leave()
 	if captureLacksNodeFrames(cerr) {
@@ -565,6 +591,7 @@ func (p *sharePump) leave() {
 	if sub == nil {
 		return
 	}
+	p.setAwaiter(nil)
 	sub.Leave()
 	for frames != nil {
 		select {

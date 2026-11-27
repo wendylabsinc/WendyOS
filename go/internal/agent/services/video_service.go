@@ -674,6 +674,9 @@ type deviceHub struct {
 	// Protected by h.mu.
 	demand  hubDemand
 	derived atomic.Pointer[derivedLayer]
+	// awaitsCamera is set while the producer waits for the camera's previous
+	// capture to release it (holdCamera).
+	awaitsCamera atomic.Bool
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -1989,8 +1992,8 @@ func (s *VideoService) ipCameraCredentials(cam ipcam.Camera) (ipcam.Credential, 
 // maxHubRetries is the maximum number of times getOrCreateHub will retry after
 // observing a race between subscribe() and the last subscriber's cancel() call.
 // Exceeding this indicates pathological churn and we return Unavailable.
-// hubTeardownTimeout caps the waits for an ending hub's producer to release its
-// device: a takeover's (startReplacementHub) and a calibrated frame hub's.
+// hubTeardownTimeout caps how long a calibrated frame hub waits for the one
+// before it to release its camera (CalibratedFrameService.awaitTeardown).
 const (
 	maxHubRetries      = 3
 	hubTeardownTimeout = 500 * time.Millisecond
@@ -2071,7 +2074,6 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 			if err != nil {
 				if st, _ := status.FromError(err); st.Code() == codes.Unavailable {
 					// subscribe() detected a cancelled hub atomically under h.mu.
-					// Evict it and retry, so a fresh one is made.
 					s.mu.Lock()
 					if s.hubs[path] == h {
 						delete(s.hubs, path)
@@ -2165,22 +2167,12 @@ func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, r
 // the wrapped message names the holder and both parameter sets.
 var errCameraHeldExplicitly = errors.New("camera is held at explicitly requested stream parameters")
 
-// errCameraReleaseTimeout is the named refusal for a takeover (an episode
-// capture's or a camera share's) whose outgoing producer did not release the
-// device within hubTeardownTimeout.
-// A replacement started anyway has the campaign, and every parameter-less
-// subscriber that reattached to it, wait for the device for as long as the old
-// producer holds it (holdCamera). Refusing costs this one campaign source its
-// clip.
-var errCameraReleaseTimeout = errors.New("camera did not release in time for its producer to restart")
-
 // isCameraCaptureRefusal reports whether err is one of the named camera
 // refusals a campaign records in its manifest instead of failing the whole
 // episode. Each means "this one source was not captured, and here is exactly
 // why"; none means the episode is broken.
 func isCameraCaptureRefusal(err error) bool {
-	return errors.Is(err, errCameraHeldExplicitly) || errors.Is(err, errCameraReleaseTimeout) ||
-		errors.Is(err, errCameraShared)
+	return errors.Is(err, errCameraHeldExplicitly) || errors.Is(err, errCameraShared)
 }
 
 // joinHubForCapture is the episode-capture join. It implements the parameter
@@ -2222,7 +2214,7 @@ func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *a
 		if status.Code(err) != codes.InvalidArgument {
 			return nil, 0, nil, 0, 0, 0, false, err
 		}
-		hub, id, ch, retry, err := s.takeOverDefaultedHub(ctx, key, req, kind, preset)
+		hub, id, ch, retry, err := s.takeOverDefaultedHub(key, req, kind, preset)
 		if err != nil {
 			return nil, 0, nil, 0, 0, 0, false, err
 		}
@@ -2253,8 +2245,9 @@ func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *a
 //
 // The replacement hub is installed in s.hubs BEFORE the old producer is
 // cancelled, so every reattaching subscriber lands on it rather than racing
-// this takeover to create a competing defaulted hub.
-func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest, kind frameKind, preset appconfig.EncodePreset) (h *deviceHub, id int, ch chan *videoFrame, retry bool, err error) {
+// this takeover to create a competing defaulted hub. Its producer captures in
+// its turn, once the old one has released the camera (holdCamera).
+func (s *VideoService) takeOverDefaultedHub(key string, req *agentpb.StreamVideoRequest, kind frameKind, preset appconfig.EncodePreset) (h *deviceHub, id int, ch chan *videoFrame, retry bool, err error) {
 	seqKey := s.sampleSeqKey(key)
 	s.mu.Lock()
 	old, exists := s.hubs[key]
@@ -2302,77 +2295,8 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		zap.Uint32("width", req.GetWidth()), zap.Uint32("height", req.GetHeight()),
 		zap.Uint32("framerate", req.GetFramerate()))
 
-	if err := s.startReplacementHub(ctx, key, old, h, req, "capture takeover"); err != nil {
-		return nil, 0, nil, false, err
-	}
+	s.startProducer(hctx, h, key, req)
 	return h, id, ch, false, nil
-}
-
-// startReplacementHub is the second half of a takeover (takeOverDefaultedHub,
-// takeOverHubForShare): with h already installed in s.hubs and old cancelled,
-// it waits for old's producer to release the device and then starts h's. When
-// the wait is cut short, h is dismantled and the error returned; what names
-// the takeover in the log.
-func (s *VideoService) startReplacementHub(ctx context.Context, key string, old, h *deviceHub, req *agentpb.StreamVideoRequest, what string) error {
-	// abort dismantles the replacement hub when the caller's context ends
-	// before its producer was started. No runProducer exists for it yet, so
-	// the cleanup runProducer would normally perform (evict from the map,
-	// close subscriber channels, close done) must happen here; otherwise a
-	// subscriber that reattached in the interim would wait forever on a
-	// channel nothing will ever close.
-	abort := func() {
-		s.mu.Lock()
-		if s.hubs[key] == h {
-			delete(s.hubs, key)
-		}
-		s.mu.Unlock()
-		h.cancel()
-		h.mu.Lock()
-		for _, sub := range h.subs {
-			// Guarded exactly as runProducer's teardown is: a raw subscriber
-			// the producer already turned away (rawNotOffered) has had its
-			// channel closed under h.mu, and closing it a second time panics.
-			if !sub.closed {
-				sub.closed = true
-				close(sub.ch)
-			}
-		}
-		h.mu.Unlock()
-		close(h.done)
-	}
-
-	// Wait for the old producer to release the device before starting the
-	// replacement.
-	waitCtx, waitCancel := context.WithTimeout(ctx, hubTeardownTimeout)
-	select {
-	case <-old.done:
-	case <-ctx.Done():
-		waitCancel()
-		abort()
-		return ctx.Err()
-	case <-waitCtx.Done():
-		if ctx.Err() != nil {
-			waitCancel()
-			abort()
-			return ctx.Err()
-		}
-		// The old producer still holds the device, so the takeover is
-		// abandoned: abort() puts the subscribers that reattached to the hub
-		// installed above back on the "producer stopped" path rather than
-		// leaving them on a hub whose producer will never start, and the
-		// caller gets a named refusal.
-		waitCancel()
-		abort()
-		s.logger.Warn("abandoning "+what+": camera did not release in time",
-			zap.String("device", key), zap.Duration("waited", hubTeardownTimeout))
-		return fmt.Errorf(
-			"%w: %s was still held by the previous producer after %s; refusing to start a replacement that cannot bind the device",
-			errCameraReleaseTimeout, key, hubTeardownTimeout)
-	}
-	waitCancel()
-
-	s.startProducer(h.ctx, h, key, req)
-	return nil
 }
 
 // sampleSeqKey is the key of the sample counter of the hub at hubKey. A local
@@ -2430,18 +2354,13 @@ func (s *VideoService) subscribeExistingHub(path string, kind frameKind, preset 
 	return h, id, ch, h.width, h.height, h.framerate, true, nil
 }
 
-// runProducer drives the capture loop for a single device hub.
-// It tries the native capture sources in order (nativeCaptureSources), falling
-// back to GStreamer when none delivers.
-// When the hub loses its last subscriber the context is cancelled and this goroutine exits.
+// runProducer feeds one hub from its camera until the hub ends or the capture
+// fails, then takes the hub out of the map and ends its subscribers' streams.
+// The hub ends, and its context with it, when its last subscriber leaves.
 func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) {
 	defer s.wg.Done()
 
-	var err error
-	if release, held := s.holdCamera(ctx, path); held {
-		err = s.captureSource(ctx, h, path, req)
-		release()
-	}
+	err := s.captureSource(ctx, h, path, req)
 	if err != nil && ctx.Err() == nil {
 		s.logger.Error("video producer exited with error", zap.String("device", path), zap.Error(err))
 	}
@@ -2470,14 +2389,21 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 	}
 	h.mu.Unlock()
 
-	// Signal that the device fd is fully released. A takeover waits on this
-	// before it starts its producer.
 	close(h.done)
 }
 
-// captureSource captures the camera a hub key names until ctx ends or the
-// capture fails. The device is released when it returns.
+// captureSource captures the camera a hub key names, in its turn (holdCamera),
+// until ctx ends or the capture fails: a network camera's stream, a SensorLink
+// camera's feed, or a node, by the native sources in order
+// (nativeCaptureSources) and by GStreamer when none delivers. The device is
+// released when it returns. A hub that ends before its turn captures nothing.
 func (s *VideoService) captureSource(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) error {
+	release, held := s.holdCamera(ctx, path, &h.awaitsCamera)
+	if !held {
+		return nil
+	}
+	defer release()
+
 	broadcast := h.produceCaptured
 	// The hub key carries the source kind: network cameras key on "ip:<id>" and
 	// have no device node to classify.
@@ -2498,12 +2424,17 @@ func (s *VideoService) captureSource(ctx context.Context, h *deviceHub, path str
 	return s.captureNode(ctx, broadcast, path, req, h)
 }
 
+// cameraReleaseWarnEvery is how often a capture that waits for the camera's
+// previous capture to release it says so in the log.
+const cameraReleaseWarnEvery = 10 * time.Second
+
 // holdCamera makes a hub key's captures take turns. A capture keeps its device
 // open until it has returned, which can be long after its hub ended, and one
 // started before then is refused the device as busy: the agent would take its
 // own earlier capture for another client. It returns once every earlier
-// capture has released the device; held is false when ctx ended first.
-func (s *VideoService) holdCamera(ctx context.Context, key string) (release func(), held bool) {
+// capture has released the device, with no limit on the wait, and awaits is
+// set for as long as it waits. held is false when ctx ended first.
+func (s *VideoService) holdCamera(ctx context.Context, key string, awaits *atomic.Bool) (release func(), held bool) {
 	s.mu.Lock()
 	if s.cameraHolds == nil {
 		s.cameraHolds = make(map[string]chan struct{})
@@ -2518,9 +2449,11 @@ func (s *VideoService) holdCamera(ctx context.Context, key string) (release func
 	select {
 	case hold <- struct{}{}:
 	default:
+		awaits.Store(true)
+		defer awaits.Store(false)
 		waiting := time.Now()
-		stuck := time.NewTimer(cameraIdleTimeout)
-		defer stuck.Stop()
+		stillHeld := time.NewTicker(cameraReleaseWarnEvery)
+		defer stillHeld.Stop()
 		for taken := false; !taken; {
 			select {
 			case hold <- struct{}{}:
@@ -2529,7 +2462,7 @@ func (s *VideoService) holdCamera(ctx context.Context, key string) (release func
 					zap.String("device", key), zap.Duration("waited", time.Since(waiting)))
 			case <-ctx.Done():
 				return nil, false
-			case <-stuck.C:
+			case <-stillHeld.C:
 				s.logger.Warn("previous capture has not released the camera; the next capture starts when it does",
 					zap.String("device", key), zap.Duration("waited", time.Since(waiting)))
 			}

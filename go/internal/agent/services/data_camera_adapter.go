@@ -154,13 +154,12 @@ func (a *cameraDataAdapter) Start(ctx context.Context, session data.CaptureSessi
 		capture, err := a.startOne(ctx, session, source, devID)
 		if isCameraCaptureRefusal(err) {
 			// Another consumer holds this camera at explicitly requested
-			// parameters that conflict with the campaign's, or the camera it
-			// holds did not release in time for the takeover. Refusing this one
-			// source, with the named error in its manifest entry, is the
-			// honest outcome: the episode continues with its other sources and
-			// the manifest says exactly who holds the camera and at what
-			// parameters, instead of recording a capture the campaign did not
-			// ask for.
+			// parameters that conflict with the campaign's, or apps share it
+			// at another mode. Refusing this one source, with the named error
+			// in its manifest entry, is the honest outcome: the episode
+			// continues with its other sources and the manifest says exactly
+			// who holds the camera and at what parameters, instead of
+			// recording a capture the campaign did not ask for.
 			group.refused = append(group.refused, data.CaptureResult{
 				SourceID:     source.ID,
 				SourceDetail: strings.TrimSpace(source.Detail + " (not captured: " + err.Error() + ")"),

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -524,35 +525,34 @@ func TestJoinHubForShare_WaitsWhenARecordingSharesTheHoldWithAViewer(t *testing.
 	}
 }
 
-// A takeover whose old producer does not let go of the camera in time is
-// abandoned with the named refusal, promptly, rather than blocking the pump.
-func TestJoinHubForShare_AbortsWhenTheCameraDoesNotReleaseInTime(t *testing.T) {
-	svc := newTestVideoService(nil, nil)
-	fp := installSlowProducers(svc, 4*hubTeardownTimeout)
-	ctx := context.Background()
+// A takeover of a camera whose old capture is slow to close it is not refused:
+// the pump has its subscription at once, and frames once the camera is closed.
+func TestJoinHubForShare_ATakeoverStartsItsReplacementWhichCapturesOnceTheCameraIsClosed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc, device, pipeWireLookups := exclusiveCamera(t)
+		ctx := context.Background()
 
-	viewerReq := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480}
-	oldHub, viewerID, _, err := svc.getOrCreateHub(ctx, "/dev/video0", viewerReq, hubHolderStreamClient)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer oldHub.unsubscribe(viewerID)
-	shareForTest(svc, "/dev/video0", "cv-a")
+		viewerReq := &agentpb.StreamVideoRequest{Width: 320, Height: 240}
+		oldHub, viewerID, viewer, err := svc.getOrCreateHub(ctx, exclusiveCameraPath, viewerReq, hubHolderStreamClient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { oldHub.unsubscribe(viewerID) })
+		waitForFrame(t, viewer, "frame at the viewer's mode")
+		shareModeForTest(svc, exclusiveCameraPath, exclusiveCameraMode, "cv-a")
 
-	started := time.Now()
-	_, err = svc.joinHubForShare(ctx, "/dev/video0", 0, testSharedMode, noPreset)
-	if !errors.Is(err, errCameraReleaseTimeout) {
-		t.Fatalf("err = %v, want errCameraReleaseTimeout", err)
-	}
-	if took := time.Since(started); took > 3*hubTeardownTimeout {
-		t.Fatalf("join took %s, want it bounded by the %s teardown wait", took, hubTeardownTimeout)
-	}
-	if fp.count() != 1 {
-		t.Fatalf("producers started = %d, want 1: a replacement was started for a camera still held", fp.count())
-	}
-	if h := currentHub(svc, "/dev/video0"); h != nil && h != oldHub {
-		t.Fatal("the abandoned replacement hub was left registered")
-	}
+		share := joinExclusiveCamera(t, svc, exclusiveCameraPath)
+		if hub := currentHub(svc, exclusiveCameraPath); hub == oldHub || hubParams(hub) != [3]uint32{} {
+			t.Fatal("the camera was not restarted at its defaults for the share")
+		}
+
+		time.Sleep(time.Hour)
+		device.keptClosedToOthers(t, 1, share)
+
+		device.close()
+		ownFrameFrom(t, share, "the share that took the camera over")
+		device.servedByItsOwnCaptures(t, 2, pipeWireLookups)
+	})
 }
 
 // Review fix: a share waiting on a recording starts when the recording leaves,
