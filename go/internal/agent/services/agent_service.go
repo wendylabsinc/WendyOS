@@ -598,7 +598,7 @@ func advertisedEntitlementTypes() []string {
 }
 
 func detectFeatureset() []string {
-	features := []string{"data-inference-classification", cloudrelay.TCPHalfCloseFeature}
+	features := []string{"data-inference-classification", cloudrelay.TCPHalfCloseFeature, cloudrelay.TCPMuxFeature}
 
 	if _, err := os.Stat("/dev/nvidia0"); err == nil {
 		features = append(features, "gpu")

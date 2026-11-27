@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -62,6 +63,9 @@ type Agent struct {
 	// lostAfter is how long a registered relay must stay down before OnLost.
 	lostAfter    time.Duration
 	registeredAt time.Time
+	// ForwardTLS is the endpoint mTLS config of multiplexed forwards
+	// (TCPMuxFeature). Nil serves every TCP session as one raw connection.
+	ForwardTLS func() (*tls.Config, error)
 }
 
 var errPresenceRefresh = errors.New("refreshing Cloud presence before transport timeout")
@@ -823,6 +827,23 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 	if agentSession {
 		port = a.MTLSPort
 	}
+	// The caller's first frame tells a multiplexed forward from one raw
+	// connection, so a mux-capable agent reads it before dialing the port.
+	first := make(chan relayFrame, 1)
+	go func() { b, half, e := session.Recv(); first <- relayFrame{b, half, e} }()
+	muxCapable := !agentSession && a.ForwardTLS != nil
+	if muxCapable {
+		select {
+		case f := <-first:
+			if f.err == nil && bytes.Equal(f.data, muxPreamble) {
+				return a.serveMux(session, c, d)
+			}
+			first <- f
+		case <-time.After(muxWait):
+		case <-session.ctx.Done():
+			return session.ctx.Err()
+		}
+	}
 	local, err := dialLocalService(ctx, d.Host, strconv.Itoa(port), agentSession)
 	if err != nil {
 		return err
@@ -853,8 +874,14 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 		}
 	}()
 	go func() {
-		for {
-			b, half, e := session.Recv()
+		f := <-first
+		// A preamble after muxWait is a mux caller this session no longer
+		// serves; end it rather than send the caller's handshake to the port.
+		if muxCapable && f.err == nil && bytes.Equal(f.data, muxPreamble) {
+			done <- fmt.Errorf("multiplexed forward started after %s", muxWait)
+			return
+		}
+		for b, half, e := f.data, f.half, f.err; ; b, half, e = session.Recv() {
 			if e != nil {
 				if e == io.EOF {
 					e = nil
@@ -885,6 +912,12 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 	case <-session.ctx.Done():
 		return session.ctx.Err()
 	}
+}
+
+type relayFrame struct {
+	data []byte
+	half bool
+	err  error
 }
 
 // Admission lasts at most 60 seconds. Files older than the maximum relay

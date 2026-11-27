@@ -610,6 +610,22 @@ func connectWithTLS(ctx context.Context, address string, certInfo *config.Certif
 	return ac, nil
 }
 
+// SecureTunnel runs the agent mTLS client handshake over conn, a relay byte
+// stream, with the certificate and expected-identity checks of an agent
+// connection. target keys the TLS session cache.
+func SecureTunnel(ctx context.Context, conn net.Conn, target string, certInfo *config.CertificateInfo, expected *certs.WendyIdentity) (net.Conn, error) {
+	tlsCfg, err := newAgentTLSConfig(target, certInfo, nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), expected, false, new(atomic.Pointer[certs.IdentityMismatchError]), new(atomic.Pointer[devicepin.PinMismatchError]))
+	if err != nil {
+		return nil, err
+	}
+	transport, err := newIssuerTransport(tlsCfg, certInfo.PemCertificateChain)
+	if err != nil {
+		return nil, err
+	}
+	secured, _, err := transport.ClientHandshake(ctx, target, conn)
+	return secured, err
+}
+
 // UnverifiedPlaintext reports a plaintext connection to an unenrolled device
 // that nothing authenticated (see NoSavedIdentity). Secrets such as Wi-Fi
 // passwords need the user's consent before they go over it.

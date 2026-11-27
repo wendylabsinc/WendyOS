@@ -850,7 +850,19 @@ func main() {
 				markCloudEnrolled(logger)
 				client := &cloudrelay.Agent{Endpoint: endpoint, Verifier: &cloudrelay.Verifier{Issuer: issuer},
 					StateDir: filepath.Join(configPath, "cloud-relay"), Credentials: provisioningSvc.ProvisioningCerts,
-					Logger: logger, MTLSPort: mtlsPortNum, OnRegistered: cloudReachedMark(logger), OnLost: cloudLostMark(logger)}
+					Logger: logger, MTLSPort: mtlsPortNum, OnRegistered: cloudReachedMark(logger), OnLost: cloudLostMark(logger),
+					// A multiplexed forward admits the operators the
+					// management TLS admits, with the device's current identity.
+					ForwardTLS: func() (*tls.Config, error) {
+						certPEM, chainPEM, keyData := provisioningSvc.ProvisioningCerts()
+						defer clear(keyData)
+						cfg, err := mtls.NewOperatorTLSConfig(certPEM, chainPEM, string(keyData), logger, certNotBeforeFloor(certPEM), orgMode)
+						if err != nil {
+							return nil, err
+						}
+						cfg.NextProtos = []string{"h2"}
+						return cfg, nil
+					}}
 				client.Run(ctx)
 				return
 			}

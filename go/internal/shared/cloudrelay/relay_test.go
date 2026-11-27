@@ -469,6 +469,7 @@ type relayLifecycle struct {
 	tcpService    func(net.Conn)
 	tcpExercise   func(net.Conn, *Agent)
 	tcpHalfClose  bool
+	tcpOpen       func(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier *Verifier, assetID, service string, signRequest func([]byte) ([]byte, error)) (net.Conn, error)
 }
 
 func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool, lifecycle ...*relayLifecycle) {
@@ -613,6 +614,9 @@ func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool, lifecycl
 		open := OpenTCP
 		if len(lifecycle) != 0 && lifecycle[0].tcpHalfClose {
 			open = OpenTCPWithHalfClose
+		}
+		if len(lifecycle) != 0 && lifecycle[0].tcpOpen != nil {
+			open = lifecycle[0].tcpOpen
 		}
 		conn, e := open(authCtx, authCtx, cloudConn, verifier, "00000000-0000-4000-8000-000000000042", service, func(b []byte) ([]byte, error) { return b, nil })
 		if e != nil {
