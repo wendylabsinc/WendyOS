@@ -14,6 +14,34 @@ and videos as GitHub attachments and embed them in the PR description. If an
 attachment cannot be uploaded, report that limitation instead of committing the
 asset to satisfy the PR demonstration requirement.
 
+## Documentation changes
+
+Docs grow with every PR and are rarely trimmed. AI assistants and LLMs must keep
+documentation edits to the minimum the change requires. When unsure whether an
+edit is needed, leave it out.
+
+Edit documentation only when the PR:
+
+- makes an existing statement wrong, or
+- adds, changes, or removes something a user types or sees: a command, flag,
+  config key, default, output, or error.
+
+Refactors, internal changes, and bug fixes that restore documented behavior need
+no documentation edit.
+
+When an edit is needed:
+
+- Fix the existing sentence in place. A renamed value is a one-word edit.
+- A new flag or command gets one or two sentences. Do not append to an existing
+  paragraph: if it must say more, rewrite it to about the same length.
+- State the behavior once, on the page that owns it. Other pages link to it
+  instead of repeating it.
+- Describe what the user does and sees now. Leave out how it works internally,
+  why it changed, and how earlier versions behaved.
+- Do not enumerate flag combinations or rare edge cases.
+
+Apply the same limits when addressing `review: docs` findings.
+
 ## Pull request descriptions
 
 Every PR description opens with one short paragraph for people, then uses only
