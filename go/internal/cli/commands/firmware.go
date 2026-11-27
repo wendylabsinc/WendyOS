@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +22,27 @@ type firmwareAsset struct {
 	DownloadURL string
 	Size        int64
 	Version     string
+	Companion   *firmwareCompanion
+}
+
+var companionBuildIDPattern = regexp.MustCompile(`^wendy-[0-9a-f]{24}$`)
+
+func (c *firmwareCompanion) validate(hostPath string) error {
+	if !companionBuildIDPattern.MatchString(c.BuildID) {
+		return fmt.Errorf("invalid companion build ID %q", c.BuildID)
+	}
+	if c.Path == "" || c.Path == hostPath || path.Clean(c.Path) != c.Path ||
+		!strings.HasPrefix(c.Path, "firmware/") || path.Dir(c.Path) != path.Dir(hostPath) ||
+		strings.ContainsAny(c.Path, "?#%\\") {
+		return fmt.Errorf("invalid companion artifact path %q", c.Path)
+	}
+	if c.SizeBytes <= 0 || c.SizeBytes > 4<<20 {
+		return fmt.Errorf("invalid companion image size %d", c.SizeBytes)
+	}
+	if checksum, err := hex.DecodeString(c.Checksum); err != nil || len(checksum) != 32 {
+		return fmt.Errorf("invalid companion SHA-256 checksum")
+	}
+	return nil
 }
 
 // deriveAssetName prefers the basename from the manifest URL/path, falling back to the legacy synthesized name.
@@ -84,12 +107,19 @@ func fetchFirmwareFromManifest(firmwareID string, nightly bool) (*firmwareAsset,
 	if err != nil {
 		return nil, err
 	}
+	entry := fm.Versions[targetVersion]
+	if entry.Companion != nil {
+		if err := entry.Companion.validate(entry.Path); err != nil {
+			return nil, fmt.Errorf("firmware %s v%s: %w", firmwareID, targetVersion, err)
+		}
+	}
 
 	return &firmwareAsset{
 		Name:        deriveAssetName(info.DownloadURL, firmwareID),
 		DownloadURL: info.DownloadURL,
 		Size:        info.ImageSize,
 		Version:     targetVersion,
+		Companion:   entry.Companion,
 	}, nil
 }
 

@@ -3418,6 +3418,12 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		return fmt.Errorf("fetching firmware: %w", err)
 	}
 	installNote(os.Stdout, "Found firmware: %s v%s", asset.Name, asset.Version)
+	if asset.Companion != nil && expectedChip != chipESP32P4 {
+		return fmt.Errorf("firmware %s v%s has companion metadata for a board without an ESP32-P4 host", asset.Name, asset.Version)
+	}
+	if asset.Companion != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+		return fmt.Errorf("this firmware includes an ESP-Hosted companion update. Connect the P4's native USB port to install both images")
+	}
 
 	// Reuse a cached download from a previous run when one exists; otherwise
 	// download with a progress bar. The cached file persists across runs and
@@ -3475,6 +3481,9 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
 			return fmt.Errorf("ESP32 enrollment requires native USB; select the board's native USB port, or install with --pre-enroll=false")
 		}
+		if asset.Companion != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+			return fmt.Errorf("this firmware includes an ESP-Hosted companion update. Select the P4's native USB port")
+		}
 		if serialDevice.Transport == discovery.SerialTransportUARTBridge {
 			fmt.Fprintln(alsoOnPromptTerminal(os.Stderr), tui.WarningMessage(esp32UARTBridgeInstallWarning(len(provCreds) > 0)))
 			if requiresESP32UARTConfirmation(serialDevice, len(provCreds) > 0, interactive) &&
@@ -3526,6 +3535,12 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		}
 	}
 
+	if asset.Companion != nil {
+		serialDevice, err = installLiteCompanion(ctx, serialDevice, interactive, asset.Companion)
+		if err != nil {
+			return fmt.Errorf("P4 firmware was flashed, but the ESP-Hosted companion install could not be verified: %w", err)
+		}
+	}
 	var enroll func() error
 	if enrollmentAuth != nil {
 		enroll = func() error {
