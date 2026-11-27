@@ -167,7 +167,11 @@ func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig
 	if asset.v2 != nil {
 		features = cloudTCPFeaturesFor(ctx, auth, asset)
 	}
+	cert := auth.Certificates[0]
 	dialOpt := clouddefaults.TunnelDialer(func(tunnelCtx context.Context) (net.Conn, error) {
+		if leafExpired([]config.CertificateInfo{cert}) {
+			return nil, errHeldSignInExpired
+		}
 		// A new management transport may reach a restarted or rolled-back
 		// agent. Keep a recent negative observation to throttle failed probes.
 		if observed := features.last.Load(); observed != nil && observed.halfClose {
@@ -176,7 +180,6 @@ func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig
 		return asset.openTunnel(carryTunnelSession(tunnelCtx, ctx), brokerConn, auth, defaultAgentPort+1, false)
 	})
 
-	cert := auth.Certificates[0]
 	expectedIdentity := cloudDiscoveryIdentity(auth, asset)
 	agentConn, err := connectCloudAgentTransport(ctx, cert, expectedIdentity,
 		dialOpt,
@@ -220,7 +223,12 @@ func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig
 	// can match whichever other device happens to be reachable.
 	agentConn.Reconnect = func(rctx context.Context) (*grpcclient.AgentConnection, error) {
 		features.last.Store(nil)
-		return asset.reconnect(carryTunnelSession(rctx, ctx), auth, brokerURL)
+		// Rebuild mTLS with the login on disk, not the captured one.
+		current, err := currentCloudLogin(rctx, auth)
+		if err != nil {
+			return nil, err
+		}
+		return asset.reconnect(carryTunnelSession(rctx, ctx), current, brokerURL)
 	}
 	if brokerConn != nil {
 		agentConn.AddCloser(brokerConn)

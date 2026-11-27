@@ -654,11 +654,20 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 	}()
 
 	// Provisioned agents serve mTLS on agentPort+1 (50052) for remote clients.
+	certInfo := auth.Certificates[0]
+	// The device mTLS inside the tunnel presents this captured leaf; once it
+	// expires the device refuses it, so stop before asking Cloud (WDY-4396).
+	var notAfter time.Time
+	if leaf, err := certs.ParseStoredLeaf(certInfo.PemCertificate); err == nil {
+		notAfter = leaf.NotAfter
+	}
 	dialOpt := clouddefaults.TunnelDialer(func(tunnelCtx context.Context) (net.Conn, error) {
+		if !notAfter.IsZero() && time.Now().After(notAfter) {
+			return nil, errors.New("this connection's sign-in expired; reconnect")
+		}
 		return device.openTunnel(tunnelCtx, brokerConn, auth, 50052)
 	})
 
-	certInfo := auth.Certificates[0]
 	var verifiedIdentity grpcclient.VerifiedServerIdentity
 	tlsCfg, err := mcpCloudAgentTLSConfig(certInfo, device, &verifiedIdentity)
 	if err != nil {
@@ -683,7 +692,12 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 		return device.openTunnel(ctx, brokerConn, auth, uint32(port))
 	}
 	agentConn.Reconnect = func(ctx context.Context) (*grpcclient.AgentConnection, error) {
-		next, _, _, err := connectPinnedMCPCloudAgent(ctx, auth, device, brokerURL)
+		// Rebuild mTLS with the login on disk, not the captured one.
+		current, err := mcpCurrentAuth(auth)
+		if err != nil {
+			return nil, err
+		}
+		next, _, _, err := connectPinnedMCPCloudAgent(ctx, current, device, brokerURL)
 		return next, err
 	}
 	if brokerConn != nil {
