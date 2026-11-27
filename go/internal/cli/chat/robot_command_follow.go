@@ -27,10 +27,9 @@ func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (r
 		return result, err
 	}
 	activity := "alignment"
-	lookupLimit := 5 * time.Second
+	lookupLimit := 25 * time.Second // One requested camera frame and its submission.
 	if args.Action == "find_active" {
 		activity = "object search"
-		lookupLimit = 25 * time.Second // One requested camera frame and its submission.
 	}
 	var receipt robotReceipt
 	if json.Unmarshal([]byte(result.Text), &receipt) != nil || receipt.State != "running" {

@@ -294,3 +294,32 @@ func TestLocalControlInitialCatalogBudget(t *testing.T) {
 		t.Fatalf("initial payload exceeded compact 16KB budget: %d", bytes)
 	}
 }
+
+// These profiles take different prompt paths, but must agree on movement
+// prerequisites and the limits of the user's motion request.
+func TestMovementLocalizationPromptPolicy(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"compact":        localControlPrompt("/project", "robot"),
+		"general":        generalSkill,
+		"device-control": deviceControlSkill,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, required := range []string{"robot_status", "localize_active", "movement request authorizes this prerequisite unless the user forbids extra motion", "original", "turn", "Aligned=true"} {
+				if !strings.Contains(prompt, required) {
+					t.Fatalf("movement prerequisite policy lost %q", required)
+				}
+			}
+			for _, guard := range []string{"five minutes", "six turns", "three nearby moves", "unknown outcome", "visual", "replay rejected movement"} {
+				if !strings.Contains(prompt, guard) {
+					t.Fatalf("movement prerequisite policy lost guard %q", guard)
+				}
+			}
+			if !strings.Contains(strings.ToLower(prompt), "refresh") || !strings.Contains(prompt, "evidence after localization") {
+				t.Fatal("movement prerequisite policy allows old object evidence after localization")
+			}
+			if strings.Contains(prompt, "Only explicit") || strings.Contains(prompt, "alignment only when requested") {
+				t.Fatal("prompt contradicts automatic localization for an authorized move")
+			}
+		})
+	}
+}

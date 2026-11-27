@@ -139,6 +139,7 @@ func (t *robotCommandTools) executeCommandOnce(ctx context.Context, call ToolCal
 		}
 		result, err := executeControlBase(ctx, t.base, call)
 		if err == nil && call.Name == "robot_status" {
+			result = navigationPrerequisiteEvidence(result)
 			return t.appendPendingReceipt(ctx, call, result)
 		}
 		return result, err
@@ -198,6 +199,10 @@ func (t *robotCommandTools) executeCommandOnce(ctx context.Context, call ToolCal
 	recovery := stop || args["action"] == "connect" || args["action"] == "status"
 	value, _ := runtime.robotCommands.LoadOrStore(t, &robotCommandTurn{})
 	state := value.(*robotCommandTurn)
+	preflightSerial, err := t.preflightNavigation(ctx, call, args, key, step, state)
+	if err != nil {
+		return ToolResult{CommandNotStarted: true, RobotSerial: preflightSerial}, err
+	}
 	t.mu.Lock()
 	if state.connectionChanged && !recovery {
 		t.mu.Unlock()
@@ -266,8 +271,16 @@ func (t *robotCommandTools) executeCommandOnce(ctx context.Context, call ToolCal
 	if attempt == nil {
 		state.next++
 		attempt = &robotCommandAttempt{id: fmt.Sprintf("%s-%d", state.prefix, state.next)}
-		args["request_id"] = attempt.id
-		attempt.arguments, err = json.Marshal(args)
+		wireArgs := make(map[string]any, len(args)+2)
+		for field, value := range args {
+			wireArgs[field] = value
+		}
+		wireArgs["request_id"] = attempt.id
+		if preflightSerial != "" {
+			wireArgs["serial"] = preflightSerial
+			attempt.serial = preflightSerial
+		}
+		attempt.arguments, err = json.Marshal(wireArgs)
 		if err != nil {
 			t.mu.Unlock()
 			return ToolResult{}, err
