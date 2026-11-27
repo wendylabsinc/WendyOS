@@ -95,6 +95,8 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		defer e.learnMemory(ctx, prompt, emit)
 	}
 	e.messages = append(e.messages, Message{Role: "user", Content: prompt})
+	turnStart := len(e.messages) - 1
+	localizationNudges := 0
 	memoryWarned := false
 	lastFailedTool, consecutiveFailures := "", 0
 	for round := 0; round < e.maxRounds; round++ {
@@ -188,6 +190,14 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		}
 		e.messages = append(e.messages, message)
 		if len(message.ToolCalls) == 0 {
+			if e.robotControlMode && needsLocalizationContinuation(e.messages[turnStart:], message.Content) {
+				if localizationNudges >= 2 {
+					return errors.New("the model did not issue the promised localization command; the requested navigation has not completed")
+				}
+				localizationNudges++
+				e.messages = append(e.messages, Message{Role: "system", Content: localizationContinuationReminder})
+				continue
+			}
 			return ctx.Err()
 		}
 		var turnErr error

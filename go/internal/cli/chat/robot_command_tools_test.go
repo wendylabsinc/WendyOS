@@ -249,7 +249,12 @@ func TestRobotCommandIdentityIsHiddenAcrossRealEngineTurns(t *testing.T) {
 }
 
 func TestRobotCommandCanonicalGoalAndLocalValidation(t *testing.T) {
-	base := &engineTestExecutor{tools: []Tool{robotCommandTestTool()}, run: func(context.Context, ToolCall) (string, error) { return `{"state":"completed"}`, nil }}
+	base := &engineTestExecutor{tools: []Tool{robotCommandTestTool(), navigationStatusTool()}, run: func(_ context.Context, call ToolCall) (string, error) {
+		if call.Name == "robot_status" {
+			return `{"snapshot":{"Aligned":true}}`, nil
+		}
+		return `{"state":"completed"}`, nil
+	}}
 	tools := &robotCommandTools{base: base}
 	ctx := robotTurnContext()
 	for _, invalid := range []string{`{"action":"turn"}`, `{"action":"turn","degrees":0}`, `{"action":"turn","degrees":181}`, `{"action":"turn","degrees":2.5}`, `{"action":"forward"}`, `{"action":"forward","distance_meters":3}`, `{"action":"go_to","destination":" "}`, `{"action":"go_to_object"}`} {
@@ -265,7 +270,7 @@ func TestRobotCommandCanonicalGoalAndLocalValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(base.calls) != 1 {
+	if len(base.calls) != 2 {
 		t.Fatal("case/whitespace/irrelevant fields duplicated a completed move")
 	}
 	if _, err := tools.Execute(ctx, ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"go_to","destination":"kitchen","serial":"now-explicit"}`)}); err == nil {
