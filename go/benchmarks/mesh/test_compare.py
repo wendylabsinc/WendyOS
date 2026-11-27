@@ -1,9 +1,19 @@
 import unittest
 
-from compare import compare, parse
+from compare import compare, parse, select_adapter
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_adapter_requires_matching_production_api(self):
+        old = "func (s *Synchronizer) ReconcileBounded("
+        current = "func (s *Synchronizer) seedAnnouncements("
+        batch = "func (s *Synchronizer) receiveHaveBatch("
+        self.assertEqual(select_adapter(old, ""), "base")
+        self.assertEqual(select_adapter(current, ""), "head")
+        self.assertEqual(select_adapter(current, batch), "batching")
+        with self.assertRaisesRegex(ValueError, "unsupported synchronizer"):
+            select_adapter("", batch)
+
     def test_known_regression_and_throughput_direction(self):
         samples = {
             "base": [{"benchmark/cpu/ns/op": 100, "benchmark/send/MB/s": 100}] * 3,

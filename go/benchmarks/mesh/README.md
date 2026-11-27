@@ -27,10 +27,18 @@ stop the run; incomplete output is never reported as a passing comparison.
 
 The simulation uses production `Directory`, `Synchronizer`, certificate
 exchange, signature verification, shared manifest pools, and `WriteControl` /
-`ReadControl`. There are two small adapters for the announcement APIs before and
-after PR #3115. They reproduce attach, change, queue-full retry, and periodic
+`ReadControl`. Separate adapters cover the announcement APIs before and after
+PR #3115 and the negotiated HAVE-batch implementation. They reproduce attach,
+change, queue-full retry, and periodic
 maintenance calls. A future change to those scheduling rules needs a matching
 adapter review, even if it still compiles.
+
+For revisions supporting HAVE batches, the default models both endpoints opting
+in. Set `WENDY_MESH_HAVE_BATCHES=0` for legacy fallback or
+`WENDY_MESH_HAVE_BATCHES=mixed` to enable the capability only on even-numbered
+nodes. The runner records this setting. The adapters seed each link's own origin
+first, matching production. Inventory checks count origins rather than frames
+so that batching cannot silently omit records.
 
 The network has directed reliable FIFO links, 16 queued control frames per
 direction, and a virtual serialization clock. The matrix includes a four-node
@@ -54,6 +62,9 @@ second, sharing each link's byte budget with control traffic. The report include
 their median, p95 and maximum modeled one-way latency. Convergence is the maximum
 publication-to-admission delay among received revisions in that phase. Superseded
 revisions may be coalesced; the final-revision assertion checks eventual delivery.
+Four additional slow full-mesh reconnect cases inject a probe at 0, 10, 20 and
+40 ms after inventory begins. These expose larger-frame serialization delays
+that the regular 100 ms probe cadence can miss.
 
 ## Measurements and boundaries
 
@@ -73,6 +84,8 @@ Control-frame counts are **not UDP packet counts**. The model excludes QUIC/TLS
 headers, ACKs, retransmissions, congestion control, Babel Hello/Update traffic,
 kernel/TUN forwarding, radio framing, contention, partitions and packet loss.
 The probe scheduler models shared bandwidth, not QUIC's actual scheduling policy.
+Writer-to-actor capacity notifications are tested separately with the real
+`Node.Run` actor; this virtual scheduler does not measure their host latency.
 The carrier benchmark measures admission and framing, not end-to-end forwarding.
 Publication benchmark allocations include the simulator; use the isolated
 inventory and carrier benchmarks to distinguish those costs.
@@ -125,6 +138,9 @@ regression is flagged only when the whole interval exceeds a 10% increase, or a
 10% decrease for throughput. Newly nonzero metrics are flagged separately by
 the same regression column. Use `--threshold` to change the budget and
 `--fail-on-regression` to make flagged measurements return exit code 1.
+Message-kind counters remain diagnostic flags when a protocol change replaces
+singletons with a new batch kind. Inspect total control frames and bytes beside
+those counters; the runner deliberately does not suppress the new kind.
 
 This is an exploratory regression screen, not a guarantee of statistical
 significance across hundreds of metrics. More rounds and a quiet dedicated host
