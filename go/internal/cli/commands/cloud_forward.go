@@ -259,11 +259,20 @@ func (m *forwardMux) dial(ctx context.Context) (net.Conn, error) {
 		}
 		m.mu.Lock()
 		if m.current == c {
-			m.current = nil
+			m.replace(nil)
 		}
 		m.mu.Unlock()
 	}
 	return m.fallback(ctx)
+}
+
+// replace makes c the forward's tunnel. The one it replaces closes once its
+// connections end, freeing its relay and agent slot.
+func (m *forwardMux) replace(c *cloudrelay.MuxClient) {
+	if m.current != nil {
+		m.current.Shutdown()
+	}
+	m.current = c
 }
 
 // client returns the forward's tunnel, opening a new one when there is none
@@ -274,6 +283,7 @@ func (m *forwardMux) client() *cloudrelay.MuxClient {
 	if m.current != nil && m.current.Usable(muxRenewBefore) {
 		return m.current
 	}
+	m.replace(nil)
 	if time.Now().Before(m.retryAt) {
 		return nil
 	}

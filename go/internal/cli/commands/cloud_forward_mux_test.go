@@ -23,15 +23,18 @@ import (
 )
 
 // fakeMuxTunnel is one multiplexed tunnel served as the agent serves it after
-// the endpoint handshake: every stream echoes what it receives.
-func fakeMuxTunnel(t *testing.T, expires time.Time) *cloudrelay.MuxClient {
+// the endpoint handshake: every stream echoes what it receives. closed ends
+// when the caller closes the tunnel.
+func fakeMuxTunnel(t *testing.T, expires time.Time) (c *cloudrelay.MuxClient, closed <-chan struct{}) {
 	t.Helper()
+	served := make(chan struct{})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
 	go func() {
+		defer close(served)
 		device, err := ln.Accept()
 		if err != nil {
 			return
@@ -58,12 +61,12 @@ func fakeMuxTunnel(t *testing.T, expires time.Time) *cloudrelay.MuxClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := cloudrelay.NewMuxClient(caller, expires)
+	c, err = cloudrelay.NewMuxClient(caller, expires)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	return c
+	return c, served
 }
 
 // startForward serves a forward on a fresh listener until the test ends. A
@@ -105,7 +108,8 @@ func TestCloudTunnelForwardCarriesConnectionsInOneTunnel(t *testing.T) {
 	mux := &forwardMux{
 		open: func() (*cloudrelay.MuxClient, error) {
 			opens.Add(1)
-			return fakeMuxTunnel(t, time.Now().Add(30*time.Minute)), nil
+			c, _ := fakeMuxTunnel(t, time.Now().Add(30*time.Minute))
+			return c, nil
 		},
 		fallback: func(context.Context) (net.Conn, error) {
 			return nil, errors.New("a connection opened a tunnel of its own")
@@ -131,15 +135,20 @@ func TestCloudTunnelForwardCarriesConnectionsInOneTunnel(t *testing.T) {
 }
 
 // Near its relay's end the forward opens a new tunnel for new connections; it
-// keeps listening, and a connection on the old tunnel keeps working.
+// keeps listening, a connection on the old tunnel keeps working, and the old
+// tunnel closes once that connection ends.
 func TestCloudTunnelForwardSurvivesRenewal(t *testing.T) {
 	var opens atomic.Int32
+	var firstClosed <-chan struct{}
 	mux := &forwardMux{
 		open: func() (*cloudrelay.MuxClient, error) {
 			if opens.Add(1) == 1 {
-				return fakeMuxTunnel(t, time.Now().Add(muxRenewBefore-time.Minute)), nil
+				c, closed := fakeMuxTunnel(t, time.Now().Add(muxRenewBefore-time.Minute))
+				firstClosed = closed
+				return c, nil
 			}
-			return fakeMuxTunnel(t, time.Now().Add(30*time.Minute)), nil
+			c, _ := fakeMuxTunnel(t, time.Now().Add(30*time.Minute))
+			return c, nil
 		},
 		fallback: func(context.Context) (net.Conn, error) {
 			return nil, errors.New("a connection opened a tunnel of its own")
@@ -163,6 +172,12 @@ func TestCloudTunnelForwardSurvivesRenewal(t *testing.T) {
 	echoes(t, first, "still on the first tunnel\n")
 	if n := opens.Load(); n != 2 {
 		t.Fatalf("opened %d tunnels, want 2: the first and its renewal", n)
+	}
+	first.Close()
+	select {
+	case <-firstClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the replaced tunnel stayed open after its last connection ended")
 	}
 }
 

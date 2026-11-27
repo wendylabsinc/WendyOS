@@ -73,6 +73,9 @@ func (m *MuxClient) Usable(margin time.Duration) bool {
 
 func (m *MuxClient) Close() error { return m.cc.Close() }
 
+// Shutdown closes the session once its connections end, without waiting.
+func (m *MuxClient) Shutdown() { go func() { _ = m.cc.Shutdown(context.Background()) }() }
+
 // Dial opens one connection to the session's port. It ends with ctx. A device
 // that cannot reach its port ends the connection without a byte, as a raw
 // session does.
