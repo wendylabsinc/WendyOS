@@ -84,6 +84,8 @@ type AgentService struct {
 
 	// Settable within-package so tests need neither a WendyOS image nor its disks.
 	deviceTypePath string
+	osIssuePath    string
+	osCommitPath   string
 	rootMedium     func() (medium, disk string, err error)
 	rootMediumOnce sync.Once
 	rootMediumName string
@@ -139,6 +141,15 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 		resp.OsVersion = &v
 	} else if _, distroVer := detectDistro(); distroVer != "" {
 		resp.OsVersion = &distroVer
+	}
+	// The version names only the release an image is based on. The stamp
+	// says which build of it runs: a release, a nightly or a pull request's.
+	build := s.osBuildStamp()
+	if build.label != "" {
+		resp.OsBuild = &build.label
+	}
+	if build.commit != "" {
+		resp.OsCommit = &build.commit
 	}
 
 	if data, err := os.ReadFile(s.deviceTypeFile()); err == nil {
@@ -1075,6 +1086,106 @@ func readWendyOSVersionFrom(paths ...string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// osBuildStamp is what the WendyOS Builder writes into an image to say which
+// build it is. Either part is empty when the image has none.
+type osBuildStamp struct {
+	// "pr-<N>" for an image built from a Builder pull request,
+	// "nightly-<timestamp>" for a nightly, and the release version for a
+	// release and for an image built outside CI.
+	label string
+	// The Builder commit, in lower-case hexadecimal. Images built outside CI
+	// have none.
+	commit string
+}
+
+const (
+	// The Builder appends "Build: <label>" to the console banner.
+	osIssuePath = "/etc/issue"
+	// The image's own copy. /etc/wendyos/commit is the same file except on a
+	// Jetson, where /etc/wendyos lives on /data and a boot script copies the
+	// commit in: an image that predates that script leaves the commit of the
+	// image that ran before it.
+	osCommitPath = "/usr/lib/wendyos/commit"
+
+	// Both files are far smaller. A larger one is not what the Builder wrote.
+	osBuildStampMaxBytes = 64 << 10
+	osBuildLabelMaxLen   = 64
+)
+
+// osBuildStamp reads the stamp of the running image. Only WendyOS has one:
+// another distribution's /etc/issue is not ours to interpret.
+func (s *AgentService) osBuildStamp() osBuildStamp {
+	isWendyOS := s.isWendyOSHost
+	if isWendyOS == nil {
+		isWendyOS = defaultIsWendyOSHost
+	}
+	if !isWendyOS() {
+		return osBuildStamp{}
+	}
+	issuePath, commitPath := s.osIssuePath, s.osCommitPath
+	if issuePath == "" {
+		issuePath = osIssuePath
+	}
+	if commitPath == "" {
+		commitPath = osCommitPath
+	}
+	return osBuildStamp{label: readOSBuildLabel(issuePath), commit: readOSBuildCommit(commitPath)}
+}
+
+// readOSBuildLabel returns the label on the last "Build:" line of the issue
+// file, or "" when there is none or it is not a plain label. The value goes
+// to terminals and logs, so anything but printable ASCII without spaces is
+// refused rather than cleaned up.
+func readOSBuildLabel(issuePath string) string {
+	var label string
+	for _, line := range strings.Split(readOSBuildStampFile(issuePath), "\n") {
+		if rest, ok := strings.CutPrefix(line, "Build:"); ok {
+			label = strings.TrimSpace(rest)
+		}
+	}
+	if label == "" || len(label) > osBuildLabelMaxLen {
+		return ""
+	}
+	for i := 0; i < len(label); i++ {
+		if label[i] <= ' ' || label[i] > '~' {
+			return ""
+		}
+	}
+	return label
+}
+
+// readOSBuildCommit returns the Git hash in the commit file in lower case, or
+// "" when the file is missing, empty or holds anything else. Seven characters
+// is the shortest hash Git abbreviates to, 64 a full SHA-256.
+func readOSBuildCommit(commitPath string) string {
+	commit := strings.ToLower(strings.TrimSpace(readOSBuildStampFile(commitPath)))
+	if len(commit) < 7 || len(commit) > 64 {
+		return ""
+	}
+	for i := 0; i < len(commit); i++ {
+		if c := commit[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return commit
+}
+
+// readOSBuildStampFile returns a stamp file's content, or "" when it cannot
+// be read or is larger than a stamp file can be: a cut-off read could end in
+// the middle of the label.
+func readOSBuildStampFile(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, osBuildStampMaxBytes+1))
+	if err != nil || len(data) > osBuildStampMaxBytes {
+		return ""
+	}
+	return string(data)
 }
 
 // Older clients never cancel on Completed and always wait this out, so it must
