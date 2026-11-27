@@ -149,6 +149,34 @@ func TestGenericSensorFeedIsolationLifetimeAndBackpressure(t *testing.T) {
 	}
 }
 
+func TestGenericSensorFeedForwardsWhatTheSourceSaysAboutItsSampleTime(t *testing.T) {
+	s := newTestGenericSensorFeed(t)
+	_, publish, release := s.Mount(mcusource.SensorPairing{SourceAssetID: 1}, []*sensorpb.SensorDescriptor{{ChannelId: 1,
+		Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "example", SampleBytes: 2}}}})
+	defer release()
+	m, _ := s.GetSensorManifest(context.Background(), &agentpb.GetSensorManifestRequest{})
+	sub := &genericSubscription{ids: map[uint32]bool{m.Sensors[0].ChannelId: true}, frames: make(chan *sensorpb.SensorData, 8), done: make(chan struct{})}
+	s.subscribers[sub] = true
+
+	// The uncertainty the source measured travels with its time, unchanged.
+	uncertainty := uint32(250)
+	publish(&sensorlink.SensorFrame{ChannelID: 1, Seq: 7, TsUs: 100, TsUncertaintyUs: &uncertainty, Payload: []byte{1, 2}})
+	got := <-sub.frames
+	if got.GetTsUs() != 100 || got.TsUncertaintyUs == nil || got.GetTsUncertaintyUs() != 250 {
+		t.Fatalf("forwarded ts_us %d with uncertainty %v, want 100 with 250", got.GetTsUs(), got.TsUncertaintyUs)
+	}
+	uncertainty = 1 // the transport's frame is reused; a reader's copy is its own
+	if got.GetTsUncertaintyUs() != 250 {
+		t.Fatalf("the forwarded uncertainty changed to %d with the frame it came from", got.GetTsUncertaintyUs())
+	}
+	// A source that makes no claim is forwarded as making none: the agent
+	// never adds an uncertainty of its own, and never turns absent into zero.
+	publish(&sensorlink.SensorFrame{ChannelID: 1, Seq: 8, TsUs: 200, Payload: []byte{1, 2}})
+	if got := <-sub.frames; got.TsUncertaintyUs != nil {
+		t.Fatalf("a frame without an uncertainty was forwarded with %d", got.GetTsUncertaintyUs())
+	}
+}
+
 func BenchmarkGenericSensorFeedWithoutReaders(b *testing.B) {
 	s := newTestGenericSensorFeed(b)
 	_, pub, release := s.Mount(mcusource.SensorPairing{SourceAssetID: 1}, []*sensorpb.SensorDescriptor{{ChannelId: 1, Format: &sensorpb.SensorDescriptor_Sensor{Sensor: &sensorpb.SensorFormat{Schema: "example.array.v1", SampleBytes: 1536}}}})

@@ -13,7 +13,8 @@ const (
 	timingDDSType = "diagnostic_msgs::msg::dds_::DiagnosticArray_"
 	timingROSType = "diagnostic_msgs/msg/DiagnosticArray"
 
-	// levelWarn is diagnostic_msgs/msg/DiagnosticStatus.WARN.
+	// diagnostic_msgs/msg/DiagnosticStatus levels.
+	levelOK   = 0
 	levelWarn = 1
 )
 
@@ -38,6 +39,9 @@ type timing struct {
 	// sourceUs is the time the source stamped the frame with, as it sent it;
 	// zero when it sent none.
 	sourceUs uint64
+	// uncertaintyUs is how far sourceUs may be from the moment the reading
+	// was really taken, as the source measured it; nil when it does not say.
+	uncertaintyUs *uint32
 	// placed says stamp is sourceUs moved to this device's clock. Otherwise
 	// stamp is when the frame arrived.
 	placed bool
@@ -63,13 +67,23 @@ func (t timing) encode(frameID, topic, source string) []byte {
 	}
 	// Microseconds to nanoseconds in text, so that no value overflows.
 	sourceNanos := strconv.FormatUint(t.sourceUs, 10) + "000"
-	var message string
+	// The stamp has a bound only when the source gave one for its own time:
+	// that, plus what moving the time to this device's clock adds.
+	level, message := uint8(levelWarn), ""
+	bound, confidence := "unbounded", "unbounded"
 	if t.placed {
+		native := "unreported"
 		message = "the source reports no uncertainty for its sample time"
+		if t.uncertaintyUs != nil {
+			reported := time.Duration(*t.uncertaintyUs) * time.Microsecond
+			native = strconv.FormatInt(int64(reported), 10)
+			bound, confidence = strconv.FormatInt(int64(reported+t.mapping), 10), "source_reported"
+			level, message = levelOK, "the source reports its sample time and how well it knows it"
+		}
 		values = append(values,
 			value{"native_clock_domain", "SENSORLINK_SOURCE"},
 			value{"native_timestamp_nanos", sourceNanos},
-			value{"native_uncertainty_nanos", "unreported"},
+			value{"native_uncertainty_nanos", native},
 			value{"mapping_segment", "sensorlink-source-" + strconv.Itoa(t.segment)},
 			value{"mapping_uncertainty_nanos", strconv.FormatInt(int64(t.mapping), 10)})
 	} else {
@@ -80,17 +94,16 @@ func (t timing) encode(frameID, topic, source string) []byte {
 		}
 		values = append(values, value{"mapping_segment", "agent-receipt"})
 	}
-	// Without a bound from the source there is none to give for the stamp.
 	values = append(values,
-		value{"timestamp_uncertainty_nanos", "unbounded"},
-		value{"confidence", "unbounded"})
+		value{"timestamp_uncertainty_nanos", bound},
+		value{"confidence", confidence})
 
 	e := cdr.NewEncoder()
 	e.Int32(int32(t.stamp.Unix())) // std_msgs/Header: stamp, then frame_id
 	e.Uint32(uint32(t.stamp.Nanosecond()))
 	e.String(frameID)
 	e.Uint32(1) // status
-	e.Uint8(levelWarn)
+	e.Uint8(level)
 	e.String(topic) // name
 	e.String(message)
 	e.String(source) // hardware_id

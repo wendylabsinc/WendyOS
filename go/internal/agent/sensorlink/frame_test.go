@@ -6,6 +6,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
+	"google.golang.org/protobuf/proto"
 )
 
 func chunk(ch, frame, seq uint32, last bool, payload string) *sensorlinkpb.SensorData {
@@ -121,5 +122,41 @@ func TestAssemblerCapsFrameSize(t *testing.T) {
 	a.Add(chunk(1, 5, 1, false, half))
 	if f := a.Add(chunk(1, 5, 2, true, "y")); f != nil {
 		t.Fatalf("oversized frame returned (%d bytes)", len(f.Payload))
+	}
+}
+
+func TestAssemblerKeepsWhatTheSourceSaysAboutItsSampleTime(t *testing.T) {
+	var a sensorlink.Assembler
+	// A source that measured when it took the sample says how well it knows.
+	measured := chunk(4, 9, 0, true, "x")
+	measured.TsUncertaintyUs = proto.Uint32(250)
+	f := a.Add(measured)
+	if f == nil || f.TsUncertaintyUs == nil || *f.TsUncertaintyUs != 250 {
+		t.Fatalf("frame = %+v, want an uncertainty of 250 us", f)
+	}
+	// The frame has its own copy: the transport reuses its message.
+	*measured.TsUncertaintyUs = 1
+	if *f.TsUncertaintyUs != 250 {
+		t.Fatalf("the frame's uncertainty changed to %d with the chunk it came from", *f.TsUncertaintyUs)
+	}
+
+	// Zero is a claim. Absent is none, and must not turn into zero.
+	exact := chunk(4, 10, 0, true, "x")
+	exact.TsUncertaintyUs = proto.Uint32(0)
+	if f := a.Add(exact); f.TsUncertaintyUs == nil || *f.TsUncertaintyUs != 0 {
+		t.Fatalf("an uncertainty of zero was lost: %+v", f)
+	}
+	if f := a.Add(chunk(4, 11, 0, true, "x")); f.TsUncertaintyUs != nil {
+		t.Fatalf("a frame whose source made no claim got an uncertainty of %d", *f.TsUncertaintyUs)
+	}
+
+	// Like ts_us it is read from the first chunk of a frame.
+	first := chunk(1, 5, 0, false, "ab")
+	first.TsUncertaintyUs = proto.Uint32(40)
+	a.Add(first)
+	last := chunk(1, 5, 1, true, "cd")
+	last.TsUncertaintyUs = proto.Uint32(999)
+	if f := a.Add(last); f == nil || f.TsUncertaintyUs == nil || *f.TsUncertaintyUs != 40 {
+		t.Fatalf("multi-chunk frame = %+v, want the first chunk's uncertainty, 40 us", f)
 	}
 }

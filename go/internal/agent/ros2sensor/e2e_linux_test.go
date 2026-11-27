@@ -80,6 +80,7 @@ func pairedSensorReachesROS2Node(t *testing.T, subscriber, rmw string, domain in
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
+	boardUncertaintyUs := uint32(150)
 	// The board: one generic sensor channel, no camera, no microphone.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -96,6 +97,9 @@ func pairedSensorReachesROS2Node(t *testing.T, subscriber, rmw string, domain in
 		// Like a board, it stamps its readings with a clock of its own: it has
 		// been up five seconds and reads its sensor every 20 ms, exactly.
 		TsUs: func(seq uint32) uint64 { return 5_000_000 + uint64(seq)*20_000 },
+		// And it says how well it knows them: it read its clock 300 us apart
+		// around each reading.
+		TsUncertaintyUs: &boardUncertaintyUs,
 	})
 
 	// The agent. Its only running ROS 2 app is the node started below: on the
@@ -266,9 +270,8 @@ func pairedSensorReachesROS2Node(t *testing.T, subscriber, rmw string, domain in
 		}
 		for key, want := range map[string]string{
 			"readings": "1", "sample_period_nanos": "20000000",
-			"native_clock_domain": "SENSORLINK_SOURCE", "native_uncertainty_nanos": "unreported",
-			"mapping_segment":             "sensorlink-source-1",
-			"timestamp_uncertainty_nanos": "unbounded", "confidence": "unbounded",
+			"native_clock_domain": "SENSORLINK_SOURCE", "native_uncertainty_nanos": "150000",
+			"mapping_segment": "sensorlink-source-1", "confidence": "source_reported",
 		} {
 			if timing.Values[key] != want {
 				t.Fatalf("timing %d: %s = %q, want %q (all: %v)", i, key, timing.Values[key], want, timing.Values)
@@ -279,11 +282,17 @@ func pairedSensorReachesROS2Node(t *testing.T, subscriber, rmw string, domain in
 		if want := strconv.FormatUint((5_000_000+sequence*20_000)*1000, 10); timing.Values["native_timestamp_nanos"] != want {
 			t.Fatalf("timing %d: frame %d has native_timestamp_nanos %q, want %s", i, sequence, timing.Values["native_timestamp_nanos"], want)
 		}
-		if _, err := strconv.ParseUint(timing.Values["mapping_uncertainty_nanos"], 10, 63); err != nil {
+		// The bound on the stamp is what the board measured plus what moving
+		// its time to this device's clock adds.
+		mapping, err := strconv.ParseUint(timing.Values["mapping_uncertainty_nanos"], 10, 63)
+		if err != nil {
 			t.Fatalf("timing %d: mapping_uncertainty_nanos = %q", i, timing.Values["mapping_uncertainty_nanos"])
 		}
-		// The board reports no uncertainty, which is a warning.
-		if timing.Level != 1 || timing.Message == "" {
+		if want := strconv.FormatUint(150_000+mapping, 10); timing.Values["timestamp_uncertainty_nanos"] != want {
+			t.Fatalf("timing %d: timestamp_uncertainty_nanos = %q, want %s", i, timing.Values["timestamp_uncertainty_nanos"], want)
+		}
+		// A stamp with a bound is no warning.
+		if timing.Level != 0 || timing.Message == "" {
 			t.Fatalf("timing %d: level %d, message %q", i, timing.Level, timing.Message)
 		}
 		if readingAt[time.Unix(timing.Sec, timing.Nanosec)] {

@@ -82,6 +82,12 @@ domain (for Wendy Lite, uptime in microseconds). Equal, zero or decreasing
 timestamps are passed through. Apps decide how to handle source clocks and
 frame-sequence gaps or wraparound.
 
+`ts_uncertainty_us` is forwarded with it, unchanged: how far `ts_us` may be from
+the moment the first reading was really taken, on the same clock, as the source
+measured it. It is absent when the source makes no claim, which is not the same
+as zero. Check its presence before using it. The agent never adds one of its
+own.
+
 Subscriptions share the pairing's upstream connection. For this first version,
 paired channels are captured even without app readers, matching existing media
 pairing behavior; app cancellation does not stop upstream capture. Unpairing or

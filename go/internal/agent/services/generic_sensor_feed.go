@@ -104,6 +104,11 @@ func (s *GenericSensorFeed) Mount(p mcusource.SensorPairing, descriptors []*sens
 			// consumes this channel. Never retain the transport's mutable buffer.
 			if frame == nil {
 				frame = &sensorlinkpb.SensorData{ChannelId: id, FrameSeq: f.Seq, TsUs: f.TsUs, Flags: f.Flags | sensorlink.FlagLastChunk, Payload: append([]byte(nil), f.Payload...)}
+				// What the source says about its sample time goes with it,
+				// unchanged: absent stays absent.
+				if f.TsUncertaintyUs != nil {
+					frame.TsUncertaintyUs = proto.Uint32(*f.TsUncertaintyUs)
+				}
 			}
 			select {
 			case sub.frames <- frame:

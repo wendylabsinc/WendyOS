@@ -116,15 +116,18 @@ has these values, all text:
 | `readings`, `sample_period_nanos` | How many readings the frame holds, and the time between two readings when the source says how often it reads. |
 | `native_clock_domain` | `SENSORLINK_SOURCE`: the stamp comes from the source's clock. `AGENT_RECEIPT`: the source sent no time, and the frame is stamped when it arrived. |
 | `native_timestamp_nanos` | The time as the source's own clock gave it. |
-| `native_uncertainty_nanos` | How far that time may be from the moment the reading was really taken, as the source measured it. `unreported` when the source does not say. |
+| `native_uncertainty_nanos` | How far that time may be from the moment the reading was really taken, as the source measured it, for example half the time its read took. `unreported` when the source does not say. |
 | `mapping_segment` | Changes when the source's clock restarts or jumps, and each time the source reconnects. Times of different segments cannot be compared on the source's clock. |
 | `mapping_uncertainty_nanos` | How far the stamp may be from the agent's best estimate of the offset between the two clocks. |
-| `timestamp_uncertainty_nanos`, `confidence` | The bound on `header.stamp`. Both are `unbounded` when there is none. |
+| `timestamp_uncertainty_nanos`, `confidence` | The bound on `header.stamp`: the source's uncertainty plus the mapping's, with confidence `source_reported`. Both are `unbounded` when the source reports none. |
 
-The status level is `WARN` while the stamp has no bound.
+The status level is `OK` when the stamp has a bound and `WARN` when it has
+none.
 
-- No source reports `native_uncertainty_nanos` yet, so today every stamp is
-  `unbounded`.
+- A source reports its uncertainty only for sensors whose read it can time,
+  and only from firmware that knows how. A Wendy Lite reports none for its
+  camera and microphone, and firmware that predates the report gives none at
+  all.
 - The agent's estimate of the offset is late by the shortest time a frame takes
   to reach the device, which it cannot measure. A reading was taken that much
   earlier than its stamp says, and `mapping_uncertainty_nanos` does not cover

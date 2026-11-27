@@ -675,15 +675,30 @@ func (x *Unsubscribe) GetChannelId() []uint32 {
 }
 
 type SensorData struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ChannelId     uint32                 `protobuf:"varint,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
-	FrameSeq      uint32                 `protobuf:"varint,2,opt,name=frame_seq,json=frameSeq,proto3" json:"frame_seq,omitempty"` // wraps at 32 bits
-	ChunkSeq      uint32                 `protobuf:"varint,3,opt,name=chunk_seq,json=chunkSeq,proto3" json:"chunk_seq,omitempty"`
-	TsUs          uint64                 `protobuf:"varint,4,opt,name=ts_us,json=tsUs,proto3" json:"ts_us,omitempty"`
-	Flags         uint32                 `protobuf:"varint,5,opt,name=flags,proto3" json:"flags,omitempty"` // bit0 = keyframe, bit1 = last chunk in frame
-	Payload       []byte                 `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ChannelId uint32                 `protobuf:"varint,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	FrameSeq  uint32                 `protobuf:"varint,2,opt,name=frame_seq,json=frameSeq,proto3" json:"frame_seq,omitempty"` // wraps at 32 bits
+	ChunkSeq  uint32                 `protobuf:"varint,3,opt,name=chunk_seq,json=chunkSeq,proto3" json:"chunk_seq,omitempty"`
+	// When the first sample in the frame was taken, in microseconds on the
+	// source's own clock. That clock need not be wall time: a Wendy Lite counts
+	// from its boot. A source that does not stamp its frames leaves this zero.
+	// A forwarding agent passes it through unchanged.
+	TsUs    uint64 `protobuf:"varint,4,opt,name=ts_us,json=tsUs,proto3" json:"ts_us,omitempty"`
+	Flags   uint32 `protobuf:"varint,5,opt,name=flags,proto3" json:"flags,omitempty"` // bit0 = keyframe, bit1 = last chunk in frame
+	Payload []byte `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`
+	// How far ts_us may be from the instant that sample was really taken, in
+	// microseconds on the same clock: the sample was taken no earlier than
+	// ts_us - ts_uncertainty_us and no later than ts_us + ts_uncertainty_us.
+	// The source that took the sample measures it, for example as half the time
+	// the read took. It says nothing about how the source's clock relates to any
+	// other clock; a receiver that places the sample on its own clock adds the
+	// uncertainty of doing so. Absent means the source makes no claim, which is
+	// not the same as zero. Receivers read it from the first chunk of a frame,
+	// as they do ts_us. A forwarding agent passes it through unchanged and never
+	// adds one of its own.
+	TsUncertaintyUs *uint32 `protobuf:"varint,7,opt,name=ts_uncertainty_us,json=tsUncertaintyUs,proto3,oneof" json:"ts_uncertainty_us,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *SensorData) Reset() {
@@ -756,6 +771,13 @@ func (x *SensorData) GetPayload() []byte {
 		return x.Payload
 	}
 	return nil
+}
+
+func (x *SensorData) GetTsUncertaintyUs() uint32 {
+	if x != nil && x.TsUncertaintyUs != nil {
+		return *x.TsUncertaintyUs
+	}
+	return 0
 }
 
 type Ping struct {
@@ -968,7 +990,7 @@ const file_wendylite_v1_sensorlink_proto_rawDesc = "" +
 	"channel_id\x18\x01 \x03(\rR\tchannelId\",\n" +
 	"\vUnsubscribe\x12\x1d\n" +
 	"\n" +
-	"channel_id\x18\x01 \x03(\rR\tchannelId\"\xaa\x01\n" +
+	"channel_id\x18\x01 \x03(\rR\tchannelId\"\xf1\x01\n" +
 	"\n" +
 	"SensorData\x12\x1d\n" +
 	"\n" +
@@ -977,7 +999,9 @@ const file_wendylite_v1_sensorlink_proto_rawDesc = "" +
 	"\tchunk_seq\x18\x03 \x01(\rR\bchunkSeq\x12\x13\n" +
 	"\x05ts_us\x18\x04 \x01(\x04R\x04tsUs\x12\x14\n" +
 	"\x05flags\x18\x05 \x01(\rR\x05flags\x12\x18\n" +
-	"\apayload\x18\x06 \x01(\fR\apayload\"\x1b\n" +
+	"\apayload\x18\x06 \x01(\fR\apayload\x12/\n" +
+	"\x11ts_uncertainty_us\x18\a \x01(\rH\x00R\x0ftsUncertaintyUs\x88\x01\x01B\x14\n" +
+	"\x12_ts_uncertainty_us\"\x1b\n" +
 	"\x04Ping\x12\x13\n" +
 	"\x05ts_us\x18\x01 \x01(\x04R\x04tsUs\"\xe0\x01\n" +
 	"\bEnvelope\x12:\n" +
@@ -1046,6 +1070,7 @@ func file_wendylite_v1_sensorlink_proto_init() {
 		(*SensorDescriptor_Audio)(nil),
 		(*SensorDescriptor_Sensor)(nil),
 	}
+	file_wendylite_v1_sensorlink_proto_msgTypes[9].OneofWrappers = []any{}
 	file_wendylite_v1_sensorlink_proto_msgTypes[11].OneofWrappers = []any{
 		(*Envelope_Manifest)(nil),
 		(*Envelope_Subscribe)(nil),

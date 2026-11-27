@@ -114,3 +114,46 @@ func TestTimingOfAFrameStampedOnArrival(t *testing.T) {
 		t.Fatalf("values = %v", unusable.values)
 	}
 }
+
+func TestTimingOfAFrameWhoseSourceSaysHowWellItKnowsTheTime(t *testing.T) {
+	stamp := time.Unix(1_700_000_000, 123_000)
+	reported := uint32(250)
+	got := decodeTiming(t, timing{
+		stamp: stamp, sequence: 41, readings: 1, period: time.Second,
+		sourceUs: 6_000_250, uncertaintyUs: &reported, placed: true, segment: 1, mapping: 1500 * time.Microsecond,
+	}.encode("sensorlink/porch", "/sensorlink/porch/temperature", "asset:7"))
+	// What the source measured, what moving its time to this device's clock
+	// adds, and the two together as the bound on the stamp.
+	for key, want := range map[string]string{
+		"native_clock_domain":         "SENSORLINK_SOURCE",
+		"native_timestamp_nanos":      "6000250000",
+		"native_uncertainty_nanos":    "250000",
+		"mapping_uncertainty_nanos":   "1500000",
+		"timestamp_uncertainty_nanos": "1750000",
+		"confidence":                  "source_reported",
+	} {
+		if got.values[key] != want {
+			t.Errorf("%s = %q, want %q (all: %v)", key, got.values[key], want, got.values)
+		}
+	}
+	if got.level != 0 || got.message != "the source reports its sample time and how well it knows it" {
+		t.Fatalf("level %d, message %q", got.level, got.message)
+	}
+
+	// Zero from the source is a claim like any other.
+	exact := uint32(0)
+	zero := decodeTiming(t, timing{stamp: stamp, sourceUs: 6_000_250, uncertaintyUs: &exact, placed: true, segment: 1,
+		mapping: 20 * time.Microsecond}.encode("f", "/t", "asset:7"))
+	if zero.values["native_uncertainty_nanos"] != "0" || zero.values["timestamp_uncertainty_nanos"] != "20000" || zero.level != 0 {
+		t.Fatalf("level %d, values %v", zero.level, zero.values)
+	}
+
+	// An uncertainty without a time it belongs to bounds nothing.
+	orphan := decodeTiming(t, timing{stamp: stamp, uncertaintyUs: &reported}.encode("f", "/t", "asset:7"))
+	if orphan.values["confidence"] != "unbounded" || orphan.values["timestamp_uncertainty_nanos"] != "unbounded" || orphan.level != 1 {
+		t.Fatalf("a frame stamped on arrival: level %d, values %v", orphan.level, orphan.values)
+	}
+	if _, ok := orphan.values["native_uncertainty_nanos"]; ok {
+		t.Fatalf("a frame stamped on arrival reports the source's uncertainty: %v", orphan.values)
+	}
+}

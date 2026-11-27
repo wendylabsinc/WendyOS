@@ -297,7 +297,7 @@ func (b *Bridge) OpenChannel(sourceKey, sourceName string, d *sensorlinkpb.Senso
 // not stamp, or stamped with a value that cannot be a time, is placed at its
 // arrival: nothing else is known about it.
 func (c *Channel) place(f *sensorlink.SensorFrame, arrival time.Time) timing {
-	t := timing{stamp: arrival, sequence: f.Seq, period: c.period, sourceUs: f.TsUs}
+	t := timing{stamp: arrival, sequence: f.Seq, period: c.period, sourceUs: f.TsUs, uncertaintyUs: f.TsUncertaintyUs}
 	if c.sampleBytes > 0 {
 		t.readings = len(f.Payload) / c.sampleBytes
 	}
