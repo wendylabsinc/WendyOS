@@ -210,7 +210,7 @@ func robotControlToolResult(result *mcpgo.CallToolResult) (ToolResult, error) {
 			}
 		}
 		if text != "" {
-			if output.Len()+len(text)+1 > maxRobotReceiptBytes {
+			if output.Len()+len(text) > maxRobotReceiptBytes {
 				return ToolResult{RobotSerial: value.RobotSerial}, errors.New("robot receipt exceeds the transport limit; command outcome remains unresolved")
 			}
 			output.WriteString(text)

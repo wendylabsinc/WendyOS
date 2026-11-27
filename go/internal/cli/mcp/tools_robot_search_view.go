@@ -91,12 +91,5 @@ func provideRobotCameraView(ctx context.Context, serial, requestID string, recei
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		return nil, fmt.Errorf("robot camera frame rejected (%d): %s", response.StatusCode, bytes.TrimSpace(message))
 	}
-	var out map[string]any
-	if err := json.NewDecoder(io.LimitReader(response.Body, 256<<10)).Decode(&out); err != nil {
-		return nil, err
-	}
-	if out == nil {
-		return nil, errors.New("robot camera frame response is missing its command receipt")
-	}
-	return out, nil
+	return decodeRobotReceipt(response.Body)
 }

@@ -150,9 +150,11 @@ func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolReque
 		}
 		return errResult(errCodeInvalidArgument, string(message)), nil
 	}
-	var out map[string]any
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&out); err != nil {
-		return errResult(errCodeInvalidArgument, err.Error()), nil
+	out, err := decodeRobotReceipt(resp.Body)
+	if err != nil {
+		result := errResult(errCodeInternal, "Could not read the robot receipt; command outcome remains unresolved: "+err.Error())
+		result.StructuredContent.(map[string]any)["next_steps"] = []string{"Check the original request_id with receipt_only=true. Do not restart movement or infer completion from this response."}
+		return result, nil
 	}
 	action := stringParam(req, "action")
 	if req.Params.Name == "robot_command" && (action == "find_active" || action == "localize_active") {
