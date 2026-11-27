@@ -241,7 +241,11 @@ func mergeServiceMetrics(cached *colmetricspb.ExportMetricsServiceRequest, rm *m
 		// high-churn resource attributes (e.g. unique container IDs per restart)
 		// cannot grow the cache without bound.
 		if len(cached.ResourceMetrics) > maxCachedResourcesPerService {
-			cached.ResourceMetrics = cached.ResourceMetrics[len(cached.ResourceMetrics)-maxCachedResourcesPerService:]
+			drop := len(cached.ResourceMetrics) - maxCachedResourcesPerService
+			// The retained suffix shares its backing array with the evicted
+			// entries. Clear their pointers so their metric payloads can be freed.
+			clear(cached.ResourceMetrics[:drop])
+			cached.ResourceMetrics = cached.ResourceMetrics[drop:]
 		}
 		return cached
 	}
