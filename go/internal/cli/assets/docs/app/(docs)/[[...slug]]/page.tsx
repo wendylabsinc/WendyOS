@@ -94,6 +94,7 @@ const legacyRedirects: Record<string, string> = {
   'installation/linux-wendy-agent': '/installation/linux/',
   'buyers-guide': '/hardware/',
   'wendyos/flashing': '/advanced/wendyos/flashing/',
+  'wendyos/requirements': '/advanced/wendyos/requirements/',
 };
 
 function getLegacyRedirect(slug?: string[]) {

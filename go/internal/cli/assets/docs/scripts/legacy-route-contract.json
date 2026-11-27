@@ -55,6 +55,7 @@
     "installation/esp32": "/installation/wendy-lite-esp32/",
     "installation/linux-wendy-agent": "/installation/linux/",
     "buyers-guide": "/hardware/",
-    "wendyos/flashing": "/advanced/wendyos/flashing/"
+    "wendyos/flashing": "/advanced/wendyos/flashing/",
+    "wendyos/requirements": "/advanced/wendyos/requirements/"
   }
 }

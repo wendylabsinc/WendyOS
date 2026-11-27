@@ -27,6 +27,13 @@ multiple Cloud contexts, run [`wendy auth use`](./commands/auth/use.md) and
 select the context for the device's enrolled organization. The CLI searches
 for the hostname through mesh, LAN, and Cloud within that organization.
 
+The selected context must hold an operator certificate for that organization
+on this computer. Personal browser sign-in with `wendy cloud login` obtains
+and saves this certificate. A service-account login supplies Cloud API access
+without this certificate and cannot select private hostnames. If the
+certificate is missing, sign in again using the personal browser flow before
+retrying; the CLI rejects a missing certificate before discovery starts.
+
 To use the UUID hostname, set `DEVICE_UUID` to the device's `pkiDeviceName`
 from `wendy cloud discover --all --json`. This command requires an active
 Cloud login and includes offline devices. If `pkiDeviceName` is missing,
@@ -45,7 +52,9 @@ becomes `jetson-a.wendy.internal`.
 
 The CLI gathers LAN, Wendy Net, and Cloud candidates in parallel. For UUID
 hostnames, direct LAN gets a 500 ms head start before the CLI chooses another
-ready route. For friendly hostnames, the CLI allows up to 3 seconds for LAN
+ready route. If no route is ready after the initial LAN scan, LAN discovery
+can continue for another 2.5 seconds while the CLI waits for a usable route.
+For friendly hostnames, the CLI allows up to 3 seconds for LAN
 and Cloud discovery to check for conflicts. If it still needs a route, Wendy
 Net discovery can run for up to 15 seconds, including over Bluetooth. Probing
 a discovered mesh route can take another 15 seconds.
@@ -85,7 +94,8 @@ Net directory identifies a different device by that name, the CLI refuses
 the connection and asks you to verify the change.
 
 After verifying an intentional replacement or an invalid saved pin, select
-the intended organization's context and unpin the hostname:
+the intended organization's context with `wendy auth use` and unpin the
+hostname. Run `wendy auth status` to list saved contexts and their organizations:
 
 ```sh
 wendy device unpin jetson.wendy.internal

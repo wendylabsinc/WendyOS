@@ -159,11 +159,6 @@ jetson.wendy.internal:18080
 device-<device-uuid>.wendy.internal:18080
 ```
 
-To select a device in the CLI, use its private `*.wendy.internal` hostname
-with `--device`. The CLI authenticates the selected device and works without a
-desktop VPN or app entitlement. See the
-[CLI device selection guide](/docs/advanced/clients/wendy-cli/device-selection).
-
 The friendly name is scoped to the client's enrolled organization. Device
 names are registered as lowercase DNS labels of up to 63 characters. A label
 starts with a letter, uses ASCII letters, digits, and hyphens, and ends with
@@ -210,6 +205,17 @@ has that UUID. A friendly-name lookup returns NXDOMAIN if neither the signed
 directory nor the Cloud roster knows the name, or if the sources tie it to
 more than one device. Use `device-<uuid>.wendy.internal` to select one device
 explicitly.
+
+### Select a device in the CLI
+
+Use the same `*.wendy.internal` hostname with `--device` on the Wendy CLI.
+The CLI authenticates the selected device using your organization's operator
+certificate from personal Cloud sign-in. CLI device selection does not require
+a desktop VPN or an app network entitlement on your computer. See the
+[CLI device selection guide](/docs/advanced/clients/wendy-cli/device-selection).
+
+{/* scripts/prepare-content.mjs publishes clients/wendy-cli/device-selection.md
+    under advanced/clients/wendy-cli/device-selection; the export crawl checks this link. */}
 
 ### Verify short DNS from the client app
 
