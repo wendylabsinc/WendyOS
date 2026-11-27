@@ -144,6 +144,9 @@ func (r *cameraPreRollRing) evict() {
 // reports, and the frames that follow open a new stream because the discarded
 // tail leaves a gap no decoder should be asked to cross.
 func (r *cameraPreRollRing) restart() {
+	// Release discarded payloads while the armed ring waits for a keyframe.
+	// Other subscribers may still own these immutable frames.
+	clear(r.frames)
 	r.frames = r.frames[:0]
 	r.bytes = 0
 	r.droppedForBytes = true
