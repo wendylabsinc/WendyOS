@@ -121,7 +121,7 @@ For Raspberry Pi and Orange Pi devices—and Orin with `--rootfs-only`, the inte
 1. **Resolve version** — `--version` if provided, otherwise latest (or nightly with `--nightly`).
 2. **Resolve drive** — `--drive` if provided, otherwise an interactive picker of external drives. Without a terminal, `--drive` is required. Internal drives require `--yes-overwrite-internal` in non-interactive mode; in interactive mode the user must type the device path to confirm.
 3. **Choose the image and check the drive** — the SD or NVMe image is picked for the drive (asking only when a USB drive could be either), and a drive too small for it is refused before any first-boot question.
-4. **Settle first boot, then confirm** — Wi-Fi and the device name come from the flags or are asked for. When pre-enrollment is chosen, its questions come next, including a name if none was given. A summary of what first boot will apply is printed, with the Cloud line `will pre-enroll` or `not enrolled`. Only then is the erase confirmed (`--force` skips the question).
+4. **Settle first boot, then confirm** — Wi-Fi comes from the flags or is asked for, then pre-enrollment, then the device name. A summary of what first boot will apply is printed, with the Cloud line `will pre-enroll` or `not enrolled`. Only then is the erase confirmed (`--force` skips the question).
 5. **Pre-enroll** — only after the confirmation does Wendy Cloud reserve the device name and issue the enrollment credential, so a declined or refused install leaves no name reserved. If this fails, a run without a terminal stops; in a terminal you can continue without enrollment.
 6. **Download and verify the image.** Downloads are cached for reuse. When a manifest checksum is available, a mismatched cached image is downloaded again; a mismatched download stops the install. See [image caching](/docs/advanced/wendyos/flashing#caching).
 7. **Write the image.** Writes with elevated privileges and a progress bar, after checking the [drive size](/docs/advanced/wendyos/flashing#drive-size-check). If a block-map write fails, the CLI rechecks the cached image before attempting a full write. A checksum mismatch removes the file and stops the install; run it again to download a replacement. A failed full write also stops the install. See [flashing details](/docs/advanced/wendyos/flashing).
@@ -298,16 +298,21 @@ Without a terminal on the input (CI, an agent's shell), nothing is asked, and ev
 | Internal drive | `--yes-overwrite-internal` is required. |
 | Several boards in recovery or EDL mode | Connect only the one to flash. |
 
-Before anything is erased or flashed, the installer prints what first boot will apply, also with `--force`. Passwords are never printed:
+Before anything is erased or flashed, the first-boot settings are on screen; passwords are never printed. Answered questions stay as one line each:
 
 ```text
-First boot will apply:
-  Device name  lab-pi
-  Wi-Fi        MyNetwork, Cafe (open)
-  Cloud        not enrolled
+? Wi-Fi: MyNetwork, Cafe (open)
+? Pre-enroll with Wendy Cloud: yes (Wendy Labs, Inc.)
+? Device name: lab-pi
 ```
 
-SD card and NVMe installs show `will pre-enroll`, because the name is reserved only after the erase is confirmed. The Cloud line is left out for Wendy Lite, which enrolls after flashing. Jetson and Dragonwing flash logs start with the same summary.
+Settings that come from flags, including `--force` runs, show as one line:
+
+```text
+› First boot: name lab-pi · Wi-Fi MyNetwork, Cafe (open) · Cloud not enrolled
+```
+
+The Cloud part says `will pre-enroll` when pre-enrolling and is left out for Wendy Lite. Jetson and Dragonwing flash logs start with the same settings.
 
 ## Agent-driven installation
 

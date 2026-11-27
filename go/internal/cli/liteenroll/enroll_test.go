@@ -441,3 +441,20 @@ func TestConfigDefaultsSignedTimeAndPreservesOverride(t *testing.T) {
 		})
 	}
 }
+
+func TestMintNameTakenIsErrDeviceNameTaken(t *testing.T) {
+	for _, field := range []string{"name", "untagged"} {
+		t.Run(field, func(t *testing.T) {
+			auth := authFixture(t)
+			cfg, err := Config(auth, deviceID, "", "https://tsa.local/time", "broker", 5055)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeEnrollment{reply: validTierCReply(), collide: func(string) string { return field }}
+			_, err = Mint(context.Background(), f, auth, cfg, "desk-board", nil, TrustProfile{})
+			if !errors.Is(err, cloudenroll.ErrDeviceNameTaken) {
+				t.Fatalf("a taken name must be recognisable, got %v", err)
+			}
+		})
+	}
+}

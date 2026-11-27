@@ -26,7 +26,9 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -120,6 +122,10 @@ func mintOnce(ctx context.Context, conn grpc.ClientConnInterface, auth *config.A
 	err = cloudrequest.InvokeWithTrailer(ctx, conn, auth, cloudpb.DeviceEnrollmentService_EnrollDevice_FullMethodName, &cloudpb.EnrollDeviceRequest{DeviceId: cfg.DeviceId, DeviceClass: cloudpb.DeviceClass_DEVICE_CLASS_C, EnrollmentRequestJws: artifact, Name: name, Hardware: hardware}, reply, &trailer)
 	if cloudenroll.DeviceUUIDTaken(err, trailer) {
 		return "", fmt.Errorf("Cloud refused device UUID %s before minting anything: %w", cfg.DeviceId, cloudenroll.ErrDeviceUUIDTaken)
+	}
+	// Without the colliding-field trailer, AlreadyExists is the name.
+	if status.Code(err) == codes.AlreadyExists {
+		return "", fmt.Errorf("Cloud refused this enrollment before minting anything: %w: %w", cloudenroll.ErrDeviceNameTaken, err)
 	}
 	if err != nil {
 		return "", fmt.Errorf("creating Tier C enrollment: %w", err)
