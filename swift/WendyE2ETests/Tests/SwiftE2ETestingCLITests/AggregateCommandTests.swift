@@ -50,12 +50,46 @@ struct `aggregate command` {
         )
         try writeAggregateTestMetadata(to: observationURL)
 
+        for relative in [
+            "coverage/bin/wendy", "coverage/bootstrap/covmeta.startup",
+            "coverage/go-native.tar.gz", "coverage/coverage.out", "report/index.html",
+        ] {
+            let url = attemptURL.appendingPathComponent(relative)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try "payload kept only in raw evidence".write(
+                to: url,
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+        for name in ["source.json", "summary.json", "test-0.xml"] {
+            try "provenance and failure evidence".write(
+                to: attemptURL.appendingPathComponent("coverage/\(name)"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: observationURL.appendingPathComponent("coverage/go"),
+            withIntermediateDirectories: true
+        )
+        try "native".write(
+            to: observationURL.appendingPathComponent("coverage/go/covmeta.test"),
+            atomically: true,
+            encoding: .utf8
+        )
+
         var command = try AggregateCommand.parse([
             "--output-dir", outputURL.path,
             "--package-dir", packageURL.path,
             attemptURL.path,
         ])
-        try command.run()
+        // Deliberately malformed coverage payload remains inspectable, while
+        // aggregate now reports its collection failure rather than copying it silently.
+        #expect(throws: ExitCode.self) { try command.run() }
 
         let runURL = outputURL.appendingPathComponent(
             "swift-e2e-tests.local0000",
@@ -73,6 +107,29 @@ struct `aggregate command` {
             .appendingPathComponent("prints-json-device-information", isDirectory: true)
             .appendingPathComponent("macos-to-rpi", isDirectory: true)
             .appendingPathComponent("0001", isDirectory: true)
+
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: aggregateObservationURL.appendingPathComponent("coverage").path
+            )
+        )
+        for relative in [
+            "coverage/bin", "coverage/bootstrap", "coverage/go-native.tar.gz",
+            "coverage/coverage.out", "report",
+        ] {
+            #expect(
+                !FileManager.default.fileExists(
+                    atPath: attemptArtifactsURL.appendingPathComponent(relative).path
+                )
+            )
+        }
+        for name in ["source.json", "summary.json", "test-0.xml"] {
+            let data = try String(
+                contentsOf: attemptArtifactsURL.appendingPathComponent("coverage/\(name)"),
+                encoding: .utf8
+            )
+            #expect(data == "provenance and failure evidence")
+        }
 
         #expect(
             FileManager.default.fileExists(

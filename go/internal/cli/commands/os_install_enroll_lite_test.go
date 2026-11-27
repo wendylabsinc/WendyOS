@@ -26,7 +26,7 @@ func TestLiteInstallEnrollmentSelectsSessionWithoutLegacyRPCs(t *testing.T) {
 	cfg := &config.Config{Auth: []config.AuthConfig{*auth}}
 	for _, mode := range []preEnrollMode{preEnrollAuto, preEnrollForced} {
 		confirmPreEnroll = func() (bool, error) { return true, nil }
-		got, err := resolveLiteInstallEnrollment(cfg, preEnrollOptions{mode: mode}, mode == preEnrollAuto)
+		got, err := resolveLiteInstallEnrollment(context.Background(), cfg, preEnrollOptions{mode: mode}, mode == preEnrollAuto)
 		if err != nil || got == nil || got.CloudGRPC != auth.CloudGRPC {
 			t.Fatalf("session = %v, error = %v", got, err)
 		}
@@ -55,7 +55,7 @@ func TestLiteInstallEnrollmentSkipAndFailures(t *testing.T) {
 			confirmContinueUnenrolled = func() (bool, error) { return tc.ack, nil }
 			// A legacy session cannot supply the tenant operator identity.
 			cfg := &config.Config{Auth: twoSessionConfig().Auth[:1]}
-			got, err := resolveLiteInstallEnrollment(cfg, preEnrollOptions{mode: tc.mode}, tc.interactive)
+			got, err := resolveLiteInstallEnrollment(context.Background(), cfg, preEnrollOptions{mode: tc.mode}, tc.interactive)
 			if got != nil {
 				t.Fatal("unexpected enrollment session")
 			}
@@ -246,5 +246,45 @@ func TestLiteCloudEnrollmentLabelFollowsCatalogValue(t *testing.T) {
 	}
 	if got := liteCloudEnrollmentLabel(nil); got != "" {
 		t.Fatalf("nothing: %q", got)
+	}
+}
+
+func TestLiteInstallChecksGivenNameBeforeFlashing(t *testing.T) {
+	stubSessionTerminals(t, false, false, nil)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = "prod.example.com:443"
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{*auth}}); err != nil {
+		t.Fatal(err)
+	}
+	stubOrgDeviceNames(t, []string{"brave-dolphin"}, nil)
+	err := installESP32Firmware(context.Background(), false, "", "esp32c6_generic_native",
+		discovery.SerialPortInfo{Port: "/dev/ttyACM0"}, wifiCLIOptions{NoWifi: true}, "brave-dolphin",
+		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"})
+	want := "Another device in your organization already uses brave-dolphin. Pass a different --device-name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device brave-dolphin"
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v; want %q before anything is flashed", err, want)
+	}
+}
+
+// Stopping at the name question after the flash leaves the board unenrolled;
+// the person must still learn how to finish.
+func TestEnrollInstalledLiteCancelSaysHowToFinish(t *testing.T) {
+	origWait, origRun := waitInstalledLiteFn, runLiteEnrollmentFn
+	t.Cleanup(func() { waitInstalledLiteFn, runLiteEnrollmentFn = origWait, origRun })
+	waitInstalledLiteFn = func(_ context.Context, p discovery.SerialPortInfo, _ bool) (discovery.SerialPortInfo, error) {
+		return p, nil
+	}
+	runLiteEnrollmentFn = func(*cobra.Command, models.ExternalDevice, *config.AuthConfig, string, liteEnrollmentOptions) error {
+		return ErrUserCancelled
+	}
+	var err error
+	captureStdout(t, func() {
+		err = enrollInstalledLite(context.Background(), discovery.SerialPortInfo{Port: "/dev/ttyACM0"}, &config.AuthConfig{CloudGRPC: "prod.example.com:443"}, "lab", "1.4.0", true)
+	})
+	if err == nil || errors.Is(err, ErrUserCancelled) || !strings.Contains(err.Error(), "not enrolled") ||
+		!strings.Contains(err.Error(), "wendy device enroll --cloud-grpc prod.example.com:443") {
+		t.Fatalf("got %v; want a visible error saying how to finish enrollment", err)
 	}
 }

@@ -23,7 +23,7 @@ func TestMCPSimulatorAgentSetupSkipsCompatibleAndRejectsOtherTargets(t *testing.
 			info.CpuArchitecture = "arm64"
 			previousConnect, previousResolve := simulatorUpdateConnect, simulatorUpdateResolve
 			t.Cleanup(func() { simulatorUpdateConnect, simulatorUpdateResolve = previousConnect, previousResolve })
-			simulatorUpdateResolve = func(string, string, bool) ([]byte, string, string, error) {
+			simulatorUpdateResolve = func(context.Context, string, string, bool) ([]byte, string, string, error) {
 				t.Fatal("unexpected update for an incompatible target or already capable agent")
 				return nil, "", "", nil
 			}
@@ -94,7 +94,7 @@ func TestMCPSimulatorAgentSetupUploadsOfficialArtifactAndVerifiesCapability(t *t
 				}
 				return next, fresh, nil
 			}
-			simulatorUpdateResolve = func(osName, arch string, nightly bool) ([]byte, string, string, error) {
+			simulatorUpdateResolve = func(_ context.Context, osName, arch string, nightly bool) ([]byte, string, string, error) {
 				if osName != "wendyos" || arch != "arm64" || nightly {
 					t.Fatal("unexpected artifact platform or channel")
 				}

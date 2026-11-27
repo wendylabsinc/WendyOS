@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # One immutable source pin for Go and embedded Swift generation.
-SHARED_GRPC_API_CONTRACTS_REF="ea85cfb447109dcef67e55b1de56f771bd5e68ad"
+SHARED_GRPC_API_CONTRACTS_REF="bc825956369b7f9b20b0c62e47abb6127ef689bb"
 # Canonical root files are staged under cloud/ to preserve existing descriptors.
 SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS=(
     "apps.proto"

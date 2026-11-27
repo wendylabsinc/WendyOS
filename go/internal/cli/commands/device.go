@@ -274,6 +274,9 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			defer target.Close()
 
 			var agentVersion, osName, osVersion, cpuArch, deviceType, storageMedium, gpuVendor, jetpackVersion, cudaVersion, gpuArch, npuVendor string
+			// Empty on agents predating the fields, on images without a build
+			// stamp, and on the BLE/provider paths.
+			var build osBuild
 			var diskUsedBytes, diskTotalBytes *int64
 			var memTotalBytes int64
 			var cpuCount uint32
@@ -317,6 +320,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				agentVersion = resp.GetVersion()
 				osName = resp.GetOs()
 				osVersion = resp.GetOsVersion()
+				build = osBuildOf(resp)
 				cpuArch = resp.GetCpuArchitecture()
 				deviceType = resp.GetDeviceType()
 				storageMedium = resp.GetStorageMedium()
@@ -377,6 +381,13 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 					"deviceType":      deviceType,
 					"cliVersion":      version.Version,
 					"hasGpu":          hasGPU,
+				}
+				// As the device reports them; absent rather than empty.
+				if build.label != "" {
+					out["osBuild"] = build.label
+				}
+				if build.commit != "" {
+					out["osCommit"] = build.commit
 				}
 				if organization != nil {
 					out["organization"] = nil
@@ -493,7 +504,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			if organization != nil {
 				fmt.Printf("%s %s\n", tui.Dim("Organization:"), tui.Value(organization.label()))
 			}
-			fmt.Printf("%s %s\n", tui.Dim("OS:"), tui.Value(osName+" "+osVersion))
+			fmt.Printf("%s %s\n", tui.Dim("OS:"), tui.Value(osName+" "+osVersionWithBuild(osVersion, build)))
 			fmt.Printf("%s %s\n", tui.Dim("Architecture:"), tui.Value(cpuArch))
 			if cpuCount > 0 {
 				fmt.Printf("%s %s\n", tui.Dim("CPU Cores:"), tui.Value(fmt.Sprintf("%d", cpuCount)))
@@ -845,13 +856,22 @@ func defaultEnrollmentName(host string) string {
 	return strings.ToLower(strings.TrimSuffix(h, ".local"))
 }
 
-func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string, error) {
-	return enrollmentName(conn.Host, name)
+func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string, taken func(string) bool, org string) (string, error) {
+	return enrollmentName(conn.Host, name, taken, org)
 }
 
-func enrollmentName(host, name string) (string, error) {
+// enrollmentName falls back to the device's own name for a blank one, unless
+// another device in the organization holds it.
+func enrollmentName(host, name string, taken func(string) bool, org string) (string, error) {
 	if name == "" {
 		defaultName := defaultEnrollmentName(host)
+		if defaultName != "" && taken(defaultName) {
+			if !isInteractiveTerminal() {
+				return "", takenNameRefusal(defaultName, org, noTTYHintEnroll)
+			}
+			printTakenName(os.Stdout, defaultName, org)
+			defaultName = suggestFreeName(defaultName, maxHostnameLen, taken)
+		}
 		if !isInteractiveTerminal() {
 			if defaultName != "" {
 				name = defaultName
@@ -888,7 +908,7 @@ func enrollmentName(host, name string) (string, error) {
 }
 
 func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) error {
-	identity, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
+	identity, name, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
 	if err != nil {
 		return err
 	}
@@ -899,19 +919,19 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	return err
 }
 
-func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, error) {
+func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, string, error) {
 	if auth == nil || len(auth.Certificates) == 0 {
-		return nil, validateEnrollmentCertificate(auth)
+		return nil, "", validateEnrollmentCertificate(auth)
 	}
 	acmeDirectoryURL := ""
 	if len(acmeDirectoryURLs) > 0 {
 		acmeDirectoryURL = acmeDirectoryURLs[0]
 	}
 	if auth.OAuthIssuer == "" && acmeDirectoryURL != "" {
-		return nil, fmt.Errorf("--acme-directory-url requires an OIDC login session")
+		return nil, "", fmt.Errorf("--acme-directory-url requires an OIDC login session")
 	}
 	if err := validateEnrollmentCertificate(auth); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Only the new login flow uses direct PKI enrollment. Imported certificates
 	// and legacy sessions retain the Cloud enrollment contract.
@@ -919,27 +939,28 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		return runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURL)
 	}
 
-	name, err := enrollmentDeviceName(conn, name)
+	// Legacy sessions cannot list the organization's devices; Cloud's own check decides.
+	name, err := enrollmentDeviceName(conn, name, func(string) bool { return false }, "")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	cert := auth.Certificates[0]
 
 	cloudCreds, err := clouddefaults.CloudTransportCredentials(auth.CloudGRPC, &cert)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	dialOptions := append([]grpc.DialOption{grpc.WithTransportCredentials(cloudCreds)}, dpopDialOptions(auth)...)
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to cloud: %w", err)
+		return nil, "", fmt.Errorf("connecting to cloud: %w", err)
 	}
 	defer cloudConn.Close()
 
 	tokenCtx, err := cloudContext(ctx, auth)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// The selected session already identifies the enrollment organization.
@@ -956,10 +977,10 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		TtlSeconds:     600,
 	})
 	if status.Code(err) == codes.Unimplemented {
-		return nil, fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
+		return nil, "", fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("creating enrollment token: %w", err)
+		return nil, "", fmt.Errorf("creating enrollment token: %w", err)
 	}
 
 	fmt.Println("Enrolling device...")
@@ -970,12 +991,12 @@ func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnecti
 		CloudHost:       auth.CloudGRPC,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("enrolling device: %w", err)
+		return nil, "", fmt.Errorf("enrolling device: %w", err)
 	}
 
 	fmt.Printf("Device enrolled (org: %s, asset: %d).\n",
 		orgLabel(auth.CloudGRPC, tokenResp.GetOrganizationId()), tokenResp.GetAssetId())
-	return &certs.WendyIdentity{OrgID: tokenResp.GetOrganizationId(), EntityType: certs.EntityAsset, EntityID: strconv.FormatInt(int64(tokenResp.GetAssetId()), 10)}, nil
+	return &certs.WendyIdentity{OrgID: tokenResp.GetOrganizationId(), EntityType: certs.EntityAsset, EntityID: strconv.FormatInt(int64(tokenResp.GetAssetId()), 10)}, name, nil
 }
 
 func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
@@ -2159,20 +2180,14 @@ func fetchAgentRelease(nightly bool) (*githubReleaseFull, error) {
 // downloadReleaseAssetBytes downloads asset and returns its raw bytes,
 // unmodified. Callers that need the extracted linux ELF (rather than the raw
 // tarball) call extractAgentFromTarGz on the result themselves.
-func downloadReleaseAssetBytes(asset githubReleaseAsset) ([]byte, error) {
-	client := &http.Client{Timeout: 5 * time.Minute}
-
-	resp, err := client.Get(asset.BrowserDownloadURL)
-	if err != nil {
+// The transfer has no deadline: it follows imageDownloadPolicy, like an OS
+// image. Every attempt asks GitHub again, so it gets a fresh CDN URL.
+func downloadReleaseAssetBytes(ctx context.Context, asset githubReleaseAsset) ([]byte, error) {
+	var raw downloadBuffer
+	if err := downloadResumable(ctx, asset.BrowserDownloadURL, &raw, 0, nil); err != nil {
 		return nil, fmt.Errorf("downloading asset: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
+	return raw, nil
 }
 
 // reconnectAgentAfterRestart re-establishes a connection to the SAME device
@@ -2273,6 +2288,8 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 	preUpdateOSVersion := preUpdateVersion.GetOsVersion()
 
 	var otaURL string
+	// The build label of a --pr image, checked once the device is back.
+	var wantBuild string
 	if artifactURLOverride != "" {
 		// Explicit artifact: apply it as-is, no manifest lookup or version
 		// comparison (mirrors `os update --artifact-url`). Still refuse a
@@ -2378,6 +2395,11 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 			}
 		}
 		otaURL = u
+		if prNumber > 0 {
+			// The PR manifest names its image by the label the image is
+			// stamped with ("pr-<N>").
+			wantBuild = latestVer
+		}
 	}
 
 	if osUpdateThroughCloud(ctx, conn) {
@@ -2389,6 +2411,7 @@ func maybeCheckOSUpdate(ctx context.Context, preUpdateVersion *agentpb.GetAgentV
 	}
 	baseline := readOSUpdateBaseline(ctx, conn)
 	baseline.preVersion = preUpdateOSVersion
+	baseline.wantBuild = wantBuild
 	recordCleared, err := applyOSUpdate(ctx, conn, otaURL)
 	baseline.recordCleared = recordCleared
 	if err != nil {
@@ -2621,7 +2644,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 						fmt.Println(tui.InfoMessage(fmt.Sprintf("Fetching latest %s agent for %s...", releaseType, agentPlatformLabel(osName, arch))))
 					}
 					var actualAgentVersion string
-					binaryData, actualAgentVersion, _, err = resolveAgentArtifactFn(osName, arch, nightly)
+					binaryData, actualAgentVersion, _, err = resolveAgentArtifactFn(ctx, osName, arch, nightly)
 					if err != nil {
 						return fmt.Errorf("resolving agent binary: %w", err)
 					}

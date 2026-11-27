@@ -852,14 +852,15 @@ func TestRestoreLeavesWhatIsNotOnTheListAlone(t *testing.T) {
 	write("provisioning.json", "unenrolled")
 	write("cloud-relay/lease.pb", "L1")
 	write("postbox.json", "cursor 1")
-	dirs := []SnapshotDir{{Path: src, Only: []string{"local-mesh.json", "nan-mesh.json", "mesh-disabled", "mesh"}}}
+	dirs := []SnapshotDir{{Path: src, Only: []string{"local-mesh.json", "local-mesh.json.disabled", "nan-mesh.json", "mesh-disabled", "mesh"}}}
 	snap := filepath.Join(t.TempDir(), "snapshot")
 	if err := snapshot(snap, dirs); err != nil {
 		t.Fatal(err)
 	}
 
 	// The trial changes settings and also enrolls, renews its lease and moves its cursor.
-	write("local-mesh.json", "new format")
+	os.Remove(filepath.Join(src, "local-mesh.json"))
+	write("local-mesh.json.disabled", "disabled\n")
 	write("nan-mesh.json", "added by the trial")
 	os.Remove(filepath.Join(src, "mesh-disabled"))
 	write("mesh/b", "added by the trial")
@@ -872,15 +873,16 @@ func TestRestoreLeavesWhatIsNotOnTheListAlone(t *testing.T) {
 	}
 
 	for rel, want := range map[string]string{
-		"local-mesh.json":      "old mesh",
-		"nan-mesh.json":        "<missing>",
-		"mesh-disabled":        "",
-		"mesh/a":               "old a",
-		"mesh/b":               "<missing>",
-		"provisioning.json":    "enrolled",
-		"device-key.pem":       "key",
-		"cloud-relay/lease.pb": "L2",
-		"postbox.json":         "cursor 2",
+		"local-mesh.json":          "old mesh",
+		"local-mesh.json.disabled": "<missing>",
+		"nan-mesh.json":            "<missing>",
+		"mesh-disabled":            "",
+		"mesh/a":                   "old a",
+		"mesh/b":                   "<missing>",
+		"provisioning.json":        "enrolled",
+		"device-key.pem":           "key",
+		"cloud-relay/lease.pb":     "L2",
+		"postbox.json":             "cursor 2",
 	} {
 		if got := read(rel); got != want {
 			t.Errorf("%s = %q, want %q", rel, got, want)

@@ -3,17 +3,16 @@ package commands
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
@@ -172,7 +171,7 @@ func firmwareCachedPath(asset *firmwareAsset) (string, error) {
 // cached copy from a previous run instead of re-downloading it. The returned
 // path lives in the cache directory and must not be deleted by the caller —
 // only `wendy cache clear`/`cache list` remove it.
-func resolveFirmware(asset *firmwareAsset) (string, error) {
+func resolveFirmware(ctx context.Context, asset *firmwareAsset) (string, error) {
 	cached, err := firmwareCachedPath(asset)
 	if err != nil {
 		return "", err
@@ -184,10 +183,11 @@ func resolveFirmware(asset *firmwareAsset) (string, error) {
 		}
 	}
 
-	downloadPath, err := downloadFirmware(asset, filepath.Dir(cached))
+	downloadPath, err := downloadFirmware(ctx, asset, filepath.Dir(cached))
 	if err != nil {
 		return "", err
 	}
+	os.Remove(cached) // clear a stale or invalid file so Rename succeeds on Windows
 	if err := os.Rename(downloadPath, cached); err != nil {
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching firmware: %w", err)
@@ -210,10 +210,13 @@ func (asset *firmwareAsset) verifyFile(filename string, size int64) error {
 }
 
 // downloadFirmware downloads asset's .bin into dir, driving its own progress
-// bar. It runs synchronously and returns once the TUI program exits.
-func downloadFirmware(asset *firmwareAsset, dir string) (string, error) {
+// bar. It runs synchronously and returns once the TUI program exits. Leaving
+// the progress bar with q or Ctrl+C cancels the download.
+func downloadFirmware(ctx context.Context, asset *firmwareAsset, dir string, opts ...tea.ProgramOption) (string, error) {
+	downloadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	prog := tui.NewProgress(fmt.Sprintf("Downloading %s %s...", asset.Name, asset.Version))
-	p := tui.NewProgressProgram(prog)
+	p := tui.NewProgressProgram(prog, opts...)
 
 	type result struct {
 		path string
@@ -221,7 +224,7 @@ func downloadFirmware(asset *firmwareAsset, dir string) (string, error) {
 	}
 	resC := make(chan result, 1)
 	go func() {
-		path, err := downloadFirmwareInto(asset, dir, func(downloaded, total int64) {
+		path, err := downloadFirmwareInto(downloadCtx, asset, dir, func(downloaded, total int64) {
 			if total > 0 {
 				p.Send(tui.ProgressUpdateMsg{Percent: float64(downloaded) / float64(total)})
 			}
@@ -230,11 +233,23 @@ func downloadFirmware(asset *firmwareAsset, dir string) (string, error) {
 		p.Send(tui.ProgressDoneMsg{Err: err})
 	}()
 
-	if _, err := tui.RunProgram(p); err != nil {
+	model, err := tui.RunProgram(p)
+	if err != nil {
+		err = fmt.Errorf("progress TUI: %w", err)
+	} else if progress, ok := model.(tui.ProgressModel); ok {
+		err = progress.Err() // context.Canceled for q or Ctrl+C, else the download's error
+	}
+	if err != nil {
+		// The transfer has no deadline, so a closed or failed progress bar
+		// must stop it before its result is waited for.
+		cancel()
 		if r := <-resC; r.path != "" {
 			os.Remove(r.path)
 		}
-		return "", fmt.Errorf("progress TUI: %w", err)
+		if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+			return "", ErrUserCancelled // the person left the progress bar
+		}
+		return "", err
 	}
 	r := <-resC
 	return r.path, r.err
@@ -243,56 +258,33 @@ func downloadFirmware(asset *firmwareAsset, dir string) (string, error) {
 // downloadFirmwareInto downloads asset's .bin into a temp file inside dir,
 // reporting progress via progressFn. It runs synchronously and owns no TUI,
 // so callers (or tests) can drive their own progress display.
-func downloadFirmwareInto(asset *firmwareAsset, dir string, progressFn func(downloaded, total int64)) (string, error) {
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Get(asset.DownloadURL)
-	if err != nil {
-		return "", fmt.Errorf("downloading firmware: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
-
+// The transfer has no deadline: it follows imageDownloadPolicy, like an OS image.
+func downloadFirmwareInto(ctx context.Context, asset *firmwareAsset, dir string, progressFn func(downloaded, total int64)) (string, error) {
 	tmpFile, err := os.CreateTemp(dir, "wendy-lite-*.bin")
 	if err != nil {
 		return "", fmt.Errorf("creating temp file: %w", err)
 	}
 
-	total := resp.ContentLength
-	if asset.Size > 0 && total <= 0 {
-		total = asset.Size
+	var maxBytes, downloaded int64
+	if asset.Checksum != "" {
+		maxBytes = asset.Size
 	}
-	var downloaded int64
-
-	buf := make([]byte, 32*1024)
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if asset.Checksum != "" && int64(n) > asset.Size-downloaded {
-				tmpFile.Close()
-				os.Remove(tmpFile.Name())
-				return "", fmt.Errorf("host firmware exceeds expected size %d", asset.Size)
-			}
-			if _, err := tmpFile.Write(buf[:n]); err != nil {
-				tmpFile.Close()
-				os.Remove(tmpFile.Name())
-				return "", fmt.Errorf("writing firmware: %w", err)
-			}
-			downloaded += int64(n)
-			if progressFn != nil {
-				progressFn(downloaded, total)
-			}
+	err = downloadResumable(ctx, asset.DownloadURL, tmpFile, maxBytes, func(offset, total int64) {
+		downloaded = offset
+		if asset.Size > 0 && total <= 0 {
+			total = asset.Size
 		}
-		if readErr == io.EOF {
-			break
+		if progressFn != nil {
+			progressFn(downloaded, total)
 		}
-		if readErr != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
-			return "", fmt.Errorf("reading firmware: %w", readErr)
+	})
+	if err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		if errors.Is(err, errDownloadTooLarge) {
+			return "", fmt.Errorf("host firmware exceeds expected size %d: %w", asset.Size, err)
 		}
+		return "", fmt.Errorf("downloading firmware: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {

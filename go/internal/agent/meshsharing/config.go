@@ -8,11 +8,11 @@ import (
 )
 
 // LoadConfig accepts the existing nan-mesh.json sharing controls. An absent
-// file means disabled; malformed or unknown controls remain explicit errors.
+// file enables participation only. Existing files retain their saved policy.
 func LoadConfig(path string) (Config, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return Config{}, nil
+		return Config{Participate: true}, nil
 	}
 	if err != nil {
 		return Config{}, err

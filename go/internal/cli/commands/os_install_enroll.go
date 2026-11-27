@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
-	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
@@ -45,6 +45,11 @@ var (
 	}
 	confirmContinueUnenrolled = func() (bool, error) {
 		return mapConfirmCancel(tui.Confirm("Continue installing without enrollment?"))
+	}
+	// confirmInstallLogin asks a person whose CLI holds no Wendy Cloud login
+	// whether to log in now, so the install can enroll the device.
+	confirmInstallLogin = func() (bool, error) {
+		return mapConfirmCancel(tui.ConfirmDefaultYes("Log in now and enroll this device?"))
 	}
 	preEnrollDeviceFn = preEnrollDevice
 	preEnrollACMEFn   = preEnrollDeviceACME
@@ -147,7 +152,7 @@ func resolvePreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrol
 		return nil, ackContinueUnenrolled()
 	}
 	if auth == nil {
-		fmt.Println("Skipping enrollment. The device will boot unenrolled; run 'wendy device enroll' after first boot.")
+		fmt.Println(skippingInstallEnrollmentMessage)
 		return nil, nil
 	}
 
@@ -176,6 +181,96 @@ func resolvePreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrol
 	return nil, ackContinueUnenrolled()
 }
 
+// skippingInstallEnrollmentMessage is what an install says when it goes on
+// without enrolling the device by the person's choice.
+const skippingInstallEnrollmentMessage = "Skipping enrollment. The device will boot unenrolled; run 'wendy device enroll' after first boot."
+
+// prepareInstallEnrollmentAuth checks the selected session's certificate when
+// enrollment is chosen, before anything is downloaded, built or written, as
+// 'wendy device enroll' does: a valid certificate may be renewed, and an
+// expired one may be replaced by signing in again. When the person declines
+// to sign in again, the install goes on without enrollment: it returns nil,
+// nil. Any other failure is returned for the caller to report.
+func prepareInstallEnrollmentAuth(ctx context.Context, auth *config.AuthConfig) (*config.AuthConfig, error) {
+	fresh, err := prepareEnrollmentAuth(ctx, auth)
+	if errors.As(err, new(enrollmentSignInDeclinedError)) {
+		fmt.Println(skippingInstallEnrollmentMessage)
+		return nil, nil
+	}
+	return fresh, err
+}
+
+// chooseInstallEnrollment settles whether an install enrolls the device. It
+// returns the config to pick the session from, or nil when the install goes on
+// without enrollment. A person whose CLI holds a login is asked whether to
+// enroll, unless --pre-enroll already said so; one whose CLI holds none is
+// offered the login instead (see loginForInstallEnrollment).
+func chooseInstallEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool) (*config.Config, error) {
+	switch {
+	case opts.mode == preEnrollSkip, opts.mode == preEnrollAuto && !interactive:
+		return nil, nil
+	case len(cfg.Auth) == 0:
+		return loginForInstallEnrollment(ctx, cfg, opts, interactive)
+	case opts.mode == preEnrollAuto:
+		ok, err := confirmPreEnroll()
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			printPreEnrollAnswer(nil)
+			return nil, nil
+		}
+	}
+	return cfg, nil
+}
+
+// loginForInstallEnrollment settles an install on a CLI that holds no Wendy
+// Cloud login. With a terminal it offers the login itself, as 'wendy device
+// enroll' does, before anything is downloaded, built or written, and returns
+// the config holding the new login. Declining returns nil: the install goes on
+// without enrollment and asks nothing more. A login that fails is reported, and
+// the person chooses whether to go on unenrolled.
+//
+// Nothing is asked without a terminal, or with --cloud-grpc, which names a
+// session that a login to the production Cloud would not add. --pre-enroll
+// then goes on to report the missing login, and an install that did not ask
+// for enrollment skips it, as before.
+func loginForInstallEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool) (*config.Config, error) {
+	if !interactive || opts.cloudGRPC != "" {
+		if opts.mode == preEnrollForced {
+			return cfg, nil
+		}
+		return nil, nil
+	}
+	fmt.Println("You are not logged in to Wendy Cloud, so the install cannot enroll this device.")
+	ok, err := confirmInstallLogin()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		fmt.Println(skippingInstallEnrollmentMessage)
+		return nil, nil
+	}
+	err = relogin(ctx, nil)
+	if ctx.Err() != nil {
+		// Ctrl+C during the login stops the install, not just the enrollment.
+		return nil, ErrUserCancelled
+	}
+	if err != nil {
+		fmt.Printf("Login failed: %v\n", err)
+		return nil, ackContinueUnenrolled()
+	}
+	fresh, err := config.Load()
+	if err == nil && len(fresh.Auth) == 0 {
+		err = errors.New("the login did not save a session")
+	}
+	if err != nil {
+		fmt.Printf("Cannot pre-enroll: %v\n", err)
+		return nil, ackContinueUnenrolled()
+	}
+	return fresh, nil
+}
+
 // ackContinueUnenrolled pauses for explicit confirmation before continuing an
 // install whose enrollment step failed. Returns ErrUserCancelled when the
 // user declines, nil when they accept.
@@ -201,45 +296,29 @@ func ackContinueUnenrolled() error {
 // settled before the mint and written back, so the device is given the name
 // Cloud reserved.
 func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmeEnrollmentBake, error) {
-	plan, err := planACMEPreEnrollment(cfg, opts, interactive, deviceName)
+	plan, err := planACMEPreEnrollment(ctx, cfg, opts, interactive)
 	if err != nil || plan == nil {
 		return nil, err
 	}
+	name, err := resolveInstallDeviceName(ctx, *deviceName, plan.auth, true)
+	if err != nil {
+		return nil, err
+	}
+	*deviceName = name
 	return plan.mint(ctx, deviceName)
 }
 
-// nameTakenError is the short refusal of a taken name without a terminal to
-// ask on.
-type nameTakenError string
-
-func (e nameTakenError) Error() string { return string(e) }
-
-// retryTakenDeviceName calls enroll with *name until it succeeds or fails for
-// another reason. When Cloud finds the name taken it says so and asks for
-// another one, which it writes back to *name; without a terminal it ends with
-// the short message and the flag to pass. Stopping at the prompt returns
-// tui.ErrCancelled.
-func retryTakenDeviceName(name *string, interactive bool, flag string, enroll func(string) error) error {
-	err := enroll(*name)
-	for errors.Is(err, cloudenroll.ErrDeviceNameTaken) {
-		if !interactive {
-			return nameTakenError(deviceNameTakenMessage(*name) + " Pass a different name with " + flag + ".")
+// printPreEnrollAnswer leaves the answered pre-enroll question on screen; a nil
+// auth means the person said no.
+func printPreEnrollAnswer(auth *config.AuthConfig) {
+	answer := "no"
+	if auth != nil {
+		answer = "yes"
+		if org := strings.TrimSpace(tui.StripControl(cachedCloudOrganizationName(auth))); org != "" {
+			answer += " (" + org + ")"
 		}
-		fmt.Println(deviceNameTakenMessage(*name))
-		next, perr := promptDeviceName("Another device name",
-			fmt.Sprintf("(a-z, 0-9 and hyphens, starts with a letter, 3–%d chars; Esc to stop)", maxDeviceNameLen), validateDeviceName)
-		if perr != nil {
-			return perr
-		}
-		*name = next
-		err = enroll(*name)
 	}
-	return err
-}
-
-// deviceNameTakenMessage says name is taken, in the person's terms.
-func deviceNameTakenMessage(name string) string {
-	return fmt.Sprintf("The name %s is already used by another device in this organization. Names are unique per organization, regardless of upper and lower case. Choose another name.", name)
+	printAnswer(alsoOnPromptTerminal(os.Stdout), "Pre-enroll with Wendy Cloud", answer, false)
 }
 
 // acmePreEnrollPlan is a settled choice to pre-enroll with auth; nothing has
@@ -249,27 +328,25 @@ type acmePreEnrollPlan struct {
 	interactive bool
 }
 
-// planACMEPreEnrollment asks everything resolveACMEPreEnrollment asks and
-// settles a blank *deviceName, reading only the local config: Cloud is not
-// contacted. A nil plan means nothing will be baked.
-func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmePreEnrollPlan, error) {
-	switch opts.mode {
-	case preEnrollSkip:
-		return nil, nil
-	case preEnrollAuto:
-		if !interactive || len(cfg.Auth) == 0 {
-			return nil, nil
-		}
-		ok, err := confirmPreEnroll()
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, nil
-		}
+// planACMEPreEnrollment asks whether to pre-enroll and with which session.
+// Before the image is written, the person may log in or replace an expired
+// certificate. Nothing is reserved in Cloud; a nil plan bakes nothing.
+func planACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool) (*acmePreEnrollPlan, error) {
+	cfg, err := chooseInstallEnrollment(ctx, cfg, opts, interactive)
+	if err != nil || cfg == nil {
+		return nil, err
 	}
 
 	auth, err := selectEnrollmentAuth(cfg, opts.cloudGRPC, interactive)
+	if err == nil && auth != nil {
+		auth, err = prepareInstallEnrollmentAuth(ctx, auth)
+		if err == nil && auth == nil {
+			return nil, nil
+		}
+	}
+	if err == nil && auth != nil && opts.mode == preEnrollAuto {
+		printPreEnrollAnswer(auth)
+	}
 	if err != nil {
 		if errors.Is(err, ErrUserCancelled) {
 			return nil, err
@@ -281,30 +358,8 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 		return nil, ackContinueUnenrolled()
 	}
 	if auth == nil {
-		fmt.Println("Skipping enrollment. The device will boot unenrolled; run 'wendy device enroll' after first boot.")
+		fmt.Println(skippingInstallEnrollmentMessage)
 		return nil, nil
-	}
-
-	// Cloud reserves the device under its name and refuses a blank one
-	// (WDY-3016), so a blank name cannot wait for the device to name itself on
-	// first boot. The caller writes the name settled here to the config
-	// partition, so the device's hostname and its Cloud row agree.
-	if *deviceName == "" {
-		if !interactive {
-			return nil, fmt.Errorf("--pre-enroll requires --device-name: Wendy Cloud registers the device under that name")
-		}
-		name, err := promptDeviceName(
-			"Device name",
-			fmt.Sprintf("(required to pre-enroll; a-z, 0-9 and hyphens, starts with a letter, 3–%d chars)", maxDeviceNameLen),
-			validateDeviceName,
-		)
-		if err != nil {
-			if errors.Is(err, tui.ErrCancelled) {
-				return nil, ErrUserCancelled
-			}
-			return nil, fmt.Errorf("device-name prompt: %w", err)
-		}
-		*deviceName = name
 	}
 	return &acmePreEnrollPlan{auth: auth, interactive: interactive}, nil
 }
@@ -314,8 +369,10 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 // continue unenrolled, which returns nil. A name another device holds is asked
 // again, and the new name is written back to *deviceName.
 func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acmeEnrollmentBake, error) {
+	asked := *deviceName
 	var state *acmeEnrollmentBake
-	enrollErr := retryTakenDeviceName(deviceName, p.interactive, "--device-name", func(name string) (err error) {
+	retry := nameRetry{interactive: p.interactive, noTTYHint: noTTYHintInstall, validate: validateDeviceName, maxLen: maxDeviceNameLen, org: cachedCloudOrganizationName(p.auth)}
+	enrollErr := retryTakenDeviceName(deviceName, retry, func(name string) (err error) {
 		state, err = preEnrollACMEFn(ctx, p.auth, name)
 		return err
 	})
@@ -326,6 +383,9 @@ func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acme
 		return nil, enrollErr
 	}
 	if enrollErr == nil {
+		if *deviceName != asked {
+			printNameAnswer(*deviceName)
+		}
 		installDone(os.Stdout, "Cloud enrollment reserved")
 		return state, nil
 	}

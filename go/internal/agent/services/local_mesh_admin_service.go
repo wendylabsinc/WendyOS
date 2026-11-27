@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
@@ -17,6 +18,8 @@ import (
 )
 
 type LocalMeshRuntimeStatus struct {
+	CarrierConfig      string
+	Carriers           map[string]string
 	Available          bool
 	State, Detail      string
 	AuthenticatedPeers int
@@ -96,19 +99,23 @@ func (s *LocalMeshAdminService) enrolledIdentity() (meshid.Tenant, meshid.Device
 	return tenant, device, nil
 }
 
-func (s *LocalMeshAdminService) read(device meshid.Device) (meshsharing.Config, localmesh.TCPConfig, error) {
+func (s *LocalMeshAdminService) read(device meshid.Device) (meshsharing.Config, localmesh.TCPConfig, string, error) {
 	sharing, err := meshsharing.LoadConfig(s.sharingPath)
 	if err != nil {
-		return meshsharing.Config{}, localmesh.TCPConfig{}, err
+		return meshsharing.Config{}, localmesh.TCPConfig{}, "", err
 	}
-	carriers, err := localmesh.LoadTCPConfig(s.carrierPath, device)
+	snapshot, err := localmesh.ReadTCPConfigSnapshot(s.carrierPath)
 	if err != nil {
-		return meshsharing.Config{}, localmesh.TCPConfig{}, err
+		return meshsharing.Config{}, localmesh.TCPConfig{}, "", err
+	}
+	carriers, err := localmesh.ParseTCPConfig(snapshot, device)
+	if err != nil {
+		return meshsharing.Config{}, localmesh.TCPConfig{}, "", err
 	}
 	if carriers == nil {
-		return sharing, localmesh.TCPConfig{}, nil
+		return sharing, localmesh.TCPConfig{}, string(snapshot), nil
 	}
-	return sharing, *carriers, nil
+	return sharing, *carriers, string(snapshot), nil
 }
 
 // savedIntent reports the saved configuration with no runtime observation.
@@ -117,6 +124,10 @@ func savedIntent(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.L
 	state, detail := "disabled", "Wendy net is disabled."
 	if sharing.Participate {
 		state, detail = "pending-runtime", "Configuration is saved; awaiting runtime state."
+		if !carriers.Ethernet && !carriers.InfrastructureWiFi && !carriers.BLE && !carriers.NAN &&
+			carriers.Listen == "" && carriers.TLSListen == "" {
+			state, detail = "waiting", "All carriers are disabled."
+		}
 	}
 	return &pb.LocalMeshStatus{Configured: &pb.LocalMeshConfiguration{
 		Participate: sharing.Participate, Roam: sharing.Roam, ShareUplink: sharing.ShareUplink,
@@ -125,20 +136,62 @@ func savedIntent(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.L
 	}, State: state, Detail: detail}
 }
 
-func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
+// describeCarriers combines saved choices with the last observed state of
+// enabled carriers. Disabled settings take precedence over a draining runtime.
+func describeCarriers(out *pb.LocalMeshStatus, carriers localmesh.TCPConfig, observed map[string]string) *pb.LocalMeshStatus {
+	var details []string
+	for _, carrier := range []struct {
+		id, label  string
+		configured bool
+	}{
+		{localmesh.CarrierEthernet, "Ethernet", carriers.Ethernet},
+		{localmesh.CarrierInfrastructureWiFi, "Infrastructure Wi-Fi", carriers.InfrastructureWiFi},
+		{"ble", "Bluetooth", carriers.BLE},
+		{"nan", "Wi-Fi Aware", carriers.NAN},
+		{"tcp", "TCP", carriers.Listen != "" || len(carriers.Peers) != 0},
+		{"tls", "TLS", carriers.TLSListen != ""},
+	} {
+		if !carrier.configured && (carrier.id == "tcp" || carrier.id == "tls") {
+			continue
+		}
+		state := "disabled"
+		if out.GetConfigured().GetParticipate() && carrier.configured {
+			state = observed[carrier.id]
+			if state == "" {
+				state = "starting"
+			}
+		}
+		details = append(details, carrier.label+": "+state)
+	}
+	if state := observed["local-net"]; state != "" {
+		details = append(details, "Local net: "+state)
+	}
+	detail := "Carriers: " + strings.Join(details, "; ") + "."
+	if out.Detail != "" {
+		detail += " " + out.Detail
+	}
+	out.Detail = detail
+	return out
+}
+
+func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig, snapshot string) *pb.LocalMeshStatus {
 	out := savedIntent(sharing, carriers)
+	var observed map[string]string
 	if s.runtime != nil {
 		runtime := s.runtime()
-		// The runtime polls saved configuration. Its previous disabled state
-		// does not describe a newly saved opt-in, even on the next status RPC.
-		if sharing.Participate && runtime.State == "disabled" {
-			return out
+		observed = runtime.Carriers
+		// Ignore observations from the old carrier or participation policy
+		// until the supervisor has applied the saved configuration.
+		if (runtime.CarrierConfig != "" && runtime.CarrierConfig != snapshot) ||
+			(sharing.Participate && runtime.State == "disabled") ||
+			(!sharing.Participate && len(observed) != 0) {
+			return describeCarriers(out, carriers, nil)
 		}
 		out.RuntimeAvailable = runtime.Available
 		if runtime.State != "" {
 			out.State = runtime.State
 		}
-		if runtime.Detail != "" {
+		if runtime.State != "" || runtime.Detail != "" {
 			out.Detail = runtime.Detail
 		}
 		if runtime.AuthenticatedPeers > 0 {
@@ -146,7 +199,7 @@ func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers lo
 		}
 		out.GatewayPrincipal = runtime.GatewayPrincipal
 	}
-	return out
+	return describeCarriers(out, carriers, observed)
 }
 
 func (s *LocalMeshAdminService) GetLocalMeshStatus(ctx context.Context, _ *pb.GetLocalMeshStatusRequest) (*pb.LocalMeshStatus, error) {
@@ -156,11 +209,11 @@ func (s *LocalMeshAdminService) GetLocalMeshStatus(ctx context.Context, _ *pb.Ge
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sharing, carriers, err := s.read(device)
+	sharing, carriers, snapshot, err := s.read(device)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "reading wendy net configuration: %v", err)
 	}
-	return s.response(sharing, carriers), nil
+	return s.response(sharing, carriers, snapshot), nil
 }
 
 func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.ConfigureLocalMeshRequest) (*pb.LocalMeshStatus, error) {
@@ -173,11 +226,11 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sharing, carriers, err := s.read(device)
+	sharing, carriers, _, err := s.read(device)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "reading wendy net configuration: %v", err)
 	}
-	previous := sharing
+	previous, previousCarriers := sharing, carriers
 	shareChanged := req.Participate != nil || req.Roam != nil || req.ShareUplink != nil
 	carrierChanged := req.Nan != nil || req.Ble != nil || req.Ethernet != nil || req.InfrastructureWifi != nil
 	if req.Participate != nil {
@@ -204,15 +257,23 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	if err = sharing.Validate(); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	// The two independent documents are each fsync-and-rename atomic. Save
-	// sharing first so radio enablement cannot run before its policy exists.
-	// Roll it back if writing the carrier document fails.
+	// When joining from disabled, install the requested carriers before
+	// publishing participation. When leaving, withdraw participation first.
+	carriersFirst := carrierChanged && !previous.Participate && sharing.Participate
+	if carriersFirst {
+		if err = meshsharing.SaveCarrierConfig(s.carrierPath, device, carriers); err != nil {
+			return nil, status.Errorf(codes.Internal, "saving wendy net carriers: %v", err)
+		}
+	}
 	if shareChanged {
 		if err = meshsharing.SaveConfig(s.sharingPath, sharing); err != nil {
+			if carriersFirst {
+				err = errors.Join(err, meshsharing.SaveCarrierConfig(s.carrierPath, device, previousCarriers))
+			}
 			return nil, status.Errorf(codes.Internal, "saving wendy net sharing policy: %v", err)
 		}
 	}
-	if carrierChanged {
+	if carrierChanged && !carriersFirst {
 		if err = meshsharing.SaveCarrierConfig(s.carrierPath, device, carriers); err != nil {
 			if shareChanged {
 				err = errors.Join(err, meshsharing.SaveConfig(s.sharingPath, previous))
@@ -230,5 +291,5 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	// The runtime polls the saved documents. Even an unchanged request can be
 	// a retry before it applies the previous change. Always acknowledge saved
 	// intent; GetLocalMeshStatus provides runtime observations.
-	return savedIntent(sharing, carriers), nil
+	return describeCarriers(savedIntent(sharing, carriers), carriers, nil), nil
 }

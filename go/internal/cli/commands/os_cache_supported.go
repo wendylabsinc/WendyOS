@@ -31,8 +31,8 @@ type osCacheEntry struct {
 }
 
 // listOSCacheEntries lists cached images and extracted Jetson flashpacks, the
-// latter sized as the sum of their files. Flashpack checksum stamps are
-// bookkeeping, not downloads, so they are left out.
+// latter sized as the sum of their files. The checksum stamps of flashpacks
+// and images are bookkeeping, not downloads, so they are left out.
 func listOSCacheEntries(dir string) ([]osCacheEntry, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -48,7 +48,7 @@ func listOSCacheEntries(dir string) ([]osCacheEntry, error) {
 			if err != nil {
 				return nil, fmt.Errorf("sizing cached flashpack %s: %w", name, err)
 			}
-		case entry.IsDir(), strings.HasSuffix(name, ".flashpack.sha256"):
+		case entry.IsDir(), strings.HasSuffix(name, ".sha256"):
 			continue
 		default:
 			info, err := entry.Info()

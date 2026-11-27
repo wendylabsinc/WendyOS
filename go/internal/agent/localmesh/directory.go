@@ -644,6 +644,23 @@ func (d *Directory) hasCurrentOwner(owner string, now time.Time) bool {
 	return ok
 }
 
+// manifestRecord borrows a retained, unexpired wire body. The caller still
+// checks the exact record and its current signing identity before exporting it.
+func (d *Directory) manifestRecord(owner string, now time.Time) (SignedManifest, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	e, ok := d.entries[owner]
+	if !ok {
+		return SignedManifest{}, false
+	}
+	instant := d.leaseNow(now)
+	if !e.activeUntil.After(instant) {
+		d.expireLocked(now)
+		return SignedManifest{}, false
+	}
+	return e.wire, e.deadline().After(instant)
+}
+
 func manifestHash(body []byte) string {
 	h := sha256.Sum256(body)
 	return hex.EncodeToString(h[:])

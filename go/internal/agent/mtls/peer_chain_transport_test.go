@@ -40,7 +40,15 @@ func TestDirectMLDSAPolicyOverTLS(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					edits := []func(*tbsCertificate){func(tbs *tbsCertificate) { tbs.Signature = algID{Algorithm: oidMLDSA65} }}
+					// A P-256 device leaf under an ML-DSA CA: pki-core's Tier A/B fallback.
+					san, err := asn1.Marshal([]asn1.RawValue{{Class: asn1.ClassContextSpecific, Tag: 6, Bytes: []byte(testTenant + "device/endpoint")}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					edits := []func(*tbsCertificate){func(tbs *tbsCertificate) {
+						tbs.Signature = algID{Algorithm: oidMLDSA65}
+						tbs.Extensions = append(tbs.Extensions, pkix.Extension{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san})
+					}}
 					if invalid && policy == "leaf-critical" {
 						edits = append(edits, critical)
 					}
@@ -87,7 +95,7 @@ func TestDirectMLDSAPolicyOverTLS(t *testing.T) {
 					rootPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: validRoot.Raw}))
 				}
 				verifyClient := buildVerifyPeerCertificate(x509.NewCertPool(), []*x509.Certificate{serverRoot}, nil, time.Time{})
-				verifyServer, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ChainPEM: rootPEM, ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}})
+				verifyServer, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ChainPEM: rootPEM, ExpectedIdentity: &certs.WendyIdentity{TenantUUID: "11111111-1111-4111-8111-111111111111", Principal: testTenant + "device/endpoint", EntityType: certs.EntityAsset, EntityID: "endpoint"}})
 				if err != nil {
 					t.Fatal(err)
 				}

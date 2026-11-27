@@ -4,6 +4,19 @@ public struct WendyE2ERecorder: Sendable {
     public let recordPath: String
     public let testDirectoryPath: String
 
+    public var goCoverageDirectoryPath: String? {
+        WendyE2EEnvironment.coverage
+            ? URL(fileURLWithPath: self.testDirectoryPath).appendingPathComponent("coverage/go")
+                .path
+            : nil
+    }
+
+    var testIdentifier: String { self.source.suite + "/" + self.source.testName + "()" }
+
+    func writeMetadata() throws {
+        try self.writeTestMetadata(nextTo: URL(fileURLWithPath: self.recordPath))
+    }
+
     public init(
         filePath: String,
         function: String,

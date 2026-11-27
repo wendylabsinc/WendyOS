@@ -4,6 +4,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"debug/elf"
 	"fmt"
 	"os"
@@ -37,7 +38,8 @@ func seedAgent(seed agentSeed) (binary []byte, version string, err error) {
 	if arch == "" {
 		arch = "arm64"
 	}
-	binary, version, _, err = seedArtifactFn("linux", arch, seed.nightly)
+	// os install passes no context this far, so Ctrl+C cannot stop this download.
+	binary, version, _, err = seedArtifactFn(context.Background(), "linux", arch, seed.nightly)
 	return binary, version, err
 }
 
