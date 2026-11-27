@@ -30,10 +30,10 @@ func (s *LocalMeshAdminService) GetLocalMeshTopology(ctx context.Context, reques
 	}
 	s.mu.Lock()
 	source := s.topology
-	sharing, carriers, err := s.read(device)
+	sharing, carriers, snapshotConfig, err := s.read(device)
 	var runtimeStatus *pb.LocalMeshStatus
 	if err == nil {
-		runtimeStatus = s.response(sharing, carriers)
+		runtimeStatus = s.response(sharing, carriers, snapshotConfig)
 	}
 	s.mu.Unlock()
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/prop"
 	"github.com/wendylabsinc/wendy/go/internal/agent/btradio"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -162,7 +163,7 @@ func selectAdapter(ctx context.Context, bus *dbus.Conn, requested string) (dbus.
 			return dbus.ObjectPath(path), nil
 		}
 	}
-	return "", errors.New("no BlueZ adapter supports both LE advertising and discovery")
+	return "", fmt.Errorf("%w: no BlueZ adapter supports both LE advertising and discovery", localmesh.ErrNoCarrierHardware)
 }
 
 func adapterL2Address(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath, psm uint16) (l2addr, error) {

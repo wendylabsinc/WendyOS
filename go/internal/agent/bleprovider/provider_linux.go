@@ -294,13 +294,13 @@ func Run(ctx context.Context, cfg Config) error {
 	payload, _ := adv.MarshalBinary()
 	bus, closeTransport, err := connectProviderBus(runCtx)
 	if err != nil {
-		return fmt.Errorf("BlueZ system bus: %w", err)
+		return bluezStartupError(fmt.Errorf("BlueZ system bus: %w", err), "/sys/class/bluetooth")
 	}
 	stopBusGuard := guardProviderBusShutdown(runCtx, 3*time.Second, closeTransport)
 	defer func() { _ = closeTransport(); _ = bus.Close(); stopBusGuard() }()
 	owner, err := bluezOwner(runCtx, bus)
 	if err != nil {
-		return err
+		return bluezStartupError(err, "/sys/class/bluetooth")
 	}
 	adapter, err := selectAdapter(runCtx, bus, cfg.AdapterPath)
 	if err != nil {

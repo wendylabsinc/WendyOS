@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 )
 
 func TestAbsentNANStatusRequiresExactHelperResponse(t *testing.T) {
@@ -160,5 +162,25 @@ func TestControlSocketIdentityChangesAcrossRecreate(t *testing.T) {
 	}
 	if _, err := controlSocketIdentity(regular); err == nil {
 		t.Fatal("regular file accepted as NAN control socket")
+	}
+}
+
+func TestNANStartupDistinguishesMissingHardwareFromHelperFault(t *testing.T) {
+	const missing = "No NAN-capable parent interface is available"
+	for _, tc := range []struct {
+		output      string
+		exitCode    int
+		wantMissing bool
+	}{
+		{missing, 1, true},
+		{missing, 2, false},
+		{"Cannot query NAN capabilities for wlan0", 1, false},
+		{"global control socket missing", 1, false},
+	} {
+		cmd := exec.Command("sh", "-c", "printf '%s\n' \"$1\" >&2; exit \"$2\"", "sh", tc.output, strconv.Itoa(tc.exitCode))
+		out, err := cmd.CombinedOutput()
+		if got := nanStartupError(string(out), err); errors.Is(got, localmesh.ErrNoCarrierHardware) != tc.wantMissing {
+			t.Fatalf("helper output %q (exit %d): %v", out, tc.exitCode, got)
+		}
 	}
 }

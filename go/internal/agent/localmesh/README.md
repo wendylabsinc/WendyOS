@@ -1,21 +1,24 @@
 Mesh control messages and signed artifacts use the binary CBOR protocol
 documented in [netwire](../netwire/README.md). Certificates travel as raw DER.
-There is no old-wire compatibility path. JSON examples below are host configuration.
+Host configuration uses JSON.
 
 # Wendy net peer transport and routing
 
-This stage adds a Linux router using enrolled Wendy device certificates,
+The Linux router uses enrolled Wendy device certificates,
 authenticated neighbour links, a Babel route engine and Wendy-owned TUNs.
 Device presence travels over each neighbour's existing control channel.
 It does not open a catalogue connection to every remote device.
 
 ## Explicit links and activation
 
-`local-mesh.json` in the agent configuration directory (`/etc/wendy-agent` by
-default) enables the router. A missing file leaves it disabled. On Linux, the
-file and its directory must belong to the agent's effective user (root for the
-system service), and neither may be writable by group or others. The file must
-be regular; symlinks and special files are refused. Reads are bounded to 64 KiB.
+Enrolled Linux agents use Ethernet, infrastructure Wi-Fi, Bluetooth, and
+Wi-Fi Aware by default. Saved carrier choices in `local-mesh.json` take
+precedence. The explicit all-carriers-off marker `local-mesh.json.disabled`
+applies when the settings file is absent. In the agent configuration directory
+(`/etc/wendy-agent` by default), both files must be regular and belong to the
+agent's effective user (root for the system service). The directory must have
+the same owner. Group and other write permissions are forbidden, and reads are
+bounded to 64 KiB.
 
 For a chosen test topology, configure both ends of each edge:
 
