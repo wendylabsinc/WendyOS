@@ -1,29 +1,21 @@
 name: Swift E2E Runtime Comparison
 
-# Disposable diagnostic branch only. Product source is identical to 38dce1f34.
+# Disposable same-VM replacement for the confounded first pair.
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: e2e-runtime-comparison-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
   compare:
     if: github.ref == 'refs/heads/kb.e2e.17-runtime-20261125'
-    name: 'Ubuntu 24 coverage=${{ matrix.coverage }}'
+    name: 'Ubuntu 24 same-VM cold pair: off then on'
     permissions:
       contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        coverage: [false, true]
     env:
       WENDY_E2E_PARALLEL: 'false'
     steps:
@@ -33,87 +25,220 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Record runner and establish cold caches
+      - name: Common setup and fixed toolchain
         shell: bash
         env:
-          COVERAGE: ${{ matrix.coverage }}
-          GOCACHE: ${{ runner.temp }}/e2e-runtime-cache/go-build
-          GOMODCACHE: ${{ runner.temp }}/e2e-runtime-cache/go-mod
+          GOCACHE: ${{ runner.temp }}/runtime-bootstrap/go-build
+          GOMODCACHE: ${{ runner.temp }}/runtime-bootstrap/go-mod
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/runtime-comparison"
-          git diff --exit-code 38dce1f3422acca274e5f463dbf2d654bdda586d HEAD -- . \
-            ':!.github/workflows/swift-e2e-tests.yml' ':!.github/actions/swift-e2e-run/action.yml'
-          jq -n --arg coverage "$COVERAGE" --arg sha "$GITHUB_SHA" \
-            --arg base 38dce1f3422acca274e5f463dbf2d654bdda586d \
-            --arg image_os "${ImageOS:-unknown}" --arg image_version "${ImageVersion:-unknown}" \
-            --arg runner_os "$RUNNER_OS" --arg runner_arch "$RUNNER_ARCH" \
-            --arg runner_name "$RUNNER_NAME" --argjson cpus "$(getconf _NPROCESSORS_ONLN)" \
-            '{coverage:($coverage == "true"), revision:$sha, productBase:$base,
-              imageOS:$image_os, imageVersion:$image_version, runnerOS:$runner_os,
-              runnerArch:$runner_arch, runnerName:$runner_name, logicalCPUs:$cpus,
-              dependencyCacheRestore:false, dependencyCacheSave:false,
-              cachePolicy:"one cold-run pair; fresh build/dependency caches before setup"}' \
-            > "$RUNNER_TEMP/runtime-comparison/runner.json"
-          lscpu -J > "$RUNNER_TEMP/runtime-comparison/cpu.json"
-          free -b > "$RUNNER_TEMP/runtime-comparison/memory.txt"
-          df -B1 > "$RUNNER_TEMP/runtime-comparison/disk.txt"
-          if [[ -f /sys/fs/cgroup/cpu.max ]]; then
-            cat /sys/fs/cgroup/cpu.max > "$RUNNER_TEMP/runtime-comparison/cpu-quota.txt"
-          fi
-          # Only this fresh disposable hosted VM is affected. No cache action restores/saves.
-          rm -rf -- swift/WendyE2ETests/.build "$GOCACHE" "$GOMODCACHE" \
-            "$HOME/.cache/org.swift.swiftpm" "$HOME/Library/Caches/org.swift.swiftpm"
-          mkdir -p "$GOCACHE" "$GOMODCACHE"
-          [[ -z "$(find "$GOCACHE" "$GOMODCACHE" -mindepth 1 -print -quit)" ]]
-          [[ ! -e swift/WendyE2ETests/.build ]]
-          printf 'GOCACHE=%s\nGOMODCACHE=%s\n' "$GOCACHE" "$GOMODCACHE" >> "$GITHUB_ENV"
-          printf 'initialGoCacheEntries=0\ninitialSwiftBuild=absent\ncacheAction=skipped\n' > "$RUNNER_TEMP/runtime-comparison/cache-policy.txt"
-          printf 'setup\tstart\t%s\n' "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"
-
-      - name: Install libusb
-        shell: bash
-        run: |
+          mkdir -p "$RUNNER_TEMP/runtime-evidence/common"
+          printf 'setup\tstart\t%s\n' "$(date --iso-8601=ns)" > "$RUNNER_TEMP/runtime-evidence/common/timing.tsv"
           sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update --error-on=any
           sudo apt-get install -y pkg-config libusb-1.0-0-dev
+          bash swift/Scripts/E2ESetup.sh
+          if [[ -f "$HOME/.local/share/swiftly/env.sh" ]]; then
+            source "$HOME/.local/share/swiftly/env.sh"
+          fi
+          for dir in "$HOME/.swiftly/bin" "$HOME/.local/share/swiftly/bin"; do
+            [[ ! -d "$dir" ]] || printf '%s\n' "$dir" >> "$GITHUB_PATH"
+          done
+          # Install the selected Go SDK once, outside caches cleared between arms.
+          go version
+          go_root="$(go env GOROOT)"
+          mkdir -p "$RUNNER_TEMP/runtime-toolchain"
+          cp -a "$go_root" "$RUNNER_TEMP/runtime-toolchain/go"
+          printf '%s\n' "$RUNNER_TEMP/runtime-toolchain/go/bin" >> "$GITHUB_PATH"
+          printf 'GOROOT=%s\nGOTOOLCHAIN=local\n' "$RUNNER_TEMP/runtime-toolchain/go" >> "$GITHUB_ENV"
+          chmod -R u+w "$RUNNER_TEMP/runtime-bootstrap"
+          rm -rf -- "$RUNNER_TEMP/runtime-bootstrap"
+          jq -n --arg sha "$GITHUB_SHA" --arg image "${ImageVersion:-unknown}" \
+            --arg runner "$RUNNER_NAME" '{revision:$sha,imageVersion:$image,runner:$runner,order:[false,true]}' \
+            > "$RUNNER_TEMP/runtime-evidence/common/runner.json"
+          lscpu -J > "$RUNNER_TEMP/runtime-evidence/common/cpu.json"
+          free -b > "$RUNNER_TEMP/runtime-evidence/common/memory.txt"
+          printf 'setup\tend\t%s\t0\n' "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-evidence/common/timing.tsv"
 
-      - name: Run complete Swift E2E arm
-        id: e2e
+      - name: Reset cold state before coverage false
+        id: prepare_false
+        shell: bash
+        env:
+          COVERAGE: 'false'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/runtime-comparison"
+          # Refuse to run with a surviving Agent or occupied local target port.
+          if pgrep -x wendy-agent > "$RUNNER_TEMP/runtime-comparison/agent-processes.txt"; then
+            echo 'ERROR: managed Agent still running' >&2
+            exit 1
+          else
+            [[ "$?" == 1 ]]
+          fi
+          listeners="$(ss -H -ltn 'sport = :50051')"
+          printf '%s\n' "$listeners" > "$RUNNER_TEMP/runtime-comparison/port-50051.txt"
+          [[ -z "$listeners" ]]
+          if [[ "$COVERAGE" == true ]]; then
+            pid_file="$RUNNER_TEMP/wendy/swift-e2e-runtime.gh${GITHUB_RUN_ID}.coverage-false.0001/managed-agent/pid"
+            pid="$(cat "$pid_file")"
+            [[ "$pid" =~ ^[0-9]+$ ]]
+            if kill -0 "$pid" 2>/dev/null; then echo 'ERROR: first Agent PID still alive' >&2; exit 1; fi
+            printf 'firstAgentPID=%s\nstopped=true\nportReleased=true\n' "$pid" > "$RUNNER_TEMP/runtime-comparison/first-agent-stopped.txt"
+          fi
+          git diff --exit-code
+          git diff --exit-code 38dce1f3422acca274e5f463dbf2d654bdda586d HEAD -- . \
+            ':!.github/workflows/swift-e2e-tests.yml' ':!.github/actions/swift-e2e-run/action.yml'
+          printf 'reset\tstart\t%s\n' "$(date --iso-8601=ns)" > "$RUNNER_TEMP/runtime-comparison/timing.tsv"
+          # Remove only owned reusable outputs/caches; retain raw evidence and SDK installation.
+          for path in go/bin swift/Build swift/WendyE2ETests/.build \
+            "$RUNNER_TEMP/e2e-runtime-cache" "$HOME/.cache/org.swift.swiftpm" \
+            "$HOME/Library/Caches/org.swift.swiftpm" "$HOME/.swiftpm/cache"; do
+            if [[ -e "$path" ]]; then chmod -R u+w "$path"; rm -rf -- "$path"; fi
+          done
+          export GOCACHE="$RUNNER_TEMP/e2e-runtime-cache/coverage-$COVERAGE/go-build"
+          export GOMODCACHE="$RUNNER_TEMP/e2e-runtime-cache/coverage-$COVERAGE/go-mod"
+          mkdir -p "$GOCACHE" "$GOMODCACHE"
+          [[ -z "$(find "$GOCACHE" "$GOMODCACHE" -mindepth 1 -print -quit)" ]]
+          [[ ! -e swift/WendyE2ETests/.build && ! -e go/bin && ! -e swift/Build ]]
+          printf 'GOCACHE=%s\nGOMODCACHE=%s\n' "$GOCACHE" "$GOMODCACHE" >> "$GITHUB_ENV"
+          printf 'initialGoCacheEntries=0\ninitialSwiftBuild=absent\ninitialGoBin=absent\ninitialSwiftBuildOutputs=absent\ncacheAction=skipped\n' > "$RUNNER_TEMP/runtime-comparison/cache-policy.txt"
+          { swift --version; go version; git --version; clang --version; pkg-config --modversion libusb-1.0;
+            sha256sum "$(command -v swift)" "$(command -v go)"; } > "$RUNNER_TEMP/runtime-comparison/tool-identity.txt"
+          git rev-parse HEAD > "$RUNNER_TEMP/runtime-comparison/source-revision.txt"
+          lscpu -J > "$RUNNER_TEMP/runtime-comparison/cpu.json"
+          free -b > "$RUNNER_TEMP/runtime-comparison/memory.txt"
+          if [[ "$COVERAGE" == true ]]; then
+            cmp "$RUNNER_TEMP/runtime-evidence/false/tool-identity.txt" "$RUNNER_TEMP/runtime-comparison/tool-identity.txt"
+            cmp "$RUNNER_TEMP/runtime-evidence/false/source-revision.txt" "$RUNNER_TEMP/runtime-comparison/source-revision.txt"
+          fi
+          printf 'reset\tend\t%s\t0\n' "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"
+
+      - name: Run complete Swift E2E coverage false
+        id: arm_false
+        if: steps.prepare_false.outcome == 'success'
         continue-on-error: true
         uses: ./.github/actions/swift-e2e-run
         with:
-          coverage: ${{ matrix.coverage }}
+          coverage: 'false'
           tests: ''
           workflow_id: swift-e2e-runtime
-          target_id: coverage-${{ matrix.coverage }}
+          target_id: coverage-false
           runner_id: ubuntu-24-04
           cli_os: linux
           device_address: 127.0.0.1:50051
           agent_os: linux
           transport: local
-          setup: true
+          setup: false
           managed_agent: true
 
-      - name: Record arm result
+      - name: Retain coverage false measurements
         if: always()
         shell: bash
         env:
-          ARM_OUTCOME: ${{ steps.e2e.outcome }}
+          ARM_OUTCOME: ${{ steps.arm_false.outcome }}
         run: |
+          mkdir -p "$RUNNER_TEMP/runtime-evidence/false"
+          if [[ -d "$RUNNER_TEMP/runtime-comparison" ]]; then
+            cp -a "$RUNNER_TEMP/runtime-comparison/." "$RUNNER_TEMP/runtime-evidence/false/"
+            rm -rf -- "$RUNNER_TEMP/runtime-comparison"
+          fi
+          printf '%s\n' "$ARM_OUTCOME" > "$RUNNER_TEMP/runtime-evidence/false/outcome.txt"
+
+      - name: Reset cold state before coverage true
+        id: prepare_true
+        if: steps.arm_false.outcome == 'success'
+        shell: bash
+        env:
+          COVERAGE: 'true'
+        run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/runtime-comparison"
-          printf '%s\n' "$ARM_OUTCOME" > "$RUNNER_TEMP/runtime-comparison/outcome.txt"
+          # Refuse to run with a surviving Agent or occupied local target port.
+          if pgrep -x wendy-agent > "$RUNNER_TEMP/runtime-comparison/agent-processes.txt"; then
+            echo 'ERROR: managed Agent still running' >&2
+            exit 1
+          else
+            [[ "$?" == 1 ]]
+          fi
+          listeners="$(ss -H -ltn 'sport = :50051')"
+          printf '%s\n' "$listeners" > "$RUNNER_TEMP/runtime-comparison/port-50051.txt"
+          [[ -z "$listeners" ]]
+          if [[ "$COVERAGE" == true ]]; then
+            pid_file="$RUNNER_TEMP/wendy/swift-e2e-runtime.gh${GITHUB_RUN_ID}.coverage-false.0001/managed-agent/pid"
+            pid="$(cat "$pid_file")"
+            [[ "$pid" =~ ^[0-9]+$ ]]
+            if kill -0 "$pid" 2>/dev/null; then echo 'ERROR: first Agent PID still alive' >&2; exit 1; fi
+            printf 'firstAgentPID=%s\nstopped=true\nportReleased=true\n' "$pid" > "$RUNNER_TEMP/runtime-comparison/first-agent-stopped.txt"
+          fi
+          git diff --exit-code
+          git diff --exit-code 38dce1f3422acca274e5f463dbf2d654bdda586d HEAD -- . \
+            ':!.github/workflows/swift-e2e-tests.yml' ':!.github/actions/swift-e2e-run/action.yml'
+          printf 'reset\tstart\t%s\n' "$(date --iso-8601=ns)" > "$RUNNER_TEMP/runtime-comparison/timing.tsv"
+          # Remove only owned reusable outputs/caches; retain raw evidence and SDK installation.
+          for path in go/bin swift/Build swift/WendyE2ETests/.build \
+            "$RUNNER_TEMP/e2e-runtime-cache" "$HOME/.cache/org.swift.swiftpm" \
+            "$HOME/Library/Caches/org.swift.swiftpm" "$HOME/.swiftpm/cache"; do
+            if [[ -e "$path" ]]; then chmod -R u+w "$path"; rm -rf -- "$path"; fi
+          done
+          export GOCACHE="$RUNNER_TEMP/e2e-runtime-cache/coverage-$COVERAGE/go-build"
+          export GOMODCACHE="$RUNNER_TEMP/e2e-runtime-cache/coverage-$COVERAGE/go-mod"
+          mkdir -p "$GOCACHE" "$GOMODCACHE"
+          [[ -z "$(find "$GOCACHE" "$GOMODCACHE" -mindepth 1 -print -quit)" ]]
+          [[ ! -e swift/WendyE2ETests/.build && ! -e go/bin && ! -e swift/Build ]]
+          printf 'GOCACHE=%s\nGOMODCACHE=%s\n' "$GOCACHE" "$GOMODCACHE" >> "$GITHUB_ENV"
+          printf 'initialGoCacheEntries=0\ninitialSwiftBuild=absent\ninitialGoBin=absent\ninitialSwiftBuildOutputs=absent\ncacheAction=skipped\n' > "$RUNNER_TEMP/runtime-comparison/cache-policy.txt"
+          { swift --version; go version; git --version; clang --version; pkg-config --modversion libusb-1.0;
+            sha256sum "$(command -v swift)" "$(command -v go)"; } > "$RUNNER_TEMP/runtime-comparison/tool-identity.txt"
+          git rev-parse HEAD > "$RUNNER_TEMP/runtime-comparison/source-revision.txt"
+          lscpu -J > "$RUNNER_TEMP/runtime-comparison/cpu.json"
+          free -b > "$RUNNER_TEMP/runtime-comparison/memory.txt"
+          if [[ "$COVERAGE" == true ]]; then
+            cmp "$RUNNER_TEMP/runtime-evidence/false/tool-identity.txt" "$RUNNER_TEMP/runtime-comparison/tool-identity.txt"
+            cmp "$RUNNER_TEMP/runtime-evidence/false/source-revision.txt" "$RUNNER_TEMP/runtime-comparison/source-revision.txt"
+          fi
+          printf 'reset\tend\t%s\t0\n' "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"
+
+      - name: Run complete Swift E2E coverage true
+        id: arm_true
+        if: steps.prepare_true.outcome == 'success'
+        continue-on-error: true
+        uses: ./.github/actions/swift-e2e-run
+        with:
+          coverage: 'true'
+          tests: ''
+          workflow_id: swift-e2e-runtime
+          target_id: coverage-true
+          runner_id: ubuntu-24-04
+          cli_os: linux
+          device_address: 127.0.0.1:50051
+          agent_os: linux
+          transport: local
+          setup: false
+          managed_agent: true
+
+      - name: Retain coverage true measurements
+        if: always()
+        shell: bash
+        env:
+          ARM_OUTCOME: ${{ steps.arm_true.outcome }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/runtime-evidence/true"
+          if [[ -d "$RUNNER_TEMP/runtime-comparison" ]]; then
+            cp -a "$RUNNER_TEMP/runtime-comparison/." "$RUNNER_TEMP/runtime-evidence/true/"
+            rm -rf -- "$RUNNER_TEMP/runtime-comparison"
+          fi
+          printf '%s\n' "$ARM_OUTCOME" > "$RUNNER_TEMP/runtime-evidence/true/outcome.txt"
 
       - name: Upload runtime measurements
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: runtime-measurements-coverage-${{ matrix.coverage }}
-          path: ${{ runner.temp }}/runtime-comparison/
+          name: runtime-measurements-single-vm
+          path: ${{ runner.temp }}/runtime-evidence/
           if-no-files-found: error
           retention-days: 14
 
-      - name: Preserve failed arm status
-        if: always() && steps.e2e.outcome != 'success'
+      - name: Preserve failed or incomplete pair status
+        if: always() && (steps.arm_false.outcome != 'success' || steps.arm_true.outcome != 'success')
         shell: bash
         run: exit 1

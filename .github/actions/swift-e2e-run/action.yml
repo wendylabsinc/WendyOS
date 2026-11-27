@@ -403,7 +403,6 @@ runs:
           if command -v swiftly >/dev/null; then swiftly --version; fi
           go env GOTOOLCHAIN GOCACHE GOMODCACHE
         } > "$RUNNER_TEMP/runtime-comparison/tool-versions.txt" 2>&1
-        printf 'setup\tend\t%s\t0\n' "$(date --iso-8601=ns)" >> "$RUNNER_TEMP/runtime-comparison/timing.tsv"
 
     - name: Capture Swift toolchain version (Windows)
       if: runner.os == 'Windows'
