@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -81,6 +82,7 @@ type virtualStats struct {
 }
 
 type virtualMesh struct {
+	services  int
 	t         testing.TB
 	epoch     time.Time
 	at        time.Duration
@@ -210,6 +212,7 @@ func (m *virtualMesh) publish(i int) {
 	}
 	m.published[n.creds.Device.Principal()][n.revision] = m.at
 	manifest := routeManifest(n.creds.Device, m.now())
+	manifest.Services = encodingBenchServices(m.services)
 	manifest.Revision = n.revision
 	manifest.Expires = m.now().Add(15 * time.Minute).UnixMilli()
 	w, err := SignManifest(manifest, n.creds.Certificate.Certificate, n.creds.Signer, m.now())
@@ -550,6 +553,128 @@ func BenchmarkVirtualCarrierCost(b *testing.B) {
 			b.ReportMetric(float64(cpu)/float64(b.N*tc.size), "cpu-ns/B")
 			b.ReportMetric(float64(s.Fragments)/float64(b.N), "datagrams/op")
 			b.ReportMetric(float64(s.Bytes)/float64(b.N), "carrier-B/op")
+		})
+	}
+}
+
+func encodingBenchServices(count int) []ManifestService {
+	var services []ManifestService
+	for i := 0; i < count; i++ {
+		services = append(services, ManifestService{
+			Mesh: "lab", AppID: "dev.wendy.camera", ServiceID: fmt.Sprintf("camera-%03d", i),
+			Type: "_http._tcp", Instance: fmt.Sprintf("Camera %d", i), Port: uint16(8000 + i),
+			TXT: []string{"codec=h264", "description=" + strings.Repeat("s", 96)},
+		})
+	}
+	return services
+}
+
+func BenchmarkVirtualEncodingPublication(b *testing.B) {
+	for _, services := range []int{0, 32} {
+		b.Run(fmt.Sprintf("services=%d", services), func(b *testing.B) {
+			m := newVirtualMesh(b, "diamond", 4, 1000000, time.Millisecond)
+			m.services = services
+			for i := range m.nodes {
+				m.publish(i)
+			}
+			m.advance(30*time.Second, false, false)
+			m.assertConverged()
+			m.reset("benchmark")
+			b.ReportAllocs()
+			b.ResetTimer()
+			cpu := virtualCPU(b)
+			for i := 0; i < b.N; i++ {
+				m.at = 30 * time.Second
+				for _, e := range m.edges {
+					e.next = m.at
+				}
+				m.publish(0)
+				m.advance(5*time.Second, false, false)
+				if len(m.events) != 0 {
+					b.Fatal("transfer did not drain in its measurement window")
+				}
+			}
+			cpu = virtualCPU(b) - cpu
+			b.StopTimer()
+			m.assertConverged()
+			manifestBytes := 0
+			for _, w := range m.nodes[0].dir.Records(m.now()) {
+				if w.Principal == m.nodes[0].creds.Device.Principal() {
+					manifestBytes = len(w.Body)
+					break
+				}
+			}
+			if manifestBytes == 0 {
+				b.Fatal("missing benchmark origin")
+			}
+			b.ReportMetric(float64(manifestBytes), "manifest-B")
+			b.ReportMetric(float64(cpu)/float64(b.N), "cpu-ns/op")
+			b.ReportMetric(float64(cpu)/float64(m.stats.Bytes), "cpu-ns/ctrl-B")
+			b.ReportMetric(float64(m.stats.Frames)/float64(b.N), "ctrl-frames/op")
+			b.ReportMetric(float64(m.stats.Bytes)/float64(b.N), "ctrl-B/op")
+		})
+	}
+}
+func BenchmarkVirtualEncodingInventory(b *testing.B) {
+	for _, tc := range []struct{ origins, services int }{{4, 0}, {32, 0}, {128, 0}, {4, 32}, {32, 32}, {128, 32}} {
+		count := tc.origins
+		b.Run(fmt.Sprintf("origins=%d/services=%d", count, tc.services), func(b *testing.B) {
+			now := time.Now()
+			first := testCredentialsFor(b, testPrincipal(testTenantUUID, "00000000-0000-4000-8000-000000000001"))
+			cache, err := OpenIdentityCache("", DefaultCacheLimits(), first.Verify, now)
+			if err != nil {
+				b.Fatal(err)
+			}
+			d, err := NewDirectory(first.Device.Tenant(), count, cache)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for i := 0; i < count; i++ {
+				c := testCredentialsFor(b, testPrincipal(testTenantUUID, fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1)))
+				if _, err := cache.Put(c.Certificate.Certificate, now); err != nil {
+					b.Fatal(err)
+				}
+				manifest := routeManifest(c.Device, now)
+				manifest.Services = encodingBenchServices(tc.services)
+				w, err := SignManifest(manifest, c.Certificate.Certificate, c.Signer, now)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if ok, err := d.Accept(w, now); err != nil || !ok {
+					b.Fatalf("accept: %t %v", ok, err)
+				}
+			}
+			e := &virtualEdge{sync: NewSynchronizer(d, cache, netgossip.NewPool()), capacity: 16}
+			defer e.sync.Close()
+			// Establish retained artifacts before timing warm inventory sweeps.
+			drain := func() {
+				virtualSeed(e, now)
+				frames := 0
+				for len(e.queue) != 0 {
+					for _, message := range e.queue {
+						if err := WriteControl(io.Discard, message); err != nil {
+							b.Fatal(err)
+						}
+						frames++
+					}
+					e.queue = e.queue[:0]
+					virtualMaintain(e, now, false)
+				}
+				if frames != count {
+					b.Fatalf("inventory emitted %d frames, want %d", frames, count)
+				}
+			}
+			drain()
+			b.ReportAllocs()
+			b.ResetTimer()
+			cpu := virtualCPU(b)
+			for i := 0; i < b.N; i++ {
+				drain()
+			}
+			cpu = virtualCPU(b) - cpu
+			b.StopTimer()
+			b.ReportMetric(float64(cpu)/float64(b.N), "cpu-ns/op")
+			b.ReportMetric(float64(cpu)/float64(b.N*count), "cpu-ns/origin")
 		})
 	}
 }
