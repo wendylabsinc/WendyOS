@@ -881,6 +881,9 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 			done <- fmt.Errorf("multiplexed forward started after %s", muxWait)
 			return
 		}
+		if muxCapable && f.err == nil && bytes.Equal(f.data, rawPreamble) {
+			f.data, f.half, f.err = session.Recv()
+		}
 		for b, half, e := f.data, f.half, f.err; ; b, half, e = session.Recv() {
 			if e != nil {
 				if e == io.EOF {

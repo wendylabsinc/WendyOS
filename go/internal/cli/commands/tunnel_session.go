@@ -149,7 +149,7 @@ func tunnelAuthorizationFor(ctx context.Context, auth *config.AuthConfig) (*tunn
 	return entry, func() { entry.conn.Close() }, nil
 }
 
-func openAuthorizedTunnel(ctx context.Context, auth *config.AuthConfig, assetID, service string, halfClose bool) (net.Conn, error) {
+func openAuthorizedTunnel(ctx context.Context, auth *config.AuthConfig, assetID, service string, flow cloudTCPFlow) (net.Conn, error) {
 	entry, release, err := tunnelAuthorizationFor(ctx, auth)
 	if err != nil {
 		return nil, err
@@ -161,7 +161,10 @@ func openAuthorizedTunnel(ctx context.Context, auth *config.AuthConfig, assetID,
 		return nil, err
 	}
 	open := cloudrelay.OpenTCP
-	if halfClose {
+	switch {
+	case flow.mux:
+		open = cloudrelay.OpenRawTCP
+	case flow.halfClose:
 		open = cloudrelay.OpenTCPWithHalfClose
 	}
 	return open(ctx, cloudCtx, entry.conn, entry.verifier, assetID, service, entry.sign)

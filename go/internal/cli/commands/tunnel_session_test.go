@@ -44,7 +44,7 @@ func TestTunnelSessionReusesConnectionButAuthorizesEveryDial(t *testing.T) {
 	defer cancel()
 	var address string
 	for i := 0; i < 2; i++ {
-		if _, err := d.openTunnel(session.Context(ctx), nil, auth, 50052, false); status.Code(err) != codes.PermissionDenied {
+		if _, err := d.openTunnel(session.Context(ctx), nil, auth, 50052, cloudTCPFlow{}); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("dial %d did not preserve authorization refusal: %v", i, err)
 		}
 		select {
@@ -162,7 +162,7 @@ func TestTunnelSessionPauseCancelsAuthorization(t *testing.T) {
 	id := "00000000-0000-4000-8000-000000000042"
 	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
 	done := make(chan error, 1)
-	go func() { _, err := d.openTunnel(ctx, nil, auth, 50052, false); done <- err }()
+	go func() { _, err := d.openTunnel(ctx, nil, auth, 50052, cloudTCPFlow{}); done <- err }()
 	select {
 	case <-started:
 	case <-ctx.Done():
@@ -223,7 +223,7 @@ func TestTunnelSessionRecoversAsSoonAsCloudReturns(t *testing.T) {
 	id := "00000000-0000-4000-8000-000000000042"
 	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
 	dial := func() codes.Code {
-		_, err := d.openTunnel(ctx, nil, auth, 50052, false)
+		_, err := d.openTunnel(ctx, nil, auth, 50052, cloudTCPFlow{})
 		return status.Code(err)
 	}
 	if got := dial(); got != codes.PermissionDenied {

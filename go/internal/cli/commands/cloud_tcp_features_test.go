@@ -69,7 +69,7 @@ func TestCloudTCPFeatureProbeWarmsSlowManagementTransport(t *testing.T) {
 	firstCtx, cancelFirst := context.WithCancel(ctx)
 	defer cancelFirst()
 	first := make(chan bool, 1)
-	go func() { first <- features.halfClose(firstCtx, agent) }()
+	go func() { first <- features.flow(firstCtx, agent).halfClose }()
 	select {
 	case <-started:
 	case <-ctx.Done():
@@ -79,7 +79,7 @@ func TestCloudTCPFeatureProbeWarmsSlowManagementTransport(t *testing.T) {
 	if <-first {
 		t.Fatal("abandoned socket exposed half-close capability")
 	}
-	if features.halfClose(ctx, agent) {
+	if features.flow(ctx, agent).halfClose {
 		t.Fatal("management probe with no response exposed half-close capability")
 	}
 	if last := features.last.Load(); last == nil || last.halfClose {
@@ -101,7 +101,7 @@ func TestCloudTCPFeatureProbeWarmsSlowManagementTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 3 {
-		if !features.halfClose(ctx, agent) {
+		if !features.flow(ctx, agent).halfClose {
 			t.Fatal("cached capability did not enable half-close")
 		}
 	}
@@ -113,7 +113,7 @@ func TestCloudTCPFeatureProbeWarmsSlowManagementTransport(t *testing.T) {
 	if _, err := agent.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	if features.halfClose(ctx, agent) {
+	if features.flow(ctx, agent).halfClose {
 		t.Fatal("an agent that omitted the feature still enabled half-close")
 	}
 }
@@ -176,7 +176,7 @@ func TestVPNFlowsRefreshFeaturesOnOneManagementTransport(t *testing.T) {
 	openFlow := func(scope *cloudTCPFeatures, want bool) {
 		t.Helper()
 		disposable := dialManagement(scope)
-		if got := scope.halfClose(flowCtx, disposable); got != want {
+		if got := scope.flow(flowCtx, disposable).halfClose; got != want {
 			t.Fatalf("half-close support = %t, want %t", got, want)
 		}
 		// Keep the flow and its disposable channel alive beyond the next

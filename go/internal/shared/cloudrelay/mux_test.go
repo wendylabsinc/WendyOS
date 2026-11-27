@@ -142,3 +142,34 @@ func TestMuxStalledStreamLeavesOthersMoving(t *testing.T) {
 		t.Fatal("second connection stalled behind the first one's unread upload")
 	}
 }
+
+// A caller that marks its session as one raw connection reaches a service
+// that speaks first without waiting for a mux preamble.
+func TestMuxCapableAgentDialsMarkedRawCallerAtOnce(t *testing.T) {
+	serverTLS, _ := forwardTestTLS(t)
+	testAuthorizedRelay(t, "tcp", false, &relayLifecycle{
+		configure: func(_ *testRelay, a *Agent) {
+			a.ForwardTLS = func() (*tls.Config, error) { return serverTLS, nil }
+			a.MTLSPort = 0 // the harness's echo port stands in for the agent's own
+		},
+		tcpOpen: OpenRawTCP,
+		tcpService: func(c net.Conn) {
+			_, _ = io.WriteString(c, "banner\n")
+			_, _ = io.Copy(c, c)
+		},
+		tcpExercise: func(conn net.Conn, _ *Agent) {
+			_ = conn.SetDeadline(time.Now().Add(muxWait / 2))
+			got := make([]byte, len("banner\n"))
+			if _, err := io.ReadFull(conn, got); err != nil || string(got) != "banner\n" {
+				t.Fatalf("banner: got %q, %v", got, err)
+			}
+			_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+			if _, err := io.WriteString(conn, "echo"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.ReadFull(conn, got[:4]); err != nil || string(got[:4]) != "echo" {
+				t.Fatalf("echo after the marker: got %q, %v", got[:4], err)
+			}
+		},
+	})
+}

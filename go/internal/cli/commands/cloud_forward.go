@@ -208,7 +208,7 @@ func (d cloudDiscoveryDevice) serveTunnelForward(ctx context.Context, ln net.Lis
 	defer session.SetActive(false)
 	ctx = session.Context(ctx)
 	dial := func(ctx context.Context) (net.Conn, error) {
-		return d.openTunnel(ctx, brokerConn, auth, remotePort, false)
+		return d.openTunnel(ctx, brokerConn, auth, remotePort, cloudTCPFlow{})
 	}
 	if d.v2 != nil && remotePort != defaultAgentPort+1 {
 		// A single lazy, authenticated management channel checks support for

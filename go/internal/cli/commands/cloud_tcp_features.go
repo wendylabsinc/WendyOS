@@ -24,8 +24,16 @@ type cloudTCPFeatures struct {
 }
 
 type cloudTCPFeatureObservation struct {
+	halfClose, mux bool
+	expires        time.Time
+}
+
+// cloudTCPFlow is what a device's agent supports for a raw TCP flow.
+type cloudTCPFlow struct {
 	halfClose bool
-	expires   time.Time
+	// mux: the agent advertises TCPMuxFeature, so the flow is opened with
+	// cloudrelay.OpenRawTCP.
+	mux bool
 }
 
 func (o *cloudTCPFeatureObservation) fresh() bool {
@@ -74,6 +82,7 @@ func (f *cloudTCPFeatures) observeVersion(ctx context.Context, method string, re
 		version, _ := reply.(*agentpb.GetAgentVersionResponse)
 		f.last.Store(&cloudTCPFeatureObservation{
 			halfClose: err == nil && slices.Contains(version.GetFeatureset(), cloudrelay.TCPHalfCloseFeature),
+			mux:       err == nil && slices.Contains(version.GetFeatureset(), cloudrelay.TCPMuxFeature),
 			expires:   time.Now().Add(cloudTCPFeatureTTL),
 		})
 	}
@@ -83,16 +92,16 @@ func (f *cloudTCPFeatures) observeVersion(ctx context.Context, method string, re
 // TODO(2026-11-23): Make half-close unconditional once enough devices have
 // upgraded that every supported agent, including rollback targets, can drain
 // its final response after receiving caller EOF.
-func (f *cloudTCPFeatures) halfClose(ctx context.Context, agent agentpb.WendyAgentServiceClient) bool {
+func (f *cloudTCPFeatures) flow(ctx context.Context, agent agentpb.WendyAgentServiceClient) cloudTCPFlow {
 	if ctx.Err() != nil {
-		return false
+		return cloudTCPFlow{}
 	}
 	if observation := f.last.Load(); observation.fresh() {
-		return observation.halfClose
+		return cloudTCPFlow{observation.halfClose, observation.mux}
 	}
 	result := f.probe.DoChan("", func() (any, error) {
 		if observation := f.last.Load(); observation.fresh() {
-			return observation.halfClose, nil
+			return cloudTCPFlow{observation.halfClose, observation.mux}, nil
 		}
 		// The channel owns this bounded probe. One socket abandoning its
 		// dial should not cut the check short for the other waiting sockets.
@@ -106,17 +115,20 @@ func (f *cloudTCPFeatures) halfClose(ctx context.Context, agent agentpb.WendyAge
 		}
 		observation := f.last.Load()
 		if observation.fresh() {
-			return err == nil && probeCtx.Err() == nil && observation.halfClose, nil
+			if err != nil || probeCtx.Err() != nil {
+				return cloudTCPFlow{}, nil
+			}
+			return cloudTCPFlow{observation.halfClose, observation.mux}, nil
 		}
 		// The shared probe may have reached another credential or asset binding,
 		// or failed before invoking an RPC. Throttle retries in this scope.
 		f.last.CompareAndSwap(observation, &cloudTCPFeatureObservation{expires: time.Now().Add(cloudTCPFeatureTTL)})
-		return false, nil
+		return cloudTCPFlow{}, nil
 	})
 	select {
 	case <-ctx.Done():
-		return false
+		return cloudTCPFlow{}
 	case r := <-result:
-		return r.Val.(bool)
+		return r.Val.(cloudTCPFlow)
 	}
 }

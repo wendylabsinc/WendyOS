@@ -27,11 +27,31 @@ const TCPMuxFeature = "cloud-relay-tcp-mux"
 // start of one raw connection, as before.
 var muxPreamble = []byte("wendy-tcp-mux/1\n")
 
+// rawPreamble is the first caller frame of one raw connection to an agent
+// that advertises TCPMuxFeature (OpenRawTCP). The agent drops it and dials
+// the port at once.
+var rawPreamble = []byte("wendy-tcp-raw/1\n")
+
 // muxWait is how long a mux-capable agent waits for the caller's first frame
-// before it dials the port for one raw connection.
-// ponytail: a caller without mux whose protocol has the server speak first
-// waits this long once per connection; it shortens once such callers are gone.
+// before it dials the port for one raw connection. A caller that sends neither
+// preamble (a CLI or desktop app from before them) waits this long once per
+// connection when the server speaks first, such as VNC, MySQL or SMTP.
 const muxWait = 2 * time.Second
+
+// OpenRawTCP is OpenTCPWithHalfClose for a device whose authenticated
+// GetAgentVersion advertises TCPMuxFeature: its first frame lets the agent
+// dial the port without waiting muxWait for a mux preamble.
+func OpenRawTCP(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier *Verifier, assetID, service string, signRequest func([]byte) ([]byte, error)) (net.Conn, error) {
+	s, err := openPortSession(ctx, authCtx, cloudConn, verifier, assetID, service, pb.DialTransport_DIAL_TRANSPORT_TCP, signRequest)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Send(rawPreamble, false); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	return s.Conn(), nil
+}
 
 // OpenTCPMux joins one relay session to a TCP service for a multiplexed
 // forward. It returns the session's byte stream, on which the caller runs the

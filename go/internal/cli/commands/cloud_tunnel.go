@@ -173,7 +173,7 @@ func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig
 		if observed := features.last.Load(); observed != nil && observed.halfClose {
 			features.last.CompareAndSwap(observed, nil)
 		}
-		return asset.openTunnel(carryTunnelSession(tunnelCtx, ctx), brokerConn, auth, defaultAgentPort+1, false)
+		return asset.openTunnel(carryTunnelSession(tunnelCtx, ctx), brokerConn, auth, defaultAgentPort+1, cloudTCPFlow{})
 	})
 
 	cert := auth.Certificates[0]
@@ -211,8 +211,11 @@ func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig
 	}
 	agentConn.CertInfo = &cert
 	agentConn.RegistryDialer = func(registryCtx context.Context, port int) (net.Conn, error) {
-		halfClose := agentConn.IsCloudV2 && port != defaultAgentPort+1 && features.halfClose(registryCtx, agentConn.AgentService)
-		return asset.openTunnel(carryTunnelSession(registryCtx, ctx), brokerConn, auth, uint32(port), halfClose)
+		var flow cloudTCPFlow
+		if agentConn.IsCloudV2 && port != defaultAgentPort+1 {
+			flow = features.flow(registryCtx, agentConn.AgentService)
+		}
+		return asset.openTunnel(carryTunnelSession(registryCtx, ctx), brokerConn, auth, uint32(port), flow)
 	}
 	// Pin reconnect to this exact asset (by id) so a post-restart reconnect
 	// can't drift to a different cloud device — the asset name may be empty or
@@ -340,7 +343,7 @@ func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *co
 	}, stream.CloseSend), nil
 }
 
-func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32, halfClose bool) (net.Conn, error) {
+func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32, flow cloudTCPFlow) (net.Conn, error) {
 	if d.legacy != nil {
 		return openBrokerTunnel(ctx, brokerConn, auth, d.legacy.GetId(), remotePort)
 	}
@@ -348,7 +351,7 @@ func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.C
 	if err != nil {
 		return nil, err
 	}
-	return openAuthorizedTunnel(ctx, auth, d.key, service, halfClose)
+	return openAuthorizedTunnel(ctx, auth, d.key, service, flow)
 }
 
 func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool) error, closeSend func() error) net.Conn {
