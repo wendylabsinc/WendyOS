@@ -27,6 +27,10 @@ const (
 	// warnInterval spaces out the warnings of one channel whose samples
 	// cannot be published.
 	warnInterval = time.Minute
+	// listFailuresTolerated is how many times in a row the running apps may
+	// fail to be listed before publishing stops. Who may read the topics is
+	// only known from that list.
+	listFailuresTolerated = 3
 )
 
 // sampleWriter writes one topic into one ROS 2 graph.
@@ -64,10 +68,14 @@ type Bridge struct {
 	acquire acquireFunc
 	// now is the device's clock; tests replace it.
 	now func() time.Time
+	// network names the network namespace of a process, and of the agent
+	// itself for pid 0. Apps that share a network have the same name.
+	network func(pid uint32) (string, error)
 
-	// reconcileMu admits one reconcile at a time.
-	reconcileMu sync.Mutex
-	wake        chan struct{}
+	// reconcileMu admits one reconcile at a time and guards listFailures.
+	reconcileMu  sync.Mutex
+	listFailures int
+	wake         chan struct{}
 
 	mu       sync.Mutex
 	channels map[*Channel]struct{}
@@ -78,6 +86,13 @@ type Bridge struct {
 	// announced remembers the topic last logged for a source's channel, so a
 	// source that reconnects is not logged again.
 	announced map[string]string
+	// reserved maps a topic to the source's channel it was first given to. It
+	// stays that channel's for as long as the agent runs, so that sources
+	// reconnecting in another order do not swap topics.
+	reserved map[string]string
+	// segments remembers the last clock mapping segment of a source's channel,
+	// so that numbering carries on when the source reconnects.
+	segments map[string]int
 }
 
 // graphLease is the participant in one graph and its writers per channel.
@@ -107,10 +122,11 @@ func New(logger *zap.Logger, pool *rtps.Pool, graphs ros2camera.GraphSource) *Br
 
 func newBridge(logger *zap.Logger, graphs ros2camera.GraphSource, acquire acquireFunc) *Bridge {
 	return &Bridge{
-		logger: logger, graphs: graphs, acquire: acquire, now: time.Now,
+		logger: logger, graphs: graphs, acquire: acquire, now: time.Now, network: rtps.NetworkNamespaceID,
 		wake:     make(chan struct{}, 1),
 		channels: map[*Channel]struct{}{}, topics: map[string]*Channel{},
 		leases: map[string]*graphLease{}, announced: map[string]string{},
+		reserved: map[string]string{}, segments: map[string]int{},
 	}
 }
 
@@ -199,7 +215,9 @@ func (b *Bridge) Mount(p mcusource.SensorPairing, descriptors []*sensorlinkpb.Se
 // Channel is one sensor channel being published. It is safe for concurrent
 // use.
 type Channel struct {
-	b     *Bridge
+	b *Bridge
+	// id names the channel of its source across connections.
+	id    string
 	topic string
 	enc   encoding
 	// source identifies the paired source, and frameID names it in message
@@ -242,16 +260,25 @@ func (b *Bridge) OpenChannel(sourceKey, sourceName string, d *sensorlinkpb.Senso
 		c.period = time.Second / time.Duration(rate)
 	}
 
+	c.id = fmt.Sprintf("%s/%d", sourceKey, d.GetChannelId())
+
 	b.mu.Lock()
+	// The first name that is this channel's own or nobody's, and not in use
+	// by another connection of the same channel.
 	c.topic = base
-	for n := 2; b.topics[c.topic] != nil; n++ {
+	for n := 2; ; n++ {
+		owner, taken := b.reserved[c.topic]
+		if (!taken || owner == c.id) && b.topics[c.topic] == nil {
+			break
+		}
 		c.topic = fmt.Sprintf("%s_%d", base, n)
 	}
+	b.reserved[c.topic] = c.id
 	b.topics[c.topic] = c
 	b.channels[c] = struct{}{}
-	id := fmt.Sprintf("%s/%d", sourceKey, d.GetChannelId())
-	fresh := b.announced[id] != c.topic
-	b.announced[id] = c.topic
+	c.clock.segment = b.segments[c.id]
+	fresh := b.announced[c.id] != c.topic
+	b.announced[c.id] = c.topic
 	b.mu.Unlock()
 
 	if fresh {
@@ -277,9 +304,14 @@ func (c *Channel) place(f *sensorlink.SensorFrame, arrival time.Time) timing {
 	if f.TsUs == 0 || f.TsUs > math.MaxInt64/uint64(time.Microsecond) {
 		return t
 	}
+	// The frame's last reading was taken this long after its first.
+	var span time.Duration
+	if t.readings > 1 {
+		span = time.Duration(t.readings-1) * c.period
+	}
 	steady := arrival.Sub(c.opened)
 	c.clockMu.Lock()
-	taken, uncertainty := c.clock.place(time.Duration(f.TsUs)*time.Microsecond, steady, c.period)
+	taken, uncertainty := c.clock.place(time.Duration(f.TsUs)*time.Microsecond, span, steady, c.period)
 	t.segment = c.clock.segment
 	c.clockMu.Unlock()
 	t.stamp, t.placed, t.mapping = arrival.Add(taken-steady), true, uncertainty
@@ -297,6 +329,17 @@ func (c *Channel) WriteFrame(f *sensorlink.SensorFrame) bool {
 	arrival := c.b.now()
 	when := c.place(f, arrival)
 	messages, err := c.enc.encode(when.stamp, c.period, f.Payload)
+	// A message has to fit one datagram. One that does not would fail on
+	// every writer, so it is dropped here, before its timing goes out.
+	fits := messages[:0]
+	for _, message := range messages {
+		if len(message) > rtps.MaxPayload {
+			err = fmt.Errorf("a message of %d bytes is larger than the %d bytes this agent can publish at once", len(message), rtps.MaxPayload)
+			continue
+		}
+		fits = append(fits, message)
+	}
+	messages = fits
 	var timingMessage []byte
 	if len(messages) > 0 {
 		timingMessage = when.encode(c.frameID, c.topic, c.source)
@@ -355,6 +398,9 @@ func (c *Channel) Close() error {
 	c.closed = true
 	delete(b.channels, c)
 	delete(b.topics, c.topic)
+	c.clockMu.Lock()
+	b.segments[c.id] = c.clock.segment
+	c.clockMu.Unlock()
 	var writers []sampleWriter
 	for _, gl := range b.leases {
 		if w := gl.writers[c]; w != nil {
@@ -374,9 +420,72 @@ func (c *Channel) Close() error {
 	return nil
 }
 
+// networksToJoin works out where the open channels may be published: one
+// participant per network and ROS domain of the running ROS 2 apps, and only
+// in networks where every such app holds sensor-read.
+//
+// A topic is readable by everything in the network it is published in. Apps
+// on the host's network share it, and so do the services of an app that share
+// a network; any of them can join any ROS domain. So the unit is the network,
+// told apart by its namespace rather than by what an app's configuration
+// says, and one app there without the entitlement keeps the topics out of it.
+func (b *Bridge) networksToJoin(ctx context.Context, graphs []ros2camera.Graph) map[string]rtps.Config {
+	type network struct {
+		everyAppMayRead bool
+		// through is the app each domain's participant enters the network by.
+		through map[int]ros2camera.Graph
+	}
+	networks := map[string]*network{}
+	for _, g := range graphs {
+		if g.DomainID < 0 || g.DomainID > 232 || g.NetworkNamespacePID == 0 {
+			continue
+		}
+		name, err := b.network(g.NetworkNamespacePID)
+		if err != nil {
+			// Most likely the app is just stopping. Without knowing its
+			// network nothing can be published for it.
+			b.logger.Debug("the network of a ROS 2 app could not be identified", zap.String("app", g.Key), zap.Error(err))
+			continue
+		}
+		n := networks[name]
+		if n == nil {
+			n = &network{everyAppMayRead: true, through: map[int]ros2camera.Graph{}}
+			networks[name] = n
+		}
+		if !g.SensorRead {
+			n.everyAppMayRead = false
+		}
+		// The lowest instance key, so that the choice does not flap.
+		if current, ok := n.through[g.DomainID]; !ok || g.InstanceKey < current.InstanceKey {
+			n.through[g.DomainID] = g
+		}
+	}
+	own, ownErr := b.network(0)
+	desired := map[string]rtps.Config{}
+	for name, n := range networks {
+		if !n.everyAppMayRead {
+			continue
+		}
+		for domain, g := range n.through {
+			cfg := rtps.Config{DomainID: domain, Interface: loopback, Publish: true}
+			// The agent is already in the host's network; any other is
+			// entered through one of its apps.
+			if ownErr != nil || name != own {
+				cfg.NetworkNamespacePID = g.NetworkNamespacePID
+				if verify := g.Verify; verify != nil {
+					cfg.VerifyNetworkNamespace = func() bool { return verify(ctx) }
+				}
+			}
+			desired[fmt.Sprintf("%s:%d", name, domain)] = cfg
+		}
+	}
+	return desired
+}
+
 // reconcile brings the participants in step with the open channels and the
-// running ROS 2 apps: one participant per app network and domain while any
-// channel is open, with a writer for every channel, and none otherwise.
+// running ROS 2 apps: one participant per network and domain that may be
+// published into while any channel is open, with writers for every channel,
+// and none otherwise.
 func (b *Bridge) reconcile(ctx context.Context) {
 	b.reconcileMu.Lock()
 	defer b.reconcileMu.Unlock()
@@ -390,39 +499,17 @@ func (b *Bridge) reconcile(ctx context.Context) {
 	if publishing {
 		graphs, err := b.graphs(ctx)
 		if err != nil {
-			// Not knowing which apps run is no reason to leave the ones we
-			// are publishing into.
-			listed = false
-			b.logger.Debug("listing ROS 2 apps for sensor channels failed", zap.Error(err))
+			// One failed listing is no reason to leave the apps being
+			// published into. But the list is also what says who may read
+			// the topics, so when it stays unreadable publishing stops.
+			b.listFailures++
+			listed = b.listFailures > listFailuresTolerated
+			graphs = nil
+			b.logger.Debug("listing ROS 2 apps for sensor channels failed", zap.Int("times", b.listFailures), zap.Error(err))
+		} else {
+			b.listFailures = 0
 		}
-		// A topic is readable by everything in the network it is published
-		// in, so it only goes where sensor-read allows it: into the network
-		// of an app that holds the entitlement, and onto the host's network
-		// only while every ROS 2 app there, on that domain, holds it.
-		hostDomainOpen := map[int]bool{}
-		for _, g := range graphs {
-			if g.DomainID < 0 || g.DomainID > 232 || g.NetworkNamespacePID == 0 {
-				continue
-			}
-			if g.HostNetwork {
-				open, seen := hostDomainOpen[g.DomainID]
-				hostDomainOpen[g.DomainID] = g.SensorRead && (open || !seen)
-				continue
-			}
-			if !g.SensorRead {
-				continue
-			}
-			cfg := rtps.Config{DomainID: g.DomainID, Interface: loopback, Publish: true, NetworkNamespacePID: g.NetworkNamespacePID}
-			if verify := g.Verify; verify != nil {
-				cfg.VerifyNetworkNamespace = func() bool { return verify(ctx) }
-			}
-			desired[fmt.Sprintf("%s:%d:%d", g.InstanceKey, g.NetworkNamespacePID, g.DomainID)] = cfg
-		}
-		for domain, open := range hostDomainOpen {
-			if open {
-				desired[fmt.Sprintf("host:%d", domain)] = rtps.Config{DomainID: domain, Interface: loopback, Publish: true}
-			}
-		}
+		desired = b.networksToJoin(ctx, graphs)
 	}
 
 	b.mu.Lock()
@@ -463,32 +550,33 @@ func (b *Bridge) reconcile(ctx context.Context) {
 		b.mu.Unlock()
 	}
 
+	// A participant has room for a limited number of writers. Every channel's
+	// readings are opened before any channel's timing, so that when they run
+	// out it is timing that goes without.
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for key, gl := range b.leases {
-		for c := range b.channels {
-			w := gl.writers[c]
-			if w == nil {
-				w = &channelWriters{}
-				gl.writers[c] = w
-			}
-			for _, topic := range []struct {
-				writer *sampleWriter
-				pub    rtps.Publication
-			}{
-				{&w.readings, rtps.Publication{Topic: "rt" + c.topic, Type: c.enc.ddsType}},
-				{&w.timing, rtps.Publication{Topic: "rt" + c.topic + timingSuffix, Type: timingDDSType}},
-			} {
-				if *topic.writer != nil {
+	for _, timingTopic := range []bool{false, true} {
+		for key, gl := range b.leases {
+			for c := range b.channels {
+				w := gl.writers[c]
+				if w == nil {
+					w = &channelWriters{}
+					gl.writers[c] = w
+				}
+				writer, pub := &w.readings, rtps.Publication{Topic: "rt" + c.topic, Type: c.enc.ddsType}
+				if timingTopic {
+					writer, pub = &w.timing, rtps.Publication{Topic: "rt" + c.topic + timingSuffix, Type: timingDDSType}
+				}
+				if *writer != nil {
 					continue
 				}
-				opened, err := gl.lease.NewWriter(topic.pub)
+				opened, err := gl.lease.NewWriter(pub)
 				if err != nil {
 					b.logger.Debug("opening a sensor channel in a ROS 2 app failed; will retry",
-						zap.String("graph", key), zap.String("topic", topic.pub.Topic), zap.Error(err))
+						zap.String("graph", key), zap.String("topic", pub.Topic), zap.Error(err))
 					continue
 				}
-				*topic.writer = opened
+				*writer = opened
 			}
 		}
 	}

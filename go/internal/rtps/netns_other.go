@@ -32,3 +32,7 @@ func withNetworkNamespace(pid uint32, verify func() bool, fn func() error) error
 	}
 	return n.run(fn)
 }
+
+// NetworkNamespaceID names the network namespace a process is in. Without
+// network namespaces every process is in the host's.
+func NetworkNamespaceID(uint32) (string, error) { return "host", nil }

@@ -18,7 +18,7 @@ func TestSampleTimesKeepTheSourcesSpacingWhileArrivalJitters(t *testing.T) {
 	var taken []time.Duration
 	for i, delay := range transit {
 		source := time.Duration(i+1) * time.Second
-		got, _ := c.place(source, source+boardOffset+delay, time.Second)
+		got, _ := c.place(source, 0, source+boardOffset+delay, time.Second)
 		taken = append(taken, got)
 	}
 	// From the frame that arrived fastest on, samples the board took a second
@@ -50,7 +50,7 @@ func TestSampleIsNeverPlacedAfterItArrivedOrBeforeTheOneBeforeIt(t *testing.T) {
 		// Frames arrive in the order they were sent.
 		arrival := max(source+boardOffset+delay, lastArrival)
 		lastArrival = arrival
-		taken, _ := c.place(source, arrival, period)
+		taken, _ := c.place(source, 0, arrival, period)
 		if taken > arrival {
 			t.Fatalf("sample %d is placed %s after it arrived", i, taken-arrival)
 		}
@@ -65,11 +65,11 @@ func TestFrameHeldUpOnTheLinkIsPlacedWhenItWasTaken(t *testing.T) {
 	var c sourceClock
 	for i := 1; i <= 5; i++ {
 		source := time.Duration(i) * time.Second
-		c.place(source, source+boardOffset+ms(5), time.Second)
+		c.place(source, 0, source+boardOffset+ms(5), time.Second)
 	}
 	// The link stalls for three seconds, then delivers the sixth frame.
 	source := 6 * time.Second
-	taken, _ := c.place(source, source+boardOffset+3*time.Second, time.Second)
+	taken, _ := c.place(source, 0, source+boardOffset+3*time.Second, time.Second)
 	if late := taken - (source + boardOffset); late != ms(5) {
 		t.Fatalf("a frame that arrived 3s late is placed %s after it was taken, want 5ms", late)
 	}
@@ -80,11 +80,11 @@ func TestFrameHeldUpOnTheLinkIsPlacedWhenItWasTaken(t *testing.T) {
 
 func TestSourceClockThatStartsAgainStartsANewSegment(t *testing.T) {
 	var c sourceClock
-	c.place(100*time.Second, 100*time.Second+boardOffset+ms(5), time.Second)
-	c.place(101*time.Second, 101*time.Second+boardOffset+ms(5), time.Second)
+	c.place(100*time.Second, 0, 100*time.Second+boardOffset+ms(5), time.Second)
+	c.place(101*time.Second, 0, 101*time.Second+boardOffset+ms(5), time.Second)
 	// The board restarted: its clock counts from zero again.
 	arrival := 104*time.Second + boardOffset
-	taken, _ := c.place(time.Second, arrival, time.Second)
+	taken, _ := c.place(time.Second, 0, arrival, time.Second)
 	if c.segment != 2 {
 		t.Fatalf("mapping segment %d after the source clock went backwards, want 2", c.segment)
 	}
@@ -93,7 +93,7 @@ func TestSourceClockThatStartsAgainStartsANewSegment(t *testing.T) {
 		t.Fatalf("first sample of the new segment is placed %s from its arrival", arrival-taken)
 	}
 	// The old offset is gone: the next sample follows the new clock.
-	next, _ := c.place(2*time.Second, arrival+time.Second+ms(40), time.Second)
+	next, _ := c.place(2*time.Second, 0, arrival+time.Second+ms(40), time.Second)
 	if next-taken != time.Second {
 		t.Fatalf("second sample of the new segment is %s after the first, want 1s", next-taken)
 	}
@@ -101,11 +101,11 @@ func TestSourceClockThatStartsAgainStartsANewSegment(t *testing.T) {
 
 func TestSourceClockThatJumpsAheadStartsANewSegment(t *testing.T) {
 	var c sourceClock
-	c.place(10*time.Second, 10*time.Second+boardOffset+ms(5), time.Second)
-	c.place(11*time.Second, 11*time.Second+boardOffset+ms(5), time.Second)
+	c.place(10*time.Second, 0, 10*time.Second+boardOffset+ms(5), time.Second)
+	c.place(11*time.Second, 0, 11*time.Second+boardOffset+ms(5), time.Second)
 	// A second later the board's clock reads ten seconds more.
 	arrival := 12*time.Second + boardOffset + ms(5)
-	taken, _ := c.place(21*time.Second, arrival, time.Second)
+	taken, _ := c.place(21*time.Second, 0, arrival, time.Second)
 	if c.segment != 2 || taken != arrival {
 		t.Fatalf("segment %d, placed %s from arrival; want a new segment placed at arrival", c.segment, arrival-taken)
 	}
@@ -118,7 +118,7 @@ func TestSourceClockThatRunsSlowOrFastIsFollowed(t *testing.T) {
 		for i := 1; i <= 1200; i++ {
 			tookAt := time.Duration(i)*time.Second + boardOffset // on the device's clock
 			source := time.Duration(i) * (time.Second + skew)
-			taken, uncertainty := c.place(source, tookAt+ms(2), time.Second+skew)
+			taken, uncertainty := c.place(source, 0, tookAt+ms(2), time.Second+skew)
 			late := taken - tookAt - ms(2)
 			if late < 0 {
 				late = -late
@@ -145,7 +145,7 @@ func TestUncertaintyCoversAnOffsetStillCatchingUp(t *testing.T) {
 	var late []time.Duration
 	for i, delay := range transit {
 		source := time.Duration(i+1) * period
-		taken, uncertainty := c.place(source, source+boardOffset+delay, period)
+		taken, uncertainty := c.place(source, 0, source+boardOffset+delay, period)
 		// Against the best that can be known: the fastest transit, 5 ms.
 		behind := taken - (source + boardOffset + ms(5))
 		if i > 0 && (behind < 0 || behind > uncertainty) {
@@ -160,5 +160,50 @@ func TestUncertaintyCoversAnOffsetStillCatchingUp(t *testing.T) {
 		if late[i] != want[i] {
 			t.Fatalf("samples are placed %v late, want %v", late, want)
 		}
+	}
+}
+
+func TestBatchOfReadingsIsPlacedByWhenItsLastOneWasTaken(t *testing.T) {
+	var c sourceClock
+	// Ten readings a frame, 100 ms apart. A frame is stamped with its first
+	// reading's time and cannot leave before its last one is taken, 900 ms
+	// later. That wait is not transit time, and must not push the stamp late.
+	const period, span = 100 * time.Millisecond, 900 * time.Millisecond
+	for i := 1; i <= 5; i++ {
+		source := time.Duration(i) * time.Second
+		arrival := source + span + boardOffset + ms(5)
+		taken, _ := c.place(source, span, arrival, period)
+		if late := taken - (source + boardOffset); late != ms(5) {
+			t.Fatalf("frame %d: first reading is placed %s after it was taken, want the transit time, 5ms", i, late)
+		}
+		if last := taken + span; last > arrival {
+			t.Fatalf("frame %d: last reading is placed %s after the frame arrived", i, last-arrival)
+		}
+	}
+}
+
+func TestFramesCloserTogetherThanTheSourceSaidAreStillPlacedInOrder(t *testing.T) {
+	var c sourceClock
+	// The source says it reads once a second and sends every 100 ms. The
+	// first frame was held up 400 ms; the offset may not move by more than
+	// the frames are apart, or the second reading would land before the first.
+	first, _ := c.place(time.Second, 0, time.Second+boardOffset+ms(400), time.Second)
+	second, _ := c.place(time.Second+ms(100), 0, time.Second+ms(100)+boardOffset+ms(405), time.Second)
+	if second <= first {
+		t.Fatalf("the second reading is placed %s before the first", first-second)
+	}
+}
+
+func TestSegmentNumbersCarryOnWhereAnEarlierConnectionStopped(t *testing.T) {
+	// A source that reconnects starts a new connection and often a new clock:
+	// its segments are numbered on from the last one, never from one again.
+	c := sourceClock{segment: 3}
+	c.place(time.Second, 0, time.Second+boardOffset, time.Second)
+	if c.segment != 4 {
+		t.Fatalf("the first frame of a later connection is in segment %d, want 4", c.segment)
+	}
+	c.place(2*time.Second, 0, 2*time.Second+boardOffset, time.Second)
+	if c.segment != 4 {
+		t.Fatalf("the second frame moved to segment %d", c.segment)
 	}
 }

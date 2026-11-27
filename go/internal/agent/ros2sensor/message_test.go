@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,5 +175,18 @@ func TestTopicNamesAreValidROS2Names(t *testing.T) {
 		if got := topicFor(tc.name, tc.key, tc.channel, tc.id); got != tc.want {
 			t.Errorf("topicFor(%q, %q, %q, %d) = %q, want %q", tc.name, tc.key, tc.channel, tc.id, got, tc.want)
 		}
+	}
+}
+
+func TestTopicNamesStayShortEnoughForROS2(t *testing.T) {
+	// A channel name may be 256 bytes and a pairing name is free text; a ROS 2
+	// topic name may not be longer than 255 characters.
+	long := strings.Repeat("temperature probe ", 20)
+	topic := topicFor(long, "asset:7", long, 3)
+	if len(topic+timingSuffix) > 200 {
+		t.Fatalf("topic is %d characters long: %s", len(topic), topic)
+	}
+	if strings.HasSuffix(topic, "_") || strings.Contains(topic, "__") || strings.Contains(topic, "_/") {
+		t.Fatalf("shortening left an invalid name: %s", topic)
 	}
 }

@@ -30,6 +30,8 @@ const (
 	// maxWriterPayload is the largest serialized sample Write accepts. A
 	// sample travels in one datagram; there is no fragmentation on this side.
 	maxWriterPayload = 60 * 1024
+	// MaxPayload is the largest serialized sample a Writer sends.
+	MaxPayload = maxWriterPayload
 	// maxWithdrawals is how many withdrawals of closed writers stay
 	// resendable. A reader that lost one would otherwise keep the writer.
 	maxWithdrawals = 64

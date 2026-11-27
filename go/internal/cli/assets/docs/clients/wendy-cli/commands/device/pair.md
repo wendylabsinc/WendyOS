@@ -70,13 +70,22 @@ wendy device ros2 topics
 wendy device ros2 echo /sensorlink/porch_board/chip_temperature
 ```
 
-- A ROS 2 app without `sensor-read` does not get these topics. Apps on the
-  host's network share that network, so the topics appear there only while
-  every ROS 2 app on the host's network, on the same ROS domain, holds
-  `sensor-read`.
+- A ROS 2 app without `sensor-read` does not get these topics. A topic reaches
+  everything in the network it is published in, so the agent publishes into a
+  network only while every ROS 2 app in it holds `sensor-read`. That matters
+  for apps on the host's network, which all share it, and for the services of
+  one app that share a network: one of them without the entitlement keeps the
+  topics from all of them. An app that does not declare ROS 2 in its
+  `wendy.json` is not counted.
+- When the agent cannot list the running apps four times in a row, about 30
+  seconds, it stops publishing until it can again.
 - Pair with `--sensors` to leave a channel out.
 - Each reading is sent once and is not kept. A subscriber receives the readings
   that arrive after it starts, with a default or a sensor-data subscription.
+- A message has to fit one datagram. A frame of raw bytes larger than about
+  60 KB is not published.
+- A channel keeps its topic for as long as the agent runs. When two pairings
+  would get the same topic, the one that connected second gets `_2` appended.
 - The agent looks for newly started ROS 2 apps every 10 seconds, so the topics
   can take about 20 seconds to appear in an app that has just started.
 - An app without ROS 2 reads these channels from the `sensor-read` socket
@@ -92,7 +101,8 @@ Wendy Lite counts from its boot. The agent moves that time to the device's
 clock: it estimates the offset between the two clocks from the frames that
 arrived fastest in the last 10 to 20 seconds. Readings keep the order and the
 spacing the source took them in, however unevenly the link delayed them.
-Readings sent together in one frame are stamped one sample period apart.
+Readings sent together in one frame are stamped one sample period apart, the
+last of them no later than the frame arrived.
 
 Each channel has a second topic, `/sensorlink/<source>/<channel>/timing`, that
 says how that time is known. It carries one
@@ -107,7 +117,7 @@ has these values, all text:
 | `native_clock_domain` | `SENSORLINK_SOURCE`: the stamp comes from the source's clock. `AGENT_RECEIPT`: the source sent no time, and the frame is stamped when it arrived. |
 | `native_timestamp_nanos` | The time as the source's own clock gave it. |
 | `native_uncertainty_nanos` | How far that time may be from the moment the reading was really taken, as the source measured it. `unreported` when the source does not say. |
-| `mapping_segment` | Changes when the source's clock restarts or jumps. Times of different segments cannot be compared on the source's clock. |
+| `mapping_segment` | Changes when the source's clock restarts or jumps, and each time the source reconnects. Times of different segments cannot be compared on the source's clock. |
 | `mapping_uncertainty_nanos` | How far the stamp may be from the agent's best estimate of the offset between the two clocks. |
 | `timestamp_uncertainty_nanos`, `confidence` | The bound on `header.stamp`. Both are `unbounded` when there is none. |
 

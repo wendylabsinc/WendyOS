@@ -28,15 +28,22 @@ const (
 // is late by the fastest transit time, which a stream that only flows one way
 // cannot measure.
 //
-// The offset in use follows that estimate in steps of at most half a sample
-// period. Samples the source took in order are then placed in order, and
-// samples it took a period apart are placed a period apart unless the
-// estimate itself moved.
+// A frame of several samples is stamped with the time of its first and cannot
+// leave before its last was taken, so it is the last sample's time that
+// arrival is compared with. The wait for the rest of the frame is not transit.
+//
+// The offset in use follows that estimate in small steps: at most half a
+// sample period, and at most half the time since the frame before. Samples
+// the source took in order are then placed in order, and samples it took a
+// period apart are placed a period apart unless the estimate itself moved.
 //
 // A source whose clock goes backwards (it restarted) or jumps ahead starts a
-// new segment: what the old offset said no longer holds.
+// new segment: what the old offset said no longer holds. Segments are
+// numbered, and the numbering carries on across connections of one source
+// when segment is set to the last number an earlier connection reached.
 type sourceClock struct {
 	segment     int
+	started     bool
 	offset      time.Duration // in use: device time = source time + offset
 	lastSource  time.Duration
 	bucketStart time.Duration
@@ -54,17 +61,19 @@ func (c *sourceClock) best() fastest {
 	return c.cur
 }
 
-// place returns when, on this device's clock, a sample was taken that its
-// source stamped source and that arrived at arrival. period is the time
-// between the source's samples, or zero when it is not known.
+// place returns when, on this device's clock, the first sample of a frame was
+// taken. Its source stamped that sample source, took the frame's last sample
+// span later, and the frame arrived at arrival. period is the time between
+// the source's samples, or zero when it is not known.
 //
 // uncertainty is how far that may be from the best estimate: the distance the
 // offset in use still has to move, plus what the clocks may have drifted
 // since the fastest arrival. It does not cover the fastest transit time.
-func (c *sourceClock) place(source, arrival, period time.Duration) (taken, uncertainty time.Duration) {
-	delay := arrival - source
-	if c.segment == 0 || source < c.lastSource || delay < c.offset-clockJump {
+func (c *sourceClock) place(source, span, arrival, period time.Duration) (taken, uncertainty time.Duration) {
+	delay := arrival - (source + span)
+	if !c.started || source < c.lastSource || delay < c.offset-clockJump {
 		c.segment++
+		c.started = true
 		c.offset = delay
 		c.cur, c.havePrev, c.bucketStart = fastest{delay, arrival}, false, arrival
 	} else {
@@ -74,17 +83,19 @@ func (c *sourceClock) place(source, arrival, period time.Duration) (taken, uncer
 		} else if delay < c.cur.delay {
 			c.cur = fastest{delay, arrival}
 		}
-		step := period / 2
-		if period <= 0 {
-			step = (source - c.lastSource) / 2
+		// Frames can come closer together than the source's rate suggests,
+		// so the time since the frame before limits the step as well.
+		step := (source - c.lastSource) / 2
+		if period > 0 {
+			step = min(step, period/2)
 		}
 		c.offset += max(-step, min(step, c.best().delay-c.offset))
 	}
 	c.lastSource = source
 
-	// A sample was not taken after it arrived, whatever the offset says while
-	// it is still catching up.
-	taken = min(source+c.offset, arrival)
+	// No sample of a frame was taken after the frame arrived, whatever the
+	// offset says while it is still catching up.
+	taken = min(source+c.offset, arrival-span)
 	best := c.best()
 	behind := taken - (source + best.delay)
 	if behind < 0 {

@@ -122,13 +122,22 @@ func channelToken(name string, id uint32) string {
 	return fmt.Sprintf("channel_%d", id)
 }
 
+// maxToken bounds one token of a topic name. A ROS 2 topic name may be 255
+// characters long, and a topic here has two tokens and a suffix.
+const maxToken = 64
+
 // nameToken turns free text into one valid token of a ROS 2 name: letters,
 // digits and single underscores, not starting with a digit and not starting
-// or ending with an underscore. It returns "" when nothing usable is left.
+// or ending with an underscore, cut to maxToken characters. It returns ""
+// when nothing usable is left.
 func nameToken(s string) string {
 	var b strings.Builder
 	pending := false
 	for _, r := range s {
+		// Room for this character, an underscore before it and a leading x.
+		if b.Len()+3 > maxToken {
+			break
+		}
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 			if pending && b.Len() > 0 {
 				b.WriteByte('_')

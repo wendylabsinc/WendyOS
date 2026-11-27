@@ -28,6 +28,21 @@ func namespaceID(file *os.File) (namespaceIdentity, error) {
 	return namespaceIdentity{device: uint64(stat.Dev), inode: stat.Ino}, nil
 }
 
+// NetworkNamespaceID names the network namespace a process is in, or this
+// process's own for pid 0. Two processes share a network exactly when their
+// names are equal.
+func NetworkNamespaceID(pid uint32) (string, error) {
+	path := "/proc/self/ns/net"
+	if pid != 0 {
+		path = fmt.Sprintf("/proc/%d/ns/net", pid)
+	}
+	var stat unix.Stat_t
+	if err := unix.Stat(path, &stat); err != nil {
+		return "", fmt.Errorf("rtps: network namespace of process %d: %w", pid, err)
+	}
+	return fmt.Sprintf("%d:%d", uint64(stat.Dev), stat.Ino), nil
+}
+
 // start time distinguishes a recycled PID even if the container ID is unchanged.
 func processStart(pid uint32) (string, error) {
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
