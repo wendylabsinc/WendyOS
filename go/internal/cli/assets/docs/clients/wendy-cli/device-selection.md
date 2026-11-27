@@ -45,15 +45,20 @@ wendy --device jetson.wendy.internal device info
 wendy --device "device-${DEVICE_UUID}.wendy.internal" device info
 ```
 
+The first example uses a friendly hostname; the second uses the device's
+certificate UUID. A successful `device info` command prints the selected
+device's information.
+
 Valid enrolled DNS labels keep their repeated hyphens, so `jetson--a` and
 `jetson-a` refer to different names. A legacy display name such as `Jetson A`
 becomes `jetson-a.wendy.internal`.
 
 The CLI gathers LAN, Wendy Net, and Cloud candidates in parallel. For UUID
 hostnames, direct LAN gets a 500 ms head start before the CLI chooses another
-ready route. If no route is ready after the initial LAN scan, LAN discovery
-can continue for another 2.5 seconds, for a total LAN scan budget of 3 seconds,
-while the CLI waits for a usable route.
+ready route. If the initial scan finishes without a matching LAN candidate or
+a discovery error, and no mesh or Cloud route is ready, the CLI can scan LAN
+for up to another 2.5 seconds. It can stop early when another route is ready.
+It does not extend the scan after a discovered LAN candidate fails to connect.
 For friendly hostnames, the CLI allows up to 3 seconds for LAN
 and Cloud discovery to check for conflicts. If it still needs a route, Wendy
 Net discovery can run for up to 15 seconds, including over Bluetooth. Probing
@@ -98,10 +103,10 @@ can still reach its original device. If Cloud inventory or a complete Wendy
 Net directory identifies a different device by that name, the CLI refuses
 the connection and asks you to verify the change.
 
-After verifying an intentional replacement or an invalid saved pin, select
-the intended organization's context with `wendy auth use` and unpin the
-hostname. Use the [sign-in context commands](./commands/auth/login.md#auth-contexts)
-to list saved contexts with `wendy auth status` and switch with `wendy auth use`:
+After verifying an intentional replacement or an invalid saved pin, use the
+[sign-in context commands](./commands/auth/login.md#auth-contexts) to find the
+intended organization with `wendy auth status` and select it with `wendy auth use`.
+Then unpin the hostname:
 
 ```sh
 wendy device unpin jetson.wendy.internal
