@@ -11,7 +11,10 @@ struct `report command` {
         let rootURL = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: rootURL) }
 
-        let packageURL = rootURL.appendingPathComponent("Package", isDirectory: true)
+        let packageURL = rootURL.appendingPathComponent(
+            "TestedRepo/swift/WendyE2ETests",
+            isDirectory: true
+        )
         let testsURL = packageURL.appendingPathComponent("Tests", isDirectory: true)
         let supportURL = packageURL.appendingPathComponent("Support", isDirectory: true)
         let runURL = rootURL.appendingPathComponent("Run", isDirectory: true)
@@ -89,6 +92,29 @@ struct `report command` {
             contentsOf: runURL.appendingPathComponent("index.html"),
             encoding: .utf8
         )
+
+        // Trusted templates and tested source identities must join the same
+        // recorded outcomes even when they live in different package roots.
+        let trustedPackage = rootURL.appendingPathComponent("TrustedPackage")
+        try FileManager.default.createDirectory(
+            at: trustedPackage.appendingPathComponent("Support"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(
+            at: productionReportTemplateURL(),
+            to: trustedPackage.appendingPathComponent("Support/e2e-report.template.html")
+        )
+        var splitReport = try ReportCommand.parse([
+            "--package-dir", trustedPackage.path,
+            "--repo", rootURL.appendingPathComponent("TestedRepo").path,
+            "--run-dir", runURL.path,
+        ])
+        try splitReport.run()
+        let splitHTML = try String(
+            contentsOf: runURL.appendingPathComponent("index.html"),
+            encoding: .utf8
+        )
+        #expect(splitHTML == html)
 
         #expect(!html.contains("<img src=x onerror="))
         #expect(html.contains("macos-to-&lt;img src=x onerror=&quot;alert(1)&quot;&gt;"))
@@ -186,6 +212,72 @@ struct `report command` {
             )
         )
     }
+}
+
+@Suite
+struct `report Go coverage total` {
+    @Test(
+        arguments: [
+            (#"{"status":"collected","summary":{"percent":1.8833638131730965}}"#, "1.883%"),
+            (#"{"status":"collected","summary":{"percent":0}}"#, "0.000%"),
+            (#"{"status":"incomplete","summary":{"percent":1.8833638131730965}}"#, "Incomplete"),
+            (#"{"status":"no-data"}"#, "No data"),
+            (#"{"status":"collected","summary":{"percent":null}}"#, "Incomplete"),
+            (#"{"status":"collected","summary":{"percent":101}}"#, "Incomplete"),
+            (nil, "Not collected"),
+        ] as [(String?, String)]
+    )
+    func `overview reads the attempt total and preserves honest missing states`(
+        coverage: String?,
+        expected: String
+    ) throws {
+        try assertCoverageOverview(coverages: [coverage], expected: expected)
+    }
+
+    @Test
+    func `overview does not average several attempts`() throws {
+        try assertCoverageOverview(
+            coverages: [
+                #"{"status":"collected","summary":{"percent":20}}"#,
+                #"{"status":"collected","summary":{"percent":80}}"#,
+            ],
+            expected: "Multiple attempts"
+        )
+    }
+}
+
+private func assertCoverageOverview(coverages: [String?], expected: String) throws {
+    let rootURL = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let packageURL = rootURL.appendingPathComponent("Package")
+    let runURL = rootURL.appendingPathComponent("Run")
+    let supportURL = packageURL.appendingPathComponent("Support")
+    try FileManager.default.createDirectory(
+        at: packageURL.appendingPathComponent("Tests"),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(at: supportURL, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(
+        at: productionReportTemplateURL(),
+        to: supportURL.appendingPathComponent("e2e-report.template.html")
+    )
+    for (index, coverage) in coverages.enumerated() {
+        let attempt = runURL.appendingPathComponent("attempts/ubuntu/\(index)")
+        try FileManager.default.createDirectory(at: attempt, withIntermediateDirectories: true)
+        let coverageField = coverage.map { ",\"coverage\":\($0)" } ?? ""
+        try "{\"exitStatus\":0\(coverageField)}".write(
+            to: attempt.appendingPathComponent("attempt.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+    var command = try ReportCommand.parse([
+        "--package-dir", packageURL.path, "--run-dir", runURL.path,
+    ])
+    try command.run()
+    let html = try String(contentsOf: runURL.appendingPathComponent("index.html"), encoding: .utf8)
+    #expect(html.contains("Go source coverage: <strong>\(expected)</strong>"))
+    #expect(!html.contains("{{GO_COVERAGE_TOTAL}}"))
 }
 
 // setenv is process-wide, so these cases must not overlap. The other report tests

@@ -2,13 +2,16 @@
 """Evaluate the committed Swift E2E job conditions across real run shapes."""
 
 import itertools
+import fnmatch
+import json
 import os
-import subprocess
-import tempfile
 
 import yaml
 from pathlib import Path
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "swift-e2e-tests.yml"
@@ -27,14 +30,18 @@ def job_condition(text, job):
     return " ".join(match[1].split()).removeprefix("${{").removesuffix("}}").strip()
 
 
-def evaluate(condition, results, attempt, event, run_cancelled=False):
+def evaluate(condition, results, attempt, event, run_cancelled=False, quiet=False,
+             workflow="Swift E2E Tests"):
     """Translate the small expression subset these gates use into Python."""
     python = re.sub(r"contains\(needs\.\*\.result, ('\w+')\)", r"(\1 in results)", condition)
     python = python.replace("always()", "True").replace("cancelled()", "run_cancelled")
     python = python.replace("github.run_attempt", "attempt").replace("github.event_name", "event")
+    python = python.replace("github.workflow", "workflow")
+    python = python.replace("inputs.quiet", "quiet")
     python = python.replace("&&", " and ").replace("||", " or ")
     python = re.sub(r"!(?!=)", " not ", python)
-    names = {"results": results, "attempt": attempt, "event": event, "run_cancelled": run_cancelled}
+    names = {"results": results, "attempt": attempt, "event": event, "run_cancelled": run_cancelled,
+             "quiet": quiet, "workflow": workflow}
     return bool(eval(python, {"__builtins__": {}}, names))
 
 
@@ -63,6 +70,8 @@ class GateTests(unittest.TestCase):
             ("green second attempt on main", ("skipped", "success"), "2", "push", (True, False)),
             ("green dispatch", ("skipped", "success"), "1", "workflow_dispatch", (True, False)),
             ("failed dispatch", ("skipped", "failure"), "1", "workflow_dispatch", (True, False)),
+            ("green reusable caller", ("skipped", "success"), "1", "workflow_call", (False, True)),
+            ("failed reusable caller", ("skipped", "failure"), "1", "workflow_call", (True, False)),
             ("all skipped on a PR", ("skipped", "skipped"), "1", "pull_request", (False, False)),
             ("all skipped on main", ("skipped", "skipped"), "1", "push", (False, False)),
             ("all skipped dispatch", ("skipped", "skipped"), "1", "workflow_dispatch", (True, False)),
@@ -76,6 +85,71 @@ class GateTests(unittest.TestCase):
         for results in (("skipped", "cancelled"), ("skipped", "failure"), ("skipped", "success")):
             with self.subTest(results):
                 self.assertEqual(self.started(results, run_cancelled=True), (False, False))
+
+    def test_quiet_diagnostics_never_run_analysis_or_notifications(self):
+        for results, attempt, event in itertools.product(
+            itertools.product(("success", "failure", "cancelled", "skipped"), repeat=2),
+            ("1", "2"), ("workflow_dispatch", "workflow_call", "push")
+        ):
+            for condition in (self.analyze, self.passed):
+                self.assertFalse(evaluate(condition, results, attempt, event, quiet=True))
+
+    def test_coverage_is_only_for_direct_nightly_and_manual_runs(self):
+        workflow = yaml.load(self.text, Loader=yaml.BaseLoader)
+        self.assertEqual(workflow["on"]["schedule"], [{"cron": "17 3 * * *"}])
+        ubuntu = workflow["jobs"]["swift-e2e-local-ubuntu"]
+        action = next(step for step in ubuntu["steps"]
+                      if step.get("uses") == "./.github/actions/swift-e2e-run")
+        expression = action["with"]["coverage"]
+        self.assertTrue(expression.startswith("${{") and expression.endswith("}}"))
+        condition = expression.removeprefix("${{").removesuffix("}}").strip()
+        build = yaml.load(WORKFLOW.with_name("build.yml").read_text(), Loader=yaml.BaseLoader)
+        for caller, event, quiet in itertools.product(
+            (workflow["name"], build["name"]),
+            ("schedule", "workflow_dispatch", "push", "pull_request", "workflow_call"),
+            (False, True),
+        ):
+            with self.subTest(caller=caller, event=event, quiet=quiet):
+                expected = caller == workflow["name"] and event in ("schedule", "workflow_dispatch")
+                self.assertEqual(evaluate(condition, (), "1", event, quiet=quiet, workflow=caller), expected)
+        self.assertNotIn("inputs.coverage", self.text)
+        self.assertNotRegex(self.text, r"(?m)^      coverage:")
+        self.assertEqual(len(re.findall(r"(?m)^      quiet:\n(?:        .*\n)*?        default: false$", self.text)), 2)
+        self.assertIn("    if: false", self.text.split("  swift-e2e-local-ubuntu:", 1)[0])
+        build = WORKFLOW.with_name("build.yml").read_text()
+        self.assertIn("uses: ./.github/workflows/swift-e2e-tests.yml", build)
+        self.assertNotIn("quiet:", build)
+
+    def test_cli_tests_trigger_for_their_actual_dependencies(self):
+        workflow = yaml.load(WORKFLOW.with_name("swift-e2e-cli-tests.yml").read_text(), Loader=yaml.BaseLoader)
+        dependencies = [
+            ".github/workflows/build.yml", ".github/actions/swift-e2e-run/action.yml",
+            "swift/Scripts/E2EAggregate.sh", "swift/Scripts/E2ETest.sh",
+            "swift/Scripts/E2EReview.sh", "swift/Scripts/E2EReport.sh",
+            "go/cmd/wendy/coverage_e2e.go", "go/cmd/wendy-agent/coverage_e2e.go",
+            "go.mod", "go.sum",
+            "swift/WendyE2ETests/Tests/WendyE2ETests/ContextCLIAssertions.swift",
+            "swift/WendyE2ETests/Tests/WendyE2ETests/LocalCLIAssertions.swift",
+            "swift/WendyE2ETests/Tests/WendyE2ETests/FirstAppFixture.swift",
+            "swift/WendyE2ETests/Tests/WendyE2ETests/WendyProjectOptimizeTests.swift",
+        ]
+        for event in ("push", "pull_request"):
+            patterns = workflow["on"][event]["paths"]
+            for dependency in dependencies:
+                with self.subTest(event=event, dependency=dependency):
+                    self.assertTrue(any(fnmatch.fnmatchcase(dependency, pattern) for pattern in patterns))
+            self.assertFalse(any(fnmatch.fnmatchcase("go/internal/cli/ordinary.go", pattern) for pattern in patterns))
+
+    def test_html_overview_is_rendered_before_raw_artifact_upload(self):
+        action = (WORKFLOW.parents[1] / "actions/swift-e2e-run/action.yml").read_text()
+        render = action.index("    - name: Render Swift E2E overview (Unix)")
+        upload = action.index("    - name: Upload Swift E2E run (Unix)")
+        self.assertLess(render, upload)
+        script = action[render:upload]
+        self.assertIn("!cancelled()", script)
+        self.assertIn("E2EAggregate.sh", script)
+        self.assertIn("E2EReport.sh", script)
+        self.assertNotIn("E2EReview", script)
 
     def test_every_run_starts_at_most_one_and_never_loses_a_finished_job(self):
         outcomes = ("success", "failure", "cancelled", "skipped")
@@ -122,6 +196,31 @@ class GateTests(unittest.TestCase):
 
     def test_report_command_reads_the_variable_the_workflow_sets(self):
         self.assertIn('environment["WENDY_E2E_REVIEW_OUTCOME"]', REPORT_COMMAND.read_text(encoding="utf-8"))
+
+    def test_host_setup_leaves_successful_attempt_creation_to_the_runner(self):
+        self.run_host_setup(0)
+
+    def test_host_setup_failure_preserves_its_artifact(self):
+        self.run_host_setup(23)
+
+    def run_host_setup(self, exit_status):
+        action = WORKFLOW.parents[1] / "actions/swift-e2e-run/action.yml"
+        block = action.read_text().split("    - name: Set up Swift E2E host (Unix)\n", 1)[1].split("\n    - name:", 1)[0]
+        script = textwrap.dedent(block.split("      run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory(prefix="swift-e2e-host-setup-") as directory:
+            root = Path(directory)
+            setup = root / "swift/Scripts/E2ESetup.sh"
+            setup.parent.mkdir(parents=True)
+            setup.write_text(f"echo real-setup-shell-receipt\nexit {exit_status}\n")
+            result = subprocess.run(["bash", "-c", script], cwd=root, capture_output=True, text=True,
+                                    env=dict(os.environ, RUNNER_TEMP=str(root / "runner-temp"), RUN_ID="test-attempt"))
+            self.assertEqual(result.returncode, exit_status, result.stderr)
+            run = root / "runner-temp/wendy/test-attempt"
+            if exit_status:
+                self.assertIn("real-setup-shell-receipt", (run / "attempt.log").read_text())
+                self.assertEqual(json.loads((run / "attempt.json").read_text())["exitStatus"], exit_status)
+            else:
+                self.assertFalse(run.exists(), "Successful setup must not precreate a coverage attempt")
 
 
 if __name__ == "__main__":

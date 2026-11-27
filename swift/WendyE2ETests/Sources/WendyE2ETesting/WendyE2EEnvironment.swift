@@ -24,6 +24,10 @@ public enum WendyE2EEnvironment {
         flag("WENDY_E2E_PARALLEL")
     }
 
+    public static var coverage: Bool {
+        flag("WENDY_E2E_COVERAGE")
+    }
+
     public static var runDirectory: String? {
         value("WENDY_E2E_RUN_DIR")
     }

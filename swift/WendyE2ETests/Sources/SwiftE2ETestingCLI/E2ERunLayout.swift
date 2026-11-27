@@ -1,5 +1,64 @@
 import Foundation
 
+func e2eAttemptGoDiffCoverageTotal(at attemptURL: URL) -> String {
+    guard let info = e2eAttemptJSON(at: attemptURL),
+        let coverage = info["coverage"] as? [String: Any],
+        let diff = coverage["diff"] as? [String: Any]
+    else { return "Not compared" }
+    return e2eGoDiffCoverageTotal(
+        diff,
+        revision: (info["git"] as? [String: Any])?["commit"] as? String
+    )
+}
+
+func e2eGoDiffCoverageTotal(_ value: [String: Any]?, revision: String?) -> String {
+    guard let diff = value, let status = diff["status"] as? String else { return "Not compared" }
+    let provenance = diff["provenance"] as? [String: Any]
+    if status != "unavailable" {
+        guard let base = provenance?["baseRevision"] as? String, base.count == 40,
+            let current = provenance?["sourceRevision"] as? String, current.count == 40
+        else { return "Unavailable: missing comparison provenance" }
+    }
+    if let current = provenance?["sourceRevision"] as? String,
+        revision != current
+    {
+        return "Unavailable: comparison revision differs from the run"
+    }
+    let revisionLabel: String
+    if let base = provenance?["baseRevision"] as? String,
+        let current = provenance?["sourceRevision"] as? String
+    {
+        revisionLabel = " (\(base.prefix(9)) → \(current.prefix(9)))"
+    } else {
+        revisionLabel = ""
+    }
+    switch status {
+    case "not-applicable":
+        return "Not applicable (no eligible changed Go statements)" + revisionLabel
+    case "unavailable":
+        return "Unavailable: \(diff["reason"] as? String ?? "comparison unavailable")"
+    case "incomplete":
+        let missing = (diff["missingFiles"] as? [String] ?? []).joined(separator: ", ")
+        return
+            "Incomplete\(missing.isEmpty ? "" : ": source absent from measured build: " + missing)"
+            + revisionLabel
+    case "collected":
+        guard let percent = diff["percent"] as? Double,
+            let covered = diff["covered"] as? Int, let statements = diff["statements"] as? Int,
+            let blocks = diff["blocks"] as? Int, statements > 0,
+            covered >= 0, covered <= statements, blocks > 0,
+            percent.isFinite, percent >= 0, percent <= 100,
+            let provenance = diff["provenance"] as? [String: Any],
+            let base = provenance["baseRevision"] as? String,
+            let current = provenance["sourceRevision"] as? String,
+            revision == current
+        else { return "Unavailable: invalid comparison totals or revision" }
+        return String(format: "%.3f%%", percent)
+            + " (\(covered)/\(statements) statements in \(blocks) blocks; \(base.prefix(9)) → \(current.prefix(9)))"
+    default: return "Unavailable: unknown comparison status"
+    }
+}
+
 #if canImport(FoundationXML)
     import FoundationXML
 #endif
@@ -30,6 +89,30 @@ func e2eAttemptArtifactsURL(in runURL: URL, targetName: String, attempt: String)
 func e2eAttemptExitStatus(at attemptURL: URL) -> Int? {
     guard let object = e2eAttemptJSON(at: attemptURL) else { return nil }
     return object["exitStatus"] as? Int
+}
+
+func e2eAttemptGoCoverageTotal(at attemptURL: URL) -> String {
+    guard let coverage = e2eAttemptJSON(at: attemptURL)?["coverage"] as? [String: Any] else {
+        return "Not collected"
+    }
+    return e2eGoCoverageTotal(coverage)
+}
+
+func e2eGoCoverageTotal(_ coverage: [String: Any]) -> String {
+    switch coverage["status"] as? String {
+    case "not-collected":
+        return "Not collected"
+    case "no-data":
+        return "No data"
+    case "collected":
+        guard let summary = coverage["summary"] as? [String: Any],
+            let percent = summary["percent"] as? Double,
+            percent.isFinite, (0...100).contains(percent)
+        else { return "Incomplete" }
+        return String(format: "%.3f%%", locale: Locale(identifier: "en_US_POSIX"), percent)
+    default:
+        return "Incomplete"
+    }
 }
 
 func e2eAttemptXUnitURL(at attemptURL: URL) -> URL? {

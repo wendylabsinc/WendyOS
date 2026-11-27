@@ -23,6 +23,14 @@ struct AggregateCommand: ParsableCommand {
     )
     var packageDir: String?
 
+    @Option(
+        help:
+            "Optional Git range (BASE...HEAD or BASE..HEAD) for changed Go blocks and Added/Removed/Changed specs."
+    )
+    var diff: String?
+    @Option(help: "Matching source repository; defaults to the package repository when needed.")
+    var repo: String?
+
     @Argument(help: "Swift E2E attempt directories to aggregate.")
     var attemptDirs: [String] = []
 
@@ -46,7 +54,38 @@ struct AggregateCommand: ParsableCommand {
 
         try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
 
+        var planned: [URL: Set<String>] = [:]
+        for input in attemptURLs {
+            let id = try AttemptID(input.lastPathComponent)
+            let root = outputURL.appendingPathComponent("\(id.workflowName).\(id.runID)")
+            planned[root, default: []].insert(id.targetName + "/" + id.attempt)
+        }
+        let hasCoverage = try attemptURLs.contains { try GoCoverage.wasRequested(run: $0) }
+        for (root, expected) in planned
+        where hasCoverage || diff != nil
+            || CoverageIO.exists(root.appendingPathComponent("coverage/summary.json"))
+        {
+            let existing = try runAttemptArtifactURLsByTarget(in: root)
+            let names = Set(
+                existing.flatMap { target, attempts in
+                    attempts.map { target + "/" + $0.lastPathComponent }
+                }
+            )
+            guard names.isSubset(of: expected) else {
+                throw ValidationError(
+                    "Coverage reaggregation requires all run attempts; supply every raw attempt or use a fresh output directory"
+                )
+            }
+        }
+
         var runURLs: Set<URL> = []
+        var inputsByRun: [URL: [URL]] = [:]
+        var coverageByRun: [URL: [AggregateCoverageAttempt]] = [:]
+        var errorsByRun: [URL: [String]] = [:]
+        var repositories: [URL: URL] = [:]
+        var scratch: [URL] = []
+        defer { for url in scratch { try? FileManager.default.removeItem(at: url) } }
+        var failed = false
         for attemptURL in attemptURLs {
             let attemptID = attemptURL.lastPathComponent
             let components = try AttemptID(attemptID)
@@ -60,20 +99,75 @@ struct AggregateCommand: ParsableCommand {
                 withIntermediateDirectories: true
             )
 
+            inputsByRun[runURL, default: []].append(attemptURL)
+            if try GoCoverage.wasRequested(run: attemptURL) || diff != nil {
+                do {
+                    let repository =
+                        try repo.map { URL(fileURLWithPath: $0) }
+                        ?? URL(
+                            fileURLWithPath: CoverageIO.command(
+                                ["git", "rev-parse", "--show-toplevel"],
+                                cwd: packageURL
+                            ).trimmingCharacters(in: .whitespacesAndNewlines)
+                        )
+                    repositories[runURL] = repository
+                    if try GoCoverage.wasRequested(run: attemptURL) {
+                        guard
+                            CoverageIO.exists(
+                                attemptURL.appendingPathComponent("coverage/source.json")
+                            )
+                        else {
+                            throw ValidationError(
+                                "Coverage requested but source provenance is missing: " + attemptID
+                            )
+                        }
+                        let capture = try AggregateCoverageAttempt(
+                            input: attemptURL,
+                            repo: repository
+                        )
+                        scratch.append(capture.scratch)
+                        coverageByRun[runURL, default: []].append(capture)
+                    }
+                } catch { errorsByRun[runURL, default: []].append(String(describing: error)) }
+            }
+            if CoverageIO.exists(attemptURL.appendingPathComponent("coverage/source.json")) {
+                do { try GoCoverage.pack(run: attemptURL) } catch {
+                    errorsByRun[runURL, default: []].append(String(describing: error))
+                }
+            }
+
             try mapAttempt(
                 attemptURL: attemptURL,
                 components: components,
                 runURL: runURL,
-                packageURL: packageURL
+                packageURL: repo.map {
+                    URL(fileURLWithPath: $0).appendingPathComponent("swift/WendyE2ETests")
+                } ?? packageURL
             )
         }
 
         for root in runURLs.sorted(by: { $0.path < $1.path }) {
+            if try aggregateGoCoverage(
+                inputs: inputsByRun[root] ?? [],
+                captured: coverageByRun[root] ?? [],
+                errors: errorsByRun[root] ?? [],
+                run: root,
+                repo: repositories[root],
+                diff: diff
+            ) {
+                failed = true
+            }
+            for input in inputsByRun[root] ?? [] {
+                if CoverageIO.exists(input.appendingPathComponent("coverage/source.json")) {
+                    try CoverageIO.remove(input.appendingPathComponent("coverage/coverage.out"))
+                }
+            }
             _ = try writeRunOverview(in: root)
             try writeRunSourceIndex(in: root)
             print("==> Wrote Swift E2E run: \(root.path)")
             print("    Overview: \(runOverviewURL(in: root).path)")
         }
+        if failed { throw ExitCode.failure }
     }
 
     private func mapAttempt(
@@ -114,7 +208,9 @@ struct AggregateCommand: ParsableCommand {
                 at: destinationURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try copyItem(at: testDirectory, to: destinationURL)
+            // HTML/AI inputs need recordings and metadata, not a second copy of
+            // native Go evidence or reproducible full-source profiles.
+            try copyDirectory(at: testDirectory, to: destinationURL, excluding: ["coverage"])
             try copyTestMetadataIfPresent(
                 from: testDirectory,
                 to: destinationURL.deletingLastPathComponent().deletingLastPathComponent(),
@@ -368,11 +464,42 @@ private func copyAttemptLevelArtifacts(from attemptURL: URL, to destinationURL: 
         includingPropertiesForKeys: nil,
         options: [.skipsHiddenFiles]
     )
-    for sourceURL in entries where sourceURL.lastPathComponent != e2eObservationsDirectoryName {
+    for sourceURL in entries
+    where ![e2eObservationsDirectoryName, "report"].contains(sourceURL.lastPathComponent) {
+        if sourceURL.lastPathComponent == "coverage" {
+            try copyDirectory(
+                at: sourceURL,
+                to: destinationURL.appendingPathComponent("coverage"),
+                excluding: [
+                    "bin", "bootstrap", "go-native.tar.gz", "native.sha256", "coverage.out",
+                    "index.html", "diff.patch", "diff.patch.gz", "diff.json",
+                ]
+            )
+            continue
+        }
         try copyItem(
             at: sourceURL,
             to: destinationURL.appendingPathComponent(sourceURL.lastPathComponent)
         )
+    }
+}
+
+private func copyDirectory(
+    at sourceURL: URL,
+    to destinationURL: URL,
+    excluding names: Set<String>
+) throws {
+    try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+    for entry in try FileManager.default.contentsOfDirectory(
+        at: sourceURL,
+        includingPropertiesForKeys: nil
+    ) {
+        if !names.contains(entry.lastPathComponent) {
+            try copyItem(
+                at: entry,
+                to: destinationURL.appendingPathComponent(entry.lastPathComponent)
+            )
+        }
     }
 }
 

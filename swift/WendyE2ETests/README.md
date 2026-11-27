@@ -79,6 +79,203 @@ The spec creates a per-test virtual environment, installs with `--no-index`, and
 runs the installed console script outside the source tree. Without that fixture,
 only this installation spec is skipped; parsed build settings remain covered.
 
+### Collect Go source coverage
+
+Local coverage is opt-in. CI collects Go coverage in direct nightly (03:17 UTC)
+and manual runs of **Swift E2E Tests**. Main push/build and reusable Build/release
+calls run without coverage, including manual Build dispatches. For example,
+collect two local CLI tests:
+
+```bash
+bash Scripts/E2ETest.sh --coverage --no-managed-agent \
+  --output-dir ../Build/e2e \
+  --filter "prints CLI and system information" \
+  --filter "prints JSON info for automation"
+```
+
+Use `--managed-agent` on an isolated Ubuntu host to include the managed Go
+Agent. Existing device Agents are never replaced; CLI-only runs explicitly
+record the Agent as uninstrumented. Remote CLI transport and managed macOS
+Agent coverage are currently unsupported. `WENDY_E2E_COVERAGE=true` is equivalent
+to `--coverage`; combining coverage with `--parallel` is an error.
+
+The runner builds dedicated binaries under the attempt's `coverage/bin`, leaving
+ordinary build outputs alone. Both coverage and ordinary mode use one normal
+sequential Swift suite invocation and its native xUnit output. Coverage is owned
+by `CLIAndAgentScenario.run`: the managed Agent resets before scenario setup and
+exports after all scenario-owned hooks, body and teardown, including partial
+setup failure cleanup. All CLI sessions in that scenario share its recorder's
+native coverage directory. The current product suite uses one scenario per
+command-bearing test; overlapping or repeated intervals are rejected.
+
+The managed Agent is started and checked for readiness before measurement. It
+stays alive through interval export and attempt finalization. Background Agent
+activity during a scenario interval is included; Swift process startup/discovery,
+Agent initialization and Swift-only work outside scenarios are excluded. Its
+private Unix socket control and CLI invocation receipts exist only in
+`e2e_coverage` builds. Skipped tests and Swift-only controls have no interval and
+retain skipped/no-data labels from native xUnit. A fatal suite-process crash stops
+the remaining suite; the durable active receipt permits best-effort Agent export,
+but interrupted/unexecuted work is explicitly incomplete, never inferred passed.
+Suite capture completeness is retained in the existing `coverage/source.json`;
+no separate runner or test-list/XML assembly is used.
+
+Native files use `observations/<suite>/<test>/coverage/go/`. CI packages these
+paths, plus startup native evidence, losslessly in `coverage/go-native.tar.gz`.
+Ordinary tar hard links store byte-identical metadata once while restoring every
+test's original paths. From the downloaded attempt directory:
+
+```bash
+tar -xzf coverage/go-native.tar.gz
+sha256sum -c coverage/native.sha256
+```
+
+Standard Go coverage tools work on the unpacked directories. Aggregation's
+run-level `coverage/coverage.out` combines test evidence by source with Go's
+`covdata merge -pcombine`, so shared CLI/Agent packages have one denominator.
+Percentages use covered statements divided by statements, including zero-hit
+packages linked into the measured binaries. They are never averages of tests.
+This is platform-specific coverage of linked main-module Go packages; third-party
+dependencies, unlinked packages and non-Go source are outside its scope.
+
+Execution records source/build provenance in `coverage/source.json`, interval
+receipts in `coverage/tests.json`, and native metadata/counters under
+`observations/<suite>/<test>/coverage/go/`. The existing shell/Make entry points
+only coordinate execution; their private `_capture` CLI calls perform collection
+in Swift. There is no separate public coverage command family. The managed Go
+Agent resets once before each scenario and exports after its cleanup, while
+still alive; all sessions of that scenario share an interval. Ordinary builds omit
+the instrumentation hooks. Missing counters, crashed participants and timeouts
+remain explicit incomplete evidence, without hiding the original test failure.
+
+### Aggregate, then display
+
+With the matching source checkout, use the existing aggregation command:
+
+```bash
+swift run swift-e2e-testing aggregate --package-dir . --output-dir /path/to/runs \
+  /path/to/swift-e2e-tests.RUN.TARGET.0001
+swift run swift-e2e-testing report --run-dir /path/to/runs/swift-e2e-tests.RUN
+```
+
+`aggregate` saves per-test participant/completeness summaries, derives per-attempt
+source totals, and computes one consolidated native
+source union with standard Go covdata `-pcombine`; it never averages percentages.
+It verifies source identities, immutable revisions and linked file/package scopes
+before combining attempts. Uncollected attempts/targets are explicitly listed as
+`not-collected` and do not invalidate a compatible collected union. A requested
+capture missing provenance/counters remains `incomplete` and fails aggregation;
+new runner metadata records `coverageRequested` even when preparation fails.
+Capture records and execution exit status remain
+unchanged by derivation, so restoring matching source/evidence permits a clean
+retry. Derived participant states are saved in summaries and test coverage
+metadata. Incompatible evidence is incomplete, not a smaller successful
+denominator. The run's `coverage/summary.json` saves totals and scope;
+`coverage/coverage.out` is its one overall profile. Generated Go files and test-only
+hooks are excluded by file from derived handwritten-source totals. Native data
+remains lossless. Non-Go and unlinked source are outside the overall build scope.
+
+Aggregation compacts each input attempt in place: binaries (after recording
+hashes/settings) and reproducible per-test profiles are omitted, while native
+files use standard `coverage/go-native.tar.gz` with hard links for repeated
+metadata. SHA-256 manifests are verified before originals are removed. Restore
+original paths inside the downloaded raw attempt with:
+
+```bash
+tar -xzf coverage/go-native.tar.gz
+```
+
+Reaggregation reads an existing native archive in scratch space, so it requires
+no new test execution or permanent unpack. Supply all raw attempts for a run
+when reaggregating coverage; use a fresh output directory for a subset. The
+embedded run report and AI inputs retain logs, recordings, test results and
+derived metadata without duplicating native archives or profiles. Standard Go
+tools can derive additional profiles or an optional source HTML view; HTML is not produced during collection:
+
+```bash
+go tool cover -html=/path/to/run/coverage/coverage.out -o=/path/to/coverage.html
+```
+
+For split checkouts, `aggregate --repo TESTED_REPO` and `review --repo TESTED_REPO`
+validate source against recorded revisions. Run the tool from the trusted
+package (`--package-dir`); the tested repository is read-only investigation data,
+not a source of scripts or package/dependency execution. For split report rendering,
+`report --package-dir TRUSTED_PACKAGE --repo TESTED_REPO` uses
+trusted templates with tested package-relative recording identities. `--tests-dir` can narrow the sources within `TESTED_REPO/swift/WendyE2ETests`.
+Review harness startup
+stays in the trusted tooling repository. The workflow materializes the actual tested SHA (including synthetic merges)
+from validated raw Git blobs before aggregation; no checkout conversion or
+archive filters run, and tested files never enter the trusted package.
+
+`report` only displays the saved aggregation results. It requires no Git access
+to calculate coverage or spec changes. Existing noncoverage runs remain readable;
+not-collected, no-data and incomplete results retain honest labels. Existing
+per-test/command timings and product assertions are unchanged.
+
+### Optional Git comparison
+
+Aggregation uses the same Git range convention as optional AI `review --diff`:
+
+```bash
+swift run swift-e2e-testing aggregate --package-dir . --output-dir /path/to/runs \
+  --diff origin/main...TESTED /path/to/swift-e2e-tests.RUN.TARGET.0001
+```
+
+`BASE...TESTED` resolves an immutable merge base; `BASE..TESTED` uses the explicit
+base. TESTED must match the recorded run revision. Reaggregate with another base
+to change the comparison without rerunning tests. The run saves revisions,
+source/profile identity, metric results and spec entries in `comparison.json`
+and `coverage/summary.json`. No patch, patch archive or whole-patch AI prompt is
+stored. The unreleased earlier patch-file/reference-comparison interface has
+been removed; full reference generation remains independent.
+
+Changed-code coverage uses `git diff --unified=0` new-side added/changed line
+ranges intersecting Go coverage block spans. Each block's statements count once;
+a block is covered when its counter is positive. **This is a block/line overlap
+approximation:** comment or formatting edits inside a block may count, and whole
+blocks (including several blocks on one physical line) contribute. No semantic
+Go lexer or AST filter is used. Removed lines, `_test.go`, `testdata`, the
+repository’s `go/internal/testfixture/` test helpers, generated files (header or
+`linguist-generated` attribute), nonproduction paths and test-only
+hooks are excluded. Production `go/` paths such as simulator code remain eligible.
+Changed eligible files absent from the measured build are explicitly incomplete;
+no eligible blocks means **Not applicable**, never 100%. Wrong revisions or an
+unresolvable range produce an unavailable comparison and a stderr warning,
+without failing otherwise valid aggregation or changing test outcomes. This
+intentional approximation replaces the old token-based metric; results need not
+equal that metric.
+
+Aggregate retains spec-comparison entries and their independent extraction status
+in saved metadata. HTML displays the full current suite without Added/Changed/Removed
+highlights or a Removed-spec section; those report annotations are deferred.
+Optional AI review keeps its existing `--diff RANGE` behavior and can inspect the
+matching repository plus recorded results; it is not required to collect,
+aggregate or display coverage.
+
+The **Swift E2E Tests** workflow collects coverage on its active Ubuntu route
+only for direct nightly and manual runs. It automatically aggregates/renders
+its artifact, including failed test runs.
+`quiet=true` skips AI/GitHub/Slack reporting; normal reporting remains enabled by
+default. `diff_base_ref` requests the optional aggregate comparison against that
+base and the tested head. Omit `tests` for the full isolated Ubuntu suite. Paused
+Mac, remote and Windows routes remain paused; never run the full suite on a
+shared Mac. Framework checks use real instrumented Go fixtures in the Swift
+`native Go coverage` and aggregate comparison suites, separate from product specs.
+
+Set workflow `diff_base_ref` explicitly to request comparison before rendering
+the artifact; an empty value leaves changed-source comparison uncollected.
+Likewise, local aggregation requires explicit `--diff RANGE`. The analyzer forwards the PR range already selected for its AI review; otherwise
+only explicit input requests a comparison. No push/main fallback is selected. Comparison problems remain informational labels;
+there are no coverage thresholds or gates.
+
+The previous process-per-test implementation had a measured execution cost: the E2E step took 7.6 minutes on
+[main, Build run45633937865](https://github.com/wendylabsinc/WendyOS/actions/runs/45633937865)
+and 18.1 minutes in
+[coverage run45386626330, Swift E2E Tests](https://github.com/wendylabsinc/WendyOS/actions/runs/45386626330). These are
+observed runs, not a controlled benchmark. CI coverage is now limited to direct
+nightly and manual Swift E2E runs. These historical timings do not measure the
+current single-suite scenario implementation.
+
 ### Test against a remote device
 
 From `swift/`:

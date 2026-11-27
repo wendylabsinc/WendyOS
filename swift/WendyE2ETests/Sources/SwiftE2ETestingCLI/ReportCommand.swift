@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import WendyE2ETesting
 
 #if canImport(FoundationXML)
     import FoundationXML
@@ -19,6 +20,12 @@ struct ReportCommand: ParsableCommand {
     @Option(name: .long, help: "Swift package directory.")
     var packageDir = "."
 
+    @Option(
+        name: .long,
+        help: "Tested repository for source identities; templates remain under --package-dir."
+    )
+    var repo: String?
+
     @Option(name: .long, help: "Directory containing Swift E2E test sources.")
     var testsDir: String?
 
@@ -30,8 +37,11 @@ struct ReportCommand: ParsableCommand {
 
     mutating func run() throws {
         let packageURL = URL(fileURLWithPath: packageDir)
+        let sourcePackageURL =
+            repo.map { URL(fileURLWithPath: $0).appendingPathComponent("swift/WendyE2ETests") }
+            ?? packageURL
         let testsURL = URL(
-            fileURLWithPath: testsDir ?? defaultTestsDir(packageURL: packageURL).path
+            fileURLWithPath: testsDir ?? defaultTestsDir(packageURL: sourcePackageURL).path
         )
         let templateURL = URL(
             fileURLWithPath: template
@@ -47,9 +57,11 @@ struct ReportCommand: ParsableCommand {
         let records = try loadRecords(in: runURL)
         let aiReviews = try loadRunAIReviews(in: runURL)
         let testResults = try loadRunTestResults(in: runURL)
+        // Validate saved Go comparison provenance; spec annotations are not rendered.
+        _ = try E2ERunComparison.load(in: runURL)
         let files = try parseTests(
             in: testsURL,
-            packageURL: packageURL,
+            packageURL: sourcePackageURL,
             runURL: runURL,
             records: records,
             aiReviews: aiReviews,
@@ -882,7 +894,7 @@ private func testResultKey(classname: String, name: String) -> TestResultKey? {
     return TestResultKey(suite: suite, name: testName)
 }
 
-private func normalizedClassname(_ classname: String) -> String {
+func normalizedClassname(_ classname: String) -> String {
     if classname.last == "`", let start = classname.dropLast().lastIndex(of: "`") {
         let suiteStart = classname.index(after: start)
         return String(classname[suiteStart..<classname.index(before: classname.endIndex)])
@@ -891,7 +903,7 @@ private func normalizedClassname(_ classname: String) -> String {
     return stripBackticks(String(classname.split(separator: ".").last ?? ""))
 }
 
-private func normalizedTestName(_ name: String) -> String {
+func normalizedTestName(_ name: String) -> String {
     var value = name
     if value.hasSuffix("()") {
         value.removeLast(2)
@@ -1126,7 +1138,7 @@ private func buildTargetOverview(
     .sorted { $0.target < $1.target }
 }
 
-private func runAttemptArtifactURLsByTarget(in runURL: URL) throws -> [String: [URL]] {
+func runAttemptArtifactURLsByTarget(in runURL: URL) throws -> [String: [URL]] {
     var urlsByTarget: [String: [URL]] = [:]
     for targetURL in try directoryChildren(of: e2eAttemptArtifactsRootURL(in: runURL)) {
         let target = targetURL.lastPathComponent
@@ -1174,6 +1186,28 @@ private func renderReport(
 
     let reviewHTML = renderRunAIReview(aiReviews.root)
     let targetOverview = try renderTargetOverview(buildTargetOverview(runURL: runURL, files: files))
+    let coverageAttempts = try runAttemptArtifactURLsByTarget(in: runURL).values.flatMap { $0 }
+    let savedCoverageURL = runURL.appendingPathComponent("coverage/summary.json")
+    let savedCoverage =
+        try CoverageIO.exists(savedCoverageURL) ? CoverageIO.read(savedCoverageURL) : nil
+    let goCoverageTotal: String
+    let goDiffCoverageTotal: String
+    if let savedCoverage {
+        goCoverageTotal = e2eGoCoverageTotal(savedCoverage)
+        goDiffCoverageTotal = e2eGoDiffCoverageTotal(
+            savedCoverage["diff"] as? [String: Any],
+            revision: savedCoverage["sourceRevision"] as? String
+        )
+    } else {
+        goCoverageTotal =
+            coverageAttempts.count > 1
+            ? "Multiple attempts"
+            : coverageAttempts.first.map { e2eAttemptGoCoverageTotal(at: $0) } ?? "Not collected"
+        goDiffCoverageTotal =
+            coverageAttempts.count > 1
+            ? "Multiple attempts"
+            : coverageAttempts.first.map { e2eAttemptGoDiffCoverageTotal(at: $0) } ?? "Not compared"
+    }
     let testCards = renderCards(files: files)
 
     template.replaceSubrange(
@@ -1189,6 +1223,8 @@ private func renderReport(
         "{{RUN_ID}}": runID(outputURL: outputURL),
         "{{REVIEW_AGGREGATE_LINK}}": renderReviewAggregateLink(runURL: runURL),
         "{{TARGET_OVERVIEW}}": targetOverview,
+        "{{GO_COVERAGE_TOTAL}}": goCoverageTotal,
+        "{{GO_DIFF_COVERAGE_TOTAL}}": goDiffCoverageTotal,
         "{{TESTS_PASSED_COUNT}}": String(passed),
         "{{TESTS_FLAKED_COUNT}}": String(flaked),
         "{{TESTS_SKIPPED_COUNT}}": String(skipped),
@@ -1453,7 +1489,6 @@ private func renderCards(files: [ReportTestFile]) -> String {
             let hasAIReview = test.aiReviewMarkdown.isEmpty ? "false" : "true"
             let aiBadge = hasAIReview == "true" ? renderAIReviewBadge() : ""
             let pathText = "\(test.suite) › \(test.name)"
-
             cards.append(
                 "<details class=\"test-details\" data-test-status=\"\(statusClass)\" data-test-statuses=\"\(escapeHTML(statusClasses))\" data-has-ai=\"\(hasAI)\" data-has-ai-review=\"\(hasAIReview)\">"
             )

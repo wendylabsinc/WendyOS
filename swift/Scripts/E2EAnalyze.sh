@@ -29,7 +29,7 @@ Options:
   --run-id ID       Analyze attempts matching this run ID prefix;
                     defaults to today's local run, or WENDY_E2E_RUN_ID/GITHUB_RUN_ID.
   --stage STAGE     aggregate, review, report, or all.
-  --diff RANGE      Git diff range to pass to review stage.
+  --diff RANGE      Git range for aggregate comparison and optional AI review.
   --open            Open the newest generated report when supported; default.
   --no-open         Do not open a report.
   --help            Show this help message.
@@ -207,9 +207,11 @@ status=0
 declare -A failed_reviews=()
 
 if [[ "$STAGE" == "aggregate" || "$STAGE" == "all" ]]; then
+  aggregate_args=()
+  [[ -z "$DIFF" ]] || aggregate_args+=(--diff "$DIFF")
   bash "$SCRIPT_DIR/E2EAggregate.sh" \
     --output-dir "$OUTPUT_DIR" \
-    "${ATTEMPT_DIRS[@]}" || status=$?
+    ${aggregate_args[@]+"${aggregate_args[@]}"} "${ATTEMPT_DIRS[@]}" || status=$?
 fi
 
 if [[ "$STAGE" == "review" || "$STAGE" == "all" ]]; then
