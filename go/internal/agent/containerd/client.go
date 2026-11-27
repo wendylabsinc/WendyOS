@@ -1509,7 +1509,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 	}
 	if needsQualcommNPURuntime(appCfg) {
-		c.applyQualcommNPURuntime(spec)
+		c.applyQualcommNPURuntime(spec, true)
 	}
 
 	var hostResolvConfPath string
@@ -2233,20 +2233,27 @@ func (c *Client) applyNvidiaCDISpec(spec *localoci.Spec, cdiSpec *cdi.CDISpecifi
 	return fmt.Errorf("CDI spec %s has no applicable device: %w", specPath, allErr)
 }
 
-// refreshAcceleratorDeviceNumbersForStart re-resolves every host device number pinned in
-// a GPU- or NPU-entitled container's stored spec, persists the spec when any of them
-// have moved, and refuses the start when any of them are gone.
+// addMissingAcceleratorAccess is behind a var so tests can stand in for the
+// host's accelerators.
+var addMissingAcceleratorAccess = localoci.AddMissingAcceleratorAccess
+
+// refreshAcceleratorAccessForStart re-resolves every host device number pinned
+// in a GPU- or NPU-entitled container's stored spec, adds the accelerator access
+// the host grants now and the spec lacks, persists the spec when either changed
+// it, and refuses the start when a pinned device is gone.
 //
-// Metadata-only annotation upgrades are best-effort. Once the stored bindings
-// are known to be wrong, a failed repair write must refuse the start rather
-// than hand those bindings to the runtime.
+// Metadata-only annotation upgrades and added access are best-effort: a failed
+// write starts the app with the stored spec. Once the stored bindings are known
+// to be wrong, a failed repair write must refuse the start rather than hand
+// those bindings to the runtime.
 //
 // The refusal half is not best-effort. A device that no longer exists cannot be
 // repaired, and starting the app regardless is what produces a crash loop whose
 // exit code names nothing — see ErrDeviceUnavailable.
-func (c *Client) refreshAcceleratorDeviceNumbersForStart(ctx context.Context, container containerd.Container, appName string, labels map[string]string) error {
+func (c *Client) refreshAcceleratorAccessForStart(ctx context.Context, container containerd.Container, appName string, labels map[string]string) error {
 	appCfg := &appconfig.AppConfig{Entitlements: parseEntitlementsFromAnnotations(labels)}
-	if !appCfg.HasEntitlement(appconfig.EntitlementGPU) && !appCfg.HasEntitlement(appconfig.EntitlementNPU) {
+	gpu, npu := appCfg.HasEntitlement(appconfig.EntitlementGPU), appCfg.HasEntitlement(appconfig.EntitlementNPU)
+	if !gpu && !npu {
 		return nil
 	}
 
@@ -2284,24 +2291,41 @@ func (c *Client) refreshAcceleratorDeviceNumbersForStart(ctx context.Context, co
 			ErrDeviceUnavailable, appName, strings.Join(refresh.Missing, ", "))
 	}
 
-	if refresh.SpecModified() {
-		if perr := c.persistRefreshedSpec(ctx, container, info, &spec, appName); perr != nil {
-			if refresh.Changed() {
-				return fmt.Errorf("persisting required device repair for %s: %w", appName, perr)
-			}
-			c.logger.Warn("Could not persist refreshed device numbers; starting with the stored spec",
-				zap.String("app_name", appName), zap.Error(perr))
-		} else if refresh.Changed() {
-			c.logger.Info("Re-resolved stale host device numbers before start",
-				zap.String("app_name", appName), zap.Strings("devices", refresh.Updated),
-				zap.Strings("removed_legacy_devices", refresh.Removed))
-		} else {
-			// One-time upgrade for a container created before pins were
-			// recorded: its device entries now have explicit provenance.
-			// Legacy cgroup-only bindings cannot be inferred from that list.
-			c.logger.Info("Recorded pinned device paths for an existing container",
-				zap.String("app_name", appName))
+	granted := addMissingAcceleratorAccess(&spec, gpu, npu)
+	runtimeMounts := 0
+	if npu {
+		// Every start: the transport may be staged only after the app was made.
+		runtimeMounts = c.applyQualcommNPURuntime(&spec, false)
+	}
+	addedAccess := len(granted) > 0 || runtimeMounts > 0
+
+	if !refresh.SpecModified() && !addedAccess {
+		return nil
+	}
+	if perr := c.persistRefreshedSpec(ctx, container, info, &spec, appName, addedAccess); perr != nil {
+		if refresh.Changed() {
+			return fmt.Errorf("persisting required device repair for %s: %w", appName, perr)
 		}
+		c.logger.Warn("Could not persist refreshed accelerator access; starting with the stored spec",
+			zap.String("app_name", appName), zap.Error(perr))
+		return nil
+	}
+	if refresh.Changed() {
+		c.logger.Info("Re-resolved stale host device numbers before start",
+			zap.String("app_name", appName), zap.Strings("devices", refresh.Updated),
+			zap.Strings("removed_legacy_devices", refresh.Removed))
+	}
+	if addedAccess {
+		c.logger.Info("Granted accelerator access the container lacked",
+			zap.String("app_name", appName), zap.Strings("devices", granted),
+			zap.Int("runtime_mounts", runtimeMounts))
+	}
+	if !refresh.Changed() && !addedAccess {
+		// One-time upgrade for a container created before pins were
+		// recorded: its device entries now have explicit provenance.
+		// Legacy cgroup-only bindings cannot be inferred from that list.
+		c.logger.Info("Recorded pinned device paths for an existing container",
+			zap.String("app_name", appName))
 	}
 
 	return nil
@@ -2312,8 +2336,11 @@ func (c *Client) refreshAcceleratorDeviceNumbersForStart(ctx context.Context, co
 // refreshSecondaryNamespaces does). Containerd accepts a spec update without
 // replacing the container's snapshot. Any stale task is cleaned up later in
 // startContainer, before NewTask consumes the repaired configuration.
-func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.Container, info containers.Container, spec *localoci.Spec, appName string) error {
+func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.Container, info containers.Container, spec *localoci.Spec, appName string, grantedAccess bool) error {
 	newSpecJSON, err := marshalRefreshedDeviceSpec(info.Spec.GetValue(), spec)
+	if err == nil && grantedAccess {
+		newSpecJSON, err = marshalGrantedAccessSpec(newSpecJSON, spec)
+	}
 	if err != nil {
 		return fmt.Errorf("encoding refreshed spec for %q: %w", appName, err)
 	}
@@ -2575,8 +2602,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// writes an exact pair records the path it came from), so this covers both
 	// the GPU's own device entries and the bind-mounted, cgroup-only pins that
 	// AMD compute, i2c and serial use. Which containers are refreshed is still
-	// gated on a GPU or NPU entitlement here.
-	if devErr := c.refreshAcceleratorDeviceNumbersForStart(ctx, container, appName, containerLabels); devErr != nil {
+	// gated on a GPU or NPU entitlement here, and those also gain the
+	// accelerator access the host offers now and their spec lacks.
+	if devErr := c.refreshAcceleratorAccessForStart(ctx, container, appName, containerLabels); devErr != nil {
 		// Preflight: the app declared hardware this host no longer has. Starting
 		// anyway produces a container that runs, fails inside the vendor runtime,
 		// and crash-loops with an exit code that names nothing — the failure mode
@@ -3697,19 +3725,41 @@ var boardDetect = board.Detect
 
 // applyQualcommNPURuntime bind-mounts the host's Qualcomm AI runtime into an
 // npu-entitled container; a board with no DSP is left untouched.
-func (c *Client) applyQualcommNPURuntime(spec *localoci.Spec) {
-	result := cdi.ApplyQualcommNPURuntime(spec)
+func (c *Client) applyQualcommNPURuntime(spec *localoci.Spec, logApplied bool) int {
+	result := applyQualcommRuntime(spec)
 	if !result.HasDSP {
 		// No grantable FastRPC node, so the entitlement is inert on this board.
-		return
+		return 0
+	}
+	if !result.TransportApplied && !qualcommStageExists() {
+		// The DSP came up after the agent staged its runtime, or a reboot
+		// emptied /run under a stored bind.
+		qualcommStageMu.Lock()
+		stageQualcommRuntime(c.logger)
+		qualcommStageMu.Unlock()
+		retry := applyQualcommRuntime(spec)
+		result.Mounts += retry.Mounts
+		result.TransportApplied = retry.TransportApplied
 	}
 	if !result.TransportApplied {
 		c.logger.Warn("npu entitlement granted but Qualcomm FastRPC transport was not applied",
 			zap.Int("mounts", result.Mounts))
-		return
+		return result.Mounts
 	}
-	c.logger.Info("Applied Qualcomm NPU runtime", zap.Int("mounts", result.Mounts))
+	if logApplied && result.Mounts > 0 {
+		c.logger.Info("Applied Qualcomm NPU runtime", zap.Int("mounts", result.Mounts))
+	}
+	return result.Mounts
 }
+
+// The Qualcomm runtime calls are behind vars so tests need no DSP. Staging
+// rewrites one directory, so creates and starts take turns.
+var (
+	applyQualcommRuntime = cdi.ApplyQualcommNPURuntime
+	stageQualcommRuntime = cdi.EnsureQualcommNPURuntime
+	qualcommStageExists  = cdi.QualcommNPURuntimeStageExists
+	qualcommStageMu      sync.Mutex
+)
 
 // needsNvidiaCDI reports whether CreateContainer should apply the host's
 // NVIDIA CDI spec (library mounts, extra device nodes, driver env vars) to

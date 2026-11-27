@@ -301,6 +301,8 @@ func TestRefreshHostDeviceNumbers_AnnotationCannotHideStaleEntry(t *testing.T) {
 
 func TestRefreshHostDeviceNumbers_PiLegacyFallback(t *testing.T) {
 	source := installFakeVCIO(t, 249)
+	withNVIDIAGPUDiscovered(t, false)
+	withoutQualcommGPU(t)
 	origGlobs, origKfd := nvidiaDeviceGlobs, kfdDevicePath
 	t.Cleanup(func() { nvidiaDeviceGlobs = origGlobs; kfdDevicePath = origKfd })
 	nvidiaDeviceGlobs = []string{filepath.Join(t.TempDir(), "no-nvidia-*")}
