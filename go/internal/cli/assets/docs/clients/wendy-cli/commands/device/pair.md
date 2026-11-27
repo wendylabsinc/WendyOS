@@ -39,6 +39,99 @@ network, the list says so; update that agent to scan from the device instead.
 sensor names. Either flag opens the SensorLink tab, unless `--sensorlink` names
 a source to pair (see below). Use `--list` to print saved SensorLink pairings.
 
+### Sensor channels in ROS 2 apps
+
+A source's cameras and microphones appear on the Wendy device as a camera and a
+microphone. Its other sensor channels, such as a temperature, are published as
+ROS 2 topics inside the ROS 2 apps on the device that hold the
+[`sensor-read`](/docs/advanced/device/sensor-read) entitlement, on
+`/sensorlink/<source>/<channel>`:
+
+| Channel | Message |
+| --- | --- |
+| Temperature in °C (schema `wendy.temperature.celsius.f32le.v1`) | `sensor_msgs/msg/Temperature` |
+| Any other sensor channel | `std_msgs/msg/UInt8MultiArray` holding the bytes the source sent. `layout.dim[0].label` is the channel's schema. |
+
+`<source>` is the pairing's name, or the source's identity when the pairing has
+no name, and `<channel>` is the name the source gives the channel. Characters
+other than letters and digits become `_`, so a pairing named `porch-board` with a
+`chip-temperature` channel is published on
+`/sensorlink/porch_board/chip_temperature`. The agent logs each topic when it
+starts publishing it; see `wendy device logs --service wendy-agent`.
+
+Give the app the entitlement in `wendy.json`:
+
+```json
+{ "entitlements": [{ "type": "sensor-read" }] }
+```
+
+```sh
+wendy device ros2 topics
+wendy device ros2 echo /sensorlink/porch_board/chip_temperature
+```
+
+- A ROS 2 app without `sensor-read` does not get these topics. A topic reaches
+  everything in the network it is published in, so the agent publishes into a
+  network only while every ROS 2 app in it holds `sensor-read`. That matters
+  for apps on the host's network, which all share it, and for the services of
+  one app that share a network: one of them without the entitlement keeps the
+  topics from all of them. An app that does not declare ROS 2 in its
+  `wendy.json` is not counted.
+- When the agent cannot list the running apps four times in a row, about 30
+  seconds, it stops publishing until it can again.
+- Pair with `--sensors` to leave a channel out.
+- Each reading is sent once and is not kept. A subscriber receives the readings
+  that arrive after it starts, with a default or a sensor-data subscription.
+- A message has to fit one datagram. A frame of raw bytes larger than about
+  60 KB is not published.
+- A channel keeps its topic for as long as the agent runs. When two pairings
+  would get the same topic, the one that connected second gets `_2` appended.
+- The agent looks for newly started ROS 2 apps every 10 seconds, so the topics
+  can take about 20 seconds to appear in an app that has just started.
+- An app without ROS 2 reads these channels from the `sensor-read` socket
+  instead.
+- Audio and video the agent cannot decode are not delivered and are not
+  published to ROS 2.
+
+#### When a reading was taken
+
+The `header.stamp` of a reading is the time the source took it, not the time it
+reached the device. The source stamps each frame with its own clock, which on a
+Wendy Lite counts from its boot. The agent moves that time to the device's
+clock: it estimates the offset between the two clocks from the frames that
+arrived fastest in the last 10 to 20 seconds. Readings keep the order and the
+spacing the source took them in, however unevenly the link delayed them.
+Readings sent together in one frame are stamped one sample period apart, the
+last of them no later than the frame arrived.
+
+Each channel has a second topic, `/sensorlink/<source>/<channel>/timing`, that
+says how that time is known. It carries one
+`diagnostic_msgs/msg/DiagnosticArray` per frame, with the `header.stamp` of
+the frame's first reading, published right before the readings. Its one status
+has these values, all text:
+
+| Value | Meaning |
+| --- | --- |
+| `sequence` | The frame's number at the source. |
+| `readings`, `sample_period_nanos` | How many readings the frame holds, and the time between two readings when the source says how often it reads. |
+| `native_clock_domain` | `SENSORLINK_SOURCE`: the stamp comes from the source's clock. `AGENT_RECEIPT`: the source sent no time, and the frame is stamped when it arrived. |
+| `native_timestamp_nanos` | The time as the source's own clock gave it. |
+| `native_uncertainty_nanos` | How far that time may be from the moment the reading was really taken, as the source measured it. `unreported` when the source does not say. |
+| `mapping_segment` | Changes when the source's clock restarts or jumps, and each time the source reconnects. Times of different segments cannot be compared on the source's clock. |
+| `mapping_uncertainty_nanos` | How far the stamp may be from the agent's best estimate of the offset between the two clocks. |
+| `timestamp_uncertainty_nanos`, `confidence` | The bound on `header.stamp`. Both are `unbounded` when there is none. |
+
+The status level is `WARN` while the stamp has no bound.
+
+- No source reports `native_uncertainty_nanos` yet, so today every stamp is
+  `unbounded`.
+- The agent's estimate of the offset is late by the shortest time a frame takes
+  to reach the device, which it cannot measure. A reading was taken that much
+  earlier than its stamp says, and `mapping_uncertainty_nanos` does not cover
+  it.
+- A `std_msgs/msg/UInt8MultiArray` has no header. Read the time of such a
+  frame from the timing topic.
+
 ### SensorLink scripting
 
 Scripts and agents pair without the tabs. Name one source by its name (case is

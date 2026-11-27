@@ -1093,6 +1093,8 @@ type VideoService struct {
 	links       *ipcam.LinkManager
 	loopback    cameraLoopback
 	ros2Cameras *ros2camera.Manager
+	// ros2Graphs lists the running ROS 2 apps; nil without a container runtime.
+	ros2Graphs ros2camera.GraphSource
 	// sensorFrames carries SensorLink camera frames to the hub in-process, so
 	// the hub never opens an MCU-band node (see sensorlink_camera_feed.go). Nil
 	// in tests and builds without sensor pairing, which read the node as before.
@@ -1277,43 +1279,56 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	svc.loopback = loopback
 	var graphs ros2camera.GraphSource
 	if len(rosRuntime) != 0 && rosRuntime[0] != nil {
-		graphs = func(ctx context.Context) ([]ros2camera.Graph, error) {
-			targets, err := rosRuntime[0].FindROS2Containers(ctx)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]ros2camera.Graph, 0, len(targets))
-			for _, target := range targets {
-				if target.Running && target.TaskPID != 0 {
-					target := target
-					key := target.AppID
-					if key == "" {
-						key = target.ContainerID
-					}
-					out = append(out, ros2camera.Graph{
-						Key: key, InstanceKey: target.ContainerID, DomainID: target.DomainID, NetworkNamespacePID: target.TaskPID,
-						HostNetwork: target.HostNetwork,
-						Verify: func(ctx context.Context) bool {
-							current, err := rosRuntime[0].FindROS2Containers(ctx)
-							if err != nil {
-								return false
-							}
-							for _, candidate := range current {
-								if candidate.ContainerID == target.ContainerID && candidate.Running && candidate.TaskPID == target.TaskPID {
-									return true
-								}
-							}
-							return false
-						},
-					})
-				}
-			}
-			return out, nil
-		}
+		graphs = ros2GraphSource(rosRuntime[0])
 	}
+	svc.ros2Graphs = graphs
 	svc.ros2Cameras = ros2camera.NewManager(svcCtx, logger, svc.loopback, ros2CameraRegistryPath, graphs, pool)
 	return svc
 }
+
+// ros2GraphSource lists the running ROS 2 apps as the graphs the agent's own
+// ROS 2 participants join: each app's network and domain, and what the app
+// may read there.
+func ros2GraphSource(runtime ROS2Runtime) ros2camera.GraphSource {
+	return func(ctx context.Context) ([]ros2camera.Graph, error) {
+		targets, err := runtime.FindROS2Containers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]ros2camera.Graph, 0, len(targets))
+		for _, target := range targets {
+			if target.Running && target.TaskPID != 0 {
+				target := target
+				key := target.AppID
+				if key == "" {
+					key = target.ContainerID
+				}
+				out = append(out, ros2camera.Graph{
+					Key: key, InstanceKey: target.ContainerID, DomainID: target.DomainID, NetworkNamespacePID: target.TaskPID,
+					HostNetwork: target.HostNetwork, SensorRead: target.SensorRead,
+					Verify: func(ctx context.Context) bool {
+						current, err := runtime.FindROS2Containers(ctx)
+						if err != nil {
+							return false
+						}
+						for _, candidate := range current {
+							if candidate.ContainerID == target.ContainerID && candidate.Running && candidate.TaskPID == target.TaskPID {
+								return true
+							}
+						}
+						return false
+					},
+				})
+			}
+		}
+		return out, nil
+	}
+}
+
+// ROS2Graphs returns the source of running ROS 2 apps that ROS 2 camera
+// discovery uses, so other producers join the same apps. It is nil when the
+// agent has no container runtime.
+func (s *VideoService) ROS2Graphs() ros2camera.GraphSource { return s.ros2Graphs }
 
 // LoadCameraDHCPAllowlist loads saved permissions, migrating legacy camera links
 // with MAC-matched stored credentials once if no configuration exists. The file

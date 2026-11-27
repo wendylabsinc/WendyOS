@@ -122,6 +122,7 @@ func (c *Client) FindROS2Containers(ctx context.Context) ([]services.ROS2Target,
 			AppID:       labels[labelKeyAppID],
 			Distro:      distro,
 			DomainID:    domainID,
+			SensorRead:  ros2AppReadsSensors(labels),
 		}
 		// Resolve the RMW the app actually runs (Wendy injects RMW_IMPLEMENTATION
 		// via buildROS2Env) so callers can group apps by RMW — a device runs one
@@ -145,6 +146,12 @@ func (c *Client) FindROS2Containers(ctx context.Context) ([]services.ROS2Target,
 		targets = append(targets, target)
 	}
 	return targets, nil
+}
+
+// ros2AppReadsSensors reports whether an app holds the sensor-read
+// entitlement, from the labels its container was created with.
+func ros2AppReadsSensors(labels map[string]string) bool {
+	return entitlementsContain(parseEntitlementsFromAnnotations(labels), appconfig.EntitlementSensorRead)
 }
 
 // ros2UsesHostNetwork recognizes the OCI representation of host networking.

@@ -333,6 +333,7 @@ type ROS2Target struct {
 	DomainID    int    // resolved ROS_DOMAIN_ID
 	RMW         string // resolved RMW_IMPLEMENTATION (e.g. "rmw_cyclonedds_cpp"); "" if unset
 	HostNetwork bool   // OCI spec explicitly omits a private/joined network namespace
+	SensorRead  bool   // holds the sensor-read entitlement
 	Running     bool
 	TaskPID     uint32 // pid of the container's init process; 0 when not running
 }

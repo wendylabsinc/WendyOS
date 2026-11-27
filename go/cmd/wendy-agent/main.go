@@ -60,6 +60,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/registry"
 	"github.com/wendylabsinc/wendy/go/internal/agent/robotarm"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/ros2sensor"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/agent/udpmessage"
@@ -653,7 +654,16 @@ func main() {
 	videoSvc.SetSensorFrameFeed(sensorFrames)
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
 	genericSensorFeed := services.NewGenericSensorFeed(logger, filepath.Join(supervisor.RemoteSeenDir, "sensor-channel-ids"))
-	sensorSup.SetGenericSink(genericSensorFeed)
+	// A generic sensor channel (a temperature, an IMU) has no device to appear
+	// as. Apps read it from the sensor-read socket, and it is also published
+	// as a ROS 2 topic inside the running ROS 2 apps.
+	genericSensorSinks := []mcusource.GenericSink{genericSensorFeed}
+	if rosGraphs := videoSvc.ROS2Graphs(); rosGraphs != nil {
+		sensorBridge := ros2sensor.New(logger, discoveryPool, rosGraphs)
+		go sensorBridge.Run(ctx)
+		genericSensorSinks = append(genericSensorSinks, sensorBridge)
+	}
+	sensorSup.SetGenericSink(mcusource.GenericSinks(genericSensorSinks...))
 	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
 	resolveSensorSource := mcusource.NewSourceResolver(meshCatalog.SensorSources)
 	sensorSup.SetSourceResolver(resolveSensorSource)
