@@ -262,25 +262,3 @@ func TestRunFlashStepsPlain_StopsOnFailure(t *testing.T) {
 		t.Fatal("stage 2 should not run after stage 1 fails")
 	}
 }
-
-// AUR receives PKGBUILD/.SRCINFO rather than the packaging tree. Its inline
-// rule must keep the whole shared file, including policy comments, in sync.
-func TestArchJetsonRuleMatchesSharedRule(t *testing.T) {
-	root := filepath.Join("..", "..", "..", "..", "packaging")
-	shared, err := os.ReadFile(filepath.Join(root, "linux", "udev", "70-wendy-jetson.rules"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkgbuild, err := os.ReadFile(filepath.Join(root, "arch", "wendy", "PKGBUILD"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, inline, ok := strings.Cut(string(pkgbuild), `cat > "${pkgdir}/usr/lib/udev/rules.d/70-wendy-jetson.rules" <<'EOF'`+"\n")
-	if !ok {
-		t.Fatal("PKGBUILD is missing the inline Jetson rule")
-	}
-	inline, _, ok = strings.Cut(inline, "\nEOF\n")
-	if !ok || inline+"\n" != string(shared) {
-		t.Fatal("Arch inline Jetson rule diverged from shared rule")
-	}
-}

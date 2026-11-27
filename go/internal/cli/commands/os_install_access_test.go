@@ -19,12 +19,15 @@ func stubJetsonInstallAccess(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", cache)
 	stubEnrollPrompts(t) // Name/enrollment must never be reached on USB failure.
 	origScan, origRoot := listInstallRecoveryDevices, ensureThorInstallAccess
+	origDescriptors := scanRecoveryReadyUSBDevices
 	origConfirm, origRead := installConfirmPrompt, readLineFn
 	t.Cleanup(func() {
 		listInstallRecoveryDevices, ensureThorInstallAccess = origScan, origRoot
+		scanRecoveryReadyUSBDevices = origDescriptors
 		installConfirmPrompt, readLineFn = origConfirm, origRead
 	})
 	ensureThorInstallAccess = func() error { return nil }
+	scanRecoveryReadyUSBDevices = func() ([]installUSBDevice, error) { return nil, nil }
 	installConfirmPrompt = func(string) (bool, error) { return true, nil }
 	readLineFn = func() string { return "q" }
 	serveManifests(t, map[string]string{

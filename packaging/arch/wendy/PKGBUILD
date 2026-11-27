@@ -52,7 +52,7 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="0955", MODE="0660", GROUP="plugdev", TAG+="u
 EOF
     chmod 644 "${pkgdir}/usr/lib/udev/rules.d/70-wendy-jetson.rules"
 
-    # Modern udev requires GROUP names to resolve to a system group.
+    # Ensure plugdev resolves when udev loads the shared rule.
     install -dm755 "${pkgdir}/usr/lib/sysusers.d"
     printf 'g plugdev -\n' > "${pkgdir}/usr/lib/sysusers.d/wendy.conf"
     chmod 644 "${pkgdir}/usr/lib/sysusers.d/wendy.conf"
