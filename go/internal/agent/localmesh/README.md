@@ -508,8 +508,9 @@ Each authenticated router carrier advertises the current inventory once on
 attach, starting with the local proof. Later directory changes schedule HAVE
 messages only for the changed origins. Each carrier retains pending origin
 keys while replies or a full control queue block them, then advertises the
-latest live digest for each pending origin as space frees up on the
-maintenance tick.
+latest live digest for each pending origin as the writer frees queue capacity.
+Coalesced actor notifications resume this work while preserving reply priority;
+the maintenance tick remains a fallback when the actor event queue is full.
 A temporary signing identity miss leaves that origin pending while other
 origins can still be advertised.
 

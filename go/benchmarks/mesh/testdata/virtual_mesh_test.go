@@ -432,7 +432,7 @@ func TestVirtualMeshRegression(t *testing.T) {
 // Probe arrivals inside the inventory transfer expose serialization delays
 // that the normal 100 ms sampling cadence can miss.
 func TestVirtualMeshImmediateWarmProbe(t *testing.T) {
-	for _, offset := range []time.Duration{0, 10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond} {
+	for _, offset := range []time.Duration{0, 10 * time.Millisecond, 20 * time.Millisecond, 31 * time.Millisecond, 40 * time.Millisecond} {
 		t.Run(offset.String(), func(t *testing.T) {
 			m := newVirtualMesh(t, "full", 8, 8000, 20*time.Millisecond)
 			m.advance(60*time.Second, false, false)

@@ -62,8 +62,10 @@ second, sharing each link's byte budget with control traffic. The report include
 their median, p95 and maximum modeled one-way latency. Convergence is the maximum
 publication-to-admission delay among received revisions in that phase. Superseded
 revisions may be coalesced; the final-revision assertion checks eventual delivery.
-Four additional slow full-mesh reconnect cases inject a probe at 0, 10, 20 and
-40 ms after inventory begins. These expose larger-frame serialization delays
+Five additional slow full-mesh reconnect cases inject a probe at 0, 10, 20, 31
+and 40 ms after inventory begins. The 31 ms case captures the worst matched
+arrival offset found in a separate 0–80 ms sweep at 1 ms intervals.
+These cases expose larger-frame serialization delays
 that the regular 100 ms probe cadence can miss.
 
 ## Measurements and boundaries
