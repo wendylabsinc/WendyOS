@@ -16,8 +16,8 @@ func (s *Synchronizer) offerManifest(w SignedManifest, deadline, now time.Time) 
 		return nil
 	}
 	s.pruneSupersededPending(now)
-	s.trackArtifact(w, deadline)
 	directory, principal := s.directory, w.ownerKey()
+	s.trackArtifactID(principal, netgossip.Identify(netgossip.Manifest, data), deadline)
 	m := s.gossip.Offer(data, deadline, now, func(at time.Time) []byte {
 		return directory.manifestPayload(principal, at)
 	})
@@ -36,13 +36,14 @@ func (s *Synchronizer) resolveManifest(w SignedManifest, now time.Time, accepted
 		s.discardManifest(w)
 		return
 	}
+	data, _ := netwire.Marshal(w)
+	id := netgossip.Identify(netgossip.Manifest, data)
 	if accepted {
 		s.pruneSupersededPending(now)
-		s.trackArtifact(w, deadline)
+		s.trackArtifactID(w.ownerKey(), id, deadline)
 	}
-	data, _ := netwire.Marshal(w)
 	if !accepted {
-		s.gossipPool.Forget(netgossip.Identify(netgossip.Manifest, data))
+		s.gossipPool.Forget(id)
 	}
 	s.gossip.Resolve(data, deadline, now, accepted)
 }
@@ -109,7 +110,9 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 				return []ControlMessage{{Kind: "gossip", Gossip: netgossip.Unavailable(*m.Gossip)}}, nil, nil
 			}
 			descriptorDeadline, _ = s.directory.RecordDeadline(w, now)
-			s.trackArtifact(w, descriptorDeadline)
+			// Lookup already binds this exact payload to the requested ID.
+			// Its decoded envelope needs no second serialization/hash here.
+			s.trackArtifactID(w.ownerKey(), m.Gossip.ID(), descriptorDeadline)
 			descriptor = DescribeCertificates(w.Principal, chain)
 			if descriptor == nil {
 				return nil, nil, errors.New("invalid current manifest chain")
@@ -197,9 +200,10 @@ func (s *Synchronizer) forgetManifest(w SignedManifest) {
 	}
 	id := manifestGossipID(w)
 	s.gossipPool.Forget(id)
-	if artifact, ok := s.artifacts[w.ownerKey()]; ok && artifact.id == id {
+	owner := w.ownerKey()
+	if artifact, ok := s.artifacts[owner]; ok && artifact.id == id {
 		artifact.canceled.Store(true)
-		delete(s.artifacts, w.ownerKey())
+		delete(s.artifacts, owner)
 	}
 }
 
@@ -219,8 +223,13 @@ func (s *Synchronizer) retireArtifact(owner string, artifact manifestArtifact) {
 // trackArtifact keeps only compact local queue ownership. Directory admission
 // supplies the deadline; repeating/re-signing a body never starts a new lease.
 func (s *Synchronizer) trackArtifact(w SignedManifest, deadline time.Time) manifestArtifact {
-	id := manifestGossipID(w)
-	key := w.ownerKey()
+	return s.trackArtifactID(w.ownerKey(), manifestGossipID(w), deadline)
+}
+
+// trackArtifactID reuses a digest computed from the exact immutable envelope
+// within this operation. It retains only the existing compact queue marker;
+// no additional encoded payload is cached beyond the gossip pool's budget.
+func (s *Synchronizer) trackArtifactID(key string, id netgossip.ID, deadline time.Time) manifestArtifact {
 	if old, ok := s.artifacts[key]; ok {
 		if old.id == id {
 			return old
