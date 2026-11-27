@@ -93,6 +93,11 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		}
 	}
 	fail := func(message string) {
+		// Owner expiry can appear as a disconnected status before wait observes
+		// the deadline. Keep the last matching and clearance diagnosis either way.
+		if ctx.Err() != nil {
+			message = "Position search ended. " + details()
+		}
 		log.Printf("localization stopped: %s", message)
 		session.robot.Stop(root + 999999)
 		finish("failed", message, lastReport)

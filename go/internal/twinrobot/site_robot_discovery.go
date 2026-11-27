@@ -12,7 +12,10 @@ import (
 )
 
 const discoveryDistance = .4 // preferred viewpoint distance, not a required motion
-const discoverySpeed = sitenav.WalkingSpeed
+// Nearby observation moves use a slower gait than an explicit forward goal.
+// At 0.65 m/s the stopping horizon alone was 0.80 m, longer than any
+// requested viewpoint and needlessly requiring floor 1.25 m ahead.
+const discoverySpeed = .20
 const discoveryMargin = .10 // 6 cm lateral drift plus the footprint swept by 0.1 rad yaw drift
 
 // ErrDiscoveryBlocked identifies preflight clearance loss for a viewpoint or
@@ -121,7 +124,7 @@ func planDiscoveryView(grid sitenav.Grid, pose sitenav.Pose, history discoveryHi
 				lastErr = errors.New("the next viewpoint is too close to a previously visited position")
 				continue
 			}
-			if err := discoveryClearanceError(grid, pose.Position, target, yaw); err != nil {
+			if err := discoveryClearanceErrorAtSpeed(grid, pose.Position, target, yaw, discoverySpeed, pose.Yaw); err != nil {
 				lastErr = err
 				continue
 			}
@@ -136,10 +139,21 @@ func planDiscoveryView(grid sitenav.Grid, pose sitenav.Pose, history discoveryHi
 }
 
 func discoveryClearanceError(grid sitenav.Grid, start, target sitenav.Point, yaw float64) error {
+	return discoveryClearanceErrorAtSpeed(grid, start, target, yaw, discoverySpeed, yaw)
+}
+
+func discoveryMoveSpeed(move *discoveryMove) float64 {
+	if move.relative {
+		return sitenav.WalkingSpeed
+	}
+	return discoverySpeed
+}
+
+func discoveryClearanceErrorAtSpeed(grid sitenav.Grid, start, target sitenav.Point, yaw, speed, bodyYaw float64) error {
 	// Check the target and the stopping horizon from the current pose. Repeat
 	// before every command, as waypoint navigation does; do not add another
 	// full stopping distance beyond a viewpoint we may never need to reach.
-	horizon := discoverySpeed*.5 + discoverySpeed*discoverySpeed + .05
+	horizon := speed*.5 + speed*speed + .05
 	distance := math.Max(start.Distance(target), horizon)
 	end := sitenav.Point{X: start.X + math.Cos(yaw)*distance, Y: start.Y + math.Sin(yaw)*distance}
 	if grid.SweepWithMargin(start, end, yaw, discoveryMargin) {
@@ -155,6 +169,19 @@ func discoveryClearanceError(grid sitenav.Grid, start, target sitenav.Point, yaw
 	floorOnly := grid
 	floorOnly.Obstacles = nil
 	if !floorOnly.SweepWithMargin(start, end, yaw, discoveryMargin) {
+		gap, found := floorOnly.NearestMissingFloorInSweep(start, end, yaw, discoveryMargin)
+		if found {
+			dx, dy := gap.X-start.X, gap.Y-start.Y
+			forward, left := dx*math.Cos(bodyYaw)+dy*math.Sin(bodyYaw), -dx*math.Sin(bodyYaw)+dy*math.Cos(bodyYaw)
+			along, side := "ahead", "left"
+			if forward < 0 {
+				along = "behind"
+			}
+			if left < 0 {
+				side = "right"
+			}
+			return fmt.Errorf("LiDAR has not observed all the floor in the movement and stopping area, including the safety margin. The nearest floor gap is %.2f m %s and %.2f m %s of Go2's body center.", math.Abs(forward), along, math.Abs(left), side)
+		}
 		return errors.New("LiDAR has not observed all the floor in the movement and stopping area, including the safety margin.")
 	}
 	return errors.New("An obstacle or drop overlaps the movement or stopping area, including the safety margin.")
@@ -227,12 +254,12 @@ func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 	if progress-move.progress >= .025 {
 		move.progress, move.progressAt = progress, now
 	}
-	if err := discoveryClearanceError(r.observed.Grid.WithDeparture(r.departure), p.Position, move.target, p.Yaw); err != nil {
+	if err := discoveryClearanceErrorAtSpeed(r.observed.Grid.WithDeparture(r.departure), p.Position, move.target, p.Yaw, discoveryMoveSpeed(move), p.Yaw); err != nil {
 		r.message = operation + " stopped: " + err.Error()
 		r.stopForObservationLossLocked()
 		return
 	}
-	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, discoverySpeed, 0); err != nil {
+	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, discoveryMoveSpeed(move), 0); err != nil {
 		r.message = siteCommandFailure(operation, err)
 		r.stopLocked()
 	}

@@ -2,11 +2,35 @@ package twin
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
 )
+
+func TestSearchOwnerExpiryPreservesBlockedFloorReason(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	robot := &searchRobot{ready: true, matchAfter: -1}
+	robot.discoveryHook = func(int) error {
+		return fmt.Errorf("%w: LiDAR floor coverage is incomplete", twinrobot.ErrDiscoveryBlocked)
+	}
+	robot.statusHook = func(state twinrobot.SiteRobotSnapshot) twinrobot.SiteRobotSnapshot {
+		if robot.turns > 0 {
+			cancel()
+			state.Disconnected = true
+			state.Message = context.DeadlineExceeded.Error()
+		}
+		return state
+	}
+	session := &robotSession{robot: robot, searchRoot: 1}
+	(&Server{}).search(ctx, cancel, session, 1, twinrobot.SiteFusionRequest{Explore: true})
+	if session.searchState != "failed" || !strings.Contains(session.searchMessage, "LiDAR floor coverage is incomplete") || !strings.Contains(session.searchMessage, "Several room positions still fit") {
+		t.Fatalf("lost reason on owner expiry: %s", session.searchMessage)
+	}
+}
 
 func TestSearchPreservesLatchedMotionCauseAfterLaterPacketRejection(t *testing.T) {
 	for _, motion := range []string{"turn", "viewpoint"} {
