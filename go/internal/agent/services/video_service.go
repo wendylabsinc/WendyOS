@@ -229,9 +229,11 @@ func defaultedCaptureSize(fd int, pixfmt, width, height uint32) (uint32, uint32)
 	return width, height
 }
 
-// captureSizeFor is the size a native capture of pixfmt asks the camera for
-// when its request names width and height, read without taking the camera.
-// Behind a var so tests can describe a camera without a V4L2 node.
+// captureSizeFor is the size a request's width and height come to for pixfmt,
+// read without taking the camera: what the request names, else the camera's
+// default within the default limit, and zero where it lists none there. The
+// native H.264 source chooses past that (nativeH264CaptureSize). Behind a var
+// so tests can describe a camera without a V4L2 node.
 var captureSizeFor = func(path string, pixfmt, width, height uint32) (uint32, uint32) {
 	if width != 0 && height != 0 {
 		return width, height

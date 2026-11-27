@@ -204,29 +204,47 @@ func TestOwnFrames_AnH264CameraWithNoSizeWithinTheDefaultLimitDeclaresItsSmalles
 	}
 }
 
+// hcSizeWithinDefaultLimit is the largest of sizes within the default capture
+// limit, which is what captureSizeFor answers for a request that names none.
+func hcSizeWithinDefaultLimit(sizes [][2]uint32) (width, height uint32) {
+	for _, size := range sizes {
+		if size[0] <= defaultMaxDefaultWidth && size[1] <= defaultMaxDefaultHeight && size[0]*size[1] > width*height {
+			width, height = size[0], size[1]
+		}
+	}
+	return width, height
+}
+
 func TestNativeH264CaptureSize(t *testing.T) {
 	large := [][2]uint32{{3840, 2160}, {1920, 1080}, {2560, 1440}}
+	unnamed := &agentpb.StreamVideoRequest{}
 	for name, tc := range map[string]struct {
-		listed [][2]uint32
-		req    *agentpb.StreamVideoRequest
-		want   [2]uint32
+		listed         [][2]uint32
+		req            *agentpb.StreamVideoRequest
+		want           [2]uint32
+		wantAboveLimit bool
 	}{
-		"a size within the default limit is the largest such": {[][2]uint32{{640, 480}, {1280, 720}, {1920, 1080}}, &agentpb.StreamVideoRequest{}, [2]uint32{1280, 720}},
-		"none within the limit is the smallest listed":        {large, &agentpb.StreamVideoRequest{}, [2]uint32{1920, 1080}},
-		"a size the request names is kept":                    {large, &agentpb.StreamVideoRequest{Width: 3840, Height: 2160}, [2]uint32{3840, 2160}},
-		"no discrete size listed":                             {nil, &agentpb.StreamVideoRequest{}, [2]uint32{}},
+		"a size within the default limit is the largest such": {[][2]uint32{{640, 480}, {1280, 720}, {1920, 1080}}, unnamed, [2]uint32{1280, 720}, false},
+		"none within the limit is the smallest listed":        {large, unnamed, [2]uint32{1920, 1080}, true},
+		"a standard picture aspect is preferred to a smaller size without one": {
+			[][2]uint32{{1920, 1080}, {4096, 16}, {720, 1280}}, unnamed, [2]uint32{1920, 1080}, true},
+		"no standard picture aspect listed is the smallest of any": {
+			[][2]uint32{{2000, 900}, {4096, 16}, {1080, 1920}}, unnamed, [2]uint32{4096, 16}, true},
+		// captureSizeFor is the production one here: it keeps a named size
+		// without opening the camera, and finds no camera for an unnamed one.
+		"a size the request names is kept": {large, &agentpb.StreamVideoRequest{Width: 3840, Height: 2160}, [2]uint32{3840, 2160}, false},
+		"no discrete size listed":          {nil, unnamed, [2]uint32{}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			shareTestService(t, []uint32{v4l2PixFmtH264}, map[uint32][][2]uint32{v4l2PixFmtH264: tc.listed}, nil)
-			defaulted := captureSizeFor
-			captureSizeFor = func(path string, pixfmt, width, height uint32) (uint32, uint32) {
-				if width != 0 && height != 0 {
-					return width, height
-				}
-				return defaulted(path, pixfmt, width, height)
+			withRawModes(t, map[uint32][][2]uint32{v4l2PixFmtH264: tc.listed})
+			if tc.req == unnamed {
+				prev := captureSizeFor
+				captureSizeFor = func(string, uint32, uint32, uint32) (uint32, uint32) { return hcSizeWithinDefaultLimit(tc.listed) }
+				t.Cleanup(func() { captureSizeFor = prev })
 			}
-			if w, h := nativeH264CaptureSize("/dev/video4", tc.req); [2]uint32{w, h} != tc.want {
-				t.Errorf("size = %dx%d, want %dx%d", w, h, tc.want[0], tc.want[1])
+			w, h, aboveLimit := nativeH264CaptureSize("/dev/video4", tc.req)
+			if [2]uint32{w, h} != tc.want || aboveLimit != tc.wantAboveLimit {
+				t.Errorf("size = %dx%d (above the default limit: %v), want %dx%d (%v)", w, h, aboveLimit, tc.want[0], tc.want[1], tc.wantAboveLimit)
 			}
 		})
 	}

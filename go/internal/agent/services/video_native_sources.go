@@ -103,41 +103,56 @@ func (s *VideoService) ownFramesFor(path string, req *agentpb.StreamVideoRequest
 }
 
 func (s *VideoService) nativeH264Frames(path string, req *agentpb.StreamVideoRequest) (frames ownFrames, declined string, passes bool) {
+	frames, _, declined, passes = s.sizedNativeH264Frames(path, req)
+	return frames, declined, passes
+}
+
+func (s *VideoService) sizedNativeH264Frames(path string, req *agentpb.StreamVideoRequest) (frames ownFrames, aboveDefaultLimit bool, declined string, passes bool) {
 	var offered []uint32
 	if s.capturePixelFormats != nil {
 		offered, _ = s.capturePixelFormats(path)
 	}
 	if !slices.Contains(offered, v4l2PixFmtH264) {
-		return ownFrames{}, "the camera offers no H.264", true
+		return ownFrames{}, false, "the camera offers no H.264", true
 	}
-	width, height := nativeH264CaptureSize(path, req)
+	width, height, aboveDefaultLimit := nativeH264CaptureSize(path, req)
 	if width == 0 || height == 0 {
-		return ownFrames{}, "the camera lists no H.264 frame size a capture without one chooses, so its size is known only once it runs", false
+		return ownFrames{}, false, "the camera lists no H.264 frame size a capture without one chooses, so its size is known only once it runs", false
 	}
 	framerate := req.GetFramerate()
 	if framerate == 0 {
 		framerate = highestFrameRateFor(path, v4l2PixFmtH264, width, height)
 	}
-	return ownFrames{codec: agentpb.VideoCodec_VIDEO_CODEC_H264, width: width, height: height, framerate: framerate}, "", false
+	return ownFrames{codec: agentpb.VideoCodec_VIDEO_CODEC_H264, width: width, height: height, framerate: framerate}, aboveDefaultLimit, "", false
 }
 
-// nativeH264CaptureSize is the size the camera's H.264 is declared at and
-// captured at. The default size limit decides among the sizes within it; a
-// camera that lists H.264 only above it is captured at the smallest it lists.
-func nativeH264CaptureSize(path string, req *agentpb.StreamVideoRequest) (width, height uint32) {
+// A node declares its size before the capture runs, so one is chosen even
+// when none the camera lists fits the default limit.
+func nativeH264CaptureSize(path string, req *agentpb.StreamVideoRequest) (width, height uint32, aboveDefaultLimit bool) {
 	width, height = captureSizeFor(path, v4l2PixFmtH264, req.GetWidth(), req.GetHeight())
-	if width == 0 || height == 0 {
-		return smallestFrameSize(enumerateRawFrameSizes(path, v4l2PixFmtH264))
+	if width != 0 && height != 0 {
+		return width, height, false
 	}
-	return width, height
+	width, height = smallestFrameSize(enumerateRawFrameSizes(path, v4l2PixFmtH264))
+	return width, height, width != 0 && height != 0
 }
 
 func smallestFrameSize(sizes [][2]uint32) (width, height uint32) {
+	var anyWidth, anyHeight uint32
 	for _, size := range sizes {
 		area := uint64(size[0]) * uint64(size[1])
-		if area != 0 && (width == 0 || area < uint64(width)*uint64(height)) {
+		if area == 0 {
+			continue
+		}
+		if anyWidth == 0 || area < uint64(anyWidth)*uint64(anyHeight) {
+			anyWidth, anyHeight = size[0], size[1]
+		}
+		if hasStandardAspect(size[0], size[1]) && (width == 0 || area < uint64(width)*uint64(height)) {
 			width, height = size[0], size[1]
 		}
+	}
+	if width == 0 {
+		return anyWidth, anyHeight
 	}
 	return width, height
 }
@@ -148,7 +163,8 @@ var nativeH264Source = nativeCaptureSource{
 	accept: func(s *VideoService, cam localCamera) (func(context.Context) error, string) {
 		var pictures *derivedLayer
 		width, height := cam.req.GetWidth(), cam.req.GetHeight()
-		if frames, declined, _ := s.nativeH264Frames(cam.path, cam.req); declined == "" {
+		frames, aboveDefaultLimit, declined, _ := s.sizedNativeH264Frames(cam.path, cam.req)
+		if declined == "" {
 			width, height = frames.width, frames.height
 			if cam.hub != nil {
 				pictures, _ = s.pictureLayerFor(cam.hub, cam.path, frames)
@@ -162,6 +178,11 @@ var nativeH264Source = nativeCaptureSource{
 			cam.sink.rawNotOffered(fixedReason(h264RawWhy))
 		})
 		capture := func(ctx context.Context) error {
+			if aboveDefaultLimit {
+				s.logger.Info("selected an H.264 capture size above the default limit: the camera lists none within it",
+					zap.String("device", cam.path), zap.Uint32("width", width), zap.Uint32("height", height),
+					zap.Uint32("limit_width", defaultMaxDefaultWidth), zap.Uint32("limit_height", defaultMaxDefaultHeight))
+			}
 			return s.streamV4L2Native(ctx, send, cam.path, width, height, cam.req.GetFramerate())
 		}
 		if pictures == nil {

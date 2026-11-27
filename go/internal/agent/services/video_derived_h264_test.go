@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -379,26 +380,18 @@ func (f *h264V4L2) capture(ctx context.Context, emit func([]byte, frameTimestamp
 
 func captureFakeH264Camera(t *testing.T, subscribe func(h *deviceHub)) (*VideoService, *deviceHub, *h264V4L2) {
 	t.Helper()
-	return captureFakeH264CameraListing(t, [][2]uint32{{640, 480}}, subscribe)
+	return captureFakeH264CameraListing(t, zap.NewNop(), [][2]uint32{{640, 480}}, subscribe)
 }
 
-// captureFakeH264CameraListing captures a camera that lists these H.264 sizes.
-func captureFakeH264CameraListing(t *testing.T, sizes [][2]uint32, subscribe func(h *deviceHub)) (*VideoService, *deviceHub, *h264V4L2) {
+func captureFakeH264CameraListing(t *testing.T, logger *zap.Logger, sizes [][2]uint32, subscribe func(h *deviceHub)) (*VideoService, *deviceHub, *h264V4L2) {
 	t.Helper()
 	withRawModes(t, map[uint32][][2]uint32{v4l2PixFmtH264: sizes})
 	prevSize := captureSizeFor
-	captureSizeFor = func(string, uint32, uint32, uint32) (width, height uint32) {
-		for _, size := range sizes {
-			if size[0] <= defaultMaxDefaultWidth && size[1] <= defaultMaxDefaultHeight && size[0]*size[1] > width*height {
-				width, height = size[0], size[1]
-			}
-		}
-		return width, height
-	}
+	captureSizeFor = func(string, uint32, uint32, uint32) (uint32, uint32) { return hcSizeWithinDefaultLimit(sizes) }
 	t.Cleanup(func() { captureSizeFor = prevSize })
 	withFrameRates(t, map[uint32][]uint32{v4l2PixFmtH264: {30}})
 
-	svc := &VideoService{logger: zap.NewNop(), encoderIdleGrace: time.Second}
+	svc := &VideoService{logger: logger, encoderIdleGrace: time.Second}
 	svc.capturePixelFormats = func(string) ([]uint32, bool) { return []uint32{v4l2PixFmtYUYV, v4l2PixFmtH264}, true }
 	v4l2 := &h264V4L2{}
 	svc.captureV4L2 = v4l2.capture
@@ -463,25 +456,49 @@ func TestCaptureLocalCamera_H264CameraHandsOnItsOwnFramesAndDecodesPicturesFromT
 	}
 }
 
-func TestCaptureLocalCamera_H264CameraWithNoSizeWithinTheDefaultLimitIsAskedForTheSizeDeclared(t *testing.T) {
-	fakeGStreamer(t, 0, "gdpdepay", "gdppay")
-	var idNative int
-	var native chan *videoFrame
-	svc, h, v4l2 := captureFakeH264CameraListing(t, [][2]uint32{{3840, 2160}, {1920, 1080}}, func(h *deviceHub) {
-		idNative, native, _ = h.subscribeKind(nativeFrames)
-	})
-	defer h.unsubscribe(idNative)
+func TestCaptureLocalCamera_H264CameraIsAskedForTheSizeDeclaredAndSaysWhenItIsAboveTheDefaultLimit(t *testing.T) {
+	const aboveLimit = "selected an H.264 capture size above the default limit: the camera lists none within it"
+	for name, tc := range map[string]struct {
+		listed   [][2]uint32
+		want     [2]uint32
+		wantSaid int
+	}{
+		"no size within the default limit": {[][2]uint32{{3840, 2160}, {1920, 1080}}, [2]uint32{1920, 1080}, 1},
+		"a size within the default limit":  {[][2]uint32{{1920, 1080}, {1280, 720}}, [2]uint32{1280, 720}, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fakeGStreamer(t, 0, "gdpdepay", "gdppay")
+			core, logs := observer.New(zap.InfoLevel)
+			var idNative int
+			var native chan *videoFrame
+			svc, h, v4l2 := captureFakeH264CameraListing(t, zap.New(core), tc.listed, func(h *deviceHub) {
+				idNative, native, _ = h.subscribeKind(nativeFrames)
+			})
+			defer h.unsubscribe(idNative)
 
-	if frame := waitForFrame(t, native, "the camera's own H.264"); frame.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || !frame.native {
-		t.Fatalf("got codec=%v native=%v, want the camera's own access unit", frame.codec, frame.native)
-	}
-	declared, declined, _ := svc.ownFramesFor("/dev/video4", &agentpb.StreamVideoRequest{})
-	if declined != "" || declared.width != 1920 || declared.height != 1080 {
-		t.Fatalf("own frames = %+v (declined %q), want them declared at 1920x1080", declared, declined)
-	}
-	if cfg := v4l2.asked.Load(); cfg.pixelFormat != v4l2PixFmtH264 || cfg.width != declared.width || cfg.height != declared.height {
-		t.Errorf("the camera was asked for %s at %dx%d, want H.264 at the %dx%d its frames are declared at",
-			fourccName(cfg.pixelFormat), cfg.width, cfg.height, declared.width, declared.height)
+			if frame := waitForFrame(t, native, "the camera's own H.264"); frame.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || !frame.native {
+				t.Fatalf("got codec=%v native=%v, want the camera's own access unit", frame.codec, frame.native)
+			}
+			declared, declined, _ := svc.ownFramesFor("/dev/video4", &agentpb.StreamVideoRequest{})
+			if declined != "" || [2]uint32{declared.width, declared.height} != tc.want {
+				t.Fatalf("own frames = %+v (declined %q), want them declared at %dx%d", declared, declined, tc.want[0], tc.want[1])
+			}
+			if cfg := v4l2.asked.Load(); cfg.pixelFormat != v4l2PixFmtH264 || cfg.width != declared.width || cfg.height != declared.height {
+				t.Errorf("the camera was asked for %s at %dx%d, want H.264 at the %dx%d its frames are declared at",
+					fourccName(cfg.pixelFormat), cfg.width, cfg.height, declared.width, declared.height)
+			}
+			said := logs.FilterMessage(aboveLimit).All()
+			if len(said) != tc.wantSaid {
+				t.Fatalf("said %d times that the size is above the default limit, want %d; logs: %v", len(said), tc.wantSaid, logs.All())
+			}
+			if tc.wantSaid == 0 {
+				return
+			}
+			fields := said[0].ContextMap()
+			if said[0].Level != zap.InfoLevel || fields["device"] != "/dev/video4" || fields["width"] != tc.want[0] || fields["height"] != tc.want[1] {
+				t.Errorf("said at %v with %v, want Info naming /dev/video4 and %dx%d", said[0].Level, fields, tc.want[0], tc.want[1])
+			}
+		})
 	}
 }
 
