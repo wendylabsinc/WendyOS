@@ -337,6 +337,18 @@ func minTime(a, b time.Time) time.Time {
 // the principal, not a hash: a lookup for tenant A's device cannot resolve to
 // tenant B's entry even when the device UUIDs are identical.
 func (c *IdentityCache) Get(principal string, now time.Time) ([][]byte, Identity, bool) {
+	chain, id, ok := c.getBorrowed(principal, now)
+	if !ok {
+		return nil, Identity{}, false
+	}
+	return cloneChain(chain), id, true
+}
+
+// getBorrowed returns the cache's immutable chain for internal validation.
+// Put owns new bytes and replaces entries rather than modifying old chains.
+// Public/exporting callers must clone before returning it. Both forms
+// revalidate current trust and retention on every call.
+func (c *IdentityCache) getBorrowed(principal string, now time.Time) ([][]byte, Identity, bool) {
 	if principal == "" || len(principal) > maxPrincipalBytes {
 		return nil, Identity{}, false
 	}
@@ -355,7 +367,7 @@ func (c *IdentityCache) Get(principal string, now time.Time) ([][]byte, Identity
 	entry.Used = now
 	c.entries[principal] = entry
 	c.pendingSave = true
-	return cloneChain(entry.Chain), id, true
+	return entry.Chain, id, true
 }
 
 // Fingerprints returns a bounded snapshot of identities available under current
@@ -443,7 +455,7 @@ func (c *IdentityCache) save() error {
 // a principal's most recently selected leaf cannot relabel another owner's wire.
 func (c *IdentityCache) manifestIdentity(principal string, m Manifest, now time.Time) ([][]byte, Identity, bool) {
 	if m.Owner == nil {
-		return c.Get(principal, now)
+		return c.getBorrowed(principal, now)
 	}
 	if m.Owner.Principal != principal || len(m.Owner.Hashes) == 0 || len(m.Owner.Hashes) > 16 {
 		return nil, Identity{}, false
