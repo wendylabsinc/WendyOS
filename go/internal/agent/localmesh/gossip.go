@@ -51,6 +51,9 @@ func (s *Synchronizer) resolveManifest(w SignedManifest, now time.Time, accepted
 // Router links require HAVE/WANT. Direct-message fixtures exercise the same
 // directory and certificate admission without opening a network carrier.
 func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([]ControlMessage, []SignedManifest, error) {
+	if m.Kind == "manifest-haves" {
+		return s.receiveHaveBatch(m, now, slots...)
+	}
 	s.Sweep(now)
 	if len(slots) > 0 && slots[0] < directoryResponseDemand(m) {
 		return nil, nil, ErrControlBackpressure

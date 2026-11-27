@@ -24,12 +24,24 @@ def run(command, cwd, **kwargs):
     return subprocess.run(command, cwd=cwd, check=True, text=True, **kwargs)
 
 
+def select_adapter(sync, batch):
+    if "func (s *Synchronizer) seedAnnouncements(" in sync:
+        if "func (s *Synchronizer) receiveHaveBatch(" in batch:
+            return "batching"
+        return "head"
+    if "func (s *Synchronizer) ReconcileBounded(" in sync:
+        return "base"
+    raise ValueError("unsupported synchronizer")
+
+
 def parse(text):
     metrics = {}
     case = ""
     for line in text.splitlines():
         if line.startswith("=== RUN"):
-            case = line.split("TestVirtualMeshRegression/", 1)[-1].strip()
+            name = line.split("=== RUN", 1)[1].strip()
+            case = name.replace("TestVirtualMeshRegression/", "").replace(
+                "TestVirtualMeshImmediateWarmProbe/", "immediate-warm-probe/")
         if "MESH_RESULT " in line:
             result = json.loads(line.split("MESH_RESULT ", 1)[1])
             prefix = f"simulation/{case}/{result.pop('scenario')}"
@@ -110,6 +122,7 @@ def main():
                        go=run(["go", "version"], root, capture_output=True).stdout.strip(),
                        repeat=args.repeat, benchtime=args.benchtime, threshold_pct=args.threshold,
                        gomaxprocs=1,
+                       have_batches=os.environ.get("WENDY_MESH_HAVE_BATCHES", "1"),
                        fixtures={p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                  for p in sorted((HERE / "testdata").glob("*.go"))}), stream, indent=2)
     samples = {"base": [], "head": []}
@@ -125,9 +138,8 @@ def main():
             # Fail closed if a future implementation no longer matches
             # either adapter; don't guess the announcement schedule.
             sync = (destination / "sync.go").read_text()
-            adapter = "head" if "func (s *Synchronizer) seedAnnouncements(" in sync else "base"
-            if adapter == "base" and "func (s *Synchronizer) ReconcileBounded(" not in sync:
-                raise ValueError(f"unsupported synchronizer at {sha}")
+            batch = destination / "have_batch.go"
+            adapter = select_adapter(sync, batch.read_text() if batch.exists() else "")
             for name, source in (("virtual_mesh_test.go", "virtual_mesh_test.go"),
                                  ("virtual_mesh_adapter_test.go", f"{adapter}_adapter.go")):
                 with (destination / name).open("x") as stream:
@@ -141,7 +153,7 @@ def main():
                 print(f"Round {round_number + 1}/{args.repeat}: {label}", flush=True)
                 log = args.out / f"{label}-{round_number + 1}.txt"
                 with log.open("x") as stream:
-                    run([str(binaries[label]), "-test.run=^TestVirtualMeshRegression$", "-test.v",
+                    run([str(binaries[label]), "-test.run=^TestVirtualMesh(Regression|ImmediateWarmProbe)$", "-test.v",
                          "-test.bench=^BenchmarkVirtual", f"-test.benchtime={args.benchtime}",
                          "-test.cpu=1", "-test.timeout=5m"], root, env=env,
                         stdout=stream, stderr=subprocess.STDOUT)

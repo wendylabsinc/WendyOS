@@ -2,6 +2,8 @@ package localmesh
 
 import "time"
 
+func virtualInventoryCount(ControlMessage) int { return 1 }
+
 func virtualSeed(e *virtualEdge, now time.Time) {
 	e.enqueue(e.sync.ReconcileBounded(now, e.credit()))
 }

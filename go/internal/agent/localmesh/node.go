@@ -24,6 +24,7 @@ import (
 )
 
 type nodePeer struct {
+	haveBatches     bool // Immutable, authenticated carrier capability.
 	babelConfirmed  bool // Actor-owned: this incarnation once had two-way Babel liveness.
 	babelRetiring   bool // Actor-owned: expiry already signalled the existing lifetime owner.
 	retire          chan struct{}
@@ -535,6 +536,7 @@ func (n *Node) handle(e nodeEvent) error {
 		// Seed after Babel setup, which can publish a newer local proof.
 		now := time.Now()
 		e.add.sync = NewSynchronizer(n.directory, n.cache, n.controlHub.Announcements())
+		e.add.sync.haveBatches = e.add.haveBatches
 		e.add.sync.seedAnnouncements(n.Credentials.Device.Key(), now)
 		n.flushAnnouncements(e.add, now)
 		if newPeer {
@@ -745,6 +747,15 @@ func (n *Node) signalControlCredit(p *nodePeer) {
 
 func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
 	now := time.Now()
+	var keep bool
+	m, keep = n.prepareHaveBatch(p, m, now, func(entry ControlMessage) {
+		p.controlMu.Lock()
+		p.rememberSkippedHave(entry, now)
+		p.controlMu.Unlock()
+	})
+	if !keep {
+		return nil
+	}
 	if !n.controlEligible(p, m, now) {
 		if m.pendingHave {
 			p.controlMu.Lock()
@@ -827,6 +838,15 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 	}
 	for _, m := range messages {
 		now := time.Now()
+		var keep bool
+		m, keep = n.prepareHaveBatch(p, m, now, func(entry ControlMessage) {
+			if entry.pendingHave && !entry.Expired(now) {
+				p.sync.retryAnnouncement(entry.origin, entry.canceled, now)
+			}
+		})
+		if !keep {
+			continue
+		}
 		if !n.controlEligible(p, m, now) {
 			if m.pendingHave && !m.Expired(now) {
 				p.sync.retryAnnouncement(m.origin, m.canceled, now)
@@ -966,11 +986,11 @@ func (n *Node) AttachWithCost(ctx context.Context, peer meshid.Device, conn *qui
 	if err := n.verifyPeerCertificates(peer, conn.ConnectionState().TLS.PeerCertificates); err != nil {
 		return err
 	}
-	stream, maxIP, err := openRouterControl(ctx, conn, n.Credentials.Device, peer, WholeIPDatagramLimit)
+	stream, maxIP, batches, err := openRouterControlFeatures(ctx, conn, n.Credentials.Device, peer, WholeIPDatagramLimit, true)
 	if err != nil {
 		return err
 	}
-	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "quic")), peer, cost, &quicNodeLink{conn: conn, stream: stream, sendIP: &carrierIPSender{sender: conn, negotiated: maxIP}, receiveIP: WholeIPDatagramLimit})
+	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "quic")), peer, cost, &quicNodeLink{conn: conn, stream: stream, sendIP: &carrierIPSender{sender: conn, negotiated: maxIP}, receiveIP: WholeIPDatagramLimit}, batches)
 }
 
 // AttachStream admits a mutually authenticated TLS 1.3 byte stream. The
@@ -984,12 +1004,12 @@ func (n *Node) AttachStream(ctx context.Context, peer meshid.Device, conn net.Co
 	if err := n.verifyPeerCertificates(peer, tlsConn.ConnectionState().PeerCertificates); err != nil {
 		return err
 	}
-	boundPeer, err := openStreamHelloPeer(ctx, conn, n.Credentials.Device, peer, StreamALPN)
+	boundPeer, batches, err := openStreamHelloFeatures(ctx, conn, n.Credentials.Device, peer, StreamALPN, true)
 	if err != nil {
 		return err
 	}
 	peer = boundPeer
-	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, newStreamNodeLink(conn))
+	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, newStreamNodeLink(conn), batches)
 }
 
 func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certificate) error {
@@ -1055,13 +1075,14 @@ func (p *nodePeer) wakeControl() {
 	}
 }
 
-func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, link nodeLink) error {
+func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, link nodeLink, batches ...bool) error {
 	defer link.Close()
 	if cost == 0 || cost == ^uint16(0) {
 		return errors.New("invalid wendy net link cost")
 	}
 	lease, _ := ctx.Value(connectionLeaseKey{}).(*ConnectionLease)
 	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), done: make(chan struct{}), retire: make(chan struct{}), capacityLease: lease}
+	p.haveBatches = len(batches) != 0 && batches[0]
 	if !connectionReadyForCarrier(ctx, peer, cost, func() { _ = link.Close() }) {
 		return nil
 	}

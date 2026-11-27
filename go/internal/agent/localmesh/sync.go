@@ -31,6 +31,11 @@ var ErrControlBackpressure = errors.New("directory response credit unavailable")
 // descriptor (or unavailable) now and leave DATA for separately credited Poll.
 func directoryResponseDemand(m ControlMessage) int {
 	switch m.Kind {
+	case "manifest-haves":
+		if len(m.Haves) > maxManifestHaves*manifestDigestSize {
+			return 0
+		}
+		return len(m.Haves) / manifestDigestSize
 	case "gossip":
 		if m.Gossip == nil || m.Gossip.FutureType() || !m.Gossip.Known() {
 			return 0
@@ -57,6 +62,7 @@ func directoryResponseDemand(m ControlMessage) int {
 // routing and payload packets remain independent QUIC datagrams.
 type ControlMessage struct {
 	Kind        string              `json:"kind" cbor:"k"`
+	Haves       []byte              `json:"haves,omitempty" cbor:"a,omitempty"`
 	Hello       *LinkHello          `json:"hello,omitempty" cbor:"h,omitempty"`
 	Bundle      [][]byte            `json:"bundle,omitempty" cbor:"b,omitempty"`
 	Manifest    *SignedManifest     `json:"manifest,omitempty" cbor:"m,omitempty"`
@@ -66,8 +72,9 @@ type ControlMessage struct {
 	Time        *TimestampControl   `json:"time,omitempty" cbor:"t,omitempty"`
 	deadline    time.Time           // Local queue ownership only; never serialized.
 	canceled    *atomic.Bool
-	origin      string // Immutable local export principal/instance; never serialized.
-	pendingHave bool   // This carrier still owes the HAVE if identity repair blocks its write.
+	origin      string           // Immutable local export principal/instance; never serialized.
+	pendingHave bool             // This carrier still owes the HAVE if identity repair blocks its write.
+	haveEntries []ControlMessage // Per-origin queue ownership, never serialized.
 }
 
 // Deadline is local scheduling metadata for this queued payload. Incoming wire
@@ -89,7 +96,7 @@ func (m ControlMessage) Expired(now time.Time) bool {
 
 func knownControlKind(kind string) bool {
 	switch kind {
-	case "time", "gossip", "certificate", "hello", "bundle", "manifest", "identity-request", "manifest-request", "identity-missing", "manifest-missing":
+	case "time", "gossip", "certificate", "hello", "bundle", "manifest", "manifest-haves", "identity-request", "manifest-request", "identity-missing", "manifest-missing":
 		return true
 	}
 	return false
@@ -180,6 +187,9 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 	if err := netwire.Unmarshal(data, &m); err != nil {
 		return m, err
 	}
+	if len(m.Haves) != 0 && m.Kind != "manifest-haves" {
+		return m, errors.New("unexpected manifest HAVE batch")
+	}
 
 	if m.Kind != "time" && m.Time != nil {
 		return m, errors.New("unexpected timestamp payload")
@@ -191,6 +201,10 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 		return m, errors.New("unexpected gossip payload")
 	}
 	switch m.Kind {
+	case "manifest-haves":
+		if err := validateHaveBatch(m); err != nil {
+			return m, err
+		}
 	case "time":
 		if m.Hello != nil || m.Manifest != nil || m.Certificate != nil || m.Gossip != nil || len(m.Bundle) != 0 || m.Principal != "" {
 			return m, errors.New("invalid timestamp envelope")
@@ -280,6 +294,8 @@ type Synchronizer struct {
 	pendingRenewals      map[string]pendingManifestRenewal
 	certificates         *CertificateExchange
 	pendingAnnouncements []string // Origin keys, in announcement order.
+	haveBatches          bool     // Authenticated carrier negotiated the bounded batch envelope.
+	initialSingleton     bool     // Preserve the initial own-proof HAVE before bulk inventory.
 }
 
 func NewSynchronizer(d *Directory, c *IdentityCache, pools ...*netgossip.Pool) *Synchronizer {
@@ -322,6 +338,7 @@ func (s *Synchronizer) seedAnnouncements(own string, now time.Time) {
 	d.mu.Unlock()
 	slices.Sort(owners[start:])
 	s.pendingAnnouncements = owners
+	s.initialSingleton = ownPresent
 }
 
 // markAnnouncement records a directory change even if replies or a full
@@ -443,6 +460,33 @@ func (s *Synchronizer) identityMessage(principal string, chain [][]byte) Control
 // drainAnnouncements reads the latest revision for each pending origin. A
 // missing signing identity leaves a live origin pending while others progress.
 func (s *Synchronizer) drainAnnouncements(now time.Time, slots int) []ControlMessage {
+	if !s.haveBatches || s.gossip == nil {
+		return s.drainSingleAnnouncements(now, slots)
+	}
+	var out []ControlMessage
+	if slots > 0 && s.initialSingleton {
+		first := s.drainSingleAnnouncements(now, 1)
+		if len(first) != 0 {
+			s.initialSingleton = false
+			out = append(out, first...)
+			slots--
+		}
+	}
+	if slots <= 0 {
+		return out
+	}
+	// Each frame carries a bounded group of hints. The directory still bounds the
+	// total pending origins, and every origin keeps its own cancellation bit.
+	messages := s.drainSingleAnnouncements(now, min(slots, s.directory.limit)*manifestHavesPerFrame)
+	for len(messages) > 0 {
+		n := min(manifestHavesPerFrame, len(messages))
+		out = append(out, packHaveBatch(messages[:n]))
+		messages = messages[n:]
+	}
+	return out
+}
+
+func (s *Synchronizer) drainSingleAnnouncements(now time.Time, slots int) []ControlMessage {
 	if slots <= 0 {
 		return nil
 	}

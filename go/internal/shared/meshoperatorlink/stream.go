@@ -71,6 +71,7 @@ func completePeerCertificates(chain []*x509.Certificate, candidates IssuerCandid
 }
 
 type control struct {
+	HaveBatches bool                    `cbor:"hb,omitempty"`
 	AgentWindow uint32                  `cbor:"w,omitempty"` // Optional hello/ready receive-window maximum.
 	Stream      uint32                  `cbor:"s,omitempty"`
 	Credit      uint32                  `cbor:"c,omitempty"`

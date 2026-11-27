@@ -29,6 +29,7 @@ type virtualNode struct {
 
 type virtualEdge struct {
 	from, to    int
+	own         string
 	sync        *Synchronizer
 	queue       []ControlMessage
 	ingress     []ControlMessage
@@ -119,7 +120,7 @@ func newVirtualMesh(t testing.TB, topology string, count, bandwidth int, delay t
 		index := len(m.edges)
 		for _, ends := range [][2]int{{a, b}, {b, a}} {
 			n := m.nodes[ends[0]]
-			m.edges = append(m.edges, &virtualEdge{from: ends[0], to: ends[1], sync: NewSynchronizer(n.dir, n.dir.cache, n.pool), capacity: 16})
+			m.edges = append(m.edges, &virtualEdge{from: ends[0], to: ends[1], own: n.creds.Device.Key(), sync: NewSynchronizer(n.dir, n.dir.cache, n.pool), capacity: 16})
 		}
 		m.reverse = append(m.reverse, index+1, index)
 	}
@@ -428,6 +429,27 @@ func TestVirtualMeshRegression(t *testing.T) {
 	}
 }
 
+// Probe arrivals inside the inventory transfer expose serialization delays
+// that the normal 100 ms sampling cadence can miss.
+func TestVirtualMeshImmediateWarmProbe(t *testing.T) {
+	for _, offset := range []time.Duration{0, 10 * time.Millisecond, 20 * time.Millisecond, 31 * time.Millisecond, 40 * time.Millisecond} {
+		t.Run(offset.String(), func(t *testing.T) {
+			m := newVirtualMesh(t, "full", 8, 8000, 20*time.Millisecond)
+			m.advance(60*time.Second, false, false)
+			m.reset("warm-reconnect")
+			for _, e := range m.edges {
+				e.sync.Close()
+				n := m.nodes[e.from]
+				e.sync = NewSynchronizer(n.dir, n.dir.cache, n.pool)
+				virtualSeed(e, m.now())
+			}
+			m.add(virtualEvent{at: m.at + offset, kind: "probe-start"})
+			m.advance(time.Second, false, false)
+			m.report()
+		})
+	}
+}
+
 func virtualCPU(t testing.TB) int64 {
 	var r syscall.Rusage
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &r); err != nil {
@@ -491,24 +513,26 @@ func BenchmarkVirtualInventory(b *testing.B) {
 					b.Fatalf("accept: %t %v", ok, err)
 				}
 			}
-			e := &virtualEdge{sync: NewSynchronizer(d, cache, netgossip.NewPool()), capacity: 16}
+			e := &virtualEdge{own: first.Device.Key(), sync: NewSynchronizer(d, cache, netgossip.NewPool()), capacity: 16}
 			defer e.sync.Close()
 			// Establish retained artifacts before timing warm inventory sweeps.
 			drain := func() {
 				virtualSeed(e, now)
 				frames := 0
+				origins := 0
 				for len(e.queue) != 0 {
 					for _, message := range e.queue {
 						if err := WriteControl(io.Discard, message); err != nil {
 							b.Fatal(err)
 						}
 						frames++
+						origins += virtualInventoryCount(message)
 					}
 					e.queue = e.queue[:0]
 					virtualMaintain(e, now, false)
 				}
-				if frames != count {
-					b.Fatalf("inventory emitted %d frames, want %d", frames, count)
+				if origins != count {
+					b.Fatalf("inventory emitted %d origins in %d frames, want %d origins", origins, frames, count)
 				}
 			}
 			drain()
@@ -644,24 +668,26 @@ func BenchmarkVirtualEncodingInventory(b *testing.B) {
 					b.Fatalf("accept: %t %v", ok, err)
 				}
 			}
-			e := &virtualEdge{sync: NewSynchronizer(d, cache, netgossip.NewPool()), capacity: 16}
+			e := &virtualEdge{own: first.Device.Key(), sync: NewSynchronizer(d, cache, netgossip.NewPool()), capacity: 16}
 			defer e.sync.Close()
 			// Establish retained artifacts before timing warm inventory sweeps.
 			drain := func() {
 				virtualSeed(e, now)
 				frames := 0
+				origins := 0
 				for len(e.queue) != 0 {
 					for _, message := range e.queue {
 						if err := WriteControl(io.Discard, message); err != nil {
 							b.Fatal(err)
 						}
 						frames++
+						origins += virtualInventoryCount(message)
 					}
 					e.queue = e.queue[:0]
 					virtualMaintain(e, now, false)
 				}
-				if frames != count {
-					b.Fatalf("inventory emitted %d frames, want %d", frames, count)
+				if origins != count {
+					b.Fatalf("inventory emitted %d origins in %d frames, want %d origins", origins, frames, count)
 				}
 			}
 			drain()

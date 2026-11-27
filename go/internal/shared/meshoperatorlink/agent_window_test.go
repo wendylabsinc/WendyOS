@@ -129,7 +129,7 @@ func windowDelayProxy(t testing.TB, destination string, delay time.Duration) str
 	return listener.Addr().String()
 }
 
-func windowPair(t testing.TB, mode string, delay time.Duration, handler func(context.Context, net.Conn) error) (*RouterLink, *RouterLink) {
+func windowPair(t testing.TB, mode string, delay time.Duration, handler func(context.Context, net.Conn) error, haveBatches ...bool) (*RouterLink, *RouterLink) {
 	t.Helper()
 	operator, device, cfg := windowCredentials(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -177,7 +177,11 @@ func windowPair(t testing.TB, mode string, delay time.Duration, handler func(con
 				link, err = routerReady(ctx, server, cfg.Router, cfg.Router, true, time.Now().Add(time.Minute), handler)
 			}
 		} else {
-			link, err = AcceptRouter(ctx, server, cfg.Router.Tenant(), cfg.Roots, handler)
+			serverContext := ctx
+			if len(haveBatches) > 1 && haveBatches[1] {
+				serverContext = WithManifestHaveBatches(ctx)
+			}
+			link, err = AcceptRouter(serverContext, server, cfg.Router.Tenant(), cfg.Roots, handler)
 		}
 		if err != nil {
 			raw.Close()
@@ -214,7 +218,11 @@ func windowPair(t testing.TB, mode string, delay time.Duration, handler func(con
 		}
 		link, err = routerReady(ctx, client, cfg.Router, cfg.Router, false, time.Now().Add(time.Minute), nil)
 	} else {
-		link, err = RouterClient(ctx, client, cfg)
+		clientContext := ctx
+		if len(haveBatches) > 0 && haveBatches[0] {
+			clientContext = WithManifestHaveBatches(ctx)
+		}
+		link, err = RouterClient(clientContext, client, cfg)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -384,7 +392,7 @@ func TestAgentWindowLegacyWireFixtures(t *testing.T) {
 		Kind     string                  `cbor:"k"`
 		Instance meshoperator.InstanceID `cbor:"n,omitempty"`
 	}
-	encoded, err := netwire.Marshal(control{Kind: "operator-router-hello", Instance: meshoperator.InstanceID{1}, AgentWindow: agentTCPWindow})
+	encoded, err := netwire.Marshal(control{Kind: "operator-router-hello", Instance: meshoperator.InstanceID{1}, AgentWindow: agentTCPWindow, HaveBatches: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,5 +490,17 @@ func TestAgentWindowRejectsUnofferedAndOversizedSelection(t *testing.T) {
 	var message control
 	if err := netwire.UnmarshalExtensibleArtifact(encoded, &message, maxControlBytes); err == nil {
 		t.Fatal("overflowing window decoded")
+	}
+}
+
+func TestRouterManifestHaveBatchNegotiation(t *testing.T) {
+	for _, offer := range [][2]bool{{false, false}, {true, false}, {false, true}, {true, true}} {
+		t.Run(fmt.Sprint(offer), func(t *testing.T) {
+			client, server := windowPair(t, "tcp", 0, nil, offer[0], offer[1])
+			want := offer[0] && offer[1]
+			if client.ManifestHaveBatches() != want || server.ManifestHaveBatches() != want {
+				t.Fatal("asymmetric negotiation", client.ManifestHaveBatches(), server.ManifestHaveBatches())
+			}
+		})
 	}
 }
