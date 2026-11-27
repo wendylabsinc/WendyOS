@@ -50,6 +50,11 @@ func (a *cameraDataAdapter) Discover(ctx context.Context) []data.Source {
 	}
 	out := make([]data.Source, 0, len(devices))
 	for _, dev := range devices {
+		// Paired Go2 video is served by the robot connection, not the capture
+		// hub. Do not advertise an IP/RTSP campaign source for it.
+		if dev.GetDriver() == unitreeCameraDriver {
+			continue
+		}
 		if dev.GetTransport() == agentpb.VideoTransport_VIDEO_TRANSPORT_IP {
 			// listCameras lists only paired network cameras, which have a
 			// stored login, so being offline is the one reason left to report.
