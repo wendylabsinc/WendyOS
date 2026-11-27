@@ -3761,6 +3761,9 @@ var (
 	qualcommStageMu      sync.Mutex
 )
 
+// hostHasNVIDIAGPU is behind a var so tests need not run on a given GPU.
+var hostHasNVIDIAGPU = localoci.HostHasNVIDIAGPU
+
 // needsNvidiaCDI reports whether CreateContainer should apply the host's
 // NVIDIA CDI spec (library mounts, extra device nodes, driver env vars) to
 // this app's OCI spec. Both the explicit gpu entitlement AND — on a Jetson —
@@ -3776,12 +3779,12 @@ var (
 // once display is requested, so this only fulfills what that entitlement
 // already declares.
 func needsNvidiaCDI(appCfg *appconfig.AppConfig) bool {
-	// An explicit GPU entitlement attempts NVIDIA CDI/CSV provisioning on every
-	// board, as it did before this change — including the warnings applyNvidiaCDI
-	// logs when the host has no NVIDIA provisioning at all, which are the point
-	// of asking for a GPU that isn't there.
+	// An explicit GPU entitlement attempts NVIDIA CDI/CSV provisioning wherever
+	// the GPU may be NVIDIA's — including the warnings applyNvidiaCDI logs when
+	// the host has no GPU at all, which are the point of asking for a GPU that
+	// isn't there. A host whose GPU is another vendor's is served by that grant.
 	if appCfg.HasEntitlement(appconfig.EntitlementGPU) {
-		return true
+		return hostHasNVIDIAGPU()
 	}
 	// A display entitlement only implies NVIDIA userspace on a Jetson. Gating on
 	// the same board check applyDisplay uses for NVIDIA_DRIVER_CAPABILITIES keeps
