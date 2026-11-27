@@ -501,23 +501,25 @@ replies share the existing maintenance tick and control queue. LAN also exposes
 the fixed signed-time relay on port 43025 for bootstrap, and BLE advertises a
 separate ciphertext-only HTTPS relay on PSM 130.
 
-Each authenticated router carrier advertises the current inventory on attach,
-starting with the local proof. Later directory changes schedule HAVE messages
-only for the changed origins. Each carrier retains pending origin keys while
-replies or a full control queue block them, then advertises the latest live
-digest for each pending origin as space frees up on the maintenance tick.
+Each authenticated router carrier advertises the current inventory once on
+attach, starting with the local proof. Later directory changes schedule HAVE
+messages only for the changed origins. Each carrier retains pending origin
+keys while replies or a full control queue block them, then advertises the
+latest live digest for each pending origin as space frees up on the
+maintenance tick.
 A temporary signing identity miss leaves that origin pending while other
 origins can still be advertised.
 Full signed records are sent only on request between routers. Duplicate
 revisions do not renew their expiry.
+
 The node uses one 15-minute manifest lease for route, presence and services.
-An edit publishes immediately when idle; edits within one second coalesce into
-the latest complete state. Five quiet minutes after a successful publication
-trigger refresh. This interval is separate from Babel's one-second datagram
-Hello and 16-second Update intervals;
-reliable stream links can use a longer per-link Hello interval. Origin revisions
-remain durable; receiver payloads and ten-duration watermarks are RAM state, so
-restart can first-learn a delayed record for one local lease.
+An edit publishes immediately when idle. Edits within one second coalesce into
+the latest complete state. After five quiet minutes the node renews its own
+signed manifest, which schedules a HAVE for that origin. Babel sends datagram
+Hellos every second and Updates every 16 seconds. Reliable stream links can
+use a longer per-link Hello interval. Origin revisions remain durable.
+Receiver payloads and ten-duration watermarks are RAM state, so after a restart
+a receiver can learn a delayed record for one local lease.
 
 The payload path is IPv6 through peer TUNs and the selected Babel next hop. A
 1320-byte logical packet uses the negotiated whole form when current capacity
@@ -586,6 +588,9 @@ the claim, so certificate repair cannot start another full download. Only a
 verified, admitted object is advertised onward. Unsolicited full records are
 rejected on router links. Digests, availability hints and download completion
 never advance signed revision/generation receipts or grant route authority.
+When the per-carrier limit for manifests awaiting identity verification is
+reached, excess bodies are dropped. A later publication from that origin
+gives the receiver another chance to download and verify its manifest.
 
 Disconnect immediately releases an owner's claim. Thirty idle seconds without
 an accepted DATA chunk permits an alternate; polling and repeated HAVEs do not
