@@ -152,6 +152,9 @@ func TestGetAgentVersion(t *testing.T) {
 	if resp.CpuArchitecture != runtime.GOARCH {
 		t.Errorf("arch = %q; want %q", resp.CpuArchitecture, runtime.GOARCH)
 	}
+	if !slices.Contains(resp.GetFeatureset(), "cloud-relay-tcp-half-close") {
+		t.Error("safe Cloud relay TCP half-close is missing from the featureset")
+	}
 	metadata := MeshAgentMetadata()
 	if metadata.Version != resp.GetVersion() || metadata.OS != resp.GetOs() || metadata.OSVersion != resp.GetOsVersion() || metadata.DeviceType != resp.GetDeviceType() || metadata.CPUArchitecture != resp.GetCpuArchitecture() {
 		t.Fatalf("signed discovery metadata differs from the agent RPC: %+v", metadata)

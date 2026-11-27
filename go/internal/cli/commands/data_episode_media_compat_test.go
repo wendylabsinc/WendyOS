@@ -63,7 +63,7 @@ func TestDataEpisodesLargeLibraryKeepsCompactDefault(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	var out, errOut bytes.Buffer
-	if err = runDataEpisodes(ctx, pb.NewDataServiceClient(conn), &out, &errOut, true, time.Now()); err != nil {
+	if err = runDataEpisodes(ctx, pb.NewDataServiceClient(conn), &out, &errOut, true, "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	var listed pb.DataEpisodesResponse

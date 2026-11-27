@@ -41,9 +41,10 @@ import (
 const JoinSetupTimeout = 60 * time.Second
 
 type Options struct {
-	CarrierSources []carriers.Source
-	StateDirectory string
-	Certificate    config.CertificateInfo
+	CarrierSources  []carriers.Source
+	StateDirectory  string
+	Certificate     config.CertificateInfo
+	LiteIssuerChain string
 	// ReportCarrierFailure is an optional local diagnostics sink. It receives
 	// no certificate or request payload and must not change attachment policy.
 	ReportCarrierFailure func(transport string, err error)
@@ -331,10 +332,17 @@ func Open(ctx context.Context, options Options) (_ *Session, err error) {
 	}()
 	var revision atomic.Uint64
 	revision.Store(state.Revision)
-	cfg := meshoperatorlink.ClientConfig{Identity: identity, Signer: signer, Instance: state.Instance, Roots: roots}
 	credentials, err := localmesh.NewOperatorCredentials(info.PemCertificate, info.PemCertificateChain, key, uuid.UUID(state.Instance))
 	if err != nil {
 		return nil, err
+	}
+	if options.LiteIssuerChain != "" {
+		// Primary attachment still works if EST is temporarily unavailable.
+		_ = credentials.SetLiteIssuerChain(options.LiteIssuerChain, info.PemCertificateChain, time.Now())
+	}
+	cfg := meshoperatorlink.ClientConfig{
+		Identity: identity, Signer: signer, Instance: state.Instance, Roots: roots,
+		IssuerCandidates: credentials.TLSIssuerCandidates,
 	}
 	endpoint, err := netmesh.NewNetwork(credentials.Device)
 	if err != nil {

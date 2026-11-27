@@ -302,7 +302,7 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	hw, hwErr := cloudenroll.ReadHardware(ctx, conn.Conn)
 	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 	if err != nil {
-		return cloudErrResult(err), nil
+		return enrollMintErrResult(name, err), nil
 	}
 
 	resp, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
@@ -541,6 +541,14 @@ func (e *cloudResolveErr) Error() string { return e.msg }
 
 // signInAgainHint ends the message for a session Wendy Cloud no longer accepts.
 const signInAgainHint = "sign in again: call auth_login and show the user the link (or run 'wendy auth login' in a terminal)"
+
+// enrollMintErrResult tells the assistant plainly when the name is the problem.
+func enrollMintErrResult(name string, err error) *mcpgo.CallToolResult {
+	if errors.Is(err, cloudenroll.ErrDeviceNameTaken) {
+		return errResult(errCodeInvalidArgument, fmt.Sprintf("device name %s is already used by another device in this organization; call again with a different name", name))
+	}
+	return cloudErrResult(err)
+}
 
 // cloudErrResult maps an error from the cloud auth/asset-resolution helpers
 // (cloudAuthEntry, pickCloudAsset, connectToCloudAgent, mcpListCloudAssets) to

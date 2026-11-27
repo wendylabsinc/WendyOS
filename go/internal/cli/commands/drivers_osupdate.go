@@ -261,13 +261,15 @@ func stageRebuild(ctx context.Context, conn *grpcclient.AgentConnection, name, t
 // runDriverStage drives the install stream to completion for a staged add-on.
 // Isolated devices receive the published image over the existing connection.
 func runDriverStage(ctx context.Context, conn *grpcclient.AgentConnection, spec *agentpbv2.DriverSpec) error {
-	callCtx, cancel := context.WithTimeout(ctx, driverStageTimeout)
-	defer cancel()
-	spec, path, cleanup, err := prepareDriverUpload(callCtx, conn, spec)
+	// Downloading for an isolated device has no deadline of its own (see
+	// downloadDriver); driverStageTimeout bounds the device's part.
+	spec, path, cleanup, err := prepareDriverUpload(ctx, conn, spec)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
+	callCtx, cancel := context.WithTimeout(ctx, driverStageTimeout)
+	defer cancel()
 	stream, err := conn.DriverService.InstallDriver(callCtx)
 	if err != nil {
 		return err

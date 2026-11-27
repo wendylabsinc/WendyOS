@@ -25,7 +25,13 @@ func TestLookTurnWithoutSiteAlignmentAndAcrossYawWrap(t *testing.T) {
 		if len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE || f.commands[0].Forward != 0 || f.commands[0].Lateral != 0 || f.commands[0].Yaw*float64(direction) <= 0 || math.Abs(f.commands[0].Yaw) != lookSpeed {
 			t.Fatal("incorrect turn command", f.commands)
 		}
-		r.observed.Pose.Yaw = math.Remainder(r.observed.Pose.Yaw+float64(direction)*lookAngle, 2*math.Pi)
+		// A paired turn passes the former 30-degree stop, even across +/-pi.
+		r.observed.Pose.Yaw = math.Remainder(r.observed.Pose.Yaw+float64(direction)*math.Pi/6, 2*math.Pi)
+		r.stepLocked(time.Now())
+		if !r.moving || r.lookState != 1 || f.commands[len(f.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE {
+			t.Fatal("paired turn stopped at 30 degrees")
+		}
+		r.observed.Pose.Yaw = math.Remainder(r.observed.Pose.Yaw+float64(direction)*math.Pi/6, 2*math.Pi)
 		r.stepLocked(time.Now())
 		if r.moving || r.lookState != 2 || r.lookTurn != nil || f.commands[len(f.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 			t.Fatal("turn did not stop at target")

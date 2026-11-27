@@ -855,7 +855,7 @@ final class AppModel: ObservableObject {
 #if os(iOS)
     extension AppModel {
         // Owned by the root scene, independently of the selected device pane.
-        func runMobileMesh(active: Bool) async {
+        func runMobileMesh(active: Bool, paused: (() -> Void)? = nil) async {
             guard initialized else { return }
             mobileLifecycleGeneration += 1
             let generation = mobileLifecycleGeneration
@@ -903,6 +903,11 @@ final class AppModel: ObservableObject {
                     account: mobileCloudAccount,
                     organization: mobileCloudOrganization
                 )
+                // The embedded broker has drained and released its file locks.
+                // Hosts may now relinquish their iOS background assertion. Do
+                // this even if the caller was superseded while awaiting cleanup;
+                // the host uses its own generation to reject stale completions.
+                if !active { paused?() }
                 guard generation == mobileLifecycleGeneration, !Task.isCancelled else { return }
                 mobileRuntimeScope = scope
                 mobileWasBackgrounded = !active

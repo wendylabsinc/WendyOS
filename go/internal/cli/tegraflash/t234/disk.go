@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -72,27 +73,55 @@ type LUNSelector struct {
 var scanUMSDisks = listUMSDisks
 var umsPollInterval = time.Second
 
-// observedUMSHint formats the raw SCSI INQUIRY strings of every USB
-// mass-storage LUN currently visible, for diagnosing a wait that timed out. It
-// reports the vendor/product fields verbatim (before splitInquiry rejoins them)
-// plus the BSD/block name, so a device advertising an unexpected export name —
-// or a LUN the host never assigned a whole-disk node to — is obvious.
-func observedUMSHint(session string) string {
+// scanRawInquiry and hostOS are vars so tests can drive the timeout diagnosis
+// without this host's disks, and check host-specific hints on any platform.
+var (
+	scanRawInquiry = rawUMSInquiry
+	hostOS         = runtime.GOOS
+)
+
+// observedUMSHint diagnoses a LUN wait that timed out. It formats the raw SCSI
+// INQUIRY strings of every USB mass-storage LUN currently visible: the
+// vendor/product fields verbatim (before splitInquiry rejoins them) plus the
+// BSD/block name, so a device advertising an unexpected export name — or a LUN
+// the host never assigned a whole-disk node to — is obvious. Then it says what
+// this Jetson is doing on USB.
+func observedUMSHint(sel LUNSelector) string {
 	var parts []string
-	if raw := strings.TrimRight(rawUMSInquiry(), "\n"); raw != "" {
+	raw := strings.TrimRight(scanRawInquiry(), "\n")
+	if raw != "" {
 		parts = append(parts, "USB mass-storage LUNs currently visible (raw SCSI INQUIRY):\n"+raw)
 	} else {
 		parts = append(parts, "No USB mass-storage LUNs are currently visible to this computer.")
 	}
-	// The board's USB identity tells the failure apart: back in recovery
-	// (0955:70xx) means it rebooted mid-sequence; still the gadget (1d6b:0104)
-	// means the initrd stalled between commands; absent means it left USB.
-	if devs, err := scanUSBDevices(); err != nil {
-		parts = append(parts, "Could not list USB devices: "+err.Error())
-	} else {
-		parts = append(parts, describeTegraUSB(devs, session))
+	devs, err := scanUSBDevices()
+	if err != nil {
+		return strings.Join(append(parts, "Could not list USB devices: "+err.Error()), "\n")
+	}
+	usb, onUSB := describeTegraUSB(devs, sel.Session, recoveryPortOf(sel))
+	parts = append(parts, usb)
+	// Only the first wait of a flash (no session yet) can be held up by the
+	// prompt, and only a gadget and a disk that never showed up fit it.
+	if hostOS == "darwin" && sel.Session == "" && !onUSB && !strings.Contains(raw, sel.Vendor) {
+		parts = append(parts, macAccessoryHint)
 	}
 	return strings.Join(parts, "\n")
+}
+
+// macAccessoryHint names a possible, unconfirmed cause of a flashing gadget
+// that never reaches a Mac: Apple silicon laptops ask "Allow accessory to
+// connect?" before a new USB accessory may connect, and the flashing gadget is
+// a different USB device from the recovery-mode one the person already allowed.
+const macAccessoryHint = `On macOS, an unanswered "Allow accessory to connect?" prompt is one possible cause: macOS can ask again when the Jetson reconnects as its flashing gadget, and keeps it disconnected until you choose Allow. If you see that prompt, choose Allow. Then put the Jetson back in recovery mode and start the install again.`
+
+// recoveryPortOf is the USB port the selector's Jetson uses in recovery mode
+// ("" if unknown). Before the gadget is adopted (no session yet) that is the
+// port the wait itself is pinned to.
+func recoveryPortOf(sel LUNSelector) string {
+	if sel.RecoveryPort == "" && sel.Session == "" {
+		return sel.PortPath
+	}
+	return sel.RecoveryPort
 }
 
 // usbDevice is one device on the host's USB bus: just what the Tegra
@@ -100,69 +129,159 @@ func observedUMSHint(session string) string {
 type usbDevice struct {
 	VID, PID uint16
 	Serial   string
+	Product  string // USB product string; empty where the host scan does not read it (Windows)
 	PortPath string
 }
 
 var scanUSBDevices = listUSBDevices
 
-// describeTegraUSB reports which Tegra-relevant USB devices are present.
-// Any Linux board in device mode can use 1d6b:0104, so a gadget only counts
-// as this Jetson when its USB serial is the flash session id.
-func describeTegraUSB(devs []usbDevice, session string) string {
-	var ours, others []string
+// USB product strings of the two kinds of 1d6b:0104 gadget a Jetson shows: the
+// flashing initrd's (meta-tegra's initrd-flash.scheme.in) and the start of a
+// running WendyOS board's (gadget-setup.sh: "WendyOS <name>", and "WendyOS
+// Device <name>" on images from before the prefix was shortened).
+const (
+	flashGadgetProduct   = "Linux for Tegra"
+	wendyOSProductPrefix = "WendyOS "
+)
+
+// describeTegraUSB says which situation this Jetson is in on USB — in recovery
+// mode (it restarted, or never ran the flashing image), flashing gadget up (it
+// has not offered the disk, or the host did not attach it) or absent — and
+// lists the devices behind that. onUSB reports whether a device that is or may
+// be this Jetson is present.
+//
+// Any Linux board in device mode can use 1d6b:0104, and a running WendyOS
+// board does, so a gadget only counts as this Jetson on evidence: its USB
+// serial is the flash session id or, before the session is known, it is on
+// recoveryPort (where this Jetson was in recovery mode, "" if unknown) or is
+// the only gadget with the flashing initrd's product string. The gadget can
+// come up on the connector's other root-hub port (see LUNSelector.PortHint),
+// so a gadget elsewhere with no evidence either way is reported as possibly
+// this Jetson, not as another board. A running WendyOS board (by its product
+// string) is never the flashing gadget; it is listed with the other boards.
+func describeTegraUSB(devs []usbDevice, session, recoveryPort string) (text string, onUSB bool) {
+	var recovery, gadget, unsure, others []string
+	var candidates []usbDevice // gadgets the session cannot tell apart yet
+	runningBoard := false      // a running WendyOS board is listed under others
 	for _, d := range devs {
-		label, mine := tegraUSBLabel(d, session)
+		onPort := recoveryPort != "" && d.PortPath == recoveryPort
 		switch {
-		case label == "":
-		case mine:
-			ours = append(ours, label)
+		case d.VID == rcm.VendorNVIDIA && (onPort || recoveryPort == ""):
+			recovery = append(recovery, tegraUSBLabel(d, ""))
+		case d.VID == rcm.VendorNVIDIA:
+			others = append(others, tegraUSBLabel(d, ""))
+		case d.VID != GadgetVendorID || d.PID != GadgetProductID:
+		case session != "" && isSessionGadget(d, session):
+			gadget = append(gadget, tegraUSBLabel(d, "flashing gadget"))
+		case session != "":
+			others = append(others, tegraUSBLabel(d, ""))
+		case !strings.HasPrefix(d.Product, wendyOSProductPrefix):
+			candidates = append(candidates, d)
+		case onPort: // this Jetson's own port: it may have started its installed WendyOS
+			unsure = append(unsure, tegraUSBLabel(d, fmt.Sprintf("running board %q", d.Product)))
 		default:
-			others = append(others, label)
+			others = append(others, tegraUSBLabel(d, fmt.Sprintf("running board %q", d.Product)))
+			runningBoard = true
 		}
 	}
-	var b strings.Builder
-	if len(ours) == 0 {
-		b.WriteString("This Jetson is not on USB: no NVIDIA recovery device (0955:*)")
+	inRecovery := recoveryPort != "" && len(recovery) > 0
+	ours := -1
+	if !inRecovery { // a Jetson in recovery mode is not also a gadget
+		ours = ourGadget(candidates, recoveryPort)
+	}
+	for i, d := range candidates {
+		product := ""
+		if d.Product != "" {
+			product = fmt.Sprintf("%q", d.Product)
+		}
+		switch {
+		case i == ours:
+			gadget = append(gadget, tegraUSBLabel(d, "flashing gadget"))
+		case inRecovery || ours >= 0: // this Jetson is accounted for
+			others = append(others, tegraUSBLabel(d, product))
+		default:
+			unsure = append(unsure, tegraUSBLabel(d, product))
+		}
+	}
+
+	var lines []string
+	switch {
+	case inRecovery:
+		lines = append(lines, "This Jetson is in USB recovery mode, so the flashing image is not running: "+strings.Join(recovery, ", "))
+	case len(recovery) > 0: // no port to tell this Jetson from another one
+		lines = append(lines, "NVIDIA recovery-mode devices on USB: "+strings.Join(recovery, ", "))
+	}
+	if len(gadget) > 0 {
+		lines = append(lines, "This Jetson's flashing gadget is on USB but is not showing the disk: "+strings.Join(gadget, ", "))
+	}
+	switch len(unsure) {
+	case 0:
+	case 1:
+		lines = append(lines, "A USB gadget that may be this Jetson or another board is present: "+unsure[0])
+	default:
+		lines = append(lines, fmt.Sprintf("%d USB gadgets that may be this Jetson or other boards are present: %s", len(unsure), strings.Join(unsure, ", ")))
+	}
+	onUSB = len(lines) > 0
+	if !onUSB {
+		its := "1d6b:0104"
 		if session != "" {
-			fmt.Fprintf(&b, " and no flashing gadget with session %s", session)
-		} else {
-			b.WriteString(" or flashing gadget (1d6b:0104)")
+			its = "session " + session
 		}
-		b.WriteString(" is present.")
-	} else {
-		b.WriteString("Tegra USB devices present: " + strings.Join(ours, ", "))
+		lines = append(lines, fmt.Sprintf("This Jetson is not on USB: neither its recovery device (0955:*) nor its flashing gadget (%s) is present.", its))
 	}
-	if len(others) > 0 {
-		b.WriteString("\nOther USB gadgets present (not this Jetson): " + strings.Join(others, ", "))
+	switch {
+	case len(others) == 0:
+	case runningBoard && !inRecovery && len(gadget) == 0:
+		// With this Jetson found nowhere, a running board on another port may
+		// be it: like the flashing gadget, WendyOS's gadget can come up on the
+		// connector's other root-hub port.
+		lines = append(lines, "Other USB gadgets present (not this Jetson, unless it started WendyOS instead of the flashing image): "+strings.Join(others, ", "))
+	default:
+		lines = append(lines, "Other USB gadgets present (not this Jetson): "+strings.Join(others, ", "))
 	}
-	return b.String()
+	return strings.Join(lines, "\n"), onUSB
 }
 
-// tegraUSBLabel names a Tegra-relevant USB device ("" for anything else) and
-// reports whether it can be this flash's Jetson. Before the session is known,
-// any gadget may be it.
-func tegraUSBLabel(d usbDevice, session string) (label string, mine bool) {
+// ourGadget picks this Jetson's flashing gadget among gadgets seen before the
+// session is known: the one on the recovery port, else the only one with the
+// flashing initrd's product string. It returns -1 when neither singles one out.
+func ourGadget(candidates []usbDevice, recoveryPort string) int {
+	ours, flashing := -1, 0
+	for i, d := range candidates {
+		if recoveryPort != "" && d.PortPath == recoveryPort {
+			return i
+		}
+		if d.Product == flashGadgetProduct {
+			ours, flashing = i, flashing+1
+		}
+	}
+	if flashing != 1 {
+		return -1
+	}
+	return ours
+}
+
+// tegraUSBLabel names an NVIDIA recovery device or a 1d6b:0104 gadget; what
+// (may be empty) says which kind of gadget it is.
+func tegraUSBLabel(d usbDevice, what string) string {
 	at := ""
 	if d.PortPath != "" {
 		at = ", usb " + d.PortPath
 	}
-	switch {
-	case d.VID == rcm.VendorNVIDIA:
+	if d.VID == rcm.VendorNVIDIA {
 		if name, ok := rcm.T234ModuleName(d.PID); ok {
-			return fmt.Sprintf("0955:%04x (%s APX recovery%s)", d.PID, name, at), true
+			return fmt.Sprintf("0955:%04x (%s APX recovery%s)", d.PID, name, at)
 		}
-		return fmt.Sprintf("0955:%04x (NVIDIA recovery%s)", d.PID, at), true
-	case d.VID == GadgetVendorID && d.PID == GadgetProductID:
-		serial := d.Serial
-		if serial == "" {
-			serial = "none"
-		}
-		if session == "" || isSessionGadget(d, session) {
-			return fmt.Sprintf("1d6b:0104 (flashing gadget, serial %s%s)", serial, at), true
-		}
-		return fmt.Sprintf("1d6b:0104 (serial %s%s)", serial, at), false
+		return fmt.Sprintf("0955:%04x (NVIDIA recovery%s)", d.PID, at)
 	}
-	return "", false
+	serial := d.Serial
+	if serial == "" {
+		serial = "none"
+	}
+	if what != "" {
+		what += ", "
+	}
+	return fmt.Sprintf("1d6b:0104 (%sserial %s%s)", what, serial, at)
 }
 
 // ErrJetsonInRecovery reports that the Jetson rebooted into USB recovery mode
@@ -304,8 +423,8 @@ func WaitForUMSDiskAt(ctx context.Context, selector LUNSelector, timeout time.Du
 		return UMSDisk{}, false, nil
 	}, func(scanErr error) error {
 		if scanErr != nil {
-			return fmt.Errorf("timed out waiting for USB storage %q at port %q/session %q (last scan error: %v)\n%s", selector.Vendor, selector.PortPath, selector.Session, scanErr, observedUMSHint(selector.Session))
+			return fmt.Errorf("timed out waiting for USB storage %q at port %q/session %q (last scan error: %v)\n%s", selector.Vendor, selector.PortPath, selector.Session, scanErr, observedUMSHint(selector))
 		}
-		return fmt.Errorf("timed out waiting for USB storage %q at port %q/session %q\n%s", selector.Vendor, selector.PortPath, selector.Session, observedUMSHint(selector.Session))
+		return fmt.Errorf("timed out waiting for USB storage %q at port %q/session %q\n%s", selector.Vendor, selector.PortPath, selector.Session, observedUMSHint(selector))
 	})
 }

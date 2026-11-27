@@ -82,7 +82,7 @@ func updateMCPSimulatorAgent(ctx context.Context, name string) (*wendymcp.Simula
 		result.CapabilityVerified = true
 		return result, nil
 	}
-	artifact, expectedVersion, _, err := simulatorUpdateResolve(info.GetOs(), info.GetCpuArchitecture(), false)
+	artifact, expectedVersion, _, err := simulatorUpdateResolve(ctx, info.GetOs(), info.GetCpuArchitecture(), false)
 	if err != nil {
 		return nil, fmt.Errorf("resolving official simulator agent: %w", err)
 	}

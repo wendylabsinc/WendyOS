@@ -58,6 +58,13 @@ func stubEnrollPrompts(t *testing.T) {
 		t.Fatal("unexpected device-name prompt")
 		return "", nil
 	}
+	origNames := orgDeviceNamesFn
+	orgDeviceNamesFn = func(context.Context, *config.AuthConfig) ([]string, error) { return nil, nil }
+	origNameDefault := promptDeviceNameDefault
+	promptDeviceNameDefault = func(string, string, string, tui.ValidateFunc) (string, error) {
+		t.Fatal("unexpected device-name prompt")
+		return "", nil
+	}
 	// Default org resolver returns a stable test org so tests that reach
 	// preEnrollDeviceFn don't need a live cloud connection.
 	resolveOrgFn = func(_ context.Context, _ *config.AuthConfig, _ bool) (OrgResolution, error) {
@@ -70,6 +77,8 @@ func stubEnrollPrompts(t *testing.T) {
 		preEnrollDeviceFn = origEnroll
 		preEnrollACMEFn = origACME
 		promptDeviceName = origName
+		promptDeviceNameDefault = origNameDefault
+		orgDeviceNamesFn = origNames
 		resolveOrgFn = origResolveOrg
 	})
 }
@@ -400,10 +409,18 @@ func TestACMEPreEnrollmentBakesEABMaterial(t *testing.T) {
 		return want, nil
 	}
 	name := "dev"
-	got, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
-		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
+	var got *acmeEnrollmentBake
+	out, err := captureCommandStdout(t, func() error {
+		var err error
+		got, err = resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
+			preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
+		return err
+	})
 	if err != nil {
 		t.Fatalf("resolveACMEPreEnrollment: %v", err)
+	}
+	if !strings.Contains(out, "✓ Cloud enrollment reserved") || strings.Contains(out, "Automatic ACME enrollment requires") || strings.Contains(out, "Pre-enrolling device with Wendy Cloud") {
+		t.Fatalf("output %q; want one short reserved line", out)
 	}
 	if got != want {
 		t.Fatalf("bake = %#v, want %#v", got, want)
@@ -553,7 +570,7 @@ func takenFirst(t *testing.T, taken string) *[]string {
 func TestPreEnrollAsksAnotherNameWhenTaken(t *testing.T) {
 	stubEnrollPrompts(t)
 	tried := takenFirst(t, "hackathon-display")
-	promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) { return "hackathon-display-2", nil }
+	promptDeviceNameDefault = func(_, _, def string, _ tui.ValidateFunc) (string, error) { return def, nil }
 	name := "hackathon-display"
 	var out []byte
 	stdout := captureStdout(t, func() {
@@ -566,7 +583,8 @@ func TestPreEnrollAsksAnotherNameWhenTaken(t *testing.T) {
 	if name != "hackathon-display-2" || len(out) == 0 || fmt.Sprint(*tried) != "[hackathon-display hackathon-display-2]" {
 		t.Fatalf("name %q, tried %v", name, *tried)
 	}
-	if !strings.Contains(stdout, "The name hackathon-display is already used by another device in this organization.") || strings.Contains(stdout, "rpc error") {
+	if !strings.Contains(stdout, "Another device in your organization already uses hackathon-display.") || strings.Contains(stdout, "rpc error") ||
+		!strings.Contains(stdout, "? Device name: hackathon-display-2") {
 		t.Fatalf("output:\n%s", stdout)
 	}
 }
@@ -578,7 +596,7 @@ func TestPreEnrollTakenNameWithoutTerminal(t *testing.T) {
 	takenFirst(t, "hackathon-display")
 	name := "hackathon-display"
 	_, err := mintProvisioningJSON(context.Background(), &acmePreEnrollPlan{auth: &config.AuthConfig{}}, &name)
-	want := "The name hackathon-display is already used by another device in this organization. Names are unique per organization, regardless of upper and lower case. Choose another name. Pass a different name with --device-name."
+	want := "Another device in your organization already uses hackathon-display. Pass a different --device-name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device hackathon-display"
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v", err)
 	}
@@ -589,12 +607,115 @@ func TestPreEnrollTakenNameWithoutTerminal(t *testing.T) {
 func TestPreEnrollTakenNameStopKeepsTheWayOut(t *testing.T) {
 	stubEnrollPrompts(t)
 	takenFirst(t, "hackathon-display")
-	promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) { return "", tui.ErrCancelled }
+	promptDeviceNameDefault = func(string, string, string, tui.ValidateFunc) (string, error) { return "", tui.ErrCancelled }
 	asked := false
 	confirmContinueUnenrolled = func() (bool, error) { asked = true; return false, nil }
 	name := "hackathon-display"
 	_, err := mintProvisioningJSON(context.Background(), &acmePreEnrollPlan{auth: &config.AuthConfig{}, interactive: true}, &name)
 	if !asked || !errors.Is(err, ErrUserCancelled) {
 		t.Fatalf("asked %v, err %v", asked, err)
+	}
+}
+
+// saveOneSession makes one signed-in Cloud session the install can enroll with.
+func saveOneSession(t *testing.T) {
+	t.Helper()
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{{CloudGRPC: "prod.example.com:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFirstBootChoicesAskEnrollBeforeName(t *testing.T) {
+	stubEnrollPrompts(t)
+	saveOneSession(t)
+	setInteractive(t, true)
+	var events []string
+	confirmPreEnroll = func() (bool, error) { events = append(events, "enroll"); return true, nil }
+	promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) {
+		events = append(events, "name")
+		return "lab-box", nil
+	}
+	name, plan, err := resolveFirstBootChoices(context.Background(), "", preEnrollOptions{mode: preEnrollAuto})
+	if err != nil || name != "lab-box" || plan == nil || strings.Join(events, ",") != "enroll,name" {
+		t.Fatalf("name %q, plan %v, err %v, events %v; want enroll asked before name", name, plan, err, events)
+	}
+}
+
+func TestInstallNamePromptRejectsTakenName(t *testing.T) {
+	stubEnrollPrompts(t)
+	stubOrgDeviceNames(t, []string{"brave-dolphin"}, nil)
+	setInteractive(t, true)
+	promptDeviceName = func(_, _ string, validate tui.ValidateFunc) (string, error) {
+		err := validate("brave-dolphin")
+		if want := "Another device in your organization already uses brave-dolphin. Try another name."; err == nil || err.Error() != want {
+			t.Fatalf("validate(taken) = %v; want %q", err, want)
+		}
+		var hinted interface{ Hint() string }
+		if !errors.As(err, &hinted) || hinted.Hint() != takenNameHint("brave-dolphin") {
+			t.Fatalf("validate(taken) = %v; want the old-entry hint under the error", err)
+		}
+		if err := validate("otter-one"); err != nil {
+			t.Fatalf("validate(free) = %v", err)
+		}
+		return "otter-one", nil
+	}
+	name, err := resolveInstallDeviceName(context.Background(), "", &config.AuthConfig{}, true)
+	if err != nil || name != "otter-one" {
+		t.Fatalf("name %q, err %v", name, err)
+	}
+}
+
+func TestInstallTakenFlagNameFailsWithoutTerminal(t *testing.T) {
+	stubEnrollPrompts(t) // the reservation fails the test if reached
+	saveOneSession(t)
+	config.SetOrganizationName("prod.example.com:443", "7", "Wendy Labs, Inc.")
+	stubOrgDeviceNames(t, []string{"brave-dolphin"}, nil)
+	setInteractive(t, false)
+	name := "brave-dolphin"
+	_, err := resolveProvisioningJSON(context.Background(), preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, &name)
+	want := "Another device in Wendy Labs, Inc. already uses brave-dolphin. Pass a different --device-name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device brave-dolphin"
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v; want %q", err, want)
+	}
+}
+
+func TestInstallTakenFlagNameAsksWithSuggestion(t *testing.T) {
+	stubEnrollPrompts(t)
+	stubOrgDeviceNames(t, []string{"brave-dolphin", "brave-dolphin-2"}, nil)
+	setInteractive(t, true)
+	promptDeviceNameDefault = func(_, _, def string, _ tui.ValidateFunc) (string, error) {
+		if def != "brave-dolphin-3" {
+			t.Fatalf("suggested %q; want brave-dolphin-3", def)
+		}
+		return def, nil
+	}
+	var name string
+	var err error
+	out := captureStdout(t, func() {
+		name, err = resolveInstallDeviceName(context.Background(), "brave-dolphin", &config.AuthConfig{}, true)
+	})
+	if err != nil || name != "brave-dolphin-3" || !strings.Contains(out, "Another device in your organization already uses brave-dolphin.") {
+		t.Fatalf("name %q, err %v, output %q", name, err, out)
+	}
+}
+
+func TestInstallNameCheckLookupFailureCarriesOn(t *testing.T) {
+	stubEnrollPrompts(t)
+	stubOrgDeviceNames(t, nil, errors.New("issuer not found"))
+	setInteractive(t, false)
+	name, err := resolveInstallDeviceName(context.Background(), "brave-dolphin", &config.AuthConfig{}, true)
+	if err != nil || name != "brave-dolphin" {
+		t.Fatalf("name %q, err %v; want the flag name kept when Cloud can't be asked", name, err)
+	}
+}
+
+func TestInstallNameNotCheckedWithoutEnrollment(t *testing.T) {
+	stubEnrollPrompts(t)
+	calls := stubOrgDeviceNames(t, []string{"brave-dolphin"}, nil)
+	setInteractive(t, false)
+	name, err := resolveInstallDeviceName(context.Background(), "brave-dolphin", nil, true)
+	if err != nil || name != "brave-dolphin" || *calls != 0 {
+		t.Fatalf("name %q, err %v, lookups %d; want no Cloud check without enrollment", name, err, *calls)
 	}
 }

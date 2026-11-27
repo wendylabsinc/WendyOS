@@ -103,8 +103,9 @@ budgets can reject additional streams; close unused connections and retry.
 
 ## Configure a Lite device
 
-Wendy Net is off by default on Lite. Select its existing management connection
-and enable supported carriers, for example over USB:
+Lite firmware with a supported carrier enables Wendy Net by default.
+Select the existing management connection to change carrier settings, for
+example over USB:
 
 ```sh
 wendy --device wendy-lite:PORT net configure \

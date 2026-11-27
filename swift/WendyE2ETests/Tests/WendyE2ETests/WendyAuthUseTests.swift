@@ -8,7 +8,7 @@ struct `'wendy auth use'` {
     /**
      Selects the named account even when another account uses the same Cloud endpoint.
      Each fresh CLI process sees the selection; switching changes only the current
-     context pointer and preserves every credential, device preference and analytics setting.
+     context pointer and preserves every credential, build-host preference and analytics setting.
      No configured Cloud, Auth or PKI endpoint is contacted.
      */
     @Test

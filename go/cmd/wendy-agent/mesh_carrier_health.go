@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,7 +44,7 @@ func (h *meshCarrierHealth) report(epoch uint64, name string, value localmesh.Ca
 	if epoch != h.epoch || !enabled {
 		return
 	}
-	if !value.Ready && value.Err == nil {
+	if !value.Ready && !value.NoHardware && !value.Waiting && value.Err == nil {
 		value.Err = previous.Err
 	}
 	h.carriers[name] = value
@@ -77,57 +76,73 @@ func (h *meshCarrierHealth) status(sharing services.LocalMeshRuntimeStatus) serv
 	if len(h.carriers) == 0 {
 		return sharing
 	}
-	names := make([]string, 0, len(h.carriers))
-	for name := range h.carriers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var details []string
-	ready, failed := 0, false
-	for _, name := range names {
-		value := h.carriers[name]
-		state := "initializing"
+	out := sharing // Preserve authenticated peers and signed gateway identity.
+	out.Available = true
+	out.CarrierConfig = h.config
+	out.Carriers = make(map[string]string, len(h.carriers))
+	ready, absent, initializing, failed := 0, 0, false, false
+	for name, value := range h.carriers {
 		if value.Ready {
 			ready++
-			state = "ready"
 		}
 		if value.Err != nil {
 			failed = true
-			state = "failed"
-			if value.Ready {
-				state = "degraded"
+		}
+		if value.NoHardware {
+			absent++
+		}
+		state := carrierState(value)
+		initializing = initializing || state == "starting"
+		detail := value.Detail
+		if value.Err != nil {
+			if detail != "" {
+				detail += "; "
 			}
-			state += " (" + compactCarrierDetail(value.Err.Error()) + ")"
-		} else if value.Detail != "" {
-			state += " (" + compactCarrierDetail(value.Detail) + ")"
+			detail += value.Err.Error()
 		}
-		displayName := name
-		if name == "BLE" {
-			displayName = "Bluetooth"
+		if detail != "" {
+			state += " (" + compactCarrierDetail(detail) + ")"
 		}
-		details = append(details, displayName+": "+state)
+		out.Carriers[name] = state
 	}
-	out := sharing // Preserve authenticated peers and signed gateway identity.
-	out.Available = true
 	switch {
 	case failed && ready == 0:
 		out.State = "failed"
 	case failed || sharing.State == "error":
 		out.State = "degraded"
-	case ready == 0:
+	case ready > 0:
+		out.State = "mesh-active"
+	case absent == len(h.carriers):
+		out.State = "unavailable"
+	case initializing:
 		out.State = "initializing"
 	default:
-		out.State = "mesh-active"
+		out.State = "waiting"
 	}
-	out.Detail = "Connections: " + strings.Join(details, "; ") + "."
+	out.Detail = ""
 	if sharing.State != "" || sharing.Detail != "" {
-		out.Detail += " Internet sharing: " + sharing.State
+		out.Detail = "Internet sharing: " + sharing.State
 		if sharing.Detail != "" {
 			out.Detail += " (" + sharing.Detail + ")"
 		}
 		out.Detail += "."
 	}
 	return out
+}
+
+func carrierState(value localmesh.CarrierStatus) string {
+	switch {
+	case value.Err != nil:
+		return "fault"
+	case value.Ready:
+		return "ok"
+	case value.NoHardware:
+		return "no hardware"
+	case value.Waiting:
+		return "waiting"
+	default:
+		return "starting"
+	}
 }
 
 func compactCarrierDetail(s string) string {
@@ -157,13 +172,18 @@ func runMeshCarrier(ctx context.Context, retry time.Duration, report func(localm
 		err := run(ctx, observe)
 		mu.Lock()
 		active = false
-		if ctx.Err() == nil {
-			if err == nil {
-				err = errors.New("mesh connection stopped unexpectedly")
-			}
-			report(localmesh.CarrierStatus{Err: err})
-		}
 		mu.Unlock()
+		if ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, localmesh.ErrNoCarrierHardware) {
+			report(localmesh.CarrierStatus{NoHardware: true, Detail: strings.TrimPrefix(err.Error(), localmesh.ErrNoCarrierHardware.Error()+": ")})
+			return
+		}
+		if err == nil {
+			err = errors.New("mesh connection stopped unexpectedly")
+		}
+		report(localmesh.CarrierStatus{Err: err})
 		timer := time.NewTimer(retry)
 		select {
 		case <-ctx.Done():

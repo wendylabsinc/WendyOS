@@ -242,7 +242,7 @@ func newFallbackTransportFixture(t *testing.T) *fallbackTransportFixture {
 	broker := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverTLS(99))))
 	cloudpb.RegisterTunnelBrokerServiceServer(broker, f.broker)
 	brokerAddress := start(broker)
-	cfg := &config.Config{CurrentContext: "fixture", DefaultDevice: "primary.test", Auth: []config.AuthConfig{{Name: "fixture", CloudGRPC: brokerAddress, Certificates: []config.CertificateInfo{credential}}}, DevicePins: make(map[string]config.DevicePin)}
+	cfg := &config.Config{CurrentContext: "fixture", Auth: []config.AuthConfig{{Name: "fixture", CloudGRPC: brokerAddress, Certificates: []config.CertificateInfo{credential}}}, DevicePins: make(map[string]config.DevicePin)}
 	for name, agent := range f.agents {
 		cfg.DevicePins[name] = config.DevicePin{OrgID: 7, AssetID: strconv.Itoa(int(agent.id)), CloudGRPC: brokerAddress, Source: config.PinSourceCloud}
 	}

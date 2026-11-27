@@ -127,7 +127,7 @@ func (h *unitreePairHandler) pair(robot *agentpbv2.UnitreeRobot, key string, fro
 		resp, err := h.client.PairUnitree(ctx, req)
 		if err != nil {
 			// The request contains secrets. Do not echo arbitrary remote text.
-			message := "Unitree connection failed; check the robot's IP, account, and network"
+			message := unitree.SafeConnectionFailureMessage(status.Convert(err).Message())
 			if status.Code(err) == codes.Unimplemented {
 				message = unitreeAgentTooOld
 			}

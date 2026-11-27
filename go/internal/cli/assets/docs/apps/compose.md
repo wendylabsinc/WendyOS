@@ -212,10 +212,10 @@ The following `wendy run` flags apply to Compose projects:
 
 ## Limitations
 
-- Headless Mac is not supported. `wendy run` rejects compose projects before any registry or Docker setup when the selected target is Headless Mac. Target a Linux/WendyOS device to use compose.
+- On a Headless Mac target the services run as Linux containers through the Mac agent's container runtime (Apple `container` or Docker). Hardware entitlements are not available there; see [Headless Mac — supported project types](../clients/wendy-cli/commands/run.md#headless-mac--supported-project-types).
 - Wendy-specific hardware access entitlements such as `gpu`, `display`, `camera`, `audio`, `bluetooth`, `usb`, `i2c`, `gpio`, `spi`, `input`, and `serial` are not inferred from compose fields.
 - Host networking does not imply shared IPC or shared `/dev/shm`; ROS 2 shared-memory transport requires an app shape that can explicitly share namespaces.
-- Linux containers on macOS require a target WendyOS device; local Docker Desktop compose is used as a fallback when no device is targeted.
+- Linux containers on macOS require a target device (a WendyOS device or a Headless Mac); local Docker Desktop compose is used as a fallback when no device is targeted.
 - Compose `extends`, `profiles`, and `secrets` are not supported.
 - `wendy fleet run` does not support compose projects yet; deploy to one device at a time.
 - `wendy run --service` applies only to `wendy.json` `services` maps; the compose path always deploys every service.

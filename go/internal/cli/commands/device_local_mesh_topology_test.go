@@ -245,3 +245,49 @@ func TestLiteTopologyUsesExistingProviderCapability(t *testing.T) {
 		t.Fatal(snapshot, platform, provider.calls, err)
 	}
 }
+
+func TestLocalMeshTopologyDevicePicker(t *testing.T) {
+	restoreDeviceGlobals(t)
+	deviceFlag = ""
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	oldPicker, oldTTY := pickTargetDeviceFn, isInteractiveTerminalFn
+	t.Cleanup(func() { pickTargetDeviceFn, isInteractiveTerminalFn = oldPicker, oldTTY })
+
+	for _, tc := range []struct {
+		name      string
+		tty, json bool
+		wantPick  bool
+	}{
+		{name: "terminal", tty: true, wantPick: true},
+		{name: "JSON", tty: true, json: true},
+		{name: "no terminal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			jsonOutput = tc.json
+			isInteractiveTerminalFn = func() bool { return tc.tty }
+			provider := &liteTopologyFixtureProvider{}
+			picked := false
+			pickTargetDeviceFn = func(ctx context.Context, _ map[string]bool, _, suppressUpdate, disableEnroll bool) (*SelectedDevice, error) {
+				picked = true
+				if _, bounded := ctx.Deadline(); bounded || monitoringPickerTimeout(ctx) != localMeshTopologyTimeout {
+					t.Fatal("the connection timeout must start after device selection")
+				}
+				if !suppressUpdate || disableEnroll {
+					t.Fatal("topology should skip automatic updates and keep the shared picker's enrollment action")
+				}
+				return &SelectedDevice{External: &models.ExternalDevice{ID: "wendy-lite:physical"}, Provider: provider}, nil
+			}
+			snapshot, platform, err := readLocalMeshReporter(t.Context())
+			if picked != tc.wantPick {
+				t.Fatalf("picker opened = %t, want %t (error: %v)", picked, tc.wantPick, err)
+			}
+			if tc.wantPick {
+				if err != nil || platform != "wendy-lite" || snapshot.GetSelfDeviceId() != "selected-lite" || provider.calls != 1 {
+					t.Fatalf("did not read selected Lite reporter: snapshot=%v platform=%q calls=%d error=%v", snapshot, platform, provider.calls, err)
+				}
+			} else if !errors.Is(err, errNoDevice) {
+				t.Fatalf("missing target error = %v, want %v", err, errNoDevice)
+			}
+		})
+	}
+}

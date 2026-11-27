@@ -100,7 +100,7 @@ test("simulators publish only loopback and do not mount host paths or take host 
   }
 });
 
-test("installation planning requires explicit Pi media and only supported boards", () => {
+test("installation planning requires explicit disk-image media and only supported boards", () => {
   assert.deepEqual(
     installArgs({ deviceType: "raspberry-pi-5", drive: "/dev/disk7" }),
     [
@@ -113,6 +113,18 @@ test("installation planning requires explicit Pi media and only supported boards
     ],
   );
   assert.throws(() => installArgs({ deviceType: "raspberry-pi-5" }));
+  assert.deepEqual(
+    installArgs({ deviceType: "orange-pi-5-pro", drive: "/dev/sdb" }),
+    [
+      "install",
+      "plan",
+      "--device-type",
+      "orange-pi-5-pro",
+      "--drive",
+      "/dev/sdb",
+    ],
+  );
+  assert.throws(() => installArgs({ deviceType: "orange-pi-5-pro" }));
   assert.throws(() => installArgs({ deviceType: "unitree-g1" }));
   assert.ok(
     installArgs({ deviceType: "jetson-orin-nano" }).includes("developer-kit"),

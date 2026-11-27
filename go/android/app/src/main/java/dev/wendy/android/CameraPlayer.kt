@@ -12,7 +12,7 @@ import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-class CameraPlayer(context: Context, private val failed: (String) -> Unit) : SurfaceView(context), SurfaceHolder.Callback {
+class CameraPlayer(context: Context, private val failed: (String) -> Unit, private val resized: (Int, Int) -> Unit = { _, _ -> }) : SurfaceView(context), SurfaceHolder.Callback {
     private val thread = HandlerThread("WendyCamera").apply { start() }
     private val worker = Handler(thread.looper)
     private val closed = AtomicBoolean(false)
@@ -24,6 +24,8 @@ class CameraPlayer(context: Context, private val failed: (String) -> Unit) : Sur
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
     private var waitingForKeyframe = true
+    /** Receives IDR pictures for camera calibration while it has an owner. */
+    @Volatile var calibration: CameraCalibrationFrames? = null
     private val drainOutput = object : Runnable {
         override fun run() {
             val decoder = codec ?: return
@@ -59,8 +61,10 @@ class CameraPlayer(context: Context, private val failed: (String) -> Unit) : Sur
         if (surface == null || sps == null || pps == null) return
         val keyframe = frame[4].toInt() and 31 == 5
         if (waitingForKeyframe && !keyframe) return
+        if (keyframe) calibration?.takeIf { it.enabled }?.let { frames -> h264Dimensions(sps!!).let { frames.acceptH264(sps!!, pps!!, frame, it.width, it.height) } }
         if (codec == null) {
             val dimensions = h264Dimensions(sps!!)
+            post { resized(dimensions.width, dimensions.height) }
             val format = MediaFormat.createVideoFormat("video/avc", dimensions.width, dimensions.height).apply {
                 setByteBuffer("csd-0", ByteBuffer.wrap(byteArrayOf(0,0,0,1) + sps!!))
                 setByteBuffer("csd-1", ByteBuffer.wrap(byteArrayOf(0,0,0,1) + pps!!))

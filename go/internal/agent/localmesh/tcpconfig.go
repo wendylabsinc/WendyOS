@@ -47,6 +47,19 @@ type TCPIdentity struct {
 	AppEndpoints            []AppEndpoint // supplied only for ready local listeners
 	Certificate, Chain, Key string
 	Agent                   *AgentMetadata
+	// PreparedCredentials carries the provisioning snapshot shared with the
+	// app sessions. Configured carriers should use the same verified CA set.
+	PreparedCredentials *Credentials `json:"-"`
+}
+
+func (id TCPIdentity) MeshCredentials() (*Credentials, error) {
+	if id.PreparedCredentials != nil {
+		return id.PreparedCredentials, nil
+	}
+	if id.TimePolicy != nil {
+		return NewCredentialsWithTimePolicy(id.Certificate, id.Chain, id.Key, *id.TimePolicy)
+	}
+	return NewCredentials(id.Certificate, id.Chain, id.Key)
 }
 
 // Devices returns the parsed peers of a config loaded for self.
@@ -71,18 +84,47 @@ func ReadTCPConfigFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
+// DisabledCarrierConfigPath returns the path of the all-carriers-off marker.
+func DisabledCarrierConfigPath(path string) string { return path + ".disabled" }
+
+// ReadTCPConfigSnapshot returns the effective carrier document. A nil
+// snapshot means the administrator explicitly disabled all carriers.
+func ReadTCPConfigSnapshot(path string) ([]byte, error) {
 	data, err := ReadTCPConfigFile(path)
+	if !errors.Is(err, os.ErrNotExist) {
+		return data, err
+	}
+	override, err := ReadTCPConfigFile(DisabledCarrierConfigPath(path))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		data, err := json.Marshal(TCPConfig{Ethernet: true, InfrastructureWiFi: true, BLE: true, NAN: true})
+		return append(data, '\n'), err
 	}
 	if err != nil {
 		return nil, err
 	}
+	if string(override) != "disabled\n" {
+		return nil, errors.New("invalid Wendy Net carrier disable override")
+	}
+	return nil, nil
+}
+
+func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
+	data, err := ReadTCPConfigSnapshot(path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseTCPConfig(data, self)
+}
+
+// ParseTCPConfig validates an effective snapshot for this device.
+func ParseTCPConfig(data []byte, self meshid.Device) (*TCPConfig, error) {
+	if data == nil {
+		return nil, nil
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	// Accept retired fields from pre-upgrade files only at the disk boundary.
-	// They no longer enable a carrier and are omitted when settings are saved.
+	// The disk format accepts leaf-only fields. They do not enable a carrier
+	// and are omitted when settings are saved.
 	var stored struct {
 		TCPConfig
 		LeafListen   json.RawMessage `json:"leafListen"`
@@ -98,12 +140,12 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 	}
 	cfg := stored.TCPConfig
 	retired := len(stored.LeafListen) != 0 || len(stored.LeafBLEPeers) != 0 || len(stored.LeafTimeURL) != 0
-	if retired && cfg.Listen == "" && len(cfg.Peers) == 0 && !cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi && cfg.TLSListen == "" {
-		// A file containing only retired carriers is equivalent to no config.
+	hasCarrier := cfg.NAN || cfg.BLE || cfg.Ethernet || cfg.InfrastructureWiFi || cfg.TLSListen != ""
+	if retired && !hasCarrier && cfg.Listen == "" && len(cfg.Peers) == 0 {
 		return nil, nil
 	}
 	if cfg.Listen == "" {
-		if (!cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi && cfg.TLSListen == "") || len(cfg.Peers) != 0 {
+		if !hasCarrier || len(cfg.Peers) != 0 {
 			return nil, errors.New("listen is required for configured TCP peers; enable a carrier for discovery-only networking")
 		}
 	} else if err := validateTCPAddress(cfg.Listen, true); err != nil {

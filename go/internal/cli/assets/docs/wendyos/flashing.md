@@ -35,7 +35,7 @@ Use `--no-bmap` to disable this optimization and flash the full image. Use `--st
 
 ### Block map error handling
 
-If a bmap-accelerated write fails — for example due to a checksum mismatch or a stale/incorrect published bmap — `wendy install` automatically falls back to a full sequential write using the already-cached `.img.zst` or `.zip`. No user action and no re-download are required.
+If a bmap-accelerated write fails — for example due to a checksum mismatch or a stale/incorrect published bmap — `wendy install` automatically falls back to a full sequential write using the already-cached `.img.zst` or `.zip`. No user action and no re-download are required, unless the cached file no longer matches the checksum in the manifest: it is checked again before the full write, and a file that fails is removed from the cache and the install stops. Run the install again to download the image.
 
 A failure that occurs *during* the fallback write (short write, decode error, or a non-zero helper exit) is fatal: the helper's stderr is surfaced as the error.
 
@@ -57,7 +57,7 @@ Both raw (`.img`) and gzip-compressed (`.img.gz`) images are supported, in addit
 
 ### Caching
 
-The downloaded zip is cached locally. On subsequent installs for the same device type the cached zip is used directly, avoiding a repeat download. Legacy `.img` cache entries from older versions of the tool are still recognised as a fallback.
+The downloaded image is checked against the checksum the manifest publishes for it, then cached locally. On later installs of the same image the cached file is used directly, avoiding a repeat download. A cached file is used only if it matches the published checksum: it is hashed once, the result is recorded beside it in a small `.sha256` file, and a file that does not match is removed and downloaded again. That includes the previous build of a `--pr` image after a new push, and an extracted `.img` that older versions of the tool cached for a zip release. When the manifest publishes no checksum, the cached file is used as it is.
 
 Use `wendy os download` to pre-populate the cache without performing an install.
 

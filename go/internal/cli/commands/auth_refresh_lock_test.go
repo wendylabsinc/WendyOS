@@ -144,7 +144,7 @@ func TestOAuthRefreshProcessHelper(t *testing.T) {
 			if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
 				return false, err
 			}
-			cfg.DefaultDevice = "chosen-during-checkpoint"
+			cfg.DefaultBuildHost = "chosen-during-checkpoint"
 			return true, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -376,7 +376,7 @@ func TestOAuthCheckpointSerializesWithConfigUpdateAcrossProcesses(t *testing.T) 
 	if cfg.Auth[0].RefreshToken != "successor" {
 		t.Error("config writer restored a consumed refresh token")
 	}
-	if cfg.DefaultDevice != "chosen-during-checkpoint" {
+	if cfg.DefaultBuildHost != "chosen-during-checkpoint" {
 		t.Error("checkpoint discarded the concurrent device choice")
 	}
 }

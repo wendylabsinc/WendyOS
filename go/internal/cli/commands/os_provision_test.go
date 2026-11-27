@@ -525,9 +525,9 @@ func withStubbedProvisioning(t *testing.T, provision func(drive, []wendyconf.Wif
 	reconnectTimeout = 0
 
 	calls := 0
-	provisionConfigPartitionFn = func(d drive, c []wendyconf.WifiCredential, name string, j []byte, _ agentSeed) error {
+	provisionConfigPartitionFn = func(d drive, c []wendyconf.WifiCredential, name string, j []byte, _ agentSeed) (string, error) {
 		calls++
-		return provision(d, c, name, j)
+		return "test-agent", provision(d, c, name, j)
 	}
 	isInteractiveTerminalFn = func() bool { return interactive }
 
@@ -556,7 +556,7 @@ func TestProvisionConfigWithRetry_SuccessFirstTry(t *testing.T) {
 	if *calls != 1 {
 		t.Errorf("provision called %d times; want 1", *calls)
 	}
-	if strings.Contains(strings.ToLower(out), "warning") {
+	if strings.Contains(out, "⚠") {
 		t.Errorf("did not expect a warning on success; got %q", out)
 	}
 }
@@ -575,7 +575,7 @@ func TestProvisionConfigWithRetry_FailureIsNotFatalAndExplainsBoot(t *testing.T)
 		t.Errorf("provision called %d times; want 1 (no interactive retry)", *calls)
 	}
 	lower := strings.ToLower(out)
-	if !strings.Contains(lower, "warning") {
+	if !strings.Contains(out, "⚠ Could not apply provisioning data") {
 		t.Errorf("expected a warning; got %q", out)
 	}
 	// The OS image already landed on the drive: the user must not read this as

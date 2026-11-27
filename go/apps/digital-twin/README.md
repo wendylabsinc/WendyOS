@@ -108,7 +108,7 @@ Linux retains observations after a UI disconnect, but background mapping and
 search status reads cannot renew the operator's motion lease. The existing
 600 ms operator watchdog and agent movement expiry remain in force. Restarting
 the service restores room geometry, not live robot handles, alignment or motion.
-Reconnect contributors explicitly. Search jobs are bounded to twelve turns and
+Reconnect contributors explicitly. Search jobs are bounded to six 60-degree turns and
 five minutes and still use live obstacle and sensor checks.
 
 Historical points and supported horizontal tiles are for rendering and selecting

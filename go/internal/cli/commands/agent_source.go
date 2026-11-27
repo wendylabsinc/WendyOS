@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -142,7 +144,7 @@ func resolveAgentVersion(nightly bool) (version, source string, err error) {
 // the payload is the app-bundle zip, returned verbatim (the Swift agent
 // extracts/verifies it); for every other OS it's the extracted ELF binary
 // pulled out of the .tar.gz.
-func downloadAgentArtifactFromGCS(baseURL string, m *agentManifest, osName, arch string, nightly bool) ([]byte, string, error) {
+func downloadAgentArtifactFromGCS(ctx context.Context, baseURL string, m *agentManifest, osName, arch string, nightly bool) ([]byte, string, error) {
 	version, err := agentVersionFromManifest(m, nightly)
 	if err != nil {
 		return nil, "", err
@@ -165,19 +167,14 @@ func downloadAgentArtifactFromGCS(baseURL string, m *agentManifest, osName, arch
 		artifactNoun = "agent artifact"
 	}
 
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Get(baseURL + "/" + art.Path)
-	if err != nil {
+	// No deadline on the transfer: it follows imageDownloadPolicy, like an OS image.
+	var raw downloadBuffer
+	if err := downloadResumable(ctx, baseURL+"/"+art.Path, &raw, 0, nil); err != nil {
+		var status downloadStatusError
+		if errors.As(err, &status) {
+			return nil, "", fmt.Errorf("%s returned status %d", artifactNoun, int(status))
+		}
 		return nil, "", fmt.Errorf("downloading %s: %w", artifactNoun, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("%s returned status %d", artifactNoun, resp.StatusCode)
-	}
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", fmt.Errorf("reading %s: %w", artifactNoun, err)
 	}
 	if art.Checksum != "" {
 		sum := sha256.Sum256(raw)
@@ -203,10 +200,15 @@ func downloadAgentArtifactFromGCS(baseURL string, m *agentManifest, osName, arch
 // to GitHub releases on any GCS miss. On darwin the payload is the raw
 // app-bundle zip; on every other OS it's the extracted ELF binary. version is
 // the resolved version tag; source is "gcs" or "github".
-func resolveAgentArtifact(osName, arch string, nightly bool) (payload []byte, version, source string, err error) {
+func resolveAgentArtifact(ctx context.Context, osName, arch string, nightly bool) (payload []byte, version, source string, err error) {
 	if m, mErr := fetchAgentManifest(); mErr == nil {
-		if bin, ver, dErr := downloadAgentArtifactFromGCS(gcsBaseURL, m, osName, arch, nightly); dErr == nil {
+		bin, ver, dErr := downloadAgentArtifactFromGCS(ctx, gcsBaseURL, m, osName, arch, nightly)
+		if dErr == nil {
 			return bin, ver, "gcs", nil
+		}
+		// A cancelled download (Ctrl+C) is not a GCS miss to retry on GitHub.
+		if ctx.Err() != nil {
+			return nil, "", "", dErr
 		}
 	}
 
@@ -218,7 +220,7 @@ func resolveAgentArtifact(osName, arch string, nightly bool) (payload []byte, ve
 	if err != nil {
 		return nil, "", "", err
 	}
-	raw, err := downloadReleaseAssetBytes(*asset)
+	raw, err := downloadReleaseAssetBytes(ctx, *asset)
 	if err != nil {
 		return nil, "", "", err
 	}

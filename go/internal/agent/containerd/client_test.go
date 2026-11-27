@@ -880,11 +880,18 @@ func stubBoard(t *testing.T, kind board.Kind) {
 	t.Cleanup(func() { boardDetect = prev })
 }
 
+func stubNVIDIAGPU(t *testing.T, present bool) {
+	t.Helper()
+	prev := hostHasNVIDIAGPU
+	hostHasNVIDIAGPU = func() bool { return present }
+	t.Cleanup(func() { hostHasNVIDIAGPU = prev })
+}
+
 // TestNeedsNvidiaCDIGPUOnly verifies the pre-existing trigger (gpu entitlement
-// alone) still applies CDI, so this change is additive. Board-independent: a
-// gpu entitlement asks for CDI/CSV provisioning on any host, and applyNvidiaCDI's
-// warnings when there is none are the intended outcome.
+// alone) still applies CDI wherever the GPU may be NVIDIA's, including a host
+// with no GPU at all, where applyNvidiaCDI's warnings are the intended outcome.
 func TestNeedsNvidiaCDIGPUOnly(t *testing.T) {
+	stubNVIDIAGPU(t, true)
 	cfg := &appconfig.AppConfig{
 		Entitlements: []appconfig.Entitlement{
 			{Type: appconfig.EntitlementGPU},
@@ -895,6 +902,22 @@ func TestNeedsNvidiaCDIGPUOnly(t *testing.T) {
 		if !needsNvidiaCDI(cfg) {
 			t.Errorf("gpu entitlement should trigger CDI application on board kind %v", kind)
 		}
+	}
+}
+
+// A Mali, Adreno, VideoCore or AMD GPU is granted by its own path; NVIDIA CDI
+// there only logs warnings about a driver the host never had.
+func TestNeedsNvidiaCDIGPUOnOtherVendor(t *testing.T) {
+	stubNVIDIAGPU(t, false)
+	stubBoard(t, board.Generic)
+	gpu := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementGPU}}}
+	if needsNvidiaCDI(gpu) {
+		t.Error("gpu entitlement applied NVIDIA CDI on a host whose GPU is another vendor's")
+	}
+	stubBoard(t, board.Jetson)
+	display := &appconfig.AppConfig{Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementDisplay}}}
+	if !needsNvidiaCDI(display) {
+		t.Error("Jetson display entitlement lost its CDI injection")
 	}
 }
 

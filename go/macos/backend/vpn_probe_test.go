@@ -189,6 +189,57 @@ func TestVPNProbesCancellation(t *testing.T) {
 	}
 }
 
+func TestVPNCapabilityProbeKeepsWarmingManagementTransport(t *testing.T) {
+	const selector = "cloud://cloud.example/tenant/asset"
+	started := make(chan struct{})
+	var dials, calls, closes atomic.Int32
+	var life context.Context
+	p := newVPNProbes([]vpn.Route{{Selector: selector}}, func(ctx context.Context, _ string) (*grpcclient.AgentConnection, error) {
+		dials.Add(1)
+		life = ctx
+		return probeTestConnection(func(ctx context.Context) error {
+			if calls.Add(1) == 1 {
+				close(started)
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			return nil
+		}, func() error { closes.Add(1); return nil }), nil
+	})
+	defer p.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- p.probe(ctx, selector, false) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("capability RPC did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled capability probe: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("capability cancellation blocked")
+	}
+	if life.Err() != nil || closes.Load() != 0 {
+		t.Fatal("optional check closed the management transport")
+	}
+	if err := p.Probe(t.Context(), selector); err != nil {
+		t.Fatal(err)
+	}
+	if dials.Load() != 1 || calls.Load() != 2 {
+		t.Fatalf("persistent health probe did not reuse management: dials=%d calls=%d", dials.Load(), calls.Load())
+	}
+	p.Close()
+	if life.Err() == nil || closes.Load() != 1 {
+		t.Fatal("VPN shutdown did not release the shared management transport")
+	}
+}
+
 func TestVPNBackendClosesProbeSessions(t *testing.T) {
 	for _, action := range []string{"stop", "replace", "shutdown"} {
 		t.Run(action, func(t *testing.T) {

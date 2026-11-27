@@ -11,11 +11,21 @@ import (
 )
 
 func TestLANHealthPartialBindFailureRetryAndInterfaceRemoval(t *testing.T) {
-	eth := lanInterface{iface: net.Interface{Index: 1, Name: "eth0"}, ip: net.IPv4(192, 0, 2, 1), cost: EthernetLinkCost}
-	wifi := lanInterface{iface: net.Interface{Index: 2, Name: "wlan0"}, ip: net.IPv4(192, 0, 2, 2), cost: WiFiLinkCost}
+	eth := lanInterface{iface: net.Interface{Index: 1, Name: "eth0"}, ip: net.IPv4(192, 0, 2, 1), cost: EthernetLinkCost, transport: CarrierEthernet}
+	wifi := lanInterface{iface: net.Interface{Index: 2, Name: "wlan0"}, ip: net.IPv4(192, 0, 2, 2), cost: WiFiLinkCost, transport: CarrierInfrastructureWiFi}
 	var status CarrierStatus
-	h := lanCarrierHealth{report: func(s CarrierStatus) { status = s }}
-	h.wanted([]lanInterface{eth, wifi})
+	perTransport := map[string]CarrierStatus{}
+	h := lanCarrierHealth{
+		report:          func(s CarrierStatus) { status = s },
+		transports:      []string{CarrierEthernet, CarrierInfrastructureWiFi},
+		reportTransport: func(transport string, s CarrierStatus) { perTransport[transport] = s },
+	}
+	onlyEthernet := map[string]bool{CarrierEthernet: true}
+	h.wanted(lanScan{hardware: onlyEthernet})
+	if !perTransport[CarrierEthernet].Waiting || !perTransport[CarrierInfrastructureWiFi].NoHardware {
+		t.Fatalf("disconnected Ethernet and missing Wi-Fi were not distinguished: %+v", perTransport)
+	}
+	h.wanted(lanScan{interfaces: []lanInterface{eth, wifi}})
 	ethernet := h.begin(eth.key())
 	wireless := h.begin(wifi.key())
 	if status.Ready || status.Err != nil {
@@ -35,15 +45,15 @@ func TestLANHealthPartialBindFailureRetryAndInterfaceRemoval(t *testing.T) {
 		t.Fatal("old attempt cleared replacement failure")
 	}
 	retry(CarrierStatus{Ready: true})
-	if !status.Ready || status.Err != nil || status.Detail != "2/2 eligible interfaces ready" {
+	if !status.Ready || status.Err != nil || status.Detail != "2/2 eligible interfaces ready: eth0, wlan0" {
 		t.Fatalf("recovery: %+v", status)
 	}
-	h.wanted([]lanInterface{eth})
+	h.wanted(lanScan{interfaces: []lanInterface{eth}, hardware: onlyEthernet})
 	retry(CarrierStatus{Err: errors.New("late removed interface failure")})
 	if !status.Ready || status.Err != nil {
 		t.Fatalf("removed worker poisoned status: %+v", status)
 	}
-	h.wanted(nil)
+	h.wanted(lanScan{hardware: onlyEthernet})
 	ethernet(CarrierStatus{Ready: true})
 	if status.Ready || status.Err != nil || !strings.Contains(status.Detail, "waiting") {
 		t.Fatalf("unplugged interfaces ready: %+v", status)

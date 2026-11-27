@@ -52,7 +52,7 @@ func (n *Node) admitIngress(p *nodePeer, event nodeEvent) error {
 }
 
 // The existing maintenance tick resumes input after its writer drains. Bulk
-// polling/reconciliation leaves eight slots reserved for solicited responses;
+// transfer polling leaves eight slots reserved for solicited responses;
 // those responses may use them, preserving duplex progress under ordinary load.
 func (n *Node) continueIngress(p *nodePeer) error {
 	if p.ingress == nil {

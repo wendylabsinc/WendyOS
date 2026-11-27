@@ -153,3 +153,71 @@ func TestCameraMetadataSparseEstimatedPose(t *testing.T) {
 		}
 	}
 }
+
+func TestCameraMetadataRefusesANameTwoCamerasShare(t *testing.T) {
+	// Calibration is keyed by the stable id and nothing else, so it describes
+	// whichever camera that id means. A by-id name two connected cameras share
+	// means neither: a lens measured on one twin must not be read back for, or
+	// saved against, a name that may be answering for the other.
+	store, err := OpenCameraMetadataStore(filepath.Join(t.TempDir(), "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &CalibratedFrameService{metadata: store}
+	ctx := context.Background()
+	shared, port := "by-id:"+arducamByID, "by-path:"+twinPortA
+	m := metadataFixture()
+	m.StableId = shared
+
+	// Calibrated while the camera was the only one of its model connected.
+	svc.stableNames = func() map[string]stableNames {
+		return map[string]stableNames{"/dev/video0": {byID: arducamByID, byPath: twinPortA}}
+	}
+	if _, err := svc.SetCameraMetadata(ctx, &pb.SetCameraMetadataRequest{StableId: shared, Metadata: m}); err != nil {
+		t.Fatalf("a camera with no twin connected: %v", err)
+	}
+
+	// Then a second one with the same serial is plugged in.
+	svc.stableNames = func() map[string]stableNames {
+		return map[string]stableNames{
+			"/dev/video0": {byPath: twinPortA, twin: "pair"},
+			"/dev/video2": {byID: arducamByID, byPath: twinPortB, twin: "pair"},
+		}
+	}
+	refused := func(what string, err error) {
+		t.Helper()
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("%s: code = %v, want FailedPrecondition (%v)", what, status.Code(err), err)
+		}
+		for _, want := range []string{port, "by-path:" + twinPortB} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: refusal does not name %q: %v", what, want, err)
+			}
+		}
+	}
+	_, err = svc.ListCameraMetadata(ctx, &pb.ListCameraMetadataRequest{StableIds: []string{shared}})
+	refused("reading by the shared name", err)
+	_, err = svc.SetCameraMetadata(ctx, &pb.SetCameraMetadataRequest{StableId: shared, ExpectedRevision: 1, Metadata: m})
+	refused("saving under the shared name", err)
+
+	// Each twin is calibrated under the identity it is listed by.
+	byPort := metadataFixture()
+	byPort.StableId = port
+	if _, err := svc.SetCameraMetadata(ctx, &pb.SetCameraMetadataRequest{StableId: port, Metadata: byPort}); err != nil {
+		t.Fatalf("saving under the port: %v", err)
+	}
+	got, err := svc.ListCameraMetadata(ctx, &pb.ListCameraMetadataRequest{StableIds: []string{port}})
+	if err != nil || len(got.Cameras) != 1 {
+		t.Fatalf("reading by the port: %v, %v", got, err)
+	}
+
+	// The old record is still listed, so it can be found, and still removable:
+	// neither says which camera it belongs to.
+	all, err := svc.ListCameraMetadata(ctx, &pb.ListCameraMetadataRequest{})
+	if err != nil || len(all.Cameras) != 2 {
+		t.Fatalf("listing everything: %v, %v", all, err)
+	}
+	if _, err := svc.SetCameraMetadata(ctx, &pb.SetCameraMetadataRequest{StableId: shared, ExpectedRevision: 1}); err != nil {
+		t.Fatalf("removing the record under the shared name: %v", err)
+	}
+}

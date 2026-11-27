@@ -406,21 +406,13 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	// Resolve what the flash will write up front, as Thor does: the prompts
 	// must run before the flash UI takes over the terminal, and a bad flag
 	// should abort before the board is written.
-	creds, err := resolveWiFiCredentialsList(wifi)
+	fmt.Println() // the first-boot questions start a new stage
+	wifiAsked := wifiWillBeAsked(wifi)
+	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
 	}
-	name, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
-	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
-	if err != nil {
-		return err
-	}
-	enrolled := provJSON != nil
-
-	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+	name, provJSON, err := settleRecoveryFirstBoot(ctx, recoveryFlashConfirm{
 		target: dragonwingTargetLabel(dev),
 		warning: []string{
 			tui.WarningMessage("This rewrites " + board.guide().rewrites + ": both OS slots, the config partition, and /data. Device identity, enrollment, saved Wi-Fi and app data are discarded — the board comes back as a new device."),
@@ -428,9 +420,11 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 			tui.Dim("  the model from its chip id during the flash, not here."),
 		},
 		question: fmt.Sprintf("Write the %s bundle to %s?", humanReadableDeviceType(board.deviceType), dragonwingTargetLabel(dev)),
-	}, name, creds, enrolled, force); err != nil {
+	}, creds, wifiAsked, deviceName, preOpts, force)
+	if err != nil {
 		return err
 	}
+	enrolled := provJSON != nil
 
 	// On Windows this rebinds the board's driver for good, and the flash needs
 	// the interface it claims, so neither may run before the go-ahead.

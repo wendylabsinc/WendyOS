@@ -29,7 +29,7 @@ func (s *mcpServer) registerInstallationTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("os_list_drives", drives...), s.handleInstallDrives)
 	verify := []mcpgo.ToolOption{
 		mcpgo.WithDescription("Verify first boot at an explicit target without changing the active connection. Checks agent, optional OS/board/public key and enrollment. Application readiness remains unchecked."),
-		mcpgo.WithString("address", mcpgo.Required(), mcpgo.Description("Explicit hostname, IP:port, or cloud selector; never chooses a default device")),
+		mcpgo.WithString("address", mcpgo.Required(), mcpgo.Description("Explicit hostname, IP:port, or cloud selector; never chooses a device for you")),
 		mcpgo.WithString("expected_os_version"), mcpgo.WithString("expected_device_type"), mcpgo.WithString("expected_public_key"),
 		mcpgo.WithBoolean("require_enrollment"),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(60), mcpgo.DefaultNumber(15)),
@@ -41,7 +41,7 @@ func (s *mcpServer) registerInstallationTools(srv *server.MCPServer) {
 
 func installationOptionSchema() []mcpgo.ToolOption {
 	return []mcpgo.ToolOption{
-		mcpgo.WithString("device_type", mcpgo.Required(), mcpgo.Description("Exact board: raspberry-pi-3/4/5, jetson-orin-nano, jetson-agx-orin, jetson-agx-thor, unitree-g1, or linux-desktop")),
+		mcpgo.WithString("device_type", mcpgo.Required(), mcpgo.Description("Exact board: raspberry-pi-3/4/5, orange-pi-5-pro, jetson-orin-nano, jetson-agx-orin, jetson-agx-thor, unitree-g1, or linux-desktop")),
 		mcpgo.WithString("carrier", mcpgo.Description("Required for Jetson: developer-kit. Custom robot carriers need vendor instructions, not generic Jetson images.")),
 		mcpgo.WithString("version", mcpgo.Description("Exact WendyOS version; omitted resolves latest stable")),
 		mcpgo.WithString("storage", mcpgo.Enum("sd", "nvme", "emmc")),
