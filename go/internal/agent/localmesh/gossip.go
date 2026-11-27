@@ -10,12 +10,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/netgossip"
 )
 
-func (s *Synchronizer) offerManifest(w SignedManifest, now time.Time) []ControlMessage {
-	deadline, ok := s.directory.RecordDeadline(w, now)
-	if !ok {
-		s.forgetManifest(w)
-		return nil
-	}
+func (s *Synchronizer) offerManifest(w SignedManifest, deadline, now time.Time) []ControlMessage {
 	data, err := netwire.Marshal(w)
 	if err != nil {
 		return nil
@@ -37,6 +32,7 @@ func (s *Synchronizer) resolveManifest(w SignedManifest, now time.Time, accepted
 		// A valid duplicate may use a different signature from the retained
 		// envelope. Admission is complete, but that envelope has no export
 		// lease: release its download without installing a gossip receipt.
+		s.retireSupersededArtifact(w.ownerKey(), now)
 		s.discardManifest(w)
 		return
 	}
@@ -174,7 +170,7 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 // manifestPayload recovers one previously advertised record by its store key.
 // The pool checks the exact digest so a replacement cannot serve different bytes.
 func (d *Directory) manifestPayload(principal string, now time.Time) []byte {
-	w, ok := d.manifestRecord(principal)
+	w, ok := d.manifestRecord(principal, now)
 	if !ok {
 		return nil
 	}
@@ -199,8 +195,7 @@ func (s *Synchronizer) forgetManifest(w SignedManifest) {
 	if s.gossipPool == nil {
 		return
 	}
-	data, _ := netwire.Marshal(w)
-	id := netgossip.Identify(netgossip.Manifest, data)
+	id := manifestGossipID(w)
 	s.gossipPool.Forget(id)
 	if artifact, ok := s.artifacts[w.ownerKey()]; ok && artifact.id == id {
 		artifact.canceled.Store(true)
@@ -208,20 +203,29 @@ func (s *Synchronizer) forgetManifest(w SignedManifest) {
 	}
 }
 
+func manifestGossipID(w SignedManifest) netgossip.ID {
+	data, _ := netwire.Marshal(w)
+	return netgossip.Identify(netgossip.Manifest, data)
+}
+
+func (s *Synchronizer) retireArtifact(owner string, artifact manifestArtifact) {
+	artifact.canceled.Store(true)
+	delete(s.artifacts, owner)
+	if s.gossipPool != nil {
+		s.gossipPool.Forget(artifact.id)
+	}
+}
+
 // trackArtifact keeps only compact local queue ownership. Directory admission
 // supplies the deadline; repeating/re-signing a body never starts a new lease.
 func (s *Synchronizer) trackArtifact(w SignedManifest, deadline time.Time) manifestArtifact {
-	data, _ := netwire.Marshal(w)
-	id := netgossip.Identify(netgossip.Manifest, data)
+	id := manifestGossipID(w)
 	key := w.ownerKey()
 	if old, ok := s.artifacts[key]; ok {
 		if old.id == id {
 			return old
 		}
-		old.canceled.Store(true)
-		if s.gossipPool != nil {
-			s.gossipPool.Forget(old.id)
-		}
+		s.retireArtifact(key, old)
 	}
 	artifact := manifestArtifact{id: id, deadline: deadline, canceled: &atomic.Bool{}}
 	s.artifacts[key] = artifact

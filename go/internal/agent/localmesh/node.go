@@ -42,7 +42,8 @@ type nodePeer struct {
 	tun            io.ReadWriteCloser
 	pendingBundles sync.Map // fingerprints queued or being written on this link
 	control        chan ControlMessage
-	controlMu      sync.Mutex // Serializes dequeue against actor idle pruning.
+	controlMu      sync.Mutex              // Serializes dequeue, idle pruning and skipped HAVEs.
+	skippedHaves   map[string]*atomic.Bool // Retry notifications from the writer.
 	controlOnce    sync.Once
 	controlReady   chan struct{}
 	done           chan struct{}
@@ -411,21 +412,9 @@ func (n *Node) Run() error {
 				if p.sync == nil {
 					continue
 				}
-				previousOrigins := n.routeOrigins
-				replies, changed, err := p.sync.ContinueCertificates(time.Now(), directoryResponseSlots(p))
-				if err != nil {
-					n.closePeer(p, "directory-maintenance", err)
-					continue
-				}
-				queued := n.queueReplies(p, replies)
-				if err := n.afterDirectoryChanges(p, changed, previousOrigins, "certificate-repair"); err != nil {
+				if err := n.maintainDirectory(p); err != nil {
 					return err
 				}
-				if !queued {
-					n.closePeer(p, "directory-maintenance-queue", errors.New("directory reply reserve full"))
-					continue
-				}
-				n.flushAnnouncements(p, time.Now())
 			}
 		case event := <-n.events:
 			err := n.handle(event)
@@ -607,16 +596,16 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 
 	previousOrigins := n.routeOrigins
 	replies, changed, err := p.sync.Receive(*control, time.Now(), directoryResponseSlots(p))
+	if errors.Is(err, ErrControlBackpressure) {
+		return err
+	}
+	queued := err == nil && n.queueReplies(p, replies)
+	if handoffErr := n.afterDirectoryChanges(p, changed, previousOrigins, "carrier"); handoffErr != nil {
+		return handoffErr
+	}
 	if err != nil {
-		if errors.Is(err, ErrControlBackpressure) {
-			return err
-		}
 		n.closePeer(p, "directory-control", err)
 		return nil
-	}
-	queued := n.queueReplies(p, replies)
-	if err := n.afterDirectoryChanges(p, changed, previousOrigins, "carrier"); err != nil {
-		return err
 	}
 	if !queued {
 		n.closePeer(p, "directory-control-queue", errors.New("directory reply reserve full"))
@@ -625,6 +614,25 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 	if len(changed) == 0 {
 		n.refresh()
 	}
+	return nil
+}
+
+func (n *Node) maintainDirectory(p *nodePeer) error {
+	previousOrigins := n.routeOrigins
+	replies, changed, err := p.sync.ContinueCertificates(time.Now(), directoryResponseSlots(p))
+	queued := err == nil && n.queueReplies(p, replies)
+	if handoffErr := n.afterDirectoryChanges(p, changed, previousOrigins, "certificate-repair"); handoffErr != nil {
+		return handoffErr
+	}
+	if err != nil {
+		n.closePeer(p, "directory-maintenance", err)
+		return nil
+	}
+	if !queued {
+		n.closePeer(p, "directory-maintenance-queue", errors.New("directory reply reserve full"))
+		return nil
+	}
+	n.flushAnnouncements(p, time.Now())
 	return nil
 }
 
@@ -677,7 +685,13 @@ func (n *Node) flushAnnouncements(p *nodePeer, now time.Time) {
 }
 
 func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
-	if !n.controlEligible(p, m, time.Now()) {
+	now := time.Now()
+	if !n.controlEligible(p, m, now) {
+		if m.pendingHave {
+			p.controlMu.Lock()
+			p.rememberSkippedHave(m, now)
+			p.controlMu.Unlock()
+		}
 		return nil
 	}
 	if m.Kind == "bundle" {
@@ -753,7 +767,11 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 		return
 	}
 	for _, m := range messages {
-		if !n.controlEligible(p, m, time.Now()) {
+		now := time.Now()
+		if !n.controlEligible(p, m, now) {
+			if m.pendingHave && !m.Expired(now) {
+				p.sync.retryAnnouncement(m.origin, m.canceled, now)
+			}
 			continue
 		}
 		// A leaf can request an identity again while its large certificate

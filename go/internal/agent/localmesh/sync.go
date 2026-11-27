@@ -67,6 +67,7 @@ type ControlMessage struct {
 	deadline    time.Time           // Local queue ownership only; never serialized.
 	canceled    *atomic.Bool
 	origin      string // Immutable local export principal/instance; never serialized.
+	pendingHave bool   // This carrier still owes the HAVE if identity repair blocks its write.
 }
 
 // Deadline is local scheduling metadata for this queued payload. Incoming wire
@@ -327,11 +328,20 @@ func (s *Synchronizer) seedAnnouncements(own string, now time.Time) {
 // channel block this carrier. Cancel an older queued artifact immediately.
 func (s *Synchronizer) markAnnouncement(w SignedManifest, now time.Time) {
 	owner := w.ownerKey()
-	if _, tracked := s.artifacts[owner]; tracked {
-		if deadline, current := s.directory.RecordDeadline(w, now); current {
-			s.trackArtifact(w, deadline)
+	s.retireSupersededArtifact(owner, now)
+	s.enqueueAnnouncement(owner, now)
+}
+
+func (s *Synchronizer) retireSupersededArtifact(owner string, now time.Time) {
+	if artifact, tracked := s.artifacts[owner]; tracked {
+		current, live := s.directory.manifestRecord(owner, now)
+		if !live || manifestGossipID(current) != artifact.id {
+			s.retireArtifact(owner, artifact)
 		}
 	}
+}
+
+func (s *Synchronizer) enqueueAnnouncement(owner string, now time.Time) {
 	if slices.Contains(s.pendingAnnouncements, owner) {
 		return
 	}
@@ -353,27 +363,49 @@ func (s *Synchronizer) markAnnouncement(w SignedManifest, now time.Time) {
 	s.pendingAnnouncements = append(s.pendingAnnouncements, owner)
 }
 
+// Only requeue a skipped HAVE for the exact artifact still tracked by this
+// carrier. A newer publication may already have queued its replacement.
+func (s *Synchronizer) retryAnnouncement(owner string, marker *atomic.Bool, now time.Time) {
+	if artifact, tracked := s.artifacts[owner]; tracked && artifact.canceled == marker && artifact.deadline.After(now) {
+		s.enqueueAnnouncement(owner, now)
+	}
+}
+
 func (s *Synchronizer) Record(w SignedManifest, now time.Time) []ControlMessage {
 	messages, _ := s.recordBounded(w, now, 2)
 	return messages
 }
 
+type announcementResult uint8
+
+const (
+	announcementDone announcementResult = iota
+	announcementNoCredit
+	announcementRetry
+)
+
 // The bundle hint is consumed only if the complete record fits. A caller must
 // reserve this many queue slots before sending the returned messages.
-func (s *Synchronizer) recordBounded(w SignedManifest, now time.Time, slots int) ([]ControlMessage, bool) {
-	if s.gossip != nil {
-		if slots < 1 {
-			return nil, false
-		}
-		return s.offerManifest(w, now), true
+func (s *Synchronizer) recordBounded(w SignedManifest, now time.Time, slots int) ([]ControlMessage, announcementResult) {
+	if slots < 1 {
+		return nil, announcementNoCredit
 	}
 	deadline, ok := s.directory.RecordDeadline(w, now)
 	if !ok {
-		return nil, true
+		// An exact retained body can become exportable again after identity
+		// repair. Keep its marker for any notification from the writer.
+		if current, live := s.directory.manifestRecord(w.ownerKey(), now); live && sameManifestWire(current, w) {
+			return nil, announcementRetry
+		}
+		s.forgetManifest(w)
+		return nil, announcementDone
+	}
+	if s.gossip != nil {
+		return s.offerManifest(w, deadline, now), announcementDone
 	}
 	chain, ok := s.directory.CurrentRecordChain(w, now)
 	if !ok {
-		return nil, true
+		return nil, announcementRetry
 	}
 	s.pruneSupersededPending(now)
 	artifact := s.trackArtifact(w, deadline)
@@ -385,7 +417,7 @@ func (s *Synchronizer) recordBounded(w SignedManifest, now time.Time, slots int)
 		needed++
 	}
 	if needed > slots {
-		return nil, false
+		return nil, announcementNoCredit
 	}
 	var out []ControlMessage
 	if bundleNeeded {
@@ -399,7 +431,7 @@ func (s *Synchronizer) recordBounded(w SignedManifest, now time.Time, slots int)
 	}
 	w.Body = append([]byte(nil), w.Body...)
 	w.Signature = append([]byte(nil), w.Signature...)
-	return append(out, ControlMessage{Kind: "manifest", Manifest: &w, deadline: deadline, canceled: artifact.canceled}), true
+	return append(out, ControlMessage{Kind: "manifest", Manifest: &w, deadline: deadline, canceled: artifact.canceled}), announcementDone
 }
 
 // identityMessage is called only with a current independently verified cache
@@ -408,27 +440,40 @@ func (s *Synchronizer) identityMessage(principal string, chain [][]byte) Control
 	return ControlMessage{Kind: "certificate", Certificate: DescribeCertificates(principal, chain)}
 }
 
-// drainAnnouncements consumes origins only when their current announcement
-// fits the caller's queue budget, or they no longer have an exportable record.
-// Looking up the record here coalesces revisions while the carrier is blocked.
+// drainAnnouncements reads the latest revision for each pending origin. A
+// missing signing identity leaves a live origin pending while others progress.
 func (s *Synchronizer) drainAnnouncements(now time.Time, slots int) []ControlMessage {
+	if slots <= 0 {
+		return nil
+	}
 	var out []ControlMessage
-	consumed := 0
-	for _, owner := range s.pendingAnnouncements {
+	pending := s.pendingAnnouncements[:0]
+	for i, owner := range s.pendingAnnouncements {
 		if slots <= 0 {
+			pending = append(pending, s.pendingAnnouncements[i:]...)
 			break
 		}
-		if w, present := s.directory.manifestRecord(owner); present {
-			messages, fits := s.recordBounded(w, now, slots)
-			if !fits {
-				break
-			}
-			out = append(out, messages...)
-			slots -= len(messages)
+		w, live := s.directory.manifestRecord(owner, now)
+		if !live {
+			continue
 		}
-		consumed++
+		messages, result := s.recordBounded(w, now, slots)
+		if result == announcementNoCredit {
+			pending = append(pending, s.pendingAnnouncements[i:]...)
+			break
+		}
+		if result == announcementRetry {
+			pending = append(pending, owner)
+			continue
+		}
+		if s.gossip != nil && len(messages) != 0 {
+			messages[0].pendingHave = true
+		}
+		out = append(out, messages...)
+		slots -= len(messages)
 	}
-	s.pendingAnnouncements = slices.Delete(s.pendingAnnouncements, 0, consumed)
+	clear(s.pendingAnnouncements[len(pending):])
+	s.pendingAnnouncements = pending
 	return out
 }
 
@@ -617,16 +662,16 @@ func (s *Synchronizer) certificateResult(messages []*CertificateMessage, complet
 	}
 	for i, w := range retry {
 		out, admitted, err := s.receive(ControlMessage{Kind: "manifest", Manifest: &w}, now)
+		changed = append(changed, admitted...)
 		if err != nil {
 			// These candidates are detached already; Close cannot find them
 			// through pending. Release every unprocessed pooled claim too.
 			for _, remaining := range retry[i:] {
 				s.discardManifest(remaining)
 			}
-			return nil, nil, err
+			return nil, changed, err
 		}
 		replies = append(replies, out...)
-		changed = append(changed, admitted...)
 	}
 	return replies, changed, nil
 }
@@ -640,6 +685,9 @@ func (s *Synchronizer) ContinueCertificates(now time.Time, slots ...int) ([]Cont
 	}
 	messages, completed, err := s.certificates.Poll(now, certificateBudget...)
 	replies, changed, err := s.certificateResult(messages, completed, err, now)
+	if err != nil {
+		return nil, changed, err
+	}
 	if s.gossip != nil {
 		budget := 12
 		if len(slots) > 0 {
@@ -649,7 +697,7 @@ func (s *Synchronizer) ContinueCertificates(now time.Time, slots ...int) ([]Cont
 			replies = append(replies, s.gossipControl(m))
 		}
 	}
-	return replies, changed, err
+	return replies, changed, nil
 }
 
 // deferPendingRenewal retains no authority. A signature mismatch needs a
@@ -743,11 +791,7 @@ func (s *Synchronizer) retainPending(w SignedManifest, now time.Time) {
 func (s *Synchronizer) Sweep(now time.Time) {
 	for owner, artifact := range s.artifacts {
 		if !artifact.deadline.After(now) {
-			artifact.canceled.Store(true)
-			if s.gossipPool != nil {
-				s.gossipPool.Forget(artifact.id)
-			}
-			delete(s.artifacts, owner)
+			s.retireArtifact(owner, artifact)
 		}
 	}
 	if s.gossip != nil {

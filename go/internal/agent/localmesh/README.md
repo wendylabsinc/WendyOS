@@ -506,6 +506,8 @@ starting with the local proof. Later directory changes schedule HAVE messages
 only for the changed origins. Each carrier retains pending origin keys while
 replies or a full control queue block them, then advertises the latest live
 digest for each pending origin as space frees up on the maintenance tick.
+A temporary signing identity miss leaves that origin pending while other
+origins can still be advertised.
 Full signed records are sent only on request between routers. Duplicate
 revisions do not renew their expiry.
 The node uses one 15-minute manifest lease for route, presence and services.
