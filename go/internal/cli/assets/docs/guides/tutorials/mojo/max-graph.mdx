@@ -19,7 +19,7 @@ Start with the CPU path, then run the same computation on a supported NVIDIA GPU
 
 The image pins **MAX 26.5.0** and NumPy 2.4.3 on Python 3.12. You do not need to install MAX on the device host or on your development machine.
 
-Use your [default Wendy device](/docs/guides/tutorials/mojo/hello-world#choose-a-default-device). Create a project folder named `max-graph` and run the commands below from that folder.
+Point this terminal at your device with `WENDY_DEVICE`, as in [Hello World](/docs/guides/tutorials/mojo/hello-world#choose-your-device). Create a project folder named `max-graph` and run the commands below from that folder.
 
 For GPU execution, run `wendy device info` to inspect the GPU and CUDA version; an Orin Nano reports `sm_87`.
 

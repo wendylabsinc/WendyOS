@@ -3,7 +3,6 @@
 package commands
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -18,9 +17,8 @@ const markerTimeout = 10 * time.Second
 // Each probe, mount, marker write and unmount is a bounded subprocess. Do not
 // abandon a goroutine that can later mount or modify the card after eject.
 func markFATVolumes(d drive) {
-	if err := markFATVolumesUnindexed(d); err != nil {
-		fmt.Printf("Note: could not mark %s's FAT volumes to skip Spotlight indexing: %v\n", d.DevicePath, err)
-	}
+	// Best effort: the markers only help older images, and nothing can be done if they fail.
+	_ = markFATVolumesUnindexed(d)
 }
 
 func parseDiskutilSlices(out, diskDev string) []string {

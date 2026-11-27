@@ -54,7 +54,7 @@ func TestConnectSimulatorChoiceRefusesToDownloadNonInteractively(t *testing.T) {
 	t.Cleanup(func() { vmAssumeYes = savedYes })
 
 	savedQEMU := ensureQEMUFn
-	ensureQEMUFn = func(context.Context) error { return nil }
+	ensureQEMUFn = func(context.Context, vm.Arch) error { return nil }
 	t.Cleanup(func() { ensureQEMUFn = savedQEMU })
 
 	_, err := connectSimulatorChoice(context.Background(),
@@ -72,7 +72,7 @@ func TestConnectSimulatorChoiceRefusesToDownloadNonInteractively(t *testing.T) {
 
 func TestConnectSimulatorChoiceSurfacesAMissingQEMU(t *testing.T) {
 	saved := ensureQEMUFn
-	ensureQEMUFn = func(context.Context) error { return errors.New("qemu-system-aarch64 not found") }
+	ensureQEMUFn = func(context.Context, vm.Arch) error { return errors.New("qemu-system-aarch64 not found") }
 	t.Cleanup(func() { ensureQEMUFn = saved })
 
 	_, err := connectSimulatorChoice(context.Background(), &simulatorChoice{Name: "sim"}, true)
@@ -84,7 +84,7 @@ func TestConnectSimulatorChoiceSurfacesAMissingQEMU(t *testing.T) {
 func TestSimulatorWithoutDetachedSupport(t *testing.T) {
 	savedDetach, savedQEMU := vmDetachSupportedFn, ensureQEMUFn
 	vmDetachSupportedFn = func() bool { return false }
-	ensureQEMUFn = func(context.Context) error {
+	ensureQEMUFn = func(context.Context, vm.Arch) error {
 		t.Fatal("foreground VM guidance and an already-running VM must not check QEMU")
 		return nil
 	}

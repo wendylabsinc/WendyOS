@@ -2,11 +2,14 @@ package commands
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -25,6 +28,101 @@ func TestDebouncedDeployerUserCancellationStopsWatch(t *testing.T) {
 	case <-stopped:
 	case <-time.After(5 * time.Second):
 		t.Fatal("watch did not stop after the build UI returned ErrUserCancelled")
+	}
+}
+
+func TestWatchKeepsInitialPickerTargetForRedeploys(t *testing.T) {
+	restoreDeviceGlobals(t)
+	deviceFlag, jsonOutput = "", false
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	oldPicker, oldTTY, oldRun := pickTargetDeviceFn, isInteractiveTerminalFn, watchRunCommand
+	t.Cleanup(func() {
+		pickTargetDeviceFn, isInteractiveTerminalFn, watchRunCommand = oldPicker, oldTTY, oldRun
+	})
+	isInteractiveTerminalFn = func() bool { return true }
+
+	picked := 0
+	target := &SelectedDevice{External: &models.ExternalDevice{ID: "watch-target"}}
+	pickTargetDeviceFn = func(ctx context.Context, _ map[string]bool, _, _, _ bool) (*SelectedDevice, error) {
+		picked++
+		if devicePickerPurposeFromContext(ctx) != mainDevicePicker {
+			t.Error("watch uses a different picker from run")
+		}
+		return target, nil
+	}
+	deploys := make(chan runOptions, 2)
+	watchRunCommand = func(ctx context.Context, opts runOptions) error {
+		select {
+		case deploys <- opts:
+		case <-ctx.Done():
+		}
+		return nil
+	}
+
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	finished := make(chan struct{})
+	var watchErr error
+	go func() {
+		defer close(finished)
+		watchErr = watchCommand(ctx, runOptions{detach: true, prefix: dir}, 10*time.Millisecond)
+	}()
+	defer func() {
+		cancel()
+		<-finished
+	}()
+
+	for cycle := range 2 {
+		select {
+		case opts := <-deploys:
+			if opts.watchTarget != target || !opts.yes {
+				t.Fatalf("deploy %d did not reuse the selected target with prompts disabled", cycle+1)
+			}
+		case <-finished:
+			t.Fatalf("watch exited before deploy %d: %v", cycle+1, watchErr)
+		case <-ctx.Done():
+			t.Fatalf("waiting for deploy %d: %v", cycle+1, ctx.Err())
+		}
+		if cycle == 0 {
+			if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("pass\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	cancel()
+	<-finished
+	if watchErr != nil || picked != 1 || deviceFlag != "" {
+		t.Fatalf("watch error=%v picker calls=%d global device=%q", watchErr, picked, deviceFlag)
+	}
+}
+
+func TestWatchStartupPickerRespectsNonInteractiveModes(t *testing.T) {
+	restoreDeviceGlobals(t)
+	deviceFlag = ""
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	oldPicker, oldTTY := pickTargetDeviceFn, isInteractiveTerminalFn
+	t.Cleanup(func() { pickTargetDeviceFn, isInteractiveTerminalFn = oldPicker, oldTTY })
+	pickTargetDeviceFn = func(context.Context, map[string]bool, bool, bool, bool) (*SelectedDevice, error) {
+		t.Fatal("watch opened a picker with prompts disabled")
+		return nil, nil
+	}
+
+	for _, tc := range []struct {
+		name           string
+		tty, json, yes bool
+	}{
+		{name: "yes", tty: true, yes: true},
+		{name: "JSON", tty: true, json: true},
+		{name: "no terminal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			jsonOutput = tc.json
+			isInteractiveTerminalFn = func() bool { return tc.tty }
+			opts := runOptions{yes: tc.yes, prefix: t.TempDir()}
+			if err := watchCommand(t.Context(), opts, 0); !errors.Is(err, errNoDevice) {
+				t.Fatalf("missing target error = %v, want %v", err, errNoDevice)
+			}
+		})
 	}
 }
 

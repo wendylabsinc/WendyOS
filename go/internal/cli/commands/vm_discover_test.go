@@ -91,10 +91,13 @@ func TestVMBoardsHaveHumanReadableDeviceTypes(t *testing.T) {
 func TestVMDeviceKeyMatchesThePublishedBoardID(t *testing.T) {
 	// The key is the image's WENDYOS_BOARD_ID, not a name chosen here: it is
 	// what the Builder publishes under and what the guest reports.
-	if vmDeviceKey != "vm-arm64" {
-		t.Errorf("vmDeviceKey = %q, want the published board id vm-arm64", vmDeviceKey)
-	}
-	if got := humanReadableDeviceType(vmDeviceKey); got == vmDeviceKey {
-		t.Errorf("the VM board %q the CLI downloads has no display name", vmDeviceKey)
+	for arch, want := range map[vm.Arch]string{vm.ArchARM64: "vm-arm64", vm.ArchAMD64: "vm-x86-64"} {
+		board := arch.BoardID()
+		if board != want {
+			t.Errorf("%s BoardID() = %q, want the published board id %s", arch, board, want)
+		}
+		if got := humanReadableDeviceType(board); got == board {
+			t.Errorf("the VM board %q the CLI downloads has no display name", board)
+		}
 	}
 }

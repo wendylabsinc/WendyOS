@@ -83,14 +83,14 @@ func TestGetImageInfoFallsBackToLegacy(t *testing.T) {
 	}
 }
 
-func TestFetchDeviceInfosFetchesInParallel(t *testing.T) {
+func TestLoadDeviceManifestsFetchesInParallel(t *testing.T) {
 	main := &mainManifest{Devices: map[string]manifestDevice{
 		"raspberry-pi-5":   {Latest: "1.0.0", ManifestPath: "manifests/raspberry-pi-5.json"},
 		"jetson-orin-nano": {Latest: "1.0.0", ManifestPath: "manifests/jetson-orin-nano.json"},
 		"vm-arm64":         {Latest: "1.0.0", ManifestPath: "manifests/vm-arm64.json"},
 	}}
 	// Every fetch waits until all of them have started, so fetches made one
-	// after another time out and their devices drop out of the result.
+	// after another time out and leave their devices without a manifest.
 	var mu sync.Mutex
 	started := 0
 	allStarted := make(chan struct{})
@@ -109,13 +109,21 @@ func TestFetchDeviceInfosFetchesInParallel(t *testing.T) {
 		}
 	}
 
-	devices := fetchDeviceInfos(main, func(dev manifestDevice) string { return dev.Latest }, fetch)
+	devices := deviceInfos(main, func(dev manifestDevice) string { return dev.Latest })
+	loadDeviceManifests(devices, fetch)
 	if len(devices) != len(main.Devices) {
-		t.Fatalf("got %d devices, want %d: device manifests were not fetched in parallel", len(devices), len(main.Devices))
+		t.Fatalf("got %d devices, want %d", len(devices), len(main.Devices))
+	}
+	for _, d := range devices {
+		if d.Manifest == nil || d.Manifest.DeviceID != d.ManifestPath {
+			t.Errorf("%s has manifest %+v: device manifests were not fetched in parallel", d.Key, d.Manifest)
+		}
 	}
 }
 
-func TestFetchDeviceInfosSkipsDevicesWithoutAManifest(t *testing.T) {
+// A device list takes the master manifest alone. A device without a manifest
+// path is not listed; one whose manifest cannot be fetched still is.
+func TestDeviceInfosListDevicesWithoutFetchingTheirManifests(t *testing.T) {
 	main := &mainManifest{Devices: map[string]manifestDevice{
 		"raspberry-pi-5":   {Latest: "1.0.0", LatestNightly: "1.1.0-nightly", Stability: "stable", ManifestPath: "manifests/raspberry-pi-5.json"},
 		"jetson-orin-nano": {Latest: "1.0.0", ManifestPath: "manifests/jetson-orin-nano.json"},
@@ -128,23 +136,32 @@ func TestFetchDeviceInfosSkipsDevicesWithoutAManifest(t *testing.T) {
 		return &deviceManifest{DeviceID: path}, nil
 	}
 
-	devices := fetchDeviceInfos(main, func(dev manifestDevice) string { return dev.LatestNightly }, fetch)
-	if len(devices) != 1 {
+	devices := deviceInfos(main, func(dev manifestDevice) string { return dev.LatestNightly })
+	sort.Slice(devices, func(i, j int) bool { return devices[i].Key < devices[j].Key })
+	if len(devices) != 2 || devices[0].Key != "jetson-orin-nano" || devices[1].Key != "raspberry-pi-5" {
 		var keys []string
 		for _, d := range devices {
 			keys = append(keys, d.Key)
 		}
-		sort.Strings(keys)
-		t.Fatalf("got devices %v, want only raspberry-pi-5", keys)
+		t.Fatalf("got devices %v, want jetson-orin-nano and raspberry-pi-5", keys)
 	}
-	got := devices[0]
-	if got.Key != "raspberry-pi-5" || got.Name != humanizeDeviceKey("raspberry-pi-5") {
-		t.Errorf("device = %q (%q)", got.Key, got.Name)
+	got := devices[1]
+	if got.Name != humanizeDeviceKey("raspberry-pi-5") || got.ManifestPath != "manifests/raspberry-pi-5.json" {
+		t.Errorf("device = %q, manifest path %q", got.Name, got.ManifestPath)
 	}
 	if got.LatestVersion != "1.1.0-nightly" || got.NightlyVersion != "1.1.0-nightly" || got.Stability != "stable" {
 		t.Errorf("versions = %q/%q, stability %q", got.LatestVersion, got.NightlyVersion, got.Stability)
 	}
-	if got.Manifest == nil || got.Manifest.DeviceID != "manifests/raspberry-pi-5.json" {
-		t.Errorf("manifest = %+v", got.Manifest)
+	if devices[0].Manifest != nil || got.Manifest != nil {
+		t.Errorf("a device manifest was read while listing: %+v, %+v", devices[0].Manifest, got.Manifest)
+	}
+
+	// Reading them afterwards leaves the failed one listed, without a manifest.
+	loadDeviceManifests(devices, fetch)
+	if devices[0].Manifest != nil {
+		t.Errorf("jetson-orin-nano manifest = %+v, want none: its fetch failed", devices[0].Manifest)
+	}
+	if devices[1].Manifest == nil || devices[1].Manifest.DeviceID != "manifests/raspberry-pi-5.json" {
+		t.Errorf("raspberry-pi-5 manifest = %+v", devices[1].Manifest)
 	}
 }

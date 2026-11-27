@@ -4,7 +4,7 @@ WendyOS on Raspberry Pi 3, 4 and 5 boots through U-Boot by default: the shared R
 
 The default is the same on every Raspberry Pi board but depends on the build configuration. Set `WENDYOS_RPI_UBOOT = "0"` to build without U-Boot; the firmware then loads the kernel directly from the `/boot` partition. With a `WENDYOS_OTA` value other than `"wendy"`, `boot.scr` is the stock meta-raspberrypi single-rootfs script.
 
-This document covers that boot configuration: where the files live, what WendyOS sets, and how to customise them.
+This document covers that boot configuration: where the files live, what WendyOS sets, and how to customise them. The Orange Pi 5 Pro also boots through U-Boot, without a firmware stage; see [Rockchip (Orange Pi 5 Pro)](#rockchip-orange-pi-5-pro).
 
 ## Boot files on the `/boot` partition
 
@@ -134,3 +134,21 @@ sync && reboot
 ```
 
 > Note: OTA updates use `wendyos-update`, which writes the new rootfs to the inactive A/B slot. On Raspberry Pi, the `/boot` and `/config` partitions sit outside the A/B slots, so an update does not replace your edits to them.
+
+## Rockchip (Orange Pi 5 Pro)
+
+The Orange Pi 5 Pro runs mainline U-Boot straight from its boot disk: the boot ROM loads `idbloader.img` (DDR init and SPL) from offset 32 KiB, and SPL loads `u-boot.itb` from offset 8 MiB, both in the raw area before the first partition. There is no `config.txt` or `cmdline.txt`, and OTA updates never rewrite the boot loader.
+
+| Partition | Contents |
+|-----------|----------|
+| 1 `boot` (FAT, 128 MB) | `wendyos-rockchip.scr` (the boot script) and `uboot.env` |
+| 2 `config` (FAT) | First-boot provisioning |
+| 3 `rootfsA`, 4 `rootfsB` (ext4) | The A/B slots, each with its own `/boot/Image` and device tree |
+| 5 `data` (ext4) | `/data`, grown to fill the disk on first boot |
+
+U-Boot boots the first disk whose boot partition holds `wendyos-rockchip.scr`: the microSD card (`mmc 1`), then the eMMC (`mmc 0`), then the NVMe SSD. The name is specific to Rockchip boards, so a Raspberry Pi card's `boot.scr` is never run. The script then boots a slot on that same disk:
+
+- It reads the slot from `uboot.env` (`wendyos_boot_slot`), counts trial boots after an update, and writes the file back with `fatwrite`. `uboot.env` is `0x8000` bytes; `/etc/fw_env.config` uses the same size, so `wendyos-update` (`ubootenv` connector) reads and writes the same file.
+- It loads the kernel and device tree from the slot's `/boot`, and builds the whole command line: `console=tty0 root=/dev/mmcblk<N>p<3|4> rootwait=60 rw panic=10`, or `root=/dev/nvme0n1p<3|4>` on NVMe. Debug images also add `console=ttyS2,1500000n8`; see [uart.md](./uart.md). With `panic=10` and `rootwait=60`, a slot whose kernel panics or never finds its root file system restarts after an update instead of hanging, so the trial count advances and U-Boot falls back to the previous slot.
+
+The NVMe SSD boots only when U-Boot comes from the eMMC or a microSD card whose boot partition has no `wendyos-rockchip.scr`, because the boot ROM cannot read NVMe.

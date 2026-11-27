@@ -7,14 +7,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Organization names are display hints, stored separately from credentials. Keep
 // stale names for offline use; every successful lookup refreshes them. Endpoint
 // and organization identity both scope the cache, including for legacy IDs.
 type organizationNameCache struct {
-	Version int                          `json:"version"`
-	Names   map[string]map[string]string `json:"names"`
+	Version   int                             `json:"version"`
+	Names     map[string]map[string]string    `json:"names"`
+	UpdatedAt map[string]map[string]time.Time `json:"updatedAt,omitempty"`
 }
 
 var organizationNameCacheMu sync.Mutex
@@ -49,6 +51,23 @@ func OrganizationName(endpoint, organization string) string {
 	return cache.Names[endpoint][organization]
 }
 
+// FreshOrganizationName returns a display name only while its last successful
+// lookup is within maxAge. Older cache files remain readable but need a refresh.
+func FreshOrganizationName(endpoint, organization string, maxAge time.Duration) string {
+	organizationNameCacheMu.Lock()
+	defer organizationNameCacheMu.Unlock()
+	cache, _, ok := loadOrganizationNameCache()
+	if !ok || maxAge <= 0 {
+		return ""
+	}
+	updated := cache.UpdatedAt[endpoint][organization]
+	age := time.Since(updated)
+	if updated.IsZero() || age < 0 || age >= maxAge {
+		return ""
+	}
+	return cache.Names[endpoint][organization]
+}
+
 // SetOrganizationName records an organization's name for later display.
 func SetOrganizationName(endpoint, organization, name string) {
 	if endpoint == "" || organization == "" || strings.TrimSpace(name) == "" {
@@ -64,6 +83,13 @@ func SetOrganizationName(endpoint, organization, name string) {
 		cache.Names[endpoint] = make(map[string]string)
 	}
 	cache.Names[endpoint][organization] = name
+	if cache.UpdatedAt == nil {
+		cache.UpdatedAt = make(map[string]map[string]time.Time)
+	}
+	if cache.UpdatedAt[endpoint] == nil {
+		cache.UpdatedAt[endpoint] = make(map[string]time.Time)
+	}
+	cache.UpdatedAt[endpoint][organization] = time.Now().UTC()
 	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
 		return

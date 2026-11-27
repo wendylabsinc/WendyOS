@@ -18,7 +18,7 @@ func createTestVM(t *testing.T, s *Store, name string, meta Meta) {
 	}
 }
 
-func TestExitingLauncherCannotClearStateDuringNewStart(t *testing.T) {
+func TestLauncherCleanupOnlyClearsMatchingState(t *testing.T) {
 	s := newTestStore(t)
 	createTestVM(t, s, "dev", Meta{})
 	if err := s.WriteState(State{Name: "dev", PID: 100}); err != nil {
@@ -29,21 +29,18 @@ func TestExitingLauncherCannotClearStateDuringNewStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	// The new start has taken the lock but has not written its state yet.
-	// An old launcher must not even clear its matching old PID in this window.
-	s.clearStateForPID("dev", 100)
+	s.clearStateForPIDLocked("dev", 200)
 	if _, err := s.ReadState("dev"); err != nil {
-		t.Fatalf("cleanup ignored new owner's lock: %v", err)
+		t.Fatalf("cleanup removed a different PID's state: %v", err)
 	}
 	if err := s.WriteState(State{Name: "dev", PID: 200}); err != nil {
 		t.Fatal(err)
 	}
-	_ = lock.Close()
-	s.clearStateForPID("dev", 100)
+	s.clearStateForPIDLocked("dev", 100)
 	if state, err := s.ReadState("dev"); err != nil || state.PID != 200 {
 		t.Fatalf("new state lost: %+v %v", state, err)
 	}
-	s.clearStateForPID("dev", 200)
+	s.clearStateForPIDLocked("dev", 200)
 	if _, err := os.Stat(s.StatePath("dev")); !os.IsNotExist(err) {
 		t.Fatal("matching stale state not removed")
 	}

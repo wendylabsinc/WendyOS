@@ -82,6 +82,7 @@ else:
             ("pc", "amd64", "intel", "", "no NVIDIA GPU"),
             ("dragonwing-iq-8275", "arm64", "qualcomm", "", "no NVIDIA GPU"),
             ("raspberry-pi-5", "arm64", "", "", "no NVIDIA GPU"),
+            ("orange-pi-5-pro", "arm64", "arm", "", "no NVIDIA GPU"),
             ("pc", "amd64", "nvidia", "sm_89", "CI GPU fixtures support"),
             ("jetson-agx-thor", "arm64", "nvidia", "sm_unknown", "CI GPU fixtures support"),
         ]

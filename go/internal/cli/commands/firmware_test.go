@@ -3,10 +3,14 @@
 package commands
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -113,5 +117,82 @@ func TestDownloadFirmwareInto(t *testing.T) {
 	}
 	if lastDownloaded != int64(len(body)) || lastTotal != int64(len(body)) {
 		t.Errorf("final progress = %d/%d; want %d/%d", lastDownloaded, lastTotal, len(body), len(body))
+	}
+}
+
+func TestFetchFirmwareFromManifestUsesRequestedVersion(t *testing.T) {
+	const main = `{"firmware":{"p4":{"latest":"2.0.0","latest_nightly":"2.1.0","manifest_path":"manifests/p4.json"}}}`
+	checksum := strings.Repeat("a", 64)
+	chip := fmt.Sprintf(`{"chip_id":"p4","versions":{
+		"1.0.0":{"path":"firmware/p4/1.0.0/host.bin"},
+		"2.0.0":{"path":"firmware/p4/2.0.0/digest/host.bin","checksum":%q,"size_bytes":1,
+			"companion":{"path":"firmware/p4/2.0.0/digest/radio.bin","checksum":%q,"size_bytes":1,"build_id":%q}},
+		"2.1.0":{"path":"firmware/p4/2.1.0/host.bin"}
+	}}`, checksum, checksum, testedCompanionBuildID)
+	transport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = transport })
+	http.DefaultTransport = vmImageTestTransport(func(req *http.Request) (*http.Response, error) {
+		var body string
+		switch req.URL.Path {
+		case "/wendyos-images-public/manifests/master.json":
+			body = main
+		case "/wendyos-images-public/manifests/p4.json":
+			body = chip
+		default:
+			return nil, fmt.Errorf("unexpected request for %s", req.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+
+	legacy, err := fetchFirmwareFromManifest(t.Context(), "p4", "1.0.0", false)
+	if err != nil || legacy.Version != "1.0.0" || legacy.Companion != nil {
+		t.Fatalf("requested legacy version = %+v, %v", legacy, err)
+	}
+	latest, err := fetchFirmwareFromManifest(t.Context(), "p4", "", false)
+	if err != nil || latest.Version != "2.0.0" || latest.Companion == nil || latest.Checksum != checksum {
+		t.Fatalf("latest paired version = %+v, %v", latest, err)
+	}
+	nightly, err := fetchFirmwareFromManifest(t.Context(), "p4", "", true)
+	if err != nil || nightly.Version != "2.1.0" || nightly.Companion != nil {
+		t.Fatalf("latest nightly = %+v, %v", nightly, err)
+	}
+	if _, err := fetchFirmwareFromManifest(t.Context(), "p4", "missing", false); err == nil {
+		t.Fatal("accepted a missing explicit version")
+	}
+	chip = strings.Replace(chip, `"chip_id":"p4"`, `"chip_id":"other"`, 1)
+	if _, err := fetchFirmwareFromManifest(t.Context(), "p4", "1.0.0", false); err == nil {
+		t.Fatal("accepted a manifest for the wrong chip")
+	}
+}
+
+func TestDownloadFirmwareIntoValidatesPairedHost(t *testing.T) {
+	const expected = "host image"
+	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(expected)))
+	for _, body := range []string{expected, "bad  image", "short", "much longer than the expected image"} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, body)
+			}))
+			defer server.Close()
+			asset := &firmwareAsset{DownloadURL: server.URL, Size: int64(len(expected)), Checksum: sum}
+			dir := t.TempDir()
+			filename, err := downloadFirmwareInto(asset, dir, nil)
+			if body == expected {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := asset.verifyFile(filename, asset.Size); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted invalid paired host bytes %q", body)
+			}
+			files, err := os.ReadDir(dir)
+			if err != nil || len(files) > 0 {
+				t.Fatalf("invalid download left files behind: %v, %v", files, err)
+			}
+		})
 	}
 }

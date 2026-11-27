@@ -1,0 +1,193 @@
+---
+title: Re-routing and path choice
+description: What Wendy Net does when a link or a device disappears, and how it chooses between two paths.
+---
+
+Links come and go. A robot walks out of Bluetooth range, someone unplugs a
+cable, a device runs out of battery. Wendy Net keeps routing around the gaps:
+it always sends traffic along the cheapest path that still works, and when that
+path breaks it moves the traffic to the next best one. The addresses at both
+ends stay the same, so your app doesn't change a thing.
+
+## How a path is chosen
+
+Every kind of link has a fixed cost: Ethernet 64, Wi-Fi 128, Wi-Fi Aware 512 and
+Bluetooth 4096. A path costs the sum of its hops, and traffic takes the cheapest
+path. That's the whole rule.
+
+<Figure src="/images/wendy-net/link-costs.webp" alt="A table of link costs: Ethernet 64, Wi-Fi 128, Wi-Fi Aware 512 and Bluetooth 4096" caption="The cost of each kind of link. Faster links cost less." />
+
+A few details follow from it:
+
+- **Cost is a stand-in for speed, not a measurement.** Wendy Net doesn't measure
+  throughput, delay, signal strength or load. A Wi-Fi Aware link always costs
+  512, however good or bad the radio conditions are.
+- **A link costs as much as its slower end.** If one device is on Ethernet and
+  its neighbor is on Wi-Fi on the same network, their link costs 128.
+- **Any cheaper path wins at once.** There is no margin to beat. When two paths
+  cost exactly the same, traffic stays on the one it already uses.
+- **One path per destination.** Traffic to a device follows one next hop at a
+  time. Wendy Net doesn't split it across paths or combine links.
+
+## Two devices, several connections
+
+Two devices are often connected more than one way: the same Ethernet network,
+and Bluetooth too. Each connection is a separate link with its own cost, and
+only the cheapest one carries traffic. The others stay connected as standbys
+while the radios have room for them, so a switch doesn't have to wait for a new
+connection to be set up.
+
+<Frames columns={2}>
+  <Frame src="/images/wendy-net/one-link-at-a-time.webp" alt="Two devices joined by Ethernet 64, Wi-Fi 128 and Bluetooth 4096, with only the Ethernet link lit" caption="Ethernet is cheapest, so only Ethernet carries traffic." />
+  <Frame src="/images/wendy-net/fallback-bluetooth.webp" alt="The Ethernet and Wi-Fi links between two devices broken, with traffic now flowing over the Bluetooth link" caption="Lose the others, and traffic falls back to Bluetooth." />
+</Frames>
+
+Standbys share their radio's connection slots. When a radio is full and a new
+device needs a slot, Wendy Net closes an unused standby to make room, starting
+with the most expensive one. It never closes a link that's carrying traffic, and
+it never closes the last link to a neighbor.
+
+## When a link goes down
+
+Neighbors check on each other all the time. A link that goes quiet is declared
+dead after a few missed checks, and a connection that closes or fails is
+dropped straight away:
+
+| Link | Checks every | Declared dead after silence of |
+| --- | --- | --- |
+| Ethernet, Wi-Fi, Wi-Fi Aware | 1 second | 3.5 seconds |
+| Bluetooth | 4 seconds | 14 seconds |
+
+Some failures are noticed sooner. Wi-Fi Aware reports a lost connection as soon
+as the radio does, and Bluetooth asks the radio to give up on a silent
+connection after about 4 seconds, though not every controller honors that.
+
+As soon as a link is declared dead, the routes through it are dropped. If
+another path to the same destination is already known, traffic moves to it in
+the same step, and the device's neighbors hear about the change within a
+fraction of a second.
+
+<Figure src="/images/wendy-net/next-best-path.webp" alt="The middle link of a three-hop path broken, with traffic now taking a Bluetooth arc costing 4096, under the words Same address. Same app." caption="A link goes down and traffic takes the next best path. The addresses at both ends don't change." />
+
+So when you unplug the Ethernet cable between two devices that also share
+Bluetooth, traffic moves to Bluetooth about 3.5 seconds later. When a Bluetooth
+neighbor walks out of range, the switch can take up to about 14 seconds.
+
+If there is no other path, the destination is marked unreachable. Traffic for
+it is dropped instead of leaking out of the device's ordinary network
+connection, and the device asks the network for a fresh route. Traffic resumes
+as soon as one appears.
+
+## When a link comes back
+
+A link that comes back, or a new one, carries traffic once both ends have
+confirmed they can hear each other. That takes about 2 seconds on Ethernet,
+Wi-Fi and Wi-Fi Aware, and about 8 seconds on Bluetooth. If the returning link
+gives a cheaper path, traffic moves back to it straight away. There is no
+waiting period.
+
+## What your app notices
+
+App connections run end to end between the two devices' Wendy Net addresses,
+and a change of path doesn't change those addresses. So a switch is invisible
+apart from a short pause:
+
+- **Open connections survive a switch.** TCP data sent while the old link was
+  dying is sent again. UDP datagrams sent in that window are lost, as UDP
+  datagrams can be anywhere.
+- **During an outage with no path at all,** open TCP connections wait, UDP flows
+  are closed, and new connections fail until a route returns.
+- **A long outage ends the connection.** If nothing gets through for about
+  45 seconds, the session between the two devices closes and your app has to
+  reconnect. Write apps to reconnect and retry, as you would on any network.
+
+## Example: two ways to the gateway
+
+Here A is a robot with Bluetooth only. It can reach two devices, B and B′, over
+Bluetooth. B reaches C over Wi-Fi Aware. B′ reaches C over Ethernet, through the
+site's wired network. C has an Internet connection and
+[shares it](/docs/wendy-net/internet-sharing), so A's requests to D, a server on
+the Internet, travel to C first and leave from there.
+
+<NetDiagram
+  label="A reaches gateway C two ways: through B over Bluetooth then Wi-Fi Aware, costing 4608, or through B prime over Bluetooth then Ethernet, costing 4160. C reaches server D over the Internet. The path through B prime is active."
+  height={280}
+  nodes={[
+    { id: 'a', x: 70, y: 140, label: 'A', note: 'Bluetooth only' },
+    { id: 'b', x: 300, y: 60, label: 'B' },
+    { id: 'b2', x: 300, y: 220, label: 'B′', labelBelow: true },
+    { id: 'c', x: 520, y: 140, label: 'C', note: 'Shares its uplink' },
+    { id: 'd', x: 665, y: 140, label: 'D', note: 'Server', server: true },
+  ]}
+  links={[
+    { from: 'a', to: 'b', kind: 'bluetooth', label: 'Bluetooth 4096' },
+    { from: 'b', to: 'c', kind: 'aware', label: 'Wi-Fi Aware 512' },
+    { from: 'a', to: 'b2', kind: 'bluetooth', label: 'Bluetooth 4096', state: 'active', labelSide: 'below' },
+    { from: 'b2', to: 'c', kind: 'ethernet', label: 'Ethernet 64', state: 'active', labelSide: 'below' },
+    { from: 'c', to: 'd', kind: 'internet', label: 'Internet', state: 'active' },
+  ]}
+  caption="Both paths reach the same gateway. A uses the one through B′, because it costs less."
+/>
+
+### Which path does A use?
+
+A adds up each path to C. The Internet part, from C to D, is the same either
+way, so it doesn't affect the choice:
+
+| Path to C | Hops | Cost |
+| --- | --- | ---: |
+| Through B | Bluetooth 4096, then Wi-Fi Aware 512 | 4608 |
+| Through B′ | Bluetooth 4096, then Ethernet 64 | **4160** |
+
+The path through B′ is cheaper, so A uses it from the start. The first hop is
+Bluetooth on both paths, so the second hop decides. Had B′ been joined to C by
+ordinary Wi-Fi instead of Ethernet, its path would cost 4096 + 128 = 4224 and
+still win. Had it been joined to C by Bluetooth, its path would cost 8192 and A
+would use B.
+
+"Fastest" here means cheapest by these fixed costs. Wendy Net doesn't test the
+two paths against each other, so if the Ethernet hop were congested, A would
+still prefer it.
+
+### B disappears
+
+A isn't using B, so nothing happens to A's traffic. A notices B is gone within
+about 14 seconds, since they share a Bluetooth link, and forgets the route
+through B.
+
+### B′ disappears
+
+Now A loses the path it was using. Within about 14 seconds A declares the
+Bluetooth link to B′ dead, or sooner if the radio reports the loss first, and
+moves its traffic to the path through B in the same step. The gateway is still
+C, and A's lease and tunnel are addressed to C rather than to a path, so they
+stay up. A's requests to D keep leaving from the same place, and open
+connections to D pause and carry on.
+
+If B′ comes back, A switches back as soon as their new Bluetooth link is
+confirmed, about 8 seconds after it connects, because 4160 is less than 4608.
+
+### Where links can and can't form
+
+A Wendy Net link needs two devices that can find each other directly: on the
+same local network, within Wi-Fi Aware range, or within Bluetooth range. So the
+link between B′ and C has to run over a network they share, like a site's
+Ethernet or Wi-Fi. Wendy Net doesn't link devices to each other across the
+public Internet.
+
+If B′ has its own Internet connection, it can share that too. A then has two
+gateways to choose from. It keeps the one it's using while that one works, and
+it doesn't choose by distance or speed. Moving to another gateway ends the
+connections made through the old one. See
+[Reach the Internet through another device](/docs/wendy-net/internet-sharing#which-gateway-a-device-uses).
+
+## See what a device sees
+
+`wendy net topology` lists a device's neighbors and the routes it has chosen:
+
+```sh
+wendy net topology --device <device>
+```
+
+Run it on the device the traffic starts from, before and after a change, to
+see which neighbor a route uses.

@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -195,12 +196,15 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 				}
 			}
 			rootfsOnlyExplicit := cmd.Flags().Changed("rootfs-only")
+			// The alias lookup, the driver lookup and the device list all read the
+			// master manifest; they share one download of it.
+			ctx := withMainManifestMemo(cmd.Context())
 			// Map an alias first so driver lookup and the install checks see the device it stands for.
 			var aliasErr error
-			if deviceType, storageOverride, aliasErr = resolveInstallDeviceType(cmd.Context(), deviceType, storageOverride, prNumber); aliasErr != nil {
+			if deviceType, storageOverride, aliasErr = resolveInstallDeviceType(ctx, deviceType, storageOverride, prNumber); aliasErr != nil {
 				return aliasErr
 			}
-			prepared, err := prepareOSInstallDrivers(cmd.Context(), deviceType, versionFlag, nightly, prNumber, drivers)
+			prepared, err := prepareOSInstallDrivers(ctx, deviceType, versionFlag, nightly, prNumber, drivers)
 			if err != nil {
 				return err
 			}
@@ -208,7 +212,7 @@ or --no-wifi, pick the target with flags, and pass --force to skip confirmations
 			if prepared != nil {
 				versionFlag = prepared.version
 			}
-			if err := runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber, agent); err != nil {
+			if err := runOSInstall(ctx, nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber, agent); err != nil {
 				return err
 			}
 			return prepared.installAfterBoot(cmd.Context(), deviceName)
@@ -301,17 +305,21 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	if err != nil {
 		return err
 	}
-	noteImageFit(fit, layout, *targetDrive)
 
 	activationStep(ctx, "flash", map[string]string{"target_selected": "true"})
-	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
-	fmt.Println(elevationHint())
+	if hint := elevationHint(); hint != "" {
+		installNote(os.Stdout, "%s", hint)
+	}
 	if err := unmountBeforeWrite(*targetDrive); err != nil {
 		return err
 	}
+	// This mode has no progress bar; say what the long write is doing.
+	installNote(os.Stdout, "Writing image to %s...", targetDrive.DevicePath)
+	writeStart := time.Now()
 	if err := writeImageToDisk(stream, stream.uncompressedSize, *targetDrive, fit, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
+	installDone(os.Stdout, "Image written", writtenDetail(fit.sequentialTotal(stream.uncompressedSize), time.Since(writeStart)))
 	if agent != nil {
 		updated, attached, err := provisionConfigWithRetry(ctx, *targetDrive, nil, "", nil, true, agentSeed{local: agent})
 		var ejectErr error
@@ -334,7 +342,9 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	}
 
 	analytics.TrackStage(ctx, "image_written", "wendy install", "completed", "", nil)
-	fmt.Printf("\nSuccessfully installed image on %s.\n", targetDrive.Name)
+	fmt.Println()
+	installResult(os.Stdout, fmt.Sprintf("Installed image on %s.", targetDrive.Name))
+	installNext(os.Stdout, "put the drive in the board, power it on, then run", "wendy discover")
 	return nil
 }
 
@@ -345,7 +355,10 @@ type pickerDevice struct {
 	RawVersion string // exact version key for manifest lookup
 	IsESP32    bool
 	ESP32Board string
-	Manifest   *deviceManifest // cached manifest for Linux devices
+	// ManifestPath is where a Linux device's own manifest is published. Manifest
+	// is nil until loadPickedManifest reads it, once the device is chosen.
+	ManifestPath string
+	Manifest     *deviceManifest
 }
 
 // installedFromFlashBundle reports whether a device's manifest image is a flash
@@ -356,7 +369,8 @@ type pickerDevice struct {
 // installer).
 //
 // The device-type prefix is a floor, not a fallback, so the manifest can only
-// widen the set: a new EDL board is excluded without a code change here.
+// widen the set: a new EDL board is excluded without a code change here. Until
+// a device's manifest is loaded, only its type can answer.
 func installedFromFlashBundle(dev deviceInfo) bool {
 	if isFlashBundleDeviceType(dev.Key) {
 		return true
@@ -386,12 +400,21 @@ func isFlashBundleDeviceType(deviceType string) bool {
 	return strings.HasPrefix(deviceType, dragonwingDeviceTypePrefix)
 }
 
-// pickLinuxDevice fetches available Linux devices from the manifest and presents
-// an interactive picker. Returns the selected device key and its deviceInfo.
-func pickLinuxDevice() (string, deviceInfo, error) {
-	fmt.Println("Fetching available devices...")
+// warnDeviceNotLoaded says why the device just chosen in a picker cannot be
+// used yet. The picker opens again after it, so the person can retry or choose
+// another device.
+func warnDeviceNotLoaded(name string, cause error) {
+	fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf("Could not load the WendyOS versions for %s: %v.", name, cause)))
+	fmt.Fprintln(os.Stderr, "Check your network connection, then choose it again or choose another device.")
+}
 
-	devices, err := getAvailableDevices()
+// pickLinuxDevice fetches available Linux devices from the manifest and presents
+// an interactive picker. Returns the selected device key and its deviceInfo,
+// with the device's own manifest loaded.
+func pickLinuxDevice() (string, deviceInfo, error) {
+	installNote(os.Stdout, "Fetching available devices...")
+
+	devices, err := getAvailableDevices(context.Background())
 	if err != nil {
 		log.Printf("WARNING: could not fetch Linux device manifest: %v", err)
 	}
@@ -415,12 +438,28 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 		return "", deviceInfo{}, fmt.Errorf("no devices available")
 	}
 
-	fmt.Println()
-	key, err := pickFromItems("Select a device", items)
-	if err != nil {
-		return "", deviceInfo{}, err
+	// The rows came from the master manifest alone. The chosen device's own
+	// manifest is read now; when it cannot be used the list opens again.
+	for {
+		fmt.Println()
+		key, err := pickListedDeviceFn("Select a device", items)
+		if err != nil {
+			return "", deviceInfo{}, err
+		}
+		dev := deviceMap[key]
+		fmt.Printf("Fetching WendyOS versions for %s...\n", dev.Name)
+		if err := dev.loadManifest(context.Background()); err != nil {
+			warnDeviceNotLoaded(dev.Name, err)
+			continue
+		}
+		// Only its manifest can say that a device outside the known flash-bundle
+		// types installs from a bundle, so that check waits until here.
+		if installedFromFlashBundle(dev) {
+			fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf("%s installs from a flash bundle that this version of wendy cannot download. Choose another device, or update wendy.", dev.Name)))
+			continue
+		}
+		return key, dev, nil
 	}
-	return key, deviceMap[key], nil
 }
 
 // pickWendyLiteBoard asks which Wendy Lite board to install. When target is
@@ -428,8 +467,8 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 // lists every catalog board with published firmware. nightly selects which
 // release channel a board's firmware must be published on to be offered.
 // Returns ErrUserCancelled when the user quits the picker.
-func pickWendyLiteBoard(target string, nightly bool) (string, error) {
-	boards, err := WendyLiteBoardsWithFirmware(nightly)
+func pickWendyLiteBoard(ctx context.Context, target string, nightly bool) (string, error) {
+	boards, err := WendyLiteBoardsWithFirmware(ctx, nightly)
 	if err != nil {
 		return "", err
 	}
@@ -503,45 +542,21 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts, agent)
 	}
-	fmt.Println("Fetching available devices...")
+	installNote(os.Stdout, "Fetching available devices...")
 
 	// Fetch Linux devices from GCS manifest — the per-PR manifest when --pr is
-	// set, otherwise the standard release manifest.
+	// set, otherwise the standard release manifest. Only the master manifest is
+	// read here: the device that gets chosen has its own manifest read then.
 	var linuxDevices []deviceInfo
 	var err error
 	if prNumber > 0 {
-		linuxDevices, err = getAvailablePRDevices(prNumber)
+		linuxDevices, err = getAvailablePRDevices(ctx, prNumber)
 	} else {
-		linuxDevices, err = getAvailableDevices()
+		linuxDevices, err = getAvailableDevices(ctx)
 	}
 	if err != nil {
 		log.Printf("WARNING: could not fetch Linux device manifest: %v", err)
 	}
-
-	// Fetch Wendy Lite boards and targets, keeping only boards with published
-	// firmware — a catalog entry with no build yet would otherwise reach the
-	// picker and fail immediately after selection.
-	wliteBoards, err := WendyLiteBoardsWithFirmware(nightly)
-	if err != nil {
-		log.Printf("WARNING: could not fetch Wendy Lite board catalog: %v", err)
-	}
-	wliteTargets, err := WendyLiteTargets()
-	if err != nil {
-		log.Printf("WARNING: could not fetch Wendy Lite target catalog: %v", err)
-	}
-	// Drop targets with no board left so the picker never offers a target
-	// that leads to an empty second picker.
-	boardTargets := make(map[string]bool, len(wliteBoards))
-	for _, b := range wliteBoards {
-		boardTargets[b.Target] = true
-	}
-	var targetsWithBoards []WendyLiteTarget
-	for _, t := range wliteTargets {
-		if boardTargets[t.Name] {
-			targetsWithBoards = append(targetsWithBoards, t)
-		}
-	}
-	wliteTargets = targetsWithBoards
 
 	// Build picker items.
 	var items []tui.PickerItem
@@ -559,10 +574,10 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 
 		pd := pickerDevice{
-			Name:       dev.Name,
-			Version:    displayVersion,
-			RawVersion: rawVersion,
-			Manifest:   dev.Manifest,
+			Name:         dev.Name,
+			Version:      displayVersion,
+			RawVersion:   rawVersion,
+			ManifestPath: dev.ManifestPath,
 		}
 		deviceMap[dev.Key] = pd
 
@@ -580,6 +595,32 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	// ignores prNumber, so offering ESP32 here would silently install release
 	// firmware instead of a PR build.
 	if flagDeviceType == "" && prNumber == 0 {
+		// Fetch Wendy Lite boards and targets, keeping only boards with published
+		// firmware — a catalog entry with no build yet would otherwise reach the
+		// picker and fail immediately after selection. The firmware list is in
+		// the master manifest the device list above was built from.
+		wliteBoards, err := WendyLiteBoardsWithFirmware(ctx, nightly)
+		if err != nil {
+			log.Printf("WARNING: could not fetch Wendy Lite board catalog: %v", err)
+		}
+		wliteTargets, err := WendyLiteTargets()
+		if err != nil {
+			log.Printf("WARNING: could not fetch Wendy Lite target catalog: %v", err)
+		}
+		// Drop targets with no board left so the picker never offers a target
+		// that leads to an empty second picker.
+		boardTargets := make(map[string]bool, len(wliteBoards))
+		for _, b := range wliteBoards {
+			boardTargets[b.Target] = true
+		}
+		var targetsWithBoards []WendyLiteTarget
+		for _, t := range wliteTargets {
+			if boardTargets[t.Name] {
+				targetsWithBoards = append(targetsWithBoards, t)
+			}
+		}
+		wliteTargets = targetsWithBoards
+
 		for _, v := range wliteBoards {
 			deviceMap["wlite_"+v.Board] = pickerDevice{
 				Name:       v.DisplayName,
@@ -632,26 +673,39 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 			return fmt.Errorf("device type %q not found in manifest; available: %s", flagDeviceType, strings.Join(available, ", "))
 		}
 		selected = flagDeviceType
+		if err := loadPickedManifest(ctx, deviceMap, selected); err != nil {
+			return deviceManifestError(deviceMap[selected].Name, err)
+		}
 	} else {
 		if len(items) == 0 {
 			return fmt.Errorf("no devices available")
 		}
 
-		fmt.Println()
-		selected, err = pickInstallDevice(items)
-		if err != nil {
-			return err
-		}
-
-		if target, ok := strings.CutPrefix(selected, "wlite_target_"); ok {
-			if err := requireInstallChoice("choosing a Wendy Lite board", "Wendy Lite installs only from the interactive picker"); err != nil {
-				return err
-			}
-			board, err := pickWendyLiteBoard(target, nightly)
+		// The rows came from the master manifest alone. The chosen device's own
+		// manifest is read now; when that fails the list opens again.
+		for {
+			fmt.Println()
+			selected, err = pickInstallDeviceFn(items)
 			if err != nil {
 				return err
 			}
-			selected = "wlite_" + board
+
+			if target, ok := strings.CutPrefix(selected, "wlite_target_"); ok {
+				if err := requireInstallChoice("choosing a Wendy Lite board", "Wendy Lite installs only from the interactive picker"); err != nil {
+					return err
+				}
+				board, err := pickWendyLiteBoard(ctx, target, nightly)
+				if err != nil {
+					return err
+				}
+				selected = "wlite_" + board
+			}
+
+			err = loadPickedManifest(ctx, deviceMap, selected)
+			if err == nil {
+				break
+			}
+			warnDeviceNotLoaded(deviceMap[selected].Name, err)
 		}
 	}
 
@@ -709,7 +763,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	device := deviceMap[selected]
 
 	if device.IsESP32 {
-		return installESP32Firmware(ctx, nightly, device.ESP32Board, discovery.SerialPortInfo{}, wifi, deviceName, preOpts)
+		return installESP32Firmware(ctx, nightly, flagVersion, device.ESP32Board, discovery.SerialPortInfo{}, wifi, deviceName, preOpts)
 	}
 	if storageOverride == "emmc" && selected != orinDeviceType {
 		return fmt.Errorf("--storage emmc is supported only for --device-type %s", orinDeviceType)
@@ -793,7 +847,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		if err != nil {
 			return err
 		}
-		return installOrin(ctx, t234InstallOptions{
+		return installOrinRestartable(ctx, t234InstallOptions{
 			DeviceType: selected, DeviceName: device.Name, Version: selectedVersion,
 			Storage: storage, Artifact: artifact, Force: force, WiFi: wifi,
 			RequestedName: deviceName, PreEnroll: preOpts, Agent: agent, Nightly: nightly,
@@ -804,7 +858,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		// recommending full recovery would be wrong there — the version has
 		// no flashpack to recover with.
 		if ver.InstallMode == "recovery" {
-			fmt.Fprintln(os.Stderr, tui.WarningMessage("Rootfs-only imaging does not update Jetson QSPI boot firmware; use full recovery to guarantee matching boot firmware and rootfs."))
+			installWarn(os.Stderr, "Rootfs only: Jetson boot firmware (QSPI) is not updated. Use full recovery to update it.")
 		}
 		storageOverride, err = chooseT234RootfsOnlyStorage(selected, storageOverride)
 		if err != nil {
@@ -812,6 +866,25 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 	}
 	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, yesOverwriteInternal, noBmap, rootfsOnly, storageOverride, wifi, deviceName, preOpts, agent)
+}
+
+// loadPickedManifest reads the chosen device's own manifest when the rest of
+// runOSInstall reads it: for a disk image or an Orin. Thor and the flash-bundle
+// boards resolve their artifact themselves, and the other choices have no
+// manifest.
+func loadPickedManifest(ctx context.Context, deviceMap map[string]pickerDevice, selected string) error {
+	device, ok := deviceMap[selected]
+	if !ok || device.IsESP32 || device.Manifest != nil || selected == thorDeviceType || isFlashBundleDeviceType(selected) {
+		return nil
+	}
+	fmt.Printf("Fetching WendyOS versions for %s...\n", device.Name)
+	dm, err := fetchDeviceManifestContext(ctx, device.ManifestPath)
+	if err != nil {
+		return err
+	}
+	device.Manifest = dm
+	deviceMap[selected] = device
+	return nil
 }
 
 func rejectRecoveryDriveFlags(drive string, noBmap, overwriteInternal bool) error {
@@ -961,7 +1034,6 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 			return fmt.Errorf("drive %s not found", flagDrive)
 		}
 	} else {
-		fmt.Println()
 		selectedDrive, err := pickExternalDrive(ctx)
 		if err != nil {
 			return err
@@ -1021,7 +1093,6 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	if err != nil {
 		return err
 	}
-	noteImageFit(fit, layout, targetDrive)
 
 	if err := unmountBeforeWrite(targetDrive); err != nil {
 		return err
@@ -1029,13 +1100,12 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 
 	activationStep(ctx, "flash", nil)
 	// Step 6: Write image to drive with progress bar.
-	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
-	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
+	writeProg := tui.NewProgress("Writing to " + targetDrive.DevicePath).Transient()
 	if seekableZst != "" || bmapPath != "" {
 		// a bmap failure falls back and its reason is printed then; suppress the TUI error render
 		writeProg = writeProg.WithoutErrorView()
 	}
-	wp := tui.NewProgressProgram(writeProg)
+	writeStart := time.Now()
 
 	// Track how far the fast path got and which path ran, so a failure can
 	// report the offset it reached and frame the primary error (WDY-1841).
@@ -1046,12 +1116,12 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	case seekableZst != "":
 		writeTotal, fastPathLabel = seekableTotal, "seekable block-map write"
 	case bmapPath != "":
-		writeTotal, fastPathLabel = stream.uncompressedSize, "block-map write"
+		writeTotal, fastPathLabel = imageSize, "block-map write"
 	default:
 		writeTotal, fastPathLabel = fit.sequentialTotal(stream.uncompressedSize), "image write"
 	}
 
-	go func() {
+	primaryErr, uiErr := runProgress("Writing to "+targetDrive.DevicePath, writeProg, func(send func(tui.ProgressUpdateMsg)) error {
 		progress := func(written int64) {
 			lastWritten.Store(written)
 			if seekableZst != "" {
@@ -1059,43 +1129,36 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 				if seekableTotal > 0 {
 					pct = float64(written) / float64(seekableTotal)
 				}
-				wp.Send(tui.ProgressUpdateMsg{
+				send(tui.ProgressUpdateMsg{
 					Percent: pct,
 					Written: written,
 					Total:   seekableTotal,
 				})
 			} else if bmapPath == "" && writeTotal < stream.uncompressedSize {
 				// The sequential write stops at the drive's end.
-				wp.Send(tui.ProgressUpdateMsg{
+				send(tui.ProgressUpdateMsg{
 					Percent: float64(written) / float64(writeTotal),
 					Written: written,
 					Total:   writeTotal,
 				})
 			} else if msg, ok := stream.writeProgressMsg(written); ok {
-				wp.Send(msg)
+				send(msg)
 			}
 		}
-		var writeErr error
 		switch {
 		case seekableZst != "":
-			fmt.Println("Using seekable block map for faster flashing.")
-			writeErr = writeImageWithBmapSeekable(seekableZst, seekableBmap, targetDrive, fit, progress)
+			return writeImageWithBmapSeekable(seekableZst, seekableBmap, targetDrive, fit, progress)
 		case bmapPath != "":
-			fmt.Println("Using block map for faster flashing.")
-			writeErr = writeImageWithBmap(stream, stream.uncompressedSize, targetDrive, bmapPath, fit, progress)
+			return writeImageWithBmap(stream, stream.uncompressedSize, targetDrive, bmapPath, fit, progress)
 		default:
-			writeErr = writeImageToDisk(stream, stream.uncompressedSize, targetDrive, fit, progress)
+			return writeImageToDisk(stream, stream.uncompressedSize, targetDrive, fit, progress)
 		}
-		wp.Send(tui.ProgressDoneMsg{Err: writeErr})
-	}()
-
-	writeFinal, err := tui.RunProgram(wp)
-	if err != nil {
-		return fmt.Errorf("progress TUI: %w", err)
+	})
+	if uiErr != nil {
+		return uiErr
 	}
 
-	writeModel := writeFinal.(tui.ProgressModel)
-	if primaryErr := writeModel.Err(); primaryErr != nil {
+	if primaryErr != nil {
 		// User cancellation is not a write failure: don't classify it, and
 		// don't start a full-image fallback write on a flash the user just
 		// cancelled (same handling as the measure step above).
@@ -1157,30 +1220,30 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 		announceFastWriteFallback(os.Stdout, primary)
 		fallbackTotal := fallbackFit.sequentialTotal(fallbackSize)
-		fallbackProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
-		fp := tui.NewProgressProgram(fallbackProg)
-		go func() {
-			fp.Send(tui.ProgressDoneMsg{Err: writeImageToDisk(fallbackReader, fallbackSize, targetDrive, fallbackFit, func(written int64) {
+		writeTotal = fallbackTotal
+		fallbackProg := tui.NewProgress("Writing to " + targetDrive.DevicePath).Transient()
+		fallbackErr, uiErr := runProgress("Writing to "+targetDrive.DevicePath, fallbackProg, func(send func(tui.ProgressUpdateMsg)) error {
+			return writeImageToDisk(fallbackReader, fallbackSize, targetDrive, fallbackFit, func(written int64) {
 				if fallbackTotal > 0 {
-					fp.Send(tui.ProgressUpdateMsg{
+					send(tui.ProgressUpdateMsg{
 						Percent: float64(written) / float64(fallbackTotal),
 						Written: written,
 						Total:   fallbackTotal,
 					})
 				}
-			})})
-		}()
-		fallbackFinal, ferr := tui.RunProgram(fp)
-		if ferr != nil {
-			return fmt.Errorf("progress TUI: %w", ferr)
+			})
+		})
+		if uiErr != nil {
+			return uiErr
 		}
-		if fm := fallbackFinal.(tui.ProgressModel); fm.Err() != nil {
+		if fallbackErr != nil {
 			// Both writes failed: surface the primary (real) error AND the
 			// fallback's, clearly labeled, so we never again debug the wrong one.
-			return combineFlashFailure(primary, fm.Err())
+			return combineFlashFailure(primary, fallbackErr)
 		}
 	}
 
+	installDone(os.Stdout, "Image written", writtenDetail(writeTotal, time.Since(writeStart)))
 	analytics.TrackStage(ctx, "image_written", "wendy install", "completed", "", nil)
 	activationStep(ctx, "provision", nil)
 	hasProvisioningData := agent != nil || provisioningRequired(provCreds, provDeviceName, provisioningJSON)
@@ -1197,9 +1260,9 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		if hasProvisioningData {
 			return errors.Join(fmt.Errorf("the OS image was written to %s, but --binary, --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name), ejectDisk(targetDrive))
 		}
-		fmt.Println("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
+		fmt.Println()
+		installWarn(os.Stdout, "First-boot settings can't be written on this platform. The device will run the agent in the image and update it after first boot.")
 	} else {
-		fmt.Printf("\nWriting provisioning data to config partition...\n")
 		// A provisioning failure is not a flash failure: the OS image already
 		// landed on the drive above. provisionConfigWithRetry warns and offers
 		// an interactive retry rather than aborting, so the user knows the
@@ -1220,9 +1283,9 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return err
 	}
 
-	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
-	fmt.Println("You can now insert the drive into your device and power it on.")
-	printFirstBootVerification(deviceKey, imgInfo.Version)
+	fmt.Println()
+	installResult(os.Stdout, fmt.Sprintf("Installed WendyOS %s on %s.", imgInfo.Version, targetDrive.Name))
+	installNext(os.Stdout, "put the drive in the board, power it on, then run", "wendy discover")
 	return nil
 }
 
@@ -1281,21 +1344,21 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 		}
 		switch {
 		case zerr != nil:
-			fmt.Printf("Note: could not fetch seekable image (%v); flashing the full image.\n", zerr)
+			installNote(os.Stdout, "could not fetch seekable image (%v); flashing the full image.", zerr)
 		case berr != nil:
-			fmt.Printf("Note: cannot resolve block-map cache path (%v); flashing the full image.\n", berr)
+			installNote(os.Stdout, "cannot resolve block-map cache path (%v); flashing the full image.", berr)
 		default:
 			var parsed *Bmap
 			if derr := downloadBmap(img.BmapURL, bmapCandidate); derr != nil {
 				// A block map an earlier run cached will do if it is for an image
 				// of this size; the write still checks every range's checksum.
 				if parsed = cachedBmapFor(bmapCandidate, zstPath); parsed != nil {
-					fmt.Printf("Note: could not fetch block map (%v); using the cached copy.\n", derr)
+					installNote(os.Stdout, "could not fetch block map (%v); using the cached copy.", derr)
 				} else {
-					fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
+					installNote(os.Stdout, "could not fetch block map (%v); flashing the full image.", derr)
 				}
 			} else if b, perr := parseBmap(readFileOrNil(bmapCandidate)); perr != nil {
-				fmt.Printf("Note: block map unusable (%v); flashing the full image.\n", perr)
+				installNote(os.Stdout, "block map unusable (%v); flashing the full image.", perr)
 			} else {
 				parsed = b
 			}
@@ -1308,7 +1371,7 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 		// --no-bmap, or no block map published: a cached .zst is still the image.
 		if cached, err := osCachedZstPath(deviceKey, version, storage); err == nil {
 			if info, err := os.Stat(cached); err == nil && info.Size() > 0 {
-				fmt.Printf("Using cached seekable image (%s)\n", cached)
+				installDone(os.Stdout, "Image ready", "(cached)")
 				localZst = cached
 			}
 		}
@@ -1326,7 +1389,7 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 			src.stream = stream
 			return src, nil
 		}
-		fmt.Printf("Note: could not open %s (%v); flashing the full image.\n", localZst, err)
+		installNote(os.Stdout, "could not open %s (%v); flashing the full image.", localZst, err)
 	}
 	stream, err := openOSImageStream(deviceKey, img)
 	if err != nil {
@@ -1336,13 +1399,13 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 	if !noBmap && img.BmapURL != "" {
 		candidate, derr := osCachedBmapPath(deviceKey, version, storage)
 		if derr != nil {
-			fmt.Printf("Note: cannot resolve block-map cache path (%v); flashing the full image.\n", derr)
+			installNote(os.Stdout, "cannot resolve block-map cache path (%v); flashing the full image.", derr)
 		} else if derr := downloadBmap(img.BmapURL, candidate); derr != nil {
-			fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
+			installNote(os.Stdout, "could not fetch block map (%v); flashing the full image.", derr)
 		} else if parsed, perr := parseBmap(readFileOrNil(candidate)); perr != nil {
-			fmt.Printf("Note: block map unusable (%v); flashing the full image.\n", perr)
+			installNote(os.Stdout, "block map unusable (%v); flashing the full image.", perr)
 		} else if stream.uncompressedSize > 0 && parsed.ImageSize != stream.uncompressedSize {
-			fmt.Printf("Note: block map is for a %d-byte image but this image is %d bytes; flashing the full image.\n", parsed.ImageSize, stream.uncompressedSize)
+			installNote(os.Stdout, "block map is for a %d-byte image but this image is %d bytes; flashing the full image.", parsed.ImageSize, stream.uncompressedSize)
 		} else {
 			src.bmapPath = candidate
 			src.imageSize = parsed.ImageSize
@@ -1570,16 +1633,33 @@ func probeRangeSupportContext(ctx context.Context, client *http.Client, img *ima
 // progress-bar TUI. Prefer downloadImageInto when embedding the download inside
 // another progress UI (it takes a plain byte callback and owns no TUI).
 func downloadImage(img *imageInfo) (string, error) {
-	return downloadImageContext(context.Background(), img)
+	return downloadImageWithProgress(context.Background(), img, tui.NewProgress("Downloading WendyOS "+img.Version).Transient())
+}
+
+// downloadedDetail is the downloaded file's size for its ✓ line, or "".
+func downloadedDetail(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return "· " + tui.FormatBytes(info.Size())
 }
 
 func downloadImageContext(ctx context.Context, img *imageInfo, opts ...tea.ProgramOption) (string, error) {
+	return downloadImageWithProgress(ctx, img, tui.NewProgress(fmt.Sprintf("Downloading %s...", img.Version)), opts...)
+}
+
+func downloadImageWithProgress(ctx context.Context, img *imageInfo, prog tui.ProgressModel, opts ...tea.ProgramOption) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	// JSON and headless invocations cannot open /dev/tty. Keep cancellation,
+	// transfer retries and partial-file cleanup in the shared downloader.
+	if jsonOutput || !isInteractiveTerminal() {
+		return downloadImageIntoContext(ctx, img, nil)
+	}
 	downloadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	prog := tui.NewProgress(fmt.Sprintf("Downloading %s...", img.Version))
 	p := tui.NewProgressProgram(prog, append([]tea.ProgramOption{tea.WithContext(downloadCtx)}, opts...)...)
 	sendProgress := throttledProgress(p, 33*time.Millisecond)
 
@@ -1863,7 +1943,7 @@ func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, err
 		return "", err
 	}
 	if info, statErr := os.Stat(cached); statErr == nil && info.Size() > 0 {
-		fmt.Printf("Using cached seekable image (%s)\n", cached)
+		installDone(os.Stdout, "Image ready", "(cached)")
 		return cached, nil
 	}
 	downloadPath, err := downloadOSImage(&imageInfo{DownloadURL: zstURL, Version: version})
@@ -1875,6 +1955,7 @@ func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, err
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching seekable image: %w", err)
 	}
+	installDone(os.Stdout, "Image downloaded", downloadedDetail(cached))
 	return cached, nil
 }
 
@@ -1948,7 +2029,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		return "", err
 	}
 	if info, statErr := os.Stat(imgCached); statErr == nil && info.Size() > 0 {
-		fmt.Printf("Using cached image (%s)\n", imgCached)
+		installDone(os.Stdout, "Image ready", "(cached)")
 		return imgCached, nil
 	}
 
@@ -1959,7 +2040,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 			return "", zipErr
 		}
 		if info, statErr := os.Stat(zipCached); statErr == nil && info.Size() > 0 {
-			fmt.Printf("Using cached image (%s)\n", zipCached)
+			installDone(os.Stdout, "Image ready", "(cached)")
 			return zipCached, nil
 		}
 		// Cache miss: download zip, rename to zip cache path.
@@ -1972,6 +2053,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 			os.Remove(downloadPath)
 			return "", fmt.Errorf("caching image: %w", renameErr)
 		}
+		installDone(os.Stdout, "Image downloaded", downloadedDetail(zipCached))
 		return zipCached, nil
 	}
 
@@ -1985,6 +2067,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 		os.Remove(downloadPath)
 		return "", fmt.Errorf("caching image: %w", err)
 	}
+	installDone(os.Stdout, "Image downloaded", downloadedDetail(imgCached))
 	return imgCached, nil
 }
 
@@ -2071,19 +2154,25 @@ func measureGzipImage(path string, progress func(read, total int64)) (int64, err
 // progress bar tracking compressed bytes read. Returns context.Canceled when
 // the user quits the bar.
 func measureImageWithProgress(stream *imageStream) error {
-	prog := tui.NewProgress("Determining image size (one-time per image)...")
-	p := tui.NewProgressProgram(prog)
-	sendProgress := throttledProgress(p, 33*time.Millisecond)
-
-	go func() {
-		p.Send(tui.ProgressDoneMsg{Err: stream.measureUncompressedSize(sendProgress)})
-	}()
-
-	final, err := tui.RunProgram(p)
-	if err != nil {
-		return fmt.Errorf("progress TUI: %w", err)
+	const title = "Determining image size (one-time per image)"
+	measureErr, uiErr := runProgress(title, tui.NewProgress(title+"..."), func(send func(tui.ProgressUpdateMsg)) error {
+		last := time.Time{}
+		return stream.measureUncompressedSize(func(read, total int64) {
+			if time.Since(last) < 33*time.Millisecond && read < total {
+				return
+			}
+			last = time.Now()
+			var pct float64
+			if total > 0 {
+				pct = float64(read) / float64(total)
+			}
+			send(tui.ProgressUpdateMsg{Percent: pct, Written: read, Total: total})
+		})
+	})
+	if uiErr != nil {
+		return uiErr
 	}
-	return final.(tui.ProgressModel).Err()
+	return measureErr
 }
 
 // imageSizeSidecar caches a measured decompressed size next to the compressed
@@ -2643,10 +2732,10 @@ func promptAddOneCredential(index int) (c wendyconf.WifiCredential, added bool, 
 		}
 		if useKeychain {
 			if pw, kerr := lookupKeychainPassword(c.SSID); kerr == nil && pw != "" {
-				fmt.Println("Using saved password from keychain.")
+				installNote(os.Stdout, "Using saved password from keychain.")
 				c.Password = pw
 			} else {
-				fmt.Println("Password not available from keychain.")
+				installNote(os.Stdout, "Password not available from keychain.")
 			}
 		}
 	}
@@ -2699,7 +2788,6 @@ func resolveDeviceName(flagName string) (string, error) {
 		return "", nil
 	}
 
-	fmt.Println()
 	name, err := promptDeviceName(
 		"Device name",
 		fmt.Sprintf("(a-z, 0-9 and hyphens, starts with a letter, 3–%d chars; empty = auto-generate)", maxDeviceNameLen),
@@ -2813,7 +2901,33 @@ func confirmEraseDrive(d drive, force bool) error {
 		fmt.Println("Cancelled.")
 		return ErrUserCancelled
 	}
+	if !force {
+		printAnswer(alsoOnPromptTerminal(os.Stdout), fmt.Sprintf("Erase %s (%s)?", d.DevicePath, eraseDriveLabel(d)), "yes", true)
+	}
 	return nil
+}
+
+// eraseDriveLabel names the drive and its size for the answered erase question.
+func eraseDriveLabel(d drive) string {
+	if d.SizeBytes > 0 {
+		return d.Name + ", " + formatBytes(d.SizeBytes)
+	}
+	return d.Name
+}
+
+// resolveFirstBootWiFi resolves first-boot Wi-Fi and, when it was asked,
+// leaves the answer on screen.
+func resolveFirstBootWiFi(wifi wifiCLIOptions) ([]wendyconf.WifiCredential, error) {
+	asked := !wifi.chosen() && isInteractiveTerminal()
+	creds, err := resolveWiFiCredentialsList(wifi)
+	if err == nil && asked {
+		answer := "none"
+		if len(creds) > 0 {
+			answer = strings.Join(wifiSummaryNames(creds), ", ")
+		}
+		printAnswer(alsoOnPromptTerminal(os.Stdout), "Wi-Fi", answer, false)
+	}
+	return creds, err
 }
 
 // diskInstallSettled is what installLinuxImage writes, settled before the download.
@@ -2859,10 +2973,12 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 	} else if storageOverride == "" && d.MediaFixed && storage == "nvme" {
 		// Auto-detected an SSD enclosure. Surface the inference and the override
 		// so a surprising choice is at least visible and reversible.
-		fmt.Printf("Detected a fixed SSD on %s — using the NVMe image (pass --storage sd to override).\n", d.DevicePath)
+		installNote(os.Stdout, "Detected a fixed SSD on %s — using the NVMe image (pass --storage sd to override).", d.DevicePath)
 	}
 
-	fmt.Printf("\nPreparing %s %s image...\n", device.Name, version)
+	fmt.Println()
+	installHeader(os.Stdout, device.Name, version, d.DevicePath, installImageDetail(d, storage))
+	fmt.Println()
 	var imgInfo *imageInfo
 	var err error
 	if rootfsOnly && ver.InstallMode == "recovery" {
@@ -2883,6 +2999,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 	if err != nil {
 		return diskInstallSettled{}, err
 	}
+	fmt.Println() // the work starts a new stage
 	// Reserving the name in Cloud waits for the erase confirm, so a declined
 	// install leaves nothing reserved and its retry can use the same name.
 	provisioningJSON, err := mintProvisioningJSON(ctx, plan, &name)
@@ -2896,7 +3013,7 @@ func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevic
 // pre-enroll, and shows it before asking to erase d, so nothing that changes
 // the result is asked afterwards. The returned plan is minted only after this.
 func confirmDiskInstall(d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
-	creds, err := resolveWiFiCredentialsList(wifi)
+	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -3050,7 +3167,8 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 	// again by identity: while set, d's device path is not known to be ours.
 	relocate := false
 
-	err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
+	installNote(os.Stdout, "Writing first-boot settings...")
+	agentVersion, err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
 	// skip ends the loop when the user declines a retry.
 	skip := func() (drive, bool, error) {
 		if requested {
@@ -3063,13 +3181,15 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 		notApplied, stillMounted := splitStillMounted(err)
 		if notApplied == nil {
 			// Only the unmount failed; the caller reports the mount.
-			fmt.Println(provisioningWrittenLine(deviceName, creds, len(provisioningJSON) > 0))
+			installDone(os.Stdout, "First-boot settings written", firstBootWrittenDetail(agentVersion))
 			return d, !relocate, stillMounted
 		}
 		if requested {
-			fmt.Printf("\nWarning: could not apply provisioning data — --binary / --wifi / --device-name / --pre-enroll were requested but not written: %v\n", err)
+			fmt.Println()
+			installWarn(os.Stdout, "Could not apply provisioning data — --binary / --wifi / --device-name / --pre-enroll were requested but not written: %v", err)
 		} else {
-			fmt.Printf("\nWarning: could not pre-configure the agent on the config partition: %v\n", err)
+			fmt.Println()
+			installWarn(os.Stdout, "Could not pre-configure the agent on the config partition: %v", err)
 		}
 		fmt.Println("The OS image itself was written successfully — the device will still boot, run the agent baked into the image, and fetch updates after first boot.")
 
@@ -3131,26 +3251,23 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 			}
 			d, relocate = found, false
 		}
-		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
+		agentVersion, err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
 	}
-	fmt.Println(provisioningWrittenLine(deviceName, creds, len(provisioningJSON) > 0))
+	installDone(os.Stdout, "First-boot settings written", firstBootWrittenDetail(agentVersion))
 	return d, true, nil
 }
 
-// provisionConfigPartition seeds the local agent or downloads the latest one for the image's channel.
-func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, seed agentSeed) error {
+// provisionConfigPartition seeds the local agent or downloads the latest one
+// for the image's channel, and returns the seeded agent's version.
+func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, seed agentSeed) (string, error) {
 	if agent := seed.local; agent != nil {
-		fmt.Printf("Using local wendy-agent %s (%s)\n", agent.path, agent.arch)
-		return writeConfigPartition(d, configAgent{data: agent.data, local: true}, creds, deviceName, provisioningJSON)
+		return "local", writeConfigPartition(d, configAgent{data: agent.data, local: true}, creds, deviceName, provisioningJSON)
 	}
-	fmt.Printf("Downloading wendy-agent for device...\n")
 	agentBinary, agentVer, err := seedAgent(seed)
 	if err != nil {
-		return fmt.Errorf("resolving agent binary: %w", err)
+		return "", fmt.Errorf("resolving agent binary: %w", err)
 	}
-	fmt.Printf("Using wendy-agent %s\n", agentVer)
-
-	return writeConfigPartition(d, configAgent{data: agentBinary}, creds, deviceName, provisioningJSON)
+	return agentVer, writeConfigPartition(d, configAgent{data: agentBinary}, creds, deviceName, provisioningJSON)
 }
 
 // maxFlashAttempts bounds installESP32Firmware's retry loop so a permanently
@@ -3191,7 +3308,7 @@ var resolveESP32InstallSerialPortsFn = discovery.ResolveESP32InstallSerialPorts
 // board is a Wendy Lite catalog board name, e.g. "esp32c6_generic_native". An empty
 // serialDevice means the device should be located by scanning install-capable
 // serial ports. A supplied device carries its already-known transport.
-func installESP32Firmware(ctx context.Context, nightly bool, board string, serialDevice discovery.SerialPortInfo, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
+func installESP32Firmware(ctx context.Context, nightly bool, version, board string, serialDevice discovery.SerialPortInfo, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
 	target, err := WendyLiteTargetForBoard(board)
 	if err != nil {
 		return err
@@ -3210,7 +3327,8 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	autoDiscoverPort := serialDevice.Port == ""
 	interactive := !jsonOutput && isInteractiveTerminal()
 	if autoDiscoverPort {
-		fmt.Println("\nScanning for ESP32 devices...")
+		fmt.Println()
+		installNote(os.Stdout, "Scanning for ESP32 devices...")
 
 		// A device that's rebooting on its own can drop off and reappear on
 		// the USB bus as it re-enumerates, so a single scan can miss it.
@@ -3246,7 +3364,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	}
 
 	wifi.MaxNetworks = liteMaxWiFiNetworks
-	provCreds, err := resolveWiFiCredentialsList(wifi)
+	provCreds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
 	}
@@ -3291,16 +3409,25 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	}
 	fmt.Println(esp32InstallCandidateMessage(serialDevice))
 
-	fmt.Println("Fetching latest Wendy Lite firmware...")
+	installNote(os.Stdout, "Fetching Wendy Lite firmware...")
 	firmwareID, err := WendyLiteFirmwareID(board)
 	if err != nil {
 		return err
 	}
-	asset, err := fetchFirmwareFromManifest(firmwareID, nightly)
+	asset, err := fetchFirmwareFromManifest(ctx, firmwareID, version, nightly)
 	if err != nil {
 		return fmt.Errorf("fetching firmware: %w", err)
 	}
-	fmt.Printf("Found firmware: %s v%s\n", asset.Name, asset.Version)
+	installNote(os.Stdout, "Found firmware: %s v%s", asset.Name, asset.Version)
+	if asset.Companion != nil && asset.Size > maxFlashSize {
+		return fmt.Errorf("host firmware is too large (%d bytes, maximum %d)", asset.Size, maxFlashSize)
+	}
+	if asset.Companion != nil && expectedChip != chipESP32P4 {
+		return fmt.Errorf("firmware %s v%s has companion metadata for a board without an ESP32-P4 host", asset.Name, asset.Version)
+	}
+	if asset.Companion != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+		return fmt.Errorf("this firmware includes an ESP-Hosted companion update. Connect the P4's native USB port to install both images")
+	}
 
 	// Reuse a cached download from a previous run when one exists; otherwise
 	// download with a progress bar. The cached file persists across runs and
@@ -3315,6 +3442,11 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	img, err := LoadEspFlashImage(fwPath)
 	if err != nil {
 		return fmt.Errorf("loading firmware image: %w", err)
+	}
+
+	if asset.Checksum != "" && (int64(len(img.Bytes())) != asset.Size ||
+		fmt.Sprintf("%x", sha256.Sum256(img.Bytes())) != asset.Checksum) {
+		return fmt.Errorf("host firmware changed before flashing")
 	}
 
 	confBytes, err := proto.Marshal(wendyConf)
@@ -3357,6 +3489,9 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 
 		if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
 			return fmt.Errorf("ESP32 enrollment requires native USB; select the board's native USB port, or install with --pre-enroll=false")
+		}
+		if asset.Companion != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+			return fmt.Errorf("this firmware includes an ESP-Hosted companion update. Select the P4's native USB port")
 		}
 		if serialDevice.Transport == discovery.SerialTransportUARTBridge {
 			fmt.Fprintln(alsoOnPromptTerminal(os.Stderr), tui.WarningMessage(esp32UARTBridgeInstallWarning(len(provCreds) > 0)))
@@ -3409,12 +3544,19 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		}
 	}
 
-	fmt.Printf("\nSuccessfully flashed Wendy Lite %s!\n", asset.Version)
-	fmt.Println("The device will reboot automatically.")
-	if enrollmentAuth != nil {
-		return enrollInstalledLite(ctx, serialDevice, enrollmentAuth, provDeviceName, asset.Version, interactive)
+	if asset.Companion != nil {
+		serialDevice, err = installLiteCompanion(ctx, serialDevice, interactive, asset.Companion)
+		if err != nil {
+			return fmt.Errorf("P4 firmware was flashed, but the ESP-Hosted companion install could not be verified: %w", err)
+		}
 	}
-	return nil
+	var enroll func() error
+	if enrollmentAuth != nil {
+		enroll = func() error {
+			return enrollInstalledLite(ctx, serialDevice, enrollmentAuth, provDeviceName, asset.Version, interactive)
+		}
+	}
+	return finishLiteInstall(os.Stdout, asset.Version, enroll)
 }
 
 func esp32InstallCandidateMessage(device discovery.SerialPortInfo) string {

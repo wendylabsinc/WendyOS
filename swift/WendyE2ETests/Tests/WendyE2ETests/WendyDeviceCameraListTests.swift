@@ -28,8 +28,7 @@ struct `'wendy device camera list'` {
 
     /**
      `--device` selects the target device hostname and skips discovery and
-     pickers. The command does not read or change the saved default device when
-     an explicit target is supplied.
+     pickers.
      */
     @Test(
         .disabled(

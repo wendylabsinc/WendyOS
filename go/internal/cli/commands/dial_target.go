@@ -20,8 +20,8 @@ import (
 // exactly what let a spoofed mDNS answer redirect a connection to another
 // same-CA host.
 type dialTarget struct {
-	// PinKey is the name the user asked for (--device value, saved default, or
-	// the picker's device name) — never the resolved IP, which changes on
+	// PinKey is the name the user asked for (--device value or the picker's
+	// device name) — never the resolved IP, which changes on
 	// ordinary DHCP churn and would train users to unpin reflexively. An empty
 	// PinKey cannot supply an expected identity for an enrolled-device dial.
 	PinKey string
@@ -188,7 +188,7 @@ func governingPin(pinKey string) (config.DevicePin, string, bool) {
 // always did (see typedVMBarePinKey).
 func pinKeyForAddr(addr string) string {
 	// SplitHostPort accepts non-numeric service names, so vm:dev would
-	// otherwise become just "vm" when set-default/unpin derives its key.
+	// otherwise become just "vm" when unpin derives its key.
 	if name, matched, err := simulatorName(addr); err == nil && matched {
 		return vmDeviceIDPrefix + name
 	}
@@ -270,22 +270,6 @@ func runningVMAgentPort(name string) (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-// dialPinKeyForDevice is the pin key a dial to device — as typed for --device
-// or set-default — is checked under. It adds the default agent port and
-// re-aims a running VM's mTLS forward first, exactly as resolveDeviceAddress
-// does, because a running VM's forward is keyed by its port: `set-default
-// 127.0.0.1` dials 127.0.0.1:50051, which is checked under vm:<name> while a
-// VM forwards that port and under the bare 127.0.0.1 otherwise.
-func dialPinKeyForDevice(device string) string {
-	if _, matched, err := simulatorName(device); matched || err != nil {
-		return pinKeyForAddr(device)
-	}
-	if _, _, err := net.SplitHostPort(device); err != nil {
-		device = hostPort(device, defaultAgentPort)
-	}
-	return pinKeyForAddr(vmForwardDialAddr(device))
 }
 
 // typedVMBarePinKey is the key a connection judged under pinKey, and dialled
@@ -615,6 +599,31 @@ func (e missingLoginError) Error() string {
 func (e missingLoginError) NextSteps() []string { return []string{missingLoginStep} }
 
 func (e missingLoginError) Unwrap() error { return e.refusal }
+
+// orgOnlyBindingError refuses a device whose saved binding names an
+// organization but no device. Older CLIs saved these. No certificate can
+// satisfy one, so the device stays refused until the binding is cleared: say
+// which one it is and how, rather than only that an identity is required.
+type orgOnlyBindingError struct {
+	// key is the name the binding is saved under, which `wendy device unpin`
+	// has to be handed to clear it.
+	key string
+}
+
+func (e orgOnlyBindingError) step() string {
+	return "Clear the saved identity, then connect again: wendy device unpin " + shellQuoteArg(e.key)
+}
+
+func (e orgOnlyBindingError) Error() string {
+	return fmt.Sprintf("The identity this CLI saved for %q names an organization but no device, so it cannot verify the device that answers.\n  ", e.key) + e.step()
+}
+
+// NextSteps exposes the unpin step the message ends with to JSON mode.
+func (e orgOnlyBindingError) NextSteps() []string { return []string{e.step()} }
+
+// Is keeps the refusal a missing expected identity: recovery, the Cloud name
+// fallback and the unauthenticated-transport guard all stop on that sentinel.
+func (e orgOnlyBindingError) Is(target error) bool { return target == certs.ErrExpectedDeviceIdentity }
 
 // blocksUnauthenticatedFallback reports whether err forbids reaching this device
 // over a transport that enforces nothing — today the picker's Bluetooth

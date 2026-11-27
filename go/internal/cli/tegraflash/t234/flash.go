@@ -631,6 +631,6 @@ func waitForUMSDiskConfirmed(ctx context.Context, selector LUNSelector, timeout 
 		}
 		return UMSDisk{}, false, nil
 	}, func(error) error {
-		return fmt.Errorf("timed out waiting for USB storage %q from the selected device\n%s", selector.Vendor, observedUMSHint(selector.Session))
+		return fmt.Errorf("timed out waiting for USB storage %q from the selected device\n%s", selector.Vendor, observedUMSHint(selector))
 	})
 }

@@ -161,6 +161,16 @@ for (const c of input.cases) {
         # Otherwise the docs workflow test below would skip on every run.
         self.assertIn(".github/workflows/docs-review.yml", automatic_job)
 
+    def test_trusted_automation_absence_never_bootstraps_pr_head(self):
+        text = WORKFLOW.read_text()
+        automatic_job = text.split("  validate-candidate-tests:", 1)[0]
+        self.assertIn("no PR-head automation fallback is permitted", automatic_job)
+        self.assertNotIn("bootstrap_dir", automatic_job)
+        self.assertNotIn('ref="$EXPECTED_HEAD_SHA"', automatic_job)
+        self.assertNotIn("compatibility_review.py", text)
+        self.assertNotIn("compatibility_state.py", text)
+        self.assertNotIn("guard-public", text)
+
     @needs_docs_workflow
     def test_sparse_checkout_without_docs_workflow_still_passes(self):
         # The copy also skips this test, so it cannot recurse.

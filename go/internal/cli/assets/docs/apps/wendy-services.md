@@ -278,4 +278,4 @@ Two things differ from a local build:
 
 - Log output is multiplexed with a `[serviceName]` prefix on each line. Per-service log stream routing is not yet available.
 - Containers are created one at a time in dependency order, not atomically as a group. Grouped atomic creation is planned as a follow-up.
-- Headless Mac is not supported. `wendy run` rejects multi-service `wendy.json` projects when the selected target is Headless Mac, before any build or registry operation. Target a Linux/WendyOS device for multi-service workloads.
+- On a Headless Mac target the services run as Linux containers through the Mac agent's container runtime (Apple `container` or Docker). Hardware entitlements are not available there; see [Headless Mac — supported project types](../clients/wendy-cli/commands/run.md#headless-mac--supported-project-types).

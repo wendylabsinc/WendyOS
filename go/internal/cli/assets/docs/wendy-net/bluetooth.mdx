@@ -1,0 +1,128 @@
+---
+title: Wendy Net over Bluetooth
+description: How Bluetooth links work, what they can carry, how fast they are, and how a Bluetooth-only device shows up in mDNS.
+---
+
+Bluetooth reaches devices that nothing else can: a robot with no cable, no
+access point in range and no Wi-Fi Aware radio. It's the slowest kind of link,
+so Wendy Net only uses it when nothing cheaper is available, but it carries the
+same traffic as every other link.
+
+## Turn it on
+
+Enable Bluetooth on each device that should use it, then check for neighbors:
+
+```sh
+wendy net configure --device <device> --participate=true --ble=true
+wendy net topology --device <device>
+```
+
+Your apps don't need a Bluetooth entitlement for this. The agent manages the
+Bluetooth links. [Bluetooth hardware](/docs/hardware/bluetooth#wendy-net-over-bluetooth)
+covers radio profiles, transmit power and capacity in more detail.
+
+## How a Bluetooth link works
+
+<Figure src="/images/wendy-net/find-bluetooth.webp" alt="A device sending a row of 31 small cells, under the words Bluetooth, 31 bytes" caption="Each device announces itself with a 31-byte Bluetooth advertisement." />
+
+1. **Each device advertises.** It sends a small Bluetooth Low Energy
+   advertisement, 31 bytes in all. It carries your organization's ID and the
+   start of the device's ID, and no device name. Anyone nearby can read the
+   organization ID.
+2. **A neighbor connects.** Data runs over a Bluetooth LE connection-oriented
+   channel, a direct stream between the two radios.
+3. **Both prove who they are.** Wendy Net doesn't use Bluetooth pairing. Instead,
+   the two devices run mutual TLS over the channel with their enrollment
+   certificates, exactly as they would over Ethernet, and both must belong to
+   your organization. Devices skip sending the certificates the other side
+   already has, so the handshake fits a slow link.
+4. **The link joins the network.** From then on it's an ordinary Wendy Net link
+   with a cost of 4096. Reconnecting to a device it has met before is quicker,
+   because the TLS session can resume.
+
+A WendyOS device keeps up to three Bluetooth neighbors at once, and starts at
+most two of those links itself. It also keeps one extra slot for a computer
+running the Wendy CLI's router.
+
+## What it can carry
+
+A Bluetooth link carries real network traffic. An app can make any HTTP, TCP or
+UDP call to an app on another device, even when the only link between them is
+Bluetooth, and a Bluetooth link can be one hop of a
+[longer route](/docs/wendy-net/multi-hop) that also crosses Ethernet or
+Wi-Fi Aware.
+
+<Figure src="/images/wendy-net/any-tcp-call.webp" alt="The command curl 10.99.0.7:18080 returning 200 OK between two devices joined by a dotted Bluetooth line, with the words Any port the app publishes" caption="An ordinary HTTP call to another device's service, over a Bluetooth link." />
+
+It's slow, though. Expect kilobytes per second rather than megabytes, and
+delays of hundreds of milliseconds on each Bluetooth hop. That suits commands,
+alerts, status updates, sensor readings and small API calls. It doesn't suit
+video, large files or container images: move those over Ethernet, Wi-Fi or
+Wi-Fi Aware.
+
+A Bluetooth link keeps only a short queue: a few kilobytes, and nothing older
+than a few seconds. If an app sends faster than the link can carry, the extra
+packets are dropped instead of piling up into minutes of delay. Use TCP, or
+retry in your app, for data that must arrive.
+
+## Does a Bluetooth device show up in mDNS?
+
+On the radio, no. Inside your app, yes.
+
+<Frames columns={2}>
+  <Frame src="/images/wendy-net/mdns-on-the-radio.webp" alt="A device's mDNS announcement stopping at its own boundary, never reaching a device joined to it by a dotted Bluetooth line, with the words No multicast between devices" caption="On the radio, no: multicast stays on each device." />
+  <Frame src="/images/wendy-net/mdns-inside-your-app.webp" alt="An app panel browsing _http._tcp that shows the service 10.99.0.7:18080, joined by a dotted line to a device labelled Bluetooth only" caption="Inside your app, yes: the service appears like any other." />
+</Frames>
+
+**On the radio, no.** mDNS works by multicast on one local network, and Wendy
+Net doesn't flood multicast between devices. A device that's reachable only
+over Bluetooth isn't announced on your LAN, so `dns-sd` or `avahi-browse` on
+your laptop won't list it, and its `.local` hostname won't resolve there.
+
+**Inside your app, yes.** Every device's signed manifest lists the services its
+apps publish. On each Wendy Net app's private network, WendyOS answers mDNS from
+those manifests. So a service on a Bluetooth-only device appears in your app's
+ordinary mDNS browse, with an address in `10.99.0.0/16` and the published port,
+just like a service on a device across the room on Ethernet. Your app connects
+to that address, and Wendy Net carries the connection over Bluetooth.
+
+The service stays listed only while there's a route to its device. When the
+Bluetooth link breaks and no other path is left, the service disappears from
+your app's browse results. It comes back when the route does.
+
+[Share and discover app services](/docs/guides/wendy-net-services) shows how
+to publish and browse a service.
+
+**On your computer, through the CLI.** `wendy discover --type mesh` lists the
+devices that the CLI's router can reach through Wendy Net, Bluetooth-only ones
+included, named after their hostnames:
+
+```sh
+wendy discover --type mesh
+```
+
+The CLI starts that router when it needs one, using your saved sign-in. See
+[Connect to Wendy Net from your computer](/docs/advanced/development/local-mesh-radio).
+
+## Sharing the radio
+
+- **Apps that use Bluetooth peripherals** still need the `bluetooth`
+  entitlement. They share the same adapter with Wendy Net, along with its
+  bandwidth.
+- **Coded profiles** trade speed for range. They change the scan and connect
+  settings for the whole adapter, and both devices must support them. Start
+  with the normal profile. See
+  [radio profile and transmit power](/docs/hardware/bluetooth#radio-profile-and-transmit-power).
+- **The adapter.** The agent uses the first Bluetooth adapter that supports LE
+  advertising and turns it on.
+
+## When a link doesn't come up
+
+1. Run `wendy net status` and `wendy net topology` on both devices. Both need
+   `--ble=true` and the same organization.
+2. Give the first connection time. A first handshake between two devices
+   carries their certificates, and over Bluetooth that can take a while.
+3. Check the device logs if nothing appears. After a failure the Bluetooth
+   carrier restarts about five seconds later, and scanning restarts after
+   45 seconds without seeing any Wendy Net advertisement. A powered-off or faulty
+   adapter shows up as an error in status.

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"go.uber.org/zap"
 )
 
@@ -454,5 +456,25 @@ func TestTerminateTaskWaitErrorStillKillsAndDeletes(t *testing.T) {
 	}
 	if !task.deleted {
 		t.Error("expected task to be deleted despite wait failure")
+	}
+}
+
+// Only a task that can hold a FastRPC session needs its owner's ordered exit;
+// a DRM accel NPU is released by the kernel like a GPU.
+func TestSpecMayUseFastRPC(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec *oci.Spec
+		want bool
+	}{
+		{"unreadable spec", nil, true},
+		{"FastRPC bind", &oci.Spec{Mounts: []specs.Mount{{Destination: "/dev/fastrpc-cdsp"}}}, true},
+		{"FastRPC device entry", &oci.Spec{Linux: &specs.Linux{Devices: []specs.LinuxDevice{{Path: "/dev/fastrpc-adsp"}}}}, true},
+		{"accel NPU", &oci.Spec{Mounts: []specs.Mount{{Destination: "/dev/accel/accel0"}}, Linux: &specs.Linux{}}, false},
+		{"no NPU node", &oci.Spec{}, false},
+	} {
+		if got := specMayUseFastRPC(tc.spec); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

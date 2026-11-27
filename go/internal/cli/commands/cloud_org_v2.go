@@ -12,7 +12,14 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
+const cloudOrganizationNameTTL = time.Hour
+
 func cloudOrganizationName(ctx context.Context, auth *config.AuthConfig) string {
+	if auth != nil {
+		if fresh := config.FreshOrganizationName(auth.CloudGRPC, auth.OrganizationKey(), cloudOrganizationNameTTL); fresh != "" {
+			return fresh
+		}
+	}
 	cached := cachedCloudOrganizationName(auth)
 	if auth == nil {
 		return cached
