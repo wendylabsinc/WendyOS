@@ -55,8 +55,8 @@ becomes `jetson-a.wendy.internal`.
 
 The CLI gathers LAN, Wendy Net, and Cloud candidates in parallel. For UUID
 hostnames, direct LAN gets a 500 ms head start before the CLI chooses another
-ready route. If the initial scan finishes without a matching LAN candidate or
-a discovery error, and no mesh or Cloud route is ready, the CLI can scan LAN
+ready route. If the initial scan finds no matching LAN candidate, reports no
+discovery error, and no mesh or Cloud route is ready, the CLI can scan LAN
 for up to another 2.5 seconds. It can stop early when another route is ready.
 It does not extend the scan after a discovered LAN candidate fails to connect.
 For friendly hostnames, the CLI allows up to 3 seconds for LAN

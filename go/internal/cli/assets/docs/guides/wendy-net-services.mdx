@@ -144,14 +144,14 @@ check: verify an actual request to the discovered server.
 An app can also connect to a specific enrolled device without browsing or
 publishing a DNS-SD service. Enroll both devices in the same Wendy Cloud
 organization. The client agent must support short device DNS. Run the
-[UUID lookup below](#verify-short-dns-from-the-client-app) to check the installed
+[DNS check below](#verify-short-dns-from-the-client-app) to check the installed
 client directly. For offline friendly names learned through mesh, the destination
 agent also needs support for publishing its Cloud-registered name to the signed
 directory. See the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases)
 for availability. Keep the client in network mode `mesh` and
 [publish the server's incoming ports](#1-give-the-publishing-app-wendy-net-access).
 Use the destination's certificate UUID for `<device-uuid>`. The
-[verification steps below](#verify-short-dns-from-the-client-app) show how to
+[inventory lookup below](#look-up-a-device-uuid) shows how to
 retrieve it. Use either name with the **published** port:
 
 ```text
