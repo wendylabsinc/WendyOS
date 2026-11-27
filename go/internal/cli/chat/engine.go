@@ -99,8 +99,8 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 	turnStart := len(e.messages) - 1
 	localizationNudges := 0
 	var objectSearch *robotFindWorkflow
-	if query := requestedObjectSearch(prompt); e.automaticObjectSearchAllowed(ctx, e.messages[:turnStart]) && query != "" {
-		objectSearch = &robotFindWorkflow{query: query}
+	if query, navigate := requestedObjectGoal(prompt); e.automaticObjectSearchAllowed(ctx, e.messages[:turnStart]) && query != "" {
+		objectSearch = &robotFindWorkflow{query: query, navigate: navigate}
 	}
 	memoryWarned := false
 	lastFailedTool, consecutiveFailures := "", 0
@@ -148,7 +148,14 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		if forced != nil {
 			message = Message{ToolCalls: []ToolCall{*forced}}
 			if objectSearch != nil && forced.Name == "robot_command" {
-				message.Content = "The object is not in the current view. I'll search nearby viewpoints with bounded movement."
+				var goal struct{ Action string }
+				_ = json.Unmarshal(forced.Arguments, &goal)
+				switch goal.Action {
+				case "find_active":
+					message.Content = "The object is not in the current view. I'll search nearby viewpoints with bounded movement."
+				case "go_to_object":
+					message.Content = "The target has a verified approach route. I'll move to its stand-off position."
+				}
 			}
 		} else {
 			message, err = e.provider.Stream(ctx, messages, available, func(chunk string) {
