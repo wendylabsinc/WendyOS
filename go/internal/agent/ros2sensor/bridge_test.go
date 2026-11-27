@@ -6,7 +6,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
@@ -372,5 +374,47 @@ func TestOnlyGenericSensorChannelsAreAccepted(t *testing.T) {
 		if _, err := b.OpenChannel("asset:7", "porch", d); err == nil {
 			t.Errorf("%s channel was accepted for publishing to ROS 2", name)
 		}
+	}
+}
+
+func TestMountPublishesASourcesSensorChannelsUntilReleased(t *testing.T) {
+	b, d := testBridge(isolatedApp("robot", 4242, 17))
+	pairing := mcusource.SensorPairing{SourceAssetID: 7, Name: "porch-board"}
+	accepted, publish, release := b.Mount(pairing, []*sensorlinkpb.SensorDescriptor{
+		temperatureChannel(3, "temperature"),
+		// Never offered by the supervisor, and refused all the same.
+		{ChannelId: 9, Name: "cam", Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{}}},
+	})
+	if len(accepted) != 1 || accepted[0] != 3 {
+		t.Fatalf("accepted channels %v, want only the sensor channel 3", accepted)
+	}
+	b.reconcile(context.Background())
+	leases := d.openLeases()
+	if len(leases) != 1 || len(leases[0].open()) != 1 {
+		t.Fatalf("%d participants after mounting one channel", len(leases))
+	}
+	writer := leases[0].open()[0]
+	if writer.pub.Topic != "rt/sensorlink/porch_board/temperature" {
+		t.Fatalf("topic = %q, want it named after the pairing", writer.pub.Topic)
+	}
+
+	if !publish(&sensorlink.SensorFrame{ChannelID: 3, Payload: f32le(21.5)}) {
+		t.Fatal("a frame of the mounted channel was not taken")
+	}
+	if publish(&sensorlink.SensorFrame{ChannelID: 9, Payload: []byte{1}}) {
+		t.Fatal("a frame of a channel that was not mounted was taken")
+	}
+	if got := writer.count(); got != 1 {
+		t.Fatalf("app received %d samples, want 1", got)
+	}
+
+	release()
+	release() // the supervisor's contract: releasing twice is harmless
+	b.reconcile(context.Background())
+	if n := len(d.openLeases()); n != 0 {
+		t.Fatalf("%d participants left after the source went away", n)
+	}
+	if publish(&sensorlink.SensorFrame{ChannelID: 3, Payload: f32le(22)}) {
+		t.Fatal("a frame was taken after the mount was released")
 	}
 }

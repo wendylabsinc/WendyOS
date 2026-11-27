@@ -2,6 +2,7 @@ package mcusource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -32,16 +33,15 @@ type AudioLoop interface {
 }
 
 // Supervisor runs one reconcile goroutine per pairing: dial the source, mount
-// its camera and microphone channels, hand its generic sensor channels to the
-// sensor sink, and pump frames with backoff.
+// its camera, microphone and generic channels, and pump frames with backoff.
 type Supervisor struct {
+	generic       GenericSink
 	logger        *zap.Logger
 	lb            Loopback
 	transportFor  TransportFactory
 	newWriter     func(path string) ros2camera.CameraWriter
 	audioLoop     AudioLoop
 	resolveSource SourceResolver
-	openSensor    SensorChannelOpener
 
 	statusMu  sync.Mutex
 	connected map[string]bool
@@ -49,6 +49,17 @@ type Supervisor struct {
 	nodeIDsMu sync.Mutex
 	nodeIDs   map[string]uint32 // "pairing key:channelID" -> MCU-band node id
 }
+
+// GenericSink receives complete, opaque samples. Authentication and source
+// lifetime stay with the supervisor; interpretation belongs to consuming apps.
+// Mount returns only accepted channels, a publisher and an idempotent release
+// function. Rejected channels must not be subscribed upstream.
+type GenericSink interface {
+	Mount(SensorPairing, []*sensorlinkpb.SensorDescriptor) ([]uint32, func(*sensorlink.SensorFrame) bool, func())
+}
+
+// SetGenericSink must be called before starting pairings.
+func (s *Supervisor) SetGenericSink(sink GenericSink) { s.generic = sink }
 
 // SourceResolver locates the current endpoints for a saved source identity.
 // Resolution is repeated on reconnect; addresses are never persisted.
@@ -60,26 +71,7 @@ func (s *Supervisor) SetSourceResolver(resolve SourceResolver) {
 	s.resolveSource = resolve
 }
 
-// SensorChannelWriter takes the samples of one generic sensor channel, such
-// as a temperature. A sample it cannot use is its own to report: the stream
-// carries on.
-type SensorChannelWriter interface {
-	WriteSample(payload []byte)
-	Close() error
-}
-
-// SensorChannelOpener starts delivering one generic sensor channel of a
-// paired source to apps. The writer is closed when the stream ends.
-type SensorChannelOpener func(p SensorPairing, d *sensorlinkpb.SensorDescriptor) (SensorChannelWriter, error)
-
-// SetSensorChannelOpener installs the sink for generic sensor channels before
-// pairings start. Without one those channels are not subscribed to: a camera
-// or microphone has a device to appear as, a sensor value does not.
-func (s *Supervisor) SetSensorChannelOpener(open SensorChannelOpener) {
-	s.openSensor = open
-}
-
-// transportFor is called once per streamOnce attempt (not cached) so each
+// transportFor is called for each connection attempt (not cached) so each
 // pairing's mTLS handshake pins that specific source's identity,
 // mirroring mesh_dialer.go's per-target pinning — a single shared transport
 // cannot do that across pairings with different source identities.
@@ -184,15 +176,49 @@ func (s *Supervisor) releasePairing(p SensorPairing) {
 const (
 	backoffBase = 1 * time.Second
 	backoffCap  = 30 * time.Second
+	// idleBackoffCap bounds retries of a source that answers but offers
+	// nothing this device can mount: each retry costs the source a full
+	// handshake, and such a source rarely gains a channel soon.
+	idleBackoffCap  = 5 * time.Minute
+	maxBackoffLevel = 9
 )
 
-func backoffDelay(level int) time.Duration {
+// errNothingToMount reports a source that answered with no camera,
+// microphone or generic channel this device can mount.
+var errNothingToMount = errors.New("source offers no channel this device can mount")
+
+func backoffDelay(level int, idle bool) time.Duration {
+	limit := backoffCap
+	if idle {
+		limit = idleBackoffCap
+	}
 	d := backoffBase << level
-	if d > backoffCap || d <= 0 {
-		return backoffCap
+	if d > limit || d <= 0 {
+		return limit
 	}
 	return d
 }
+
+// retrySchedule gives an idle source its own level, so a streak of failures
+// does not make the first idle check wait the longest idle delay.
+type retrySchedule struct{ level, idleLevel int }
+
+func (r *retrySchedule) next(idle bool) time.Duration {
+	level := &r.level
+	if idle {
+		level = &r.idleLevel
+	} else {
+		r.idleLevel = 0
+	}
+	d := backoffDelay(*level, idle)
+	if *level < maxBackoffLevel {
+		*level++
+	}
+	return d
+}
+
+// reset follows a stream that delivered frames.
+func (r *retrySchedule) reset() { *r = retrySchedule{} }
 
 // RunPairing reconciles a single pairing until ctx is cancelled.
 //
@@ -209,7 +235,7 @@ func (s *Supervisor) RunPairing(ctx context.Context, p SensorPairing, addr strin
 }
 
 func (s *Supervisor) runPairing(ctx context.Context, p SensorPairing, addr string, pinned bool) error {
-	level := 0
+	var retry retrySchedule
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -231,10 +257,7 @@ func (s *Supervisor) runPairing(ctx context.Context, p SensorPairing, addr strin
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
-				case <-time.After(backoffDelay(level)):
-				}
-				if level < 5 {
-					level++
+				case <-time.After(retry.next(false)):
 				}
 				continue
 			}
@@ -249,37 +272,54 @@ func (s *Supervisor) runPairing(ctx context.Context, p SensorPairing, addr strin
 		var err error
 		for _, dialAddr := range dialAddrs {
 			delivered, err = s.streamOnce(ctx, p, dialAddr)
-			if delivered || ctx.Err() != nil {
+			// A source with nothing to mount was reached; its other
+			// addresses lead to the same answer at the cost of a handshake.
+			if delivered || ctx.Err() != nil || errors.Is(err, errNothingToMount) {
 				break
 			}
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err != nil {
-			s.logger.Warn("sensor source stream ended", zap.String("source", p.Key()), zap.Error(err))
-		}
 		if delivered {
 			// A healthy stream delivered at least one frame before ending;
 			// don't let a brief drop after hours of good streaming pay the
 			// full climbed-up backoff (up to backoffCap) to reconnect.
-			level = 0
+			retry.reset()
+		}
+		idle := errors.Is(err, errNothingToMount)
+		delay := retry.next(idle)
+		if idle {
+			s.logger.Info("sensor source offers nothing to mount; checking again later",
+				zap.String("source", p.Key()), zap.Duration("retry_in", delay))
+		} else if err != nil {
+			s.logger.Warn("sensor source stream ended", zap.String("source", p.Key()), zap.Error(err))
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoffDelay(level)):
-		}
-		if level < 5 {
-			level++
+		case <-time.After(delay):
 		}
 	}
 }
 
-// streamOnce connects, mounts camera channels, and copies frames until error.
+var errMixedSensorStartup = errors.New("combined media and generic sensor stream did not start")
+
+// streamOnce tries the combined subscription, then preserves media on a clean
+// connection if the combined stream fails to start.
+func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr string) (bool, error) {
+	delivered, err := s.streamPairing(ctx, p, addr, s.generic)
+	if !errors.Is(err, errMixedSensorStartup) || ctx.Err() != nil {
+		return delivered, err
+	}
+	s.logger.Warn("Retrying sensor source with media only", zap.String("source", p.Key()), zap.Error(err))
+	return s.streamPairing(ctx, p, addr, nil)
+}
+
+// streamPairing connects, mounts supported channels and copies frames.
 // delivered reports whether at least one frame was written, so the caller
 // can reset its reconnect backoff after a stream that was actually healthy.
-func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr string) (delivered bool, err error) {
+func (s *Supervisor) streamPairing(ctx context.Context, p SensorPairing, addr string, genericSink GenericSink) (delivered bool, err error) {
 	s.setConnected(p, false)
 	defer s.setConnected(p, false)
 	tr, err := s.transportFor(p, addr)
@@ -304,23 +344,30 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	}
 	cams := cameraChannels(manifest, p.SensorAllowlist)
 	mics := microphoneChannels(manifest, p.SensorAllowlist)
-	var sensors []*sensorlinkpb.SensorDescriptor
-	if s.openSensor != nil {
-		sensors = sensorChannels(manifest, p.SensorAllowlist)
+	var generic []*sensorlinkpb.SensorDescriptor
+	if genericSink != nil {
+		counts := make(map[uint32]int)
+		for _, ch := range manifest.GetSensors() {
+			counts[ch.GetChannelId()]++
+		}
+		for _, ch := range manifest.GetSensors() {
+			if ValidGenericDescriptor(ch) && counts[ch.ChannelId] == 1 && (len(p.SensorAllowlist) == 0 || contains(p.SensorAllowlist, ch.Name)) {
+				generic = append(generic, ch)
+			}
+		}
+		sort.Slice(generic, func(i, j int) bool { return generic[i].ChannelId < generic[j].ChannelId })
 	}
 	// Lite channels sharing an input are mutually exclusive, including camera
-	// and microphone channels. Prefer cameras, then microphones, then sensors,
-	// and within each the lowest channel ID so manifest reordering does not
-	// change the selected mode. Older agent-hosted sources leave every input
-	// ID at zero despite supporting concurrent streams.
+	// and microphone channels. Prefer cameras, then the lowest channel ID so
+	// manifest reordering does not change the selected mode. Older agent-hosted
+	// sources leave every input ID at zero despite supporting concurrent streams.
 	exclusiveInputs := p.Transport == "wendycom"
 	if exclusiveInputs {
 		sort.Slice(cams, func(i, j int) bool { return cams[i].ChannelId < cams[j].ChannelId })
 		sort.Slice(mics, func(i, j int) bool { return mics[i].ChannelId < mics[j].ChannelId })
-		sort.Slice(sensors, func(i, j int) bool { return sensors[i].ChannelId < sensors[j].ChannelId })
 	}
-	if len(cams) == 0 && len(mics) == 0 && len(sensors) == 0 {
-		return false, nil // nothing to mount; caller backs off and retries
+	if len(cams) == 0 && len(mics) == 0 && len(generic) == 0 {
+		return false, errNothingToMount
 	}
 
 	// Assign a stable per-(source,channel) MCU-band node id to each camera
@@ -380,29 +427,37 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 		subs = append(subs, ch.ChannelId)
 		usedInputs[ch.InputId] = true
 	}
-	sensorWriters := make(map[uint32]SensorChannelWriter, len(sensors))
-	defer func() {
-		for _, sw := range sensorWriters {
-			sw.Close()
-		}
-	}()
-	for _, ch := range sensors {
+	mediaCount := len(subs)
+	selectedGeneric := make([]*sensorlinkpb.SensorDescriptor, 0, len(generic))
+	for _, ch := range generic {
 		if exclusiveInputs && usedInputs[ch.InputId] {
 			continue
 		}
-		sw, err := s.openSensor(p, ch)
-		if err != nil {
-			// Per-channel isolation, as for cameras and microphones.
-			s.logger.Warn("skipping sensor channel", zap.String("source", p.Key()), zap.Uint32("channel", ch.ChannelId), zap.Error(err))
-			continue
-		}
-		sensorWriters[ch.ChannelId] = sw
-		subs = append(subs, ch.ChannelId)
 		usedInputs[ch.InputId] = true
+		selectedGeneric = append(selectedGeneric, ch)
+	}
+	var genericSamples map[uint32]uint32
+	var publishGeneric func(*sensorlink.SensorFrame) bool
+	if len(selectedGeneric) > 0 {
+		var accepted []uint32
+		var release func()
+		accepted, publishGeneric, release = genericSink.Mount(p, selectedGeneric)
+		subs = append(subs, accepted...)
+		defer release()
+		genericSamples = make(map[uint32]uint32, len(accepted))
+		for _, id := range accepted {
+			genericSamples[id] = 0
+		}
+		for _, ch := range selectedGeneric {
+			if _, ok := genericSamples[ch.ChannelId]; ok {
+				genericSamples[ch.ChannelId] = ch.GetSensor().GetSampleBytes()
+			}
+		}
 	}
 	if len(subs) == 0 {
 		return false, nil
 	}
+	mixed := mediaCount > 0 && len(genericSamples) > 0
 
 	var latest []uint32
 	for _, ch := range cams {
@@ -412,16 +467,17 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 			latest = append(latest, ch.ChannelId)
 		}
 	}
-	nextFrame, closeStream, err := streamLiveFrames(ctx, tr, subs, latest)
+	nextFrame, closeStream, err := streamLiveFrames(ctx, tr, subs, latest, genericSamples)
 	if err != nil {
+		if mixed {
+			return false, fmt.Errorf("%w: %w", errMixedSensorStartup, err)
+		}
 		return false, err
 	}
 	closeStream = sync.OnceValue(closeStream)
 	defer closeStream()
-	// The reader goroutine inside Connect only unblocks when the conn is
-	// closed or a read fails; without this, an idle source (no frames, no
-	// error) leaves `range frames` blocked forever even after ctx is
-	// cancelled. Closing the stream on cancellation forces the read to fail.
+	// Close the upstream stream on cancellation to interrupt an idle read
+	// and unblock transports whose FIFO only wakes on delivery or close.
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {
@@ -456,32 +512,19 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 				s.setConnected(p, true)
 			}
 			delivered = true
-		} else if sw := sensorWriters[f.ChannelID]; sw != nil {
-			sw.WriteSample(f.Payload)
+		} else if publishGeneric != nil && publishGeneric(f) {
 			if !delivered {
 				s.setConnected(p, true)
 			}
 			delivered = true
 		}
 	}
-	return delivered, nil
-}
-
-// sensorChannels returns the generic sensor channels: the ones that are
-// neither video nor audio. Media in a codec the agent cannot decode is not
-// among them, so it is never handed to the sensor sink.
-func sensorChannels(m *sensorlinkpb.SensorManifest, allow []string) []*sensorlinkpb.SensorDescriptor {
-	var out []*sensorlinkpb.SensorDescriptor
-	for _, d := range m.GetSensors() {
-		if d.GetSensor() == nil {
-			continue
-		}
-		if len(allow) > 0 && !contains(allow, d.Name) {
-			continue
-		}
-		out = append(out, d)
+	// Some transports report refused subscriptions by closing the stream
+	// instead of returning an error when it opens.
+	if mixed && !delivered && ctx.Err() == nil {
+		return false, errMixedSensorStartup
 	}
-	return out
+	return delivered, nil
 }
 
 // cameraChannels returns only video formats the loopback writer supports.

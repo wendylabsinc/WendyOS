@@ -69,11 +69,17 @@ export function trustedSender(event, contents, devURL) {
   return url.protocol === "wendy:" && url.hostname === "app";
 }
 
+// Disk-image boards: the plan writes to a host drive, so it needs one.
+const DISK_IMAGE_BOARDS = new Set([
+  "raspberry-pi-3",
+  "raspberry-pi-4",
+  "raspberry-pi-5",
+  "orange-pi-5-pro",
+]);
+
 export function installArgs(options) {
   const boards = new Set([
-    "raspberry-pi-3",
-    "raspberry-pi-4",
-    "raspberry-pi-5",
+    ...DISK_IMAGE_BOARDS,
     "jetson-orin-nano",
     "jetson-agx-orin",
     "jetson-agx-thor",
@@ -84,7 +90,7 @@ export function installArgs(options) {
   if (options.deviceType.startsWith("jetson-"))
     args.push("--carrier", "developer-kit");
   if (options.deviceType === "jetson-agx-orin") args.push("--storage", "nvme");
-  if (options.deviceType.startsWith("raspberry-"))
+  if (DISK_IMAGE_BOARDS.has(options.deviceType))
     args.push("--drive", text(options.drive, "drive path"));
   if (options.version)
     args.push("--version", text(options.version, "version", 100));

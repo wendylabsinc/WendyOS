@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -58,10 +59,14 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	configure.Flags().Uint32("max-links", 0, "Lite: limit simultaneous mesh connections")
 	configure.Flags().Uint32("ble-links", 0, "Lite: limit simultaneous Bluetooth mesh connections")
 	configure.Flags().Uint32("wifi-links", 0, "Lite: limit simultaneous infrastructure Wi-Fi mesh connections")
+	configure.Flags().Bool("espnow", false, "Lite: enable the ESP-NOW carrier")
+	configure.Flags().Uint32("espnow-channel", 0, "Lite: ESP-NOW 2.4 GHz channel")
+	configure.Flags().Uint32("espnow-links", 0, "Lite: limit outgoing ESP-NOW mesh connections")
+	configure.Flags().String("espnow-rate", "", "Lite: preferred ESP-NOW unicast rate in Mbit/s (default, 1, 2, 6, 12, 24)")
 	configure.Flags().Uint32("nan-links", 0, "Lite: limit simultaneous Wi-Fi Aware mesh connections")
 	configure.RunE = func(cmd *cobra.Command, _ []string) error {
 		changed := false
-		for _, name := range append([]string{"participate", "roam", "share-uplink", "nan", "ble", "ble-mode", "ethernet", "infrastructure-wifi"}, liteNetLimitFlags...) {
+		for _, name := range append([]string{"participate", "roam", "share-uplink", "nan", "ble", "ble-mode", "ethernet", "infrastructure-wifi"}, liteNetOnlyFlags...) {
 			changed = changed || cmd.Flags().Changed(name)
 		}
 		interactive := !changed && !jsonOutput && isInteractiveTerminal()
@@ -87,7 +92,7 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 		if target.External != nil {
 			return configureLiteNet(cmd, target)
 		}
-		for _, name := range liteNetLimitFlags {
+		for _, name := range liteNetOnlyFlags {
 			if cmd.Flags().Changed(name) {
 				return fmt.Errorf("--%s applies to Wendy Lite peers", name)
 			}
@@ -218,9 +223,21 @@ func readCLIReporter(parent context.Context) (*pb.LocalMeshTopology, error) {
 }
 
 func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, string, error) {
-	ctx, cancel := context.WithTimeout(parent, localMeshTopologyTimeout)
-	defer cancel()
-	target, err := resolveLocalMeshTopologyTarget(ctx, ReadOnlyMonitoring())
+	_, cloudCommand := cloudDeviceConfigFromContext(parent)
+	pick := deviceFlag == "" && !cloudCommand && os.Getenv("WENDY_AGENT_SOCKET") == "" && !jsonOutput && isInteractiveTerminal()
+	ctx := parent
+	var cancel context.CancelFunc
+	options := []resolveOption{ReadOnlyMonitoring()}
+	if pick {
+		// Start the connection timeout after selection so the user has time to choose.
+		ctx = context.WithValue(parent, monitoringPickerTimeoutKey{}, localMeshTopologyTimeout)
+		// Use the shared picker's enrollment action when the user requests it.
+		options = append(options, func(cfg *resolveConfig) { cfg.disablePickerEnroll = false })
+	} else {
+		ctx, cancel = context.WithTimeout(parent, localMeshTopologyTimeout)
+		defer cancel()
+	}
+	target, err := resolveLocalMeshTopologyTarget(ctx, options...)
 	if err != nil {
 		return nil, "", err
 	}
@@ -246,6 +263,10 @@ func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, strin
 	}
 	if conn.Conn == nil {
 		return nil, "", fmt.Errorf("mesh topology requires a WendyOS agent or a supported Wendy Lite device")
+	}
+	if pick {
+		ctx, cancel = context.WithTimeout(parent, localMeshTopologyTimeout)
+		defer cancel()
 	}
 	client := pb.NewWendyLocalMeshAdminServiceClient(conn.Conn)
 	topology, err := client.GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{})

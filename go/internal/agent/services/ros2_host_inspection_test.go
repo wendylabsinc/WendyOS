@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,7 @@ type hostInspectionRuntime struct {
 	*fakeROS2Runtime
 	hostCalls atomic.Int32
 	appCalls  atomic.Int32
+	hostErr   error
 }
 
 func (r *hostInspectionRuntime) EnsureROS2Sidecars(ctx context.Context) ([]ROS2Sidecar, error) {
@@ -29,7 +31,28 @@ func (r *hostInspectionRuntime) EnsureROS2Sidecars(ctx context.Context) ([]ROS2S
 }
 func (r *hostInspectionRuntime) EnsureHostROS2Sidecar(_ context.Context, opts ros2inspection.HostOptions) (ROS2Sidecar, error) {
 	r.hostCalls.Add(1)
-	return ROS2Sidecar{Name: "host-inspector", Distro: ros2inspection.HostDistro, RMW: ros2inspection.FastRTPSRMW, DomainID: opts.DomainID}, nil
+	return ROS2Sidecar{Name: "host-inspector", Distro: ros2inspection.HostDistro, RMW: ros2inspection.FastRTPSRMW, DomainID: opts.DomainID}, r.hostErr
+}
+
+func TestROS2HostPreparationPreservesCancellationStatus(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code codes.Code
+	}{
+		{context.Canceled, codes.Canceled},
+		{context.DeadlineExceeded, codes.DeadlineExceeded},
+		{errors.New("registry unavailable"), codes.FailedPrecondition},
+	} {
+		t.Run(tc.code.String(), func(t *testing.T) {
+			runtime := &hostInspectionRuntime{fakeROS2Runtime: &fakeROS2Runtime{}, hostErr: fmt.Errorf("preparing image: %w", tc.err)}
+			client := hostInspectionClient(t, runtime)
+			domain := int32(0)
+			_, err := client.ListTopics(hostInspectionContext(), &agentpbv2.ListROS2TopicsRequest{DomainId: &domain})
+			if status.Code(err) != tc.code || len(runtime.calls) != 0 {
+				t.Fatalf("preparation error = %v, want %v without executing ROS commands", err, tc.code)
+			}
+		})
+	}
 }
 func hostInspectionClient(t *testing.T, runtime ROS2Runtime) agentpbv2.ROS2ServiceClient {
 	t.Helper()

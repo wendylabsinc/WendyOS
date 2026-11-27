@@ -118,7 +118,7 @@ class Owned:
 def mutant_overlay(output):
     source=ROOT/'go/internal/cli/vm/spec.go';text=source.read_text()
     before='''\tif runtime.GOOS == "windows" {
-\t\tif path, err := FindQEMU(runtime.GOOS); err == nil {
+\t\tif path, err := FindQEMU(s.Arch, runtime.GOOS); err == nil {
 \t\t\treturn path
 \t\t}
 \t}

@@ -141,6 +141,11 @@ type Client struct {
 	// systemAPISocketProvider's nil-tolerant treatment above.
 	cameraLoopbackProvider CameraLoopbackProvider
 
+	// cameraShareProvider is the camera share manager, injected via
+	// SetCameraShareProvider (camera_share_wiring.go). Nil means no sharing:
+	// every share call is a no-op and camera apps get the real cameras.
+	cameraShareProvider CameraShareProvider
+
 	// appServices caches the services map for multi-service apps, keyed by appID.
 	// Populated on CreateContainerWithProgress; used by resolveStopOrder.
 	appServices map[string]map[string]*appconfig.ServiceConfig
@@ -191,6 +196,9 @@ type Client struct {
 	// ros2ExecRefs counts active ExecROS2 calls per sidecar name. Protected by mu.
 	// Teardown paths check this before SIGKILLing a sidecar (WDY-1702 H5).
 	ros2ExecRefs map[string]int
+
+	// Standalone inspectors share image preparation across request lifetimes.
+	ros2ImagePreparation ros2ImagePreparation
 
 	// chunkIndex maps CDC chunk hashes to byte ranges in uncompressed layer
 	// blobs (Model B). staging holds chunks received this session until the
@@ -490,6 +498,10 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 // Close releases the underlying containerd client connection and stops all
 // D-Bus proxy processes.
 func (c *Client) Close() error {
+	if !c.ros2ImagePreparation.close() {
+		c.logger.Warn("ROS 2 inspector image preparation did not stop in time",
+			zap.Duration("waited", ros2ImageShutdownTimeout))
+	}
 	c.closeRecoveredTaskOutput()
 	c.meshIngressStopOnce.Do(func() {
 		if c.meshIngressStop != nil {
@@ -1497,7 +1509,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 	}
 	if needsQualcommNPURuntime(appCfg) {
-		c.applyQualcommNPURuntime(spec)
+		c.applyQualcommNPURuntime(spec, true)
 	}
 
 	var hostResolvConfPath string
@@ -1630,6 +1642,9 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	if desiredNetworkIdentity != "" {
 		labels[labelKeyNetworkIdentity] = desiredNetworkIdentity
 	}
+	// How a camera app gets its camera, set only at create: the label is what
+	// tells a sharing container from one made before sharing existed (R4).
+	addCameraShareLabel(labels, entCfg.Entitlements)
 
 	// Publish the resolved ROS 2 configuration as a container label so the
 	// agent can discover ROS 2 containers at runtime and configure the CLI
@@ -1748,14 +1763,16 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		oldHadData := false
 		retiredMesh := false
 		oldHadNAN := false
-		oldHadNPU := false
+		oldUsesFastRPC := false
+		oldSharedCamera := false
 		if oldLabels, labelErr := existing.Labels(ctx); labelErr == nil {
+			oldSharedCamera = sharesCamera(oldLabels)
 			oldEntitlements := parseEntitlementsFromAnnotations(oldLabels)
 			oldHadSystemAPI = entitlementsContain(oldEntitlements, appconfig.EntitlementNotifications)
 			oldHadData = entitlementsContain(oldEntitlements, appconfig.EntitlementEpisodeWrite)
 			oldHadNAN = hasNANEntitlement(oldEntitlements)
-			oldHadNPU = entitlementsContain(oldEntitlements, appconfig.EntitlementNPU)
 			oldSpec, _ := existing.Spec(ctx)
+			oldUsesFastRPC = entitlementsContain(oldEntitlements, appconfig.EntitlementNPU) && specMayUseFastRPC(oldSpec)
 			if oldLabels[labelKeyNetworkIdentity] == desiredNetworkIdentity {
 				reusedNetworkSandbox, _ = c.reusableNetworkSandbox(ctx, containerName, desiredNetworkIdentity)
 				if reusedNetworkSandbox == nil && oldSpec != nil {
@@ -1787,7 +1804,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		c.logger.Info("Removing existing container", zap.String("container_name", containerName))
 		// Terminate the old task's whole process group — not just init — and
 		// wait for it to exit. NAN apps get grace for supplicant cleanup;
-		// NPU apps must finish owner-directed SDK cleanup without forced kill.
+		// FastRPC NPU apps must finish owner-directed SDK cleanup without forced kill.
 		// A surviving process keeps devices/ports the new container needs
 		// (WDY-1818: /dev/video0 held for hours after replace).
 		if task, taskErr := existing.Task(ctx, nil); taskErr == nil {
@@ -1799,10 +1816,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 			// The container and NAN operation keys retain ownership while
 			// graceful task exit waits outside the global metadata mutex.
 			c.mu.Unlock()
-			termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN, oldHadNPU)
+			termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN, oldUsesFastRPC)
 			c.mu.Lock()
 			if termErr != nil {
-				if oldHadNPU {
+				if oldUsesFastRPC {
 					oldNPUTaskRetained = true
 					return termErr
 				}
@@ -1822,8 +1839,8 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 			}
 			// Task may be orphaned (shim crashed). Force-delete via the task
 			// service only when it is safe to use the legacy forced path.
-			if err := c.recoverReplacedTaskLookup(ctx, containerName, oldHadNPU, taskErr); err != nil {
-				oldNPUTaskRetained = oldHadNPU
+			if err := c.recoverReplacedTaskLookup(ctx, containerName, oldUsesFastRPC, taskErr); err != nil {
+				oldNPUTaskRetained = oldUsesFastRPC
 				return err
 			}
 		}
@@ -1840,10 +1857,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 				// The container and NAN operation keys retain ownership while
 				// graceful task exit waits outside the global metadata mutex.
 				c.mu.Unlock()
-				termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN, oldHadNPU)
+				termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN, oldUsesFastRPC)
 				c.mu.Lock()
 				if termErr != nil {
-					if oldHadNPU {
+					if oldUsesFastRPC {
 						oldNPUTaskRetained = true
 						return termErr
 					}
@@ -1861,6 +1878,18 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 		if delErr != nil && !errdefs.IsNotFound(delErr) {
 			return fmt.Errorf("deleting existing container %q during replace: %w", containerName, delErr)
+		}
+		// The old container's shares go before the new container's are made,
+		// and on this goroutine, so the removal never races the new
+		// container's CreateCameraShares for the same ID (Review Focus 1).
+		// Outside c.mu, like the NAN release below: the share manager may be
+		// busy with a sync, and other apps' lifecycle calls must not wait for
+		// it. The container's lifecycle lock keeps this Remove before the
+		// Create.
+		if oldSharedCamera {
+			c.mu.Unlock()
+			c.removeCameraShares(containerName)
+			c.mu.Lock()
 		}
 		if oldHadSystemAPI && c.systemAPISocketProvider != nil {
 			c.systemAPISocketProvider.Release(appID, serviceName)
@@ -2123,6 +2152,18 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// Hydration must not revive old sibling labels during group replacement.
 	c.appIsolation[appID] = appCfg.Isolation
 
+	// Make the new container's camera shares. It can take up to the share
+	// manager's 2 s budget, so c.mu is let go of meanwhile; the container's
+	// own lifecycle lock, held since the top, keeps its start (whose cover
+	// needs the shares), stop and delete waiting until they exist. Not bound
+	// to the request: the container exists now, and a share not made here is
+	// never made, so its app would get the real cameras.
+	if sharesCamera(labels) {
+		c.mu.Unlock()
+		c.createCameraShares(context.WithoutCancel(ctx), containerName, appID)
+		c.mu.Lock()
+	}
+
 	return nil
 }
 
@@ -2192,20 +2233,27 @@ func (c *Client) applyNvidiaCDISpec(spec *localoci.Spec, cdiSpec *cdi.CDISpecifi
 	return fmt.Errorf("CDI spec %s has no applicable device: %w", specPath, allErr)
 }
 
-// refreshAcceleratorDeviceNumbersForStart re-resolves every host device number pinned in
-// a GPU- or NPU-entitled container's stored spec, persists the spec when any of them
-// have moved, and refuses the start when any of them are gone.
+// addMissingAcceleratorAccess is behind a var so tests can stand in for the
+// host's accelerators.
+var addMissingAcceleratorAccess = localoci.AddMissingAcceleratorAccess
+
+// refreshAcceleratorAccessForStart re-resolves every host device number pinned
+// in a GPU- or NPU-entitled container's stored spec, adds the accelerator access
+// the host grants now and the spec lacks, persists the spec when either changed
+// it, and refuses the start when a pinned device is gone.
 //
-// Metadata-only annotation upgrades are best-effort. Once the stored bindings
-// are known to be wrong, a failed repair write must refuse the start rather
-// than hand those bindings to the runtime.
+// Metadata-only annotation upgrades and added access are best-effort: a failed
+// write starts the app with the stored spec. Once the stored bindings are known
+// to be wrong, a failed repair write must refuse the start rather than hand
+// those bindings to the runtime.
 //
 // The refusal half is not best-effort. A device that no longer exists cannot be
 // repaired, and starting the app regardless is what produces a crash loop whose
 // exit code names nothing — see ErrDeviceUnavailable.
-func (c *Client) refreshAcceleratorDeviceNumbersForStart(ctx context.Context, container containerd.Container, appName string, labels map[string]string) error {
+func (c *Client) refreshAcceleratorAccessForStart(ctx context.Context, container containerd.Container, appName string, labels map[string]string) error {
 	appCfg := &appconfig.AppConfig{Entitlements: parseEntitlementsFromAnnotations(labels)}
-	if !appCfg.HasEntitlement(appconfig.EntitlementGPU) && !appCfg.HasEntitlement(appconfig.EntitlementNPU) {
+	gpu, npu := appCfg.HasEntitlement(appconfig.EntitlementGPU), appCfg.HasEntitlement(appconfig.EntitlementNPU)
+	if !gpu && !npu {
 		return nil
 	}
 
@@ -2243,24 +2291,41 @@ func (c *Client) refreshAcceleratorDeviceNumbersForStart(ctx context.Context, co
 			ErrDeviceUnavailable, appName, strings.Join(refresh.Missing, ", "))
 	}
 
-	if refresh.SpecModified() {
-		if perr := c.persistRefreshedSpec(ctx, container, info, &spec, appName); perr != nil {
-			if refresh.Changed() {
-				return fmt.Errorf("persisting required device repair for %s: %w", appName, perr)
-			}
-			c.logger.Warn("Could not persist refreshed device numbers; starting with the stored spec",
-				zap.String("app_name", appName), zap.Error(perr))
-		} else if refresh.Changed() {
-			c.logger.Info("Re-resolved stale host device numbers before start",
-				zap.String("app_name", appName), zap.Strings("devices", refresh.Updated),
-				zap.Strings("removed_legacy_devices", refresh.Removed))
-		} else {
-			// One-time upgrade for a container created before pins were
-			// recorded: its device entries now have explicit provenance.
-			// Legacy cgroup-only bindings cannot be inferred from that list.
-			c.logger.Info("Recorded pinned device paths for an existing container",
-				zap.String("app_name", appName))
+	granted := addMissingAcceleratorAccess(&spec, gpu, npu)
+	runtimeMounts := 0
+	if npu {
+		// Every start: the transport may be staged only after the app was made.
+		runtimeMounts = c.applyQualcommNPURuntime(&spec, false)
+	}
+	addedAccess := len(granted) > 0 || runtimeMounts > 0
+
+	if !refresh.SpecModified() && !addedAccess {
+		return nil
+	}
+	if perr := c.persistRefreshedSpec(ctx, container, info, &spec, appName, addedAccess); perr != nil {
+		if refresh.Changed() {
+			return fmt.Errorf("persisting required device repair for %s: %w", appName, perr)
 		}
+		c.logger.Warn("Could not persist refreshed accelerator access; starting with the stored spec",
+			zap.String("app_name", appName), zap.Error(perr))
+		return nil
+	}
+	if refresh.Changed() {
+		c.logger.Info("Re-resolved stale host device numbers before start",
+			zap.String("app_name", appName), zap.Strings("devices", refresh.Updated),
+			zap.Strings("removed_legacy_devices", refresh.Removed))
+	}
+	if addedAccess {
+		c.logger.Info("Granted accelerator access the container lacked",
+			zap.String("app_name", appName), zap.Strings("devices", granted),
+			zap.Int("runtime_mounts", runtimeMounts))
+	}
+	if !refresh.Changed() && !addedAccess {
+		// One-time upgrade for a container created before pins were
+		// recorded: its device entries now have explicit provenance.
+		// Legacy cgroup-only bindings cannot be inferred from that list.
+		c.logger.Info("Recorded pinned device paths for an existing container",
+			zap.String("app_name", appName))
 	}
 
 	return nil
@@ -2271,8 +2336,11 @@ func (c *Client) refreshAcceleratorDeviceNumbersForStart(ctx context.Context, co
 // refreshSecondaryNamespaces does). Containerd accepts a spec update without
 // replacing the container's snapshot. Any stale task is cleaned up later in
 // startContainer, before NewTask consumes the repaired configuration.
-func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.Container, info containers.Container, spec *localoci.Spec, appName string) error {
+func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.Container, info containers.Container, spec *localoci.Spec, appName string, grantedAccess bool) error {
 	newSpecJSON, err := marshalRefreshedDeviceSpec(info.Spec.GetValue(), spec)
+	if err == nil && grantedAccess {
+		newSpecJSON, err = marshalGrantedAccessSpec(newSpecJSON, spec)
+	}
 	if err != nil {
 		return fmt.Errorf("encoding refreshed spec for %q: %w", appName, err)
 	}
@@ -2346,7 +2414,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	c.mu.Lock()
 	lockWait := time.Since(lockStarted)
 	var resolveDuration, staleTaskDuration, newTaskDuration, waitDuration, runtimeStartDuration, netnsAnchorDuration time.Duration
-	var cniDeleteDuration, cniAddDuration, networkFinalizeDuration time.Duration
+	var cniDeleteDuration, cniAddDuration, networkFinalizeDuration, cameraShareCoverDuration time.Duration
 	muHeld := true
 	defer func() {
 		if muHeld {
@@ -2534,8 +2602,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// writes an exact pair records the path it came from), so this covers both
 	// the GPU's own device entries and the bind-mounted, cgroup-only pins that
 	// AMD compute, i2c and serial use. Which containers are refreshed is still
-	// gated on a GPU or NPU entitlement here.
-	if devErr := c.refreshAcceleratorDeviceNumbersForStart(ctx, container, appName, containerLabels); devErr != nil {
+	// gated on a GPU or NPU entitlement here, and those also gain the
+	// accelerator access the host offers now and their spec lacks.
+	if devErr := c.refreshAcceleratorAccessForStart(ctx, container, appName, containerLabels); devErr != nil {
 		// Preflight: the app declared hardware this host no longer has. Starting
 		// anyway produces a container that runs, fails inside the vendor runtime,
 		// and crash-loops with an exit code that names nothing — the failure mode
@@ -3000,6 +3069,24 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			return nil, failPreparedTask(fmt.Errorf("starting avahi bridge for app %q: %w", appID, err))
 		}
 	}
+	// Cover the camera shares while the runtime still holds the entrypoint,
+	// so the app's first open of a camera path finds its share node. Never
+	// through failPreparedTask: sharing never stops or delays a start (R2),
+	// and a camera not covered is the real camera. A start that fails from
+	// here on lets go of the namespace the cover took.
+	if sharesCamera(containerLabels) {
+		sharingContainer := container.ID()
+		phaseStarted = time.Now()
+		covered := c.coverCameraShares(ctx, sharingContainer, appName, task.Pid())
+		cameraShareCoverDuration = time.Since(phaseStarted)
+		if covered {
+			defer func() {
+				if !taskStarted {
+					c.releaseCameraShares(sharingContainer)
+				}
+			}()
+		}
+	}
 	// Order the release of the entrypoint against whole-app StopContainer's
 	// appStopping marker. Per-container stop/delete also holds our keyed lock.
 	// The IO context survives RPC disconnect, but a request canceled during
@@ -3046,12 +3133,15 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		zap.Duration("cni_delete", cniDeleteDuration),
 		zap.Duration("cni_add", cniAddDuration),
 		zap.Duration("network_finalize", networkFinalizeDuration),
+		zap.Duration("camera_share_cover", cameraShareCoverDuration),
 		zap.Duration("total", time.Since(startStarted)),
 	)
 
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
 	outputOwner := c.trackTaskOutput(appName, task.Pid())
+	// Set before streamOutput, its only reader, starts.
+	outputOwner.cameraShared = sharesCamera(containerLabels)
 	meshIngressStarted = true
 	nanStartLease.committed = true
 	go c.streamOutput(taskCtx, task, exitStatusCh, outputCh, appName, nanTaskAppID, meshIngressRun, outputOwner, stdoutR, stderrR, stdoutW, stderrW)
@@ -3141,9 +3231,28 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	if err != nil {
 		return -1, fmt.Errorf("exec in container %q: %w", appName, err)
 	}
-	defer func() { _, _ = proc.Delete(ctx, containerd.WithProcessKill) }()
+	return runExecProcess(ctx, proc, tty, resize, 5*time.Second)
+}
 
-	statusC, err := proc.Wait(ctx)
+// runExecProcess owns the exec from creation through deletion. The stream's
+// cancellation ends the command, but must not cancel the RPCs that kill and
+// remove it. WithoutCancel preserves the containerd namespace and tracing values.
+func runExecProcess(ctx context.Context, proc containerd.Process, tty bool, resize <-chan [2]uint32, cleanupTimeout time.Duration) (int, error) {
+	baseCtx := context.WithoutCancel(ctx)
+	waitCtx, cancelWait := context.WithCancel(baseCtx)
+	defer cancelWait()
+	defer func() {
+		if pio := proc.IO(); pio != nil {
+			pio.Cancel()
+		}
+		cleanupCtx, cancel := context.WithTimeout(baseCtx, cleanupTimeout)
+		defer cancel()
+		_, _ = proc.Delete(cleanupCtx, containerd.WithProcessKill)
+	}()
+
+	// A Wait bound to ctx can report cancellation while the process is still
+	// running. Keep observing real exit until cleanup finishes instead.
+	statusC, err := proc.Wait(waitCtx)
 	if err != nil {
 		return -1, fmt.Errorf("waiting on exec: %w", err)
 	}
@@ -3152,27 +3261,50 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	}
 
 	if tty && resize != nil {
-		// proc.Resize takes (width=cols, height=rows). The initial size was sent
-		// by the handler as the first resize frame.
 		go func() {
-			for sz := range resize {
-				_ = proc.Resize(ctx, sz[1], sz[0])
+			for {
+				select {
+				case <-waitCtx.Done():
+					return
+				case sz, ok := <-resize:
+					if !ok {
+						return
+					}
+					// Resize takes width (columns), then height (rows).
+					_ = proc.Resize(ctx, sz[1], sz[0])
+				}
 			}
 		}()
 	}
 
 	select {
-	case st := <-statusC:
-		// Block until containerd's stdout/stderr copy goroutines have drained so
-		// the caller can send its final frame (e.g. an exit code) only after the
-		// last output byte, not racing in-flight output.
-		if pio := proc.IO(); pio != nil {
-			pio.Wait()
+	case st, ok := <-statusC:
+		if !ok {
+			return -1, fmt.Errorf("exec exit status stream closed without a status")
 		}
-		return int(st.ExitCode()), st.Error()
+		if err := st.Error(); err != nil {
+			return -1, err
+		}
+		// Preserve all output before returning an exit code. If the client
+		// disconnects during the drain, cleanup cancels the FIFO readers.
+		if pio := proc.IO(); pio != nil {
+			drained := make(chan struct{})
+			go func() { pio.Wait(); close(drained) }()
+			select {
+			case <-drained:
+			case <-ctx.Done():
+				return -1, ctx.Err()
+			}
+		}
+		return int(st.ExitCode()), nil
 	case <-ctx.Done():
-		_ = proc.Kill(ctx, syscall.SIGKILL)
-		<-statusC
+		cleanupCtx, cancel := context.WithTimeout(baseCtx, cleanupTimeout)
+		defer cancel()
+		_ = proc.Kill(cleanupCtx, syscall.SIGKILL)
+		select {
+		case <-statusC:
+		case <-cleanupCtx.Done():
+		}
 		return -1, ctx.Err()
 	}
 }
@@ -3593,19 +3725,44 @@ var boardDetect = board.Detect
 
 // applyQualcommNPURuntime bind-mounts the host's Qualcomm AI runtime into an
 // npu-entitled container; a board with no DSP is left untouched.
-func (c *Client) applyQualcommNPURuntime(spec *localoci.Spec) {
-	result := cdi.ApplyQualcommNPURuntime(spec)
+func (c *Client) applyQualcommNPURuntime(spec *localoci.Spec, logApplied bool) int {
+	result := applyQualcommRuntime(spec)
 	if !result.HasDSP {
 		// No grantable FastRPC node, so the entitlement is inert on this board.
-		return
+		return 0
+	}
+	if !result.TransportApplied && !qualcommStageExists() {
+		// The DSP came up after the agent staged its runtime, or a reboot
+		// emptied /run under a stored bind.
+		qualcommStageMu.Lock()
+		stageQualcommRuntime(c.logger)
+		qualcommStageMu.Unlock()
+		retry := applyQualcommRuntime(spec)
+		result.Mounts += retry.Mounts
+		result.TransportApplied = retry.TransportApplied
 	}
 	if !result.TransportApplied {
 		c.logger.Warn("npu entitlement granted but Qualcomm FastRPC transport was not applied",
 			zap.Int("mounts", result.Mounts))
-		return
+		return result.Mounts
 	}
-	c.logger.Info("Applied Qualcomm NPU runtime", zap.Int("mounts", result.Mounts))
+	if logApplied && result.Mounts > 0 {
+		c.logger.Info("Applied Qualcomm NPU runtime", zap.Int("mounts", result.Mounts))
+	}
+	return result.Mounts
 }
+
+// The Qualcomm runtime calls are behind vars so tests need no DSP. Staging
+// rewrites one directory, so creates and starts take turns.
+var (
+	applyQualcommRuntime = cdi.ApplyQualcommNPURuntime
+	stageQualcommRuntime = cdi.EnsureQualcommNPURuntime
+	qualcommStageExists  = cdi.QualcommNPURuntimeStageExists
+	qualcommStageMu      sync.Mutex
+)
+
+// hostHasNVIDIAGPU is behind a var so tests need not run on a given GPU.
+var hostHasNVIDIAGPU = localoci.HostHasNVIDIAGPU
 
 // needsNvidiaCDI reports whether CreateContainer should apply the host's
 // NVIDIA CDI spec (library mounts, extra device nodes, driver env vars) to
@@ -3622,12 +3779,12 @@ func (c *Client) applyQualcommNPURuntime(spec *localoci.Spec) {
 // once display is requested, so this only fulfills what that entitlement
 // already declares.
 func needsNvidiaCDI(appCfg *appconfig.AppConfig) bool {
-	// An explicit GPU entitlement attempts NVIDIA CDI/CSV provisioning on every
-	// board, as it did before this change — including the warnings applyNvidiaCDI
-	// logs when the host has no NVIDIA provisioning at all, which are the point
-	// of asking for a GPU that isn't there.
+	// An explicit GPU entitlement attempts NVIDIA CDI/CSV provisioning wherever
+	// the GPU may be NVIDIA's — including the warnings applyNvidiaCDI logs when
+	// the host has no GPU at all, which are the point of asking for a GPU that
+	// isn't there. A host whose GPU is another vendor's is served by that grant.
 	if appCfg.HasEntitlement(appconfig.EntitlementGPU) {
-		return true
+		return hostHasNVIDIAGPU()
 	}
 	// A display entitlement only implies NVIDIA userspace on a Jetson. Gating on
 	// the same board check applyDisplay uses for NVIDIA_DRIVER_CAPABILITIES keeps
@@ -3957,6 +4114,11 @@ func (c *Client) recreateContainer(ctx context.Context, ctr containerd.Container
 		),
 	)
 	if err != nil {
+		// The container is gone for good. Recreated, it keeps its ID and
+		// labels, and so its camera shares.
+		if sharesCamera(info.Labels) {
+			c.removeCameraShares(ctr.ID())
+		}
 		return fmt.Errorf("recreating container: %w", err)
 	}
 
@@ -4211,6 +4373,11 @@ func (c *Client) refreshSecondaryNamespaces(ctx context.Context, name string, pr
 		),
 	)
 	if err != nil {
+		// As in recreateContainer: only a container gone for good loses its
+		// camera shares.
+		if sharesCamera(info.Labels) {
+			c.removeCameraShares(name)
+		}
 		return fmt.Errorf("recreating container with refreshed namespaces: %w", err)
 	}
 	return nil
@@ -4337,6 +4504,14 @@ func (c *Client) streamOutput(
 
 	if taskExited {
 		c.withTaskOutputOwner(appName, outputOwner, func() {
+			// The task ended on its own (or was stopped): let go of its mount
+			// namespace now, not on the next start's path, where closing a
+			// dead container's last reference costs milliseconds. Run only
+			// while this run is current, under the container's lifecycle lock,
+			// so a replacement run's cover is never let go of.
+			if outputOwner != nil && outputOwner.cameraShared {
+				c.releaseCameraShares(appName)
+			}
 			recCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			c.recordContainerExit(recCtx, appName, int32(code), classifyExit(code, taskOOMKilled(recCtx, task)), exitedAt)
@@ -4538,6 +4713,10 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	task, err := container.Task(ctx, nil)
 	if err != nil {
 		if errdefs.IsNotFound(err) {
+			// No task: a namespace held for its last run, if any, goes too.
+			if sharesCamera(labels) {
+				c.releaseCameraShares(containerID)
+			}
 			if _, meshApp := findMeshEntitlement(parseEntitlementsFromAnnotations(labels)); meshApp && !releasedSandbox {
 				if err := c.CNIDel(ctx, owner, containerID, networkSandboxPath(containerID)); err != nil {
 					return errors.Join(clearSandboxErr, err)
@@ -4596,16 +4775,21 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	}
 
 	// Ordinary apps receive group-wide TERM and bounded escalation so no
-	// descendant retains devices/ports (WDY-1818). NPU apps must instead let
-	// their owner release SDK resources before descendants exit.
+	// descendant retains devices/ports. FastRPC NPU apps must instead let their
+	// owner release SDK resources before descendants exit.
 	var stopErr error
-	if entitlementsContain(parseEntitlementsFromAnnotations(labels), appconfig.EntitlementNPU) {
+	if entitlementsContain(parseEntitlementsFromAnnotations(labels), appconfig.EntitlementNPU) && specMayUseFastRPC(spec) {
 		stopErr = c.terminateNPUTask(ctx, task, containerID)
 	} else {
 		stopErr = c.terminateTask(ctx, task, containerID, syscall.SIGTERM, stopGracePeriod, killWaitTimeout)
 	}
 	if stopErr != nil {
 		return errors.Join(clearSandboxErr, stopErr)
+	}
+	// The task is gone: let go of the mount namespace its start's cover took.
+	// A failed stop returned above, so a task still running keeps it.
+	if sharesCamera(labels) {
+		c.releaseCameraShares(containerID)
 	}
 
 	if c.proxyManager != nil {
@@ -4949,7 +5133,16 @@ func (c *Client) deleteOne(ctx context.Context, ctr containerd.Container, wantIm
 		}
 	}
 	if err := ctr.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+		if errdefs.IsNotFound(err) && sharesCamera(persistedLabels) {
+			// Deleted meanwhile by someone else: its shares still go.
+			c.removeCameraShares(ctr.ID())
+		}
 		return "", fmt.Errorf("deleting container %q: %w", ctr.ID(), err)
+	}
+	// Every delete removes a sharing container's shares here, without waiting
+	// for its nodes to go; a sync would otherwise keep them for a minute.
+	if sharesCamera(persistedLabels) {
+		c.removeCameraShares(ctr.ID())
 	}
 	c.forgetTaskOutput(ctr.ID(), nil)
 	if c.proxyManager != nil {

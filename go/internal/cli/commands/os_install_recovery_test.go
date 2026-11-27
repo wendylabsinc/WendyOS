@@ -175,3 +175,24 @@ func TestOrinRecoveryGuidanceIsDeviceSpecific(t *testing.T) {
 		t.Errorf("AGX briefing shows the wrong recovery entry: %q", b)
 	}
 }
+
+// macOS may ask "Allow accessory to connect?" a second time mid-flash, when the
+// Jetson reconnects as its flashing gadget: the suspected, unconfirmed cause of
+// the flashpkg timeout in WDY-4295. The briefing warns about it on macOS only.
+func TestOrinBriefingWarnsAboutMacAccessoryPrompt(t *testing.T) {
+	previous := orinBriefingOS
+	t.Cleanup(func() { orinBriefingOS = previous })
+	opts := t234InstallOptions{DeviceType: orinNanoDeviceType, DeviceName: "Jetson Orin Nano", Storage: "nvme"}
+	for goos, want := range map[string]bool{"darwin": true, "linux": false, "windows": false} {
+		orinBriefingOS = goos
+		for _, detected := range []bool{false, true} {
+			b := orinRecoveryBriefingBox(opts, detected)
+			if got := strings.Contains(b, "Allow accessory to connect?"); got != want {
+				t.Errorf("%s briefing (recovery detected %v) mentions the accessory prompt = %v, want %v:\n%s", goos, detected, got, want, b)
+			}
+			if want && (!strings.Contains(b, "again during the flash") || !strings.Contains(b, "Choose Allow")) {
+				t.Errorf("%s briefing does not say the prompt can return mid-flash and to choose Allow:\n%s", goos, b)
+			}
+		}
+	}
+}

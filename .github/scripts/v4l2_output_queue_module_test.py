@@ -31,14 +31,17 @@ class ModuleProvenanceTests(unittest.TestCase):
         upstream = self.commit(self.source)
         recipe = self.builder / PROVENANCE.RECIPE
         recipe.parent.mkdir(parents=True)
-        recipe.write_text('SRCREV = "' + upstream + '"\nSRC_URI += "file://' + PROVENANCE.PATCH.name + '"\n')
+        recipe.write_text('SRCREV = "' + upstream + '"\nSRC_URI += "' + ' '.join('file://' + patch.name for patch in PROVENANCE.PATCHES) + '"\n')
         patch = self.builder / PROVENANCE.PATCH
         patch.parent.mkdir()
         patch.write_text('synthetic source provenance only\n')
+        fresh_patch = self.builder / PROVENANCE.FRESH_PATCH
+        fresh_patch.write_text('synthetic fresh reader provenance only\n')
         builder = self.commit(self.builder)
         self.pins = {'upstream_revision': upstream, 'builder_revision': builder,
                      'source_sha256': digest(self.source / 'v4l2loopback.c'),
-                     'recipe_sha256': digest(recipe), 'patch_sha256': digest(patch)}
+                     'recipe_sha256': digest(recipe), 'patch_sha256': digest(patch),
+                     'fresh_patch_sha256': digest(fresh_patch)}
 
     def commit(self, root):
         subprocess.run(['git', '-C', str(root), 'add', '-f', '.'], check=True)
@@ -67,7 +70,7 @@ class ModuleProvenanceTests(unittest.TestCase):
             self.validate()
 
     def test_hashes_and_recipe_source_and_patch_selection_are_required(self):
-        for key in ('source_sha256', 'recipe_sha256', 'patch_sha256'):
+        for key in ('source_sha256', 'recipe_sha256', 'patch_sha256', 'fresh_patch_sha256'):
             with self.subTest(key=key):
                 pins = {**self.pins, key: '0' * 64}
                 with self.assertRaisesRegex(ValueError, key):
@@ -75,7 +78,9 @@ class ModuleProvenanceTests(unittest.TestCase):
         recipe = self.builder / PROVENANCE.RECIPE
         original = recipe.read_text()
         for altered, message in ((original.replace(self.pins['upstream_revision'], '0' * 40), 'verified upstream'),
-                                 (original.replace('file://' + PROVENANCE.PATCH.name, 'file://other.patch'), 'exact candidate patch')):
+                                 (original.replace('file://' + PROVENANCE.PATCH.name, 'file://other.patch'), 'exact candidate patches'),
+                                 (original.replace(PROVENANCE.FRESH_PATCH.name, 'other-fresh.patch'), 'exact candidate patches'),
+                                 (original.replace(PROVENANCE.PATCH.name, 'swap.patch').replace(PROVENANCE.FRESH_PATCH.name, PROVENANCE.PATCH.name).replace('swap.patch', PROVENANCE.FRESH_PATCH.name), 'patches in order')):
             with self.subTest(message=message):
                 recipe.write_text(altered)
                 self.pins['builder_revision'] = self.commit(self.builder)

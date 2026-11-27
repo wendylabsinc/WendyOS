@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -43,12 +45,54 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 		return "", fmt.Errorf("%s has no valid HTTP entitlement", app)
 	}
 	managedModel := app == fmt.Sprintf("sh.wendy.models.ollama.%d", port)
-	if conn.RegistryDialer == nil && !managedModel {
+	dial := conn.RegistryDialer
+	if conn.AppDialer != nil {
+		// Mesh app ports use the selected agent's authenticated app stream.
+		// The registry dialer reaches auxiliary host sockets, not app ingress.
+		appDial := conn.AppDialer
+		dial = func(ctx context.Context, port int) (net.Conn, error) {
+			return appDial(ctx, uint16(port))
+		}
+	}
+	if app == TwinAppID {
+		dial = func(ctx context.Context, _ int) (net.Conn, error) { return dialTwin(ctx, conn) }
+	}
+	if dial == nil && !managedModel && app != TwinAppID {
 		host := strings.Trim(conn.Host, "[]")
 		if host == "" || strings.HasPrefix(host, "unix:") {
 			return "", fmt.Errorf("device has no browser-accessible address")
 		}
 		return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(int(port))), Path: "/"}).String(), nil
+	}
+	forwardCtx, cancel := context.WithCancel(b.life)
+	retained := false
+	defer func() {
+		if !retained {
+			cancel()
+		}
+	}()
+	if forward := b.appForwards[port]; forward != nil && forward.dial != nil {
+		dial = forward.dial
+	} else if strings.HasPrefix(b.deviceSelector, "cloud://") && conn.RegistryDialer != nil && conn.AppDialer == nil && app != TwinAppID {
+		// Capture the account generation before any delayed app request.
+		if b.appTunnelContext != nil {
+			forwardCtx = b.appTunnelContext(forwardCtx)
+		}
+		dial = renewingAppTunnel(forwardCtx, b.deviceSelector, conn, commands.DesktopAppTunnelConnector(conn), time.Now)
+	}
+	if dial != nil {
+		// Binding a local listener does not prove the remote app is reachable.
+		// Report admission and connection errors before opening the browser,
+		// including when reusing a listener from an earlier successful open.
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		remote, err := dial(probeCtx, int(port))
+		if err == nil {
+			_ = remote.Close()
+		}
+		cancel()
+		if err != nil {
+			return "", fmt.Errorf("cannot open %s on the selected device's port %d: %w", app, port, err)
+		}
 	}
 	if forward := b.appForwards[port]; forward != nil {
 		return forward.url, nil
@@ -59,13 +103,13 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	forwardCtx, cancel := context.WithCancel(b.life)
-	forward := &appForward{listener: listener, cancel: cancel, url: "http://" + listener.Addr().String() + "/"}
+	forward := &appForward{listener: listener, cancel: cancel, url: "http://" + listener.Addr().String() + "/", dial: dial}
 	if b.appForwards == nil {
 		b.appForwards = make(map[uint32]*appForward)
 	}
 	b.appForwards[port] = forward
-	if conn.RegistryDialer == nil {
+	retained = true
+	if dial == nil {
 		transport, err := deviceChatTransport(conn, port)
 		if err != nil {
 			forward.Close()
@@ -80,7 +124,6 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 		go func() { _ = forward.server.Serve(listener) }()
 		return forward.url, nil
 	}
-	dial := conn.RegistryDialer
 	go forward.serve(forwardCtx, func(ctx context.Context) (net.Conn, error) { return dial(ctx, int(port)) })
 	return forward.url, nil
 }
@@ -90,6 +133,7 @@ type appForward struct {
 	cancel   context.CancelFunc
 	url      string
 	server   *http.Server
+	dial     func(context.Context, int) (net.Conn, error)
 }
 
 func (f *appForward) Close() {
@@ -121,10 +165,9 @@ func forwardAppConnection(ctx context.Context, local net.Conn, dial func(context
 	defer stopRemote()
 	done := make(chan struct{}, 2)
 	copyStream := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
-		if half, ok := dst.(interface{ CloseWrite() error }); ok {
-			_ = half.CloseWrite()
-		} else {
+		_, err := io.Copy(dst, src)
+		half, canHalfClose := dst.(interface{ CloseWrite() error })
+		if err != nil || !canHalfClose || half.CloseWrite() != nil {
 			_ = dst.Close()
 		}
 		done <- struct{}{}

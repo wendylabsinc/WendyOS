@@ -158,3 +158,55 @@ func TestPrepareForReuseAbsentVMAndInvalidName(t *testing.T) {
 		t.Fatal("accepted invalid VM name")
 	}
 }
+
+func TestPrepareForReuseAcceptsAnX86VMWithoutAVariableStore(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.CreateFrom("tour", strings.NewReader("original disk"), 13, 4096, Meta{Arch: ArchAMD64}); err != nil {
+		t.Fatal(err)
+	}
+	ready, backup, err := s.PrepareForReuse("tour")
+	if err != nil || !ready || backup != "" {
+		t.Fatalf("x86-64 VM without a variable store: reuse = %v, %q, %v; want ready", ready, backup, err)
+	}
+}
+
+func TestPrepareForReuseStillNeedsTheARM64VariableStore(t *testing.T) {
+	for _, state := range []string{"missing", "1024 bytes", "full size"} {
+		t.Run(state, func(t *testing.T) {
+			s := newTestStore(t)
+			if err := s.CreateFrom("tour", strings.NewReader("original disk"), 13, 4096, Meta{}); err != nil {
+				t.Fatal(err)
+			}
+			// A record written before the arch field existed.
+			if err := os.WriteFile(s.MetaPath("tour"), []byte(`{"name":"tour","diskBytes":4096}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			switch state {
+			case "missing":
+				if err := os.Remove(s.VarsPath("tour")); err != nil {
+					t.Fatal(err)
+				}
+			case "1024 bytes":
+				if err := os.Truncate(s.VarsPath("tour"), 1024); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ready, backup, err := s.PrepareForReuse("tour")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state == "full size" {
+				if !ready || backup != "" {
+					t.Fatalf("complete ARM64 VM: reuse = %v, %q; want ready", ready, backup)
+				}
+				return
+			}
+			if ready || backup == "" {
+				t.Fatalf("ARM64 VM with a %s store: reuse = %v, %q; want not ready and preserved", state, ready, backup)
+			}
+			if _, err := os.Stat(filepath.Join(backup, "disk.img")); err != nil {
+				t.Errorf("preserved VM lost its disk: %v", err)
+			}
+		})
+	}
+}

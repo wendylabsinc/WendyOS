@@ -15,6 +15,8 @@ struct SiteRobotReading: Sendable {
     var lookDirection: Int32 = 0
     var route: [SitePoint]
     var joints: [Double]
+    var hazards: [SiteRobotHazard] = []
+    var hazardsReady = false
 
     // Joint and pose samples animate the scene without rebuilding its controls.
     func hasSameControls(as other: Self) -> Bool {
@@ -22,7 +24,7 @@ struct SiteRobotReading: Sendable {
         aligned == other.aligned && moving == other.moving && arrivalTiming == other.arrivalTiming &&
         usingArrivalTiming == other.usingArrivalTiming && timingUnavailable == other.timingUnavailable &&
         allowUnobservedFloor == other.allowUnobservedFloor && scanReady == other.scanReady && measurementsReady == other.measurementsReady && underBodyAllowance == other.underBodyAllowance &&
-        floorY == other.floorY && route == other.route
+        floorY == other.floorY && route == other.route && hazardsReady == other.hazardsReady
     }
 }
 struct SiteRobotCandidate: Sendable {
@@ -36,11 +38,54 @@ protocol SiteRobotObserving: Sendable {
     func close(_ handle: UInt64) async
 }
 
-final class SiteRobotClient: SiteRobotObserving {
+protocol SiteRobotTurning: Sendable {
+    func look(_ handle: UInt64, sequence: UInt64, direction: Int32) async throws
+    func stop(_ handle: UInt64, sequence: UInt64) async
+}
+
+protocol SiteRobotSearching: Sendable {
+    func confirmLocalization(_ handle: UInt64, sequence: UInt64, matchSequence: UInt64, frame: String, candidate: Int) async throws
+    func resetLocalization(_ handle: UInt64, sequence: UInt64, frame: String) async throws
+    func fuse(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws -> RobotFusionReport
+    func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws
+    func searchStatus(_ handle: UInt64) async throws -> SiteRobotClient.RemoteReply
+}
+
+final class SiteRobotClient: SiteRobotObserving, SiteRobotTurning, SiteRobotSearching {
     static let shared = SiteRobotClient()
     private let queue = DispatchQueue(label: "dev.wendy.site-robot", attributes: .concurrent)
     private func perform<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
         try await BlockingWork.run(on: queue, unlessCancelled: false, body)
+    }
+    struct RemoteReply: Decodable, Sendable {
+        var SearchState: String
+        var SearchMessage: String
+        var SearchTurns: Int
+        var SearchMoves: Int?
+        var SearchPhase: String?
+        var Fusion: RobotFusionReport?
+    }
+    func resetLocalization(_ handle: UInt64, sequence: UInt64, frame: String) async throws {
+        struct Command: Encodable { var Operation = "reset-localization"; var Sequence: UInt64; var Frame: String }
+        _ = try await remoteRequest(handle, data: JSONEncoder().encode(Command(Sequence: sequence, Frame: frame)))
+    }
+    func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws {
+        struct Command: Encodable { var Operation = "search"; var Sequence: UInt64; var Fusion: RobotFusionRequest }
+        _ = try await remoteRequest(handle, data: JSONEncoder().encode(Command(Sequence: sequence, Fusion: request)))
+    }
+    func searchStatus(_ handle: UInt64) async throws -> RemoteReply {
+        try await remoteRequest(handle, data: Data(#"{"Operation":"search-poll"}"#.utf8))
+    }
+    private func remoteRequest(_ handle: UInt64, data: Data) async throws -> RemoteReply {
+        let json = String(decoding: data, as: UTF8.self)
+        return try await perform {
+            try GoClient.withCString(json) {
+                guard let p = WDSiteRobotRequest(handle, $0) else { throw WendyError(message: "Missing Linux twin response.") }
+                defer { WDSiteRobotFusionFree(p) }
+                try GoClient.check(p.pointee.status)
+                return try JSONDecoder().decode(RemoteReply.self, from: Data(GoClient.string(p.pointee.json).utf8))
+            }
+        }
     }
     func open(session: UInt64, serial: String) async throws -> UInt64 {
         try await perform {
@@ -64,7 +109,10 @@ final class SiteRobotClient: SiteRobotObserving {
                 timingUnavailable: s.timing_unavailable != 0, scanReady: s.scan_ready != 0, measurementsReady: s.measurements_ready != 0,
                 underBodyAllowance: s.under_body_allowance != 0, allowUnobservedFloor: s.allow_unobserved_floor != 0, x: s.x, z: s.z, yaw: s.yaw, floorY: s.floor_y, observationRevision: s.observation_revision, lookState: Int(s.look_state), lookDirection: s.look_direction,
                 route: UnsafeBufferPointer(start: s.route, count: s.route_count).map { SitePoint(x: $0.x, y: s.floor_y, z: $0.z) },
-                joints: Array(UnsafeBufferPointer(start: s.joints, count: s.joint_count)))
+                joints: Array(UnsafeBufferPointer(start: s.joints, count: s.joint_count)),
+                hazards: UnsafeBufferPointer(start: s.hazards, count: s.hazard_count).map {
+                    SiteRobotHazard(position: SitePoint(x: $0.x, y: s.floor_y, z: $0.z), size: $0.size, yaw: $0.yaw, drop: $0.drop != 0)
+                }, hazardsReady: s.hazards_ready != 0)
         }
     }
     func nextVideo(_ handle: UInt64) async throws -> Data {
@@ -76,7 +124,20 @@ final class SiteRobotClient: SiteRobotObserving {
             return Data(bytes: bytes, count: p.pointee.count)
         }
     }
-    func align(_ handle: UInt64, sequence: UInt64, frame: String, position: SitePoint, yaw: Double) async throws {
+    func align(_ handle: UInt64, sequence: UInt64, frame: String, position: SitePoint, yaw: Double, geometry: SiteRobotGeometryPacket? = nil) async throws {
+        if let geometry {
+            struct Command: Encodable {
+                var Operation = "align"
+                var Sequence: UInt64
+                var Frame: String
+                var X, Z, Floor, Yaw: Double
+                var Fusion: RobotFusionRequest
+            }
+            let command = Command(Sequence: sequence, Frame: frame, X: position.x, Z: position.z, Floor: position.y, Yaw: yaw,
+                Fusion: RobotFusionRequest(frame: frame, architecture: geometry.architecture, furniture: geometry.furniture, visual: nil, reference: []))
+            _ = try await remoteRequest(handle, data: JSONEncoder().encode(command))
+            return
+        }
         try await perform { try GoClient.withCString(frame) { try GoClient.finish(WDSiteRobotAlign(handle, sequence, $0, position.x, position.z, position.y, yaw)) } }
     }
     func destination(_ handle: UInt64, sequence: UInt64, frame: String, point: SitePoint, move: Bool) async throws {

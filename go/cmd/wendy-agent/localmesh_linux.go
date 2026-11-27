@@ -97,7 +97,7 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 		sharing.carriers.fail(epoch, err)
 		return err
 	}
-	credentials, err := localmesh.NewCredentials(id.Certificate, id.Chain, id.Key)
+	credentials, err := id.MeshCredentials()
 	if err == nil {
 		_, err = localmesh.LoadTCPConfig(path, credentials.Device)
 	}

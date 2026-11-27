@@ -49,11 +49,21 @@ func markSimulatorUnavailable(err error) error {
 // enough to step past a busy development machine without hunting forever.
 const simulatorPortSearchTries = 8
 
-// simulatorBootTimeout scales the wait with the host's acceleration: an ARM64
-// host runs the guest natively, while anything else emulates every instruction
-// and a cold WendyOS boot takes minutes rather than seconds.
-func simulatorBootTimeout() time.Duration {
-	if vm.AccelFor(runtime.GOOS, runtime.GOARCH) == vm.AccelTCG {
+// simulatorBootTimeout scales the wait with the VM's acceleration: an
+// accelerated guest boots in seconds, while an emulated one runs every
+// instruction in software and a cold WendyOS boot takes minutes. A running VM
+// reports the acceleration it was started with; a stopped one gets what its
+// recorded architecture would get on this host.
+func simulatorBootTimeout(name string) time.Duration {
+	accel := vm.AccelFor(vm.ArchARM64, runtime.GOOS, runtime.GOARCH)
+	if st, err := vmStatusFn(name); err == nil {
+		if st.Running && st.State.Accel != "" {
+			accel = st.State.Accel
+		} else {
+			accel = vm.AccelFor(st.Meta.GuestArch(), runtime.GOOS, runtime.GOARCH)
+		}
+	}
+	if accel == vm.AccelTCG {
 		return 5 * time.Minute
 	}
 	return 90 * time.Second
@@ -335,7 +345,7 @@ var createSimulator = func(name string) error {
 		return ErrUserCancelled
 	}
 	cliLogln("Creating simulator %q...", name)
-	if err := createVM(os.Stderr, name, "", "", defaultSimulatorDiskGiB, false, 0); err != nil {
+	if err := createVM(os.Stderr, name, "", "", defaultSimulatorDiskGiB, false, 0, ""); err != nil {
 		return fmt.Errorf("%w: %w", errSimulatorUnavailable, err)
 	}
 	return attachSimulatorProfile(name, profile)
@@ -383,7 +393,7 @@ func simulatorStartOutcome(name string, err error) simulatorFlash {
 func awaitSimulator(ctx context.Context, name, addr string, booting bool) (*grpcclient.AgentConnection, error) {
 	return awaitSimulatorWith(ctx, name, addr, booting,
 		func(c context.Context) (*grpcclient.AgentConnection, error) {
-			return waitForSimulatorAgent(c, name, addr, simulatorBootTimeout())
+			return waitForSimulatorAgent(c, name, addr, simulatorBootTimeout(name))
 		})
 }
 
@@ -437,7 +447,7 @@ func awaitSimulatorWith(ctx context.Context, name, addr string, booting bool,
 func awaitSimulatorReady(ctx context.Context, name, addr string, booting bool) error {
 	_, err := awaitSimulatorWith(ctx, name, addr, booting,
 		func(c context.Context) (*grpcclient.AgentConnection, error) {
-			if err := waitForSimulatorReady(c, name, addr, simulatorBootTimeout()); err != nil {
+			if err := waitForSimulatorReady(c, name, addr, simulatorBootTimeout(name)); err != nil {
 				return nil, err
 			}
 			return nil, nil

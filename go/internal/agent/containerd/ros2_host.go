@@ -53,47 +53,35 @@ func (c *Client) EnsureHostROS2Sidecar(ctx context.Context, opts ros2inspection.
 // between the restricted host inspector and the full system CLI. Their distinct
 // labels keep command permissions and app-sidecar reconciliation separate.
 func (c *Client) ensureStandaloneROS2Sidecar(ctx context.Context, name, label string, domain int, spec *localoci.Spec) (services.ROS2Sidecar, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	ctx = c.withNamespace(ctx)
 	sidecar := services.ROS2Sidecar{Name: name, Distro: ros2inspection.HostDistro, RMW: ros2inspection.FastRTPSRMW, DomainID: domain}
-	var outdated containerd.Container
-	if existing, err := c.client.LoadContainer(ctx, name); err == nil {
-		labels, lerr := existing.Labels(ctx)
-		if lerr != nil {
-			return services.ROS2Sidecar{}, fmt.Errorf("reading host inspector labels: %w", lerr)
-		}
-		if labels[label] != ros2inspection.HostDistro {
-			return services.ROS2Sidecar{}, fmt.Errorf("container name %q is already in use by a different workload", name)
-		}
-		if task, terr := existing.Task(ctx, nil); terr == nil && labels[labelKeyROS2InspectorVersion] == ros2InspectorVersion {
-			if st, serr := task.Status(ctx); serr == nil && st.Status == containerd.Running {
-				return sidecar, nil
-			}
-		}
-		if c.sidecarHasActiveExecsLocked(name) {
-			return services.ROS2Sidecar{}, fmt.Errorf("host inspector is restarting with an inspection in flight; retry")
-		}
-		outdated = existing
-	} else if !errdefs.IsNotFound(err) {
-		return services.ROS2Sidecar{}, fmt.Errorf("loading host inspector: %w", err)
+	c.mu.Lock()
+	_, running, err := c.lookupStandaloneROS2SidecarLocked(ctx, name, label)
+	c.mu.Unlock()
+	if err != nil {
+		return services.ROS2Sidecar{}, err
+	}
+	if running {
+		return sidecar, nil
 	}
 
-	image, err := c.client.GetImage(ctx, ros2HostImage)
+	// Keep downloads outside the container lock and let failed or canceled
+	// callers return before competing for the lock again.
+	image, err := c.ros2ImagePreparation.wait(ctx, c.prepareROS2InspectorImage)
 	if err != nil {
-		image, err = c.client.Pull(ctx, ros2HostImage, containerd.WithPullUnpack)
-		if err != nil {
-			return services.ROS2Sidecar{}, fmt.Errorf("preparing standalone ROS 2 inspector image %q (first use requires downloading the image): %w", ros2HostImage, err)
-		}
+		return services.ROS2Sidecar{}, err
 	}
-	unpacked, err := c.imageUnpacked(ctx, image)
+
+	// Another request could have created the inspector during preparation.
+	// Check it again under the same lock used to create or replace it.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	outdated, running, err := c.lookupStandaloneROS2SidecarLocked(ctx, name, label)
 	if err != nil {
-		return services.ROS2Sidecar{}, fmt.Errorf("checking host inspector image: %w", err)
+		return services.ROS2Sidecar{}, err
 	}
-	if !unpacked {
-		if err := c.UnpackImage(ctx, image, nil); err != nil {
-			return services.ROS2Sidecar{}, fmt.Errorf("unpacking host inspector image: %w", err)
-		}
+	if running {
+		return sidecar, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(ros2HostProfilePath), 0o750); err != nil {
 		return services.ROS2Sidecar{}, err
@@ -136,6 +124,37 @@ func (c *Client) ensureStandaloneROS2Sidecar(ctx context.Context, name, label st
 		return services.ROS2Sidecar{}, fmt.Errorf("starting host inspector: %w", err)
 	}
 	return sidecar, nil
+}
+
+// lookupStandaloneROS2SidecarLocked identifies a running inspector to reuse
+// or an existing inspector that can be replaced. The caller must hold c.mu.
+func (c *Client) lookupStandaloneROS2SidecarLocked(ctx context.Context, name, label string) (outdated containerd.Container, running bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	existing, err := c.client.LoadContainer(ctx, name)
+	if errdefs.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("loading host inspector: %w", err)
+	}
+	labels, err := existing.Labels(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading host inspector labels: %w", err)
+	}
+	if labels[label] != ros2inspection.HostDistro {
+		return nil, false, fmt.Errorf("container name %q is already in use by a different workload", name)
+	}
+	if task, err := existing.Task(ctx, nil); err == nil && labels[labelKeyROS2InspectorVersion] == ros2InspectorVersion {
+		if status, err := task.Status(ctx); err == nil && status.Status == containerd.Running {
+			return nil, true, nil
+		}
+	}
+	if c.sidecarHasActiveExecsLocked(name) {
+		return nil, false, fmt.Errorf("host inspector is restarting with an inspection in flight; retry")
+	}
+	return existing, false, nil
 }
 
 func ros2HostSidecarSpec(profilePath string) *localoci.Spec {

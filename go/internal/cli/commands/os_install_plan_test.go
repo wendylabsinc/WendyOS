@@ -23,6 +23,8 @@ func TestInstallPlanRoutesAndValidatesBeforeWriting(t *testing.T) {
 		{name: "explicit Pi drive", opts: onboarding.Options{DeviceType: "raspberry-pi-5", Drive: "/dev/test-disk"}, artifact: deviceVersion{Path: "pi.img", SizeBytes: 1024}, method: "removable-media"},
 		{name: "missing disk", opts: onboarding.Options{DeviceType: "raspberry-pi-5", Drive: "/dev/stale"}, artifact: deviceVersion{Path: "pi.img", SizeBytes: 1024}, wantErr: "relist drives"},
 		{name: "undersized disk", opts: onboarding.Options{DeviceType: "raspberry-pi-5", Drive: "/dev/test-disk"}, artifact: deviceVersion{Path: "pi.img", SizeBytes: 8192}, wantErr: "too small"},
+		{name: "new Orange Pi needs a target", opts: onboarding.Options{DeviceType: "orange-pi-5-pro"}, artifact: deviceVersion{Path: "opi.wic", SizeBytes: 1024}, method: "removable-media"},
+		{name: "unplanned board", opts: onboarding.Options{DeviceType: "future-board"}, wantErr: "does not yet cover"},
 		{name: "Orin defaults to recovery", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "developer-kit"}, artifact: recovery, method: "usb-recovery"},
 		{name: "Orin rootfs explicit", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "developer-kit", RootfsOnly: true, Drive: "/dev/test-disk"}, artifact: recovery, method: "rootfs-only"},
 		{name: "no generic custom carrier image", opts: onboarding.Options{DeviceType: orinNanoDeviceType, Carrier: "custom"}, wantErr: "vendor"},

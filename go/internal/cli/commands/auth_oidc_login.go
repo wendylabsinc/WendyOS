@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
 	clitimesync "github.com/wendylabsinc/wendy/go/internal/cli/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -335,6 +336,11 @@ func runOIDCLogin(ctx context.Context, opts oidcLoginOptions, hooks oidcLoginHoo
 	hooks.print(tui.SuccessMessage(fmt.Sprintf("Signed in to %s. API session and certificates saved.", issuerRealm(effectiveIssuer))))
 	hooks.print(sessionKeyLine(keyAlgorithmName(key.Public()), "OIDC"))
 	clitimesync.CacheProof(ctx)
+	if directory, err := config.ConfigDir(); err == nil {
+		discovery, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, _ = operatormesh.LiteIssuers(discovery, directory, authEntry.PKIEndpoint, certInfo)
+		cancel()
+	}
 	return nil
 }
 
@@ -588,7 +594,7 @@ func refreshOIDCCertificate(ctx context.Context, auth *config.AuthConfig, lite b
 		}
 	}
 	if !lite {
-		leaf, err := storedLeaf(certInfo.PemCertificate)
+		leaf, err := certs.ParseStoredLeaf(certInfo.PemCertificate)
 		if err != nil {
 			return err
 		}
@@ -656,6 +662,9 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 	}
 	defer unlock()
 	if err := reloadOAuthSession(auth); err != nil {
+		return err
+	}
+	if err := requireAppTunnelOperator(ctx, auth); err != nil {
 		return err
 	}
 	// The process that held the lock may already have consumed our old token.

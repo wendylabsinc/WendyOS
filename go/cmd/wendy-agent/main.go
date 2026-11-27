@@ -79,7 +79,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
-	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -422,6 +421,7 @@ func main() {
 	agentUpdateSvc := services.NewAgentUpdateService(logger, installer)
 	agentUpdateSvc.PrimeExecPath()
 	osUpdateSvc := services.NewOSUpdateService(logger, installer)
+	powerSvc := services.NewPowerService(logger, installer)
 	driverSvc := services.NewDriverService(logger)
 	// Before anything reads the store: devices updated from an older agent still
 	// have add-ons in the pre-keyed flat layout.
@@ -537,6 +537,9 @@ func main() {
 		logger.Warn("loading camera DHCP configuration failed", zap.Error(err))
 	}
 	dataSvc.SetVideoService(videoSvc)
+	// The hardware listing skips camera share nodes and says how each camera
+	// is shared.
+	hwDiscoverer.SetCameraShareReporter(videoSvc)
 	// Arm pre-roll for campaigns deployed in a previous agent lifetime so their
 	// next trigger opens BEFORE the trigger instant, not only campaigns deployed
 	// during this run.
@@ -590,6 +593,10 @@ func main() {
 	// client miss (e.g. a container's task crash-exiting on its own).
 	if ctrdClient != nil {
 		ctrdClient.SetCameraLoopbackProvider(videoSvc)
+		// The camera share manager rides the same syncs: the first adopts the
+		// share nodes of apps that kept running through an agent restart, and
+		// drops those of containers deleted while the agent was down.
+		ctrdClient.SetCameraShareProvider(videoSvc)
 		ctrdClient.SyncCameraLoopbacks(ctx)
 		go ctrdClient.RunCameraLoopbackSync(ctx, time.Minute)
 	}
@@ -623,7 +630,7 @@ func main() {
 	sensorTransportFor := func(p mcusource.SensorPairing, addr string) (mcusource.SensorTransport, error) {
 		if p.Transport == "wendycom" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
-			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr)
+			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr, provisioningSvc.LitePeerIssuers())
 		}
 		if p.Transport == "grpc" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
@@ -646,22 +653,20 @@ func main() {
 	sensorFrames := services.NewSensorFrameFeed()
 	videoSvc.SetSensorFrameFeed(sensorFrames)
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
-	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
-	sensorSup.SetSourceResolver(mcusource.NewSourceResolver(meshCatalog.SensorSources))
-	// A camera or microphone channel becomes a device. A generic sensor channel
-	// (a temperature, an IMU) has no device to become, so it is published as a
-	// ROS 2 topic inside every running ROS 2 app instead.
+	genericSensorFeed := services.NewGenericSensorFeed(logger, filepath.Join(supervisor.RemoteSeenDir, "sensor-channel-ids"))
+	// A generic sensor channel (a temperature, an IMU) has no device to appear
+	// as. Apps read it from the sensor-read socket, and it is also published
+	// as a ROS 2 topic inside the running ROS 2 apps.
+	genericSensorSinks := []mcusource.GenericSink{genericSensorFeed}
 	if rosGraphs := videoSvc.ROS2Graphs(); rosGraphs != nil {
 		sensorBridge := ros2sensor.New(logger, discoveryPool, rosGraphs)
 		go sensorBridge.Run(ctx)
-		sensorSup.SetSensorChannelOpener(func(p mcusource.SensorPairing, d *sensorlinkpb.SensorDescriptor) (mcusource.SensorChannelWriter, error) {
-			channel, err := sensorBridge.OpenChannel(p.Key(), p.Name, d)
-			if err != nil {
-				return nil, err
-			}
-			return channel, nil
-		})
+		genericSensorSinks = append(genericSensorSinks, sensorBridge)
 	}
+	sensorSup.SetGenericSink(mcusource.GenericSinks(genericSensorSinks...))
+	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
+	resolveSensorSource := mcusource.NewSourceResolver(meshCatalog.SensorSources)
+	sensorSup.SetSourceResolver(resolveSensorSource)
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
 	sensorAgentScope := func() certs.Scope {
 		certPEM, _, _ := mcuIdentity()
@@ -670,6 +675,7 @@ func main() {
 		return scope
 	}
 	sensorSvc := services.NewSensorPairingService(logger, sensorStore, sensorAgentScope, sensorRunner.StartDiscovered, sensorRunner.StopPairing, sensorSup.IsPairingConnected)
+	sensorSvc.SetPairingProbe(sensorSup.ProbePairing)
 	// `device pair` lists sources from this device's network, so this device
 	// must not offer itself. Its asset ID is read per request because
 	// enrollment can assign one while the agent runs.
@@ -960,6 +966,11 @@ func main() {
 		agentpbv2.RegisterWendyBluetoothServiceServer(srv, bluetoothSvc)
 		agentpbv2.RegisterWendyAgentUpdateServiceServer(srv, agentUpdateSvc)
 		agentpbv2.RegisterWendyOSUpdateServiceServer(srv, osUpdateSvc)
+		// Reboot follows the same access policy as OS updates, which already
+		// reboot the device: available before enrollment, over mTLS afterward,
+		// and through the local admin socket. Device credentials are refused
+		// by the RPC policy's exact-method allowlist.
+		agentpbv2.RegisterWendyPowerServiceServer(srv, powerSvc)
 		// Driver management follows the same access policy as OS updates:
 		// available before enrollment, over mTLS afterward, and through the
 		// local admin socket. The store and apply path require Linux.
@@ -1016,7 +1027,7 @@ func main() {
 	// from the legacy physical and primary-operator listener's clock policy.
 	meshNativeListener := meshoperatorlink.NewMeshTLSListener()
 	defer meshNativeListener.Close()
-	startMeshNativeServer := func(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy) error {
+	startMeshNativeServer := func(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy, credentials *localmesh.Credentials) error {
 		mtlsMu.Lock()
 		defer mtlsMu.Unlock()
 		if meshNativeServer != nil {
@@ -1026,7 +1037,7 @@ func main() {
 		if orgMode != interceptor.OrgModeOff && !haveScope {
 			return errors.New("cannot determine mesh native agent identity scope")
 		}
-		srv, err := mtls.NewServerWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy, expectedScope, orgMode,
+		srv, err := mtls.NewMeshServer(certPEM, chainPEM, keyPEM, logger, policy, expectedScope, orgMode, credentials.ConfigureTLSServer,
 			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.ChainStreamInterceptor(interceptor.StreamErrorInterceptor(logger)))
 		if err != nil {
@@ -1162,6 +1173,7 @@ func main() {
 	agentSvc.SetRestartFunc(agentRestart.Schedule)
 	agentUpdateSvc.SetRestartFunc(agentRestart.Schedule)
 	var localMeshAppClient *meshsession.Client
+	var reloadLocalMeshIssuers func()
 	// currentAppRoutes reads the live node view at call time, never a view
 	// saved at dial start. It reports no routes once appClient's runtime has
 	// been replaced or stopped, so a late recheck fails closed.
@@ -1225,7 +1237,18 @@ func main() {
 			logger.Error("wendy net identity unavailable", zap.Error(err))
 			return
 		}
-		if err := startMeshNativeServer(certPEM, chainPEM, keyPEM, meshTimePolicy); err != nil {
+		updateIssuers := func() {
+			if bundle := provisioningSvc.LitePeerIssuers(); bundle != "" {
+				if err := credentials.SetLiteIssuerChain(bundle, chainPEM, meshTimePolicy.BaseTime(meshTimePolicy.WallTime())); err != nil {
+					logger.Warn("wendy net Lite issuers unavailable", zap.Error(err))
+				}
+			}
+		}
+		localMeshMu.Lock()
+		reloadLocalMeshIssuers = updateIssuers
+		updateIssuers()
+		localMeshMu.Unlock()
+		if err := startMeshNativeServer(certPEM, chainPEM, keyPEM, meshTimePolicy, credentials); err != nil {
 			logger.Error("wendy net native agent TLS ingress unavailable", zap.Error(err))
 			return
 		}
@@ -1300,9 +1323,9 @@ func main() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
 						Name: name, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
-						Agent:        services.MeshAgentMetadata(),
-						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
-						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
+						Agent:               services.MeshAgentMetadata(),
+						AppEndpoints:        []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
+						PreparedCredentials: credentials,
 					}, logger, meshCatalog, meshVIPs, meshSharing, func(snapshot func() localmesh.NodeSnapshot) {
 						localMeshMu.Lock()
 						localMeshSnapshot = snapshot
@@ -1565,12 +1588,36 @@ func main() {
 	// bind-mounts this socket into entitled containers). Disabled with
 	// WENDY_LOCAL_SOCKET=off.
 	var localSocketServer *grpc.Server
+	var sensorReadServer *grpc.Server
 	if os.Getenv("WENDY_LOCAL_SOCKET") != "off" {
+		// A sensor reader must not inherit the full administrative API. This
+		// listener registers only the two read-only generic sensor RPCs.
+		sensorReadServer = services.NewSensorReadServer(genericSensorFeed)
+		sensorLis, sensorErr := localsocket.Listen(oci.SensorReadSocketHostPath)
+		if sensorErr == nil {
+			sensorErr = os.Chown(oci.SensorReadSocketHostPath, -1, int(oci.SensorReadSocketGID))
+			if sensorErr != nil {
+				sensorLis.Close()
+			}
+		}
+		if sensorErr != nil {
+			logger.Error("Failed to listen on sensor-read socket", zap.Error(sensorErr))
+		} else {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := sensorReadServer.Serve(sensorLis); err != nil {
+					logger.Error("Sensor-read server error", zap.Error(err))
+				}
+			}()
+		}
 		localSocketServer = grpc.NewServer(
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 		)
 		registerAllServices(localSocketServer)
+		// Generic samples are available only to explicitly trusted local apps.
+		agentpbv2.RegisterWendySensorServiceServer(localSocketServer, genericSensorFeed)
 		agentpbv2.RegisterWendyUnitreeServiceServer(localSocketServer, unitreeSvc)
 		agentpbv2.RegisterWendyUnitreeRobotServiceServer(localSocketServer, unitreeRobotSvc)
 
@@ -1683,7 +1730,7 @@ func main() {
 		stopErr := localMeshLife.Stop(stopCtx)
 		stopCancel()
 		localMeshMu.Lock()
-		localMeshSnapshot, localMeshAppClient = nil, nil
+		localMeshSnapshot, localMeshAppClient, reloadLocalMeshIssuers = nil, nil, nil
 		localMeshMu.Unlock()
 		meshDialer.UpdateIdentity("", "", "")
 		meshRoster.UpdateIdentity("", "", "", "")
@@ -1721,6 +1768,13 @@ func main() {
 	go provisioningSvc.RunRenewal(ctx, func() {
 		logger.Info("Device certificate renewed — restarting agent to load the new identity")
 		agentRestart.Schedule()
+	})
+	go provisioningSvc.RunLiteIssuerRefresh(ctx, func() {
+		localMeshMu.Lock()
+		defer localMeshMu.Unlock()
+		if reloadLocalMeshIssuers != nil {
+			reloadLocalMeshIssuers()
+		}
 	})
 
 	if accessPolicy.AllowsNetwork {
@@ -1894,6 +1948,9 @@ func main() {
 	}
 	if localSocketServer != nil {
 		shutdown.servers = append(shutdown.servers, namedGRPCServer{"local socket", localSocketServer})
+	}
+	if sensorReadServer != nil {
+		shutdown.servers = append(shutdown.servers, namedGRPCServer{"sensor read", sensorReadServer})
 	}
 	shutdown.servers = append(shutdown.servers, namedGRPCServer{"OTEL", otelServer})
 	mtlsMu.Lock()

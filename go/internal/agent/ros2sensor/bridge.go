@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
@@ -129,6 +131,59 @@ func (b *Bridge) wakeUp() {
 	case b.wake <- struct{}{}:
 	default:
 	}
+}
+
+var _ mcusource.GenericSink = (*Bridge)(nil)
+
+// Mount starts publishing the generic sensor channels of a paired source, as
+// the supervisor asks of every sink for such channels. It returns the channels
+// it took, a function that publishes one frame of them and a function that
+// stops publishing them all.
+func (b *Bridge) Mount(p mcusource.SensorPairing, descriptors []*sensorlinkpb.SensorDescriptor) ([]uint32, func(*sensorlink.SensorFrame) bool, func()) {
+	channels := make(map[uint32]*Channel, len(descriptors))
+	accepted := make([]uint32, 0, len(descriptors))
+	for _, d := range descriptors {
+		id := d.GetChannelId()
+		if channels[id] != nil {
+			continue
+		}
+		c, err := b.OpenChannel(p.Key(), p.Name, d)
+		if err != nil {
+			b.logger.Warn("sensor channel is not published to ROS 2 apps",
+				zap.String("source", p.Key()), zap.Uint32("channel", id), zap.Error(err))
+			continue
+		}
+		channels[id] = c
+		accepted = append(accepted, id)
+	}
+	var mu sync.Mutex
+	released := false
+	publish := func(f *sensorlink.SensorFrame) bool {
+		if f == nil {
+			return false
+		}
+		mu.Lock()
+		c, done := channels[f.ChannelID], released
+		mu.Unlock()
+		if c == nil || done {
+			return false
+		}
+		c.WriteSample(f.Payload)
+		return true
+	}
+	release := func() {
+		mu.Lock()
+		done := released
+		released = true
+		mu.Unlock()
+		if done {
+			return
+		}
+		for _, c := range channels {
+			_ = c.Close()
+		}
+	}
+	return accepted, publish, release
 }
 
 // Channel is one sensor channel being published. It is safe for concurrent

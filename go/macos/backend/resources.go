@@ -35,21 +35,19 @@ func (b *Backend) Ports(app string, session uint64) ([]*pb.PortEntry, error) {
 }
 
 func (b *Backend) StartApp(app string, session uint64) error {
-	ctx, done := b.begin()
-	defer done()
-	conn, err := b.connection(session)
+	ctx, conn, done, err := b.deviceRPC(session)
 	if err != nil {
 		return err
 	}
+	defer done()
 	return commands.DesktopStartApp(ctx, conn, app)
 }
 func (b *Backend) StopApp(app string, session uint64) error {
-	ctx, done := b.begin()
-	defer done()
-	conn, err := b.connection(session)
+	ctx, conn, done, err := b.deviceRPC(session)
 	if err != nil {
 		return err
 	}
+	defer done()
 	_, err = conn.ContainerService.StopContainer(ctx, &pb.StopContainerRequest{AppName: app})
 	return err
 }

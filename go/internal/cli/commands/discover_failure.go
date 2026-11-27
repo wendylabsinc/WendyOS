@@ -26,9 +26,12 @@ func classifyLANProbeFailure(dev models.LANDevice, err error) *models.ProbeFailu
 	}
 	var org orgMismatchDeviceError
 	var notListening agentNotListeningError
+	var orgOnly orgOnlyBindingError
 	switch {
 	case isLANIdentityFailure(err):
 		return lanIdentityFailure(dev, err)
+	case errors.As(err, &orgOnly):
+		return orgOnlyBindingFailure(orgOnly)
 	case expiredLoginFrom(err) != nil:
 		login := expiredLoginFrom(err)
 		return probeFailure("login_expired", login.message(), login.loginStep)
@@ -49,6 +52,18 @@ func classifyLANProbeFailure(dev models.LANDevice, err error) *models.ProbeFailu
 	default:
 		return probeFailure("probe_failed", "Discovery found the device, but could not verify its agent.", "Retry with WENDY_TLS_DEBUG=1 for connection details.")
 	}
+}
+
+// orgOnlyBindingFailure explains a device refused before any connection was
+// attempted, because its saved binding names no device (orgOnlyBindingError),
+// and gives the step the direct commands give. A name carrying terminal
+// controls is never pasted into a command.
+func orgOnlyBindingFailure(refusal orgOnlyBindingError) *models.ProbeFailure {
+	step := "Clear the saved identity with 'wendy device unpin', then run 'wendy discover' again."
+	if tui.StripControl(refusal.key) == refusal.key {
+		step = refusal.step()
+	}
+	return probeFailure("probe_failed", "The identity this CLI saved for this device names an organization but no device, so discovery could not verify its agent.", step)
 }
 
 func probeFailure(code, message string, steps ...string) *models.ProbeFailure {

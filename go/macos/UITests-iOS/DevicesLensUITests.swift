@@ -137,8 +137,10 @@ final class DevicesLensUITests: XCTestCase {
         let header = app.staticTexts[widgetTitle]
         for _ in 0..<6 { if header.isHittable { break }; app.swipeUp() }
         XCTAssertTrue(header.isHittable)
-        let cardID = header.identifier.replacingOccurrences(of: "home.widget.options.", with: "home.widget.")
-        let card = app.descendants(matching: .any)[cardID].firstMatch
+        // SwiftUI can merge a single card with the deck's accessibility
+        // container, adopting its identifier. The unique title still identifies
+        // the card across both the single-widget and multi-widget layouts.
+        let card = app.otherElements.matching(NSPredicate(format: "label == %@", widgetTitle)).firstMatch
         XCTAssertTrue(card.exists, app.debugDescription)
         header.tap()
         XCTAssertFalse(app.buttons["Edit"].exists, "Tapping the title must not open a menu")

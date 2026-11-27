@@ -30,6 +30,11 @@ type freshAdvertisement struct {
 	pending              bool
 }
 
+type connectedCandidate struct {
+	peer     candidate
+	observed time.Time
+}
+
 type advertisementFreshness struct {
 	adapter           dbus.ObjectPath
 	uuid, networkName string
@@ -37,6 +42,8 @@ type advertisementFreshness struct {
 	mu                sync.Mutex
 	seen              map[dbus.ObjectPath]freshAdvertisement
 	partial           map[localNameKey]localNameParts
+	connected         map[dbus.ObjectPath]connectedCandidate
+	connectedChange   time.Time
 }
 
 func newAdvertisementFreshness(adapter dbus.ObjectPath, uuid, networkName string, self meshid.Device) *advertisementFreshness {
@@ -66,7 +73,7 @@ func (f *advertisementFreshness) observe(path dbus.ObjectPath, props map[string]
 				if len(raw) != 0 && raw[0] != AdvertisementVersion {
 					continue // Unsupported versions neither refresh nor withdraw v1.
 				}
-				f.forget(path) // Same v1 UUID now carries a different mesh/payload.
+				f.forget(path, at) // Same v1 UUID now carries a different mesh/payload.
 				return
 			}
 		}
@@ -98,6 +105,26 @@ func (f *advertisementFreshness) handle(signal *dbus.Signal, at time.Time) {
 		if _, ok := signal.Body[2].([]string); !ok {
 			return
 		}
+		// Revoke queued connected-link probes when their local policy or
+		// endpoint changes. A later object snapshot may admit a new probe.
+		invalidated := signal.Body[2].([]string)
+		for _, name := range []string{"Connected", "Blocked", "ServiceData", "Address", "AddressType"} {
+			_, changed := props[name]
+			for _, removed := range invalidated {
+				if removed == name {
+					changed = true
+				}
+			}
+			if changed {
+				f.mu.Lock()
+				delete(f.connected, signal.Path)
+				if at.After(f.connectedChange) {
+					f.connectedChange = at
+				}
+				f.mu.Unlock()
+				break
+			}
+		}
 		// A missing property is not proof the mesh advert stopped.
 		f.observe(signal.Path, props, at)
 	case "org.freedesktop.DBus.ObjectManager.InterfacesRemoved":
@@ -114,16 +141,20 @@ func (f *advertisementFreshness) handle(signal *dbus.Signal, at time.Time) {
 		}
 		for _, iface := range interfaces {
 			if iface == deviceInterface {
-				f.forget(path)
+				f.forget(path, at)
 				return
 			}
 		}
 	}
 }
 
-func (f *advertisementFreshness) forget(path dbus.ObjectPath) {
+func (f *advertisementFreshness) forget(path dbus.ObjectPath, at time.Time) {
 	f.mu.Lock()
 	delete(f.seen, path)
+	delete(f.connected, path)
+	if at.After(f.connectedChange) {
+		f.connectedChange = at
+	}
 	for key := range f.partial {
 		if key.path == path {
 			delete(f.partial, key)
@@ -132,9 +163,9 @@ func (f *advertisementFreshness) forget(path dbus.ObjectPath) {
 	f.mu.Unlock()
 }
 
-// candidates also returns the devices newly heard since the previous scan.
+// candidatesFromSnapshot also returns the devices newly heard since the previous scan.
 // Selection.Seen must follow advertisement events, not each cache poll.
-func (f *advertisementFreshness) candidates(objects managedObjects, at time.Time) ([]candidate, []dbus.ObjectPath) {
+func (f *advertisementFreshness) candidatesFromSnapshot(objects managedObjects, started, at time.Time) ([]candidate, []dbus.ObjectPath) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	byAddress := make(map[string]candidate)
@@ -165,6 +196,47 @@ func (f *advertisementFreshness) candidates(objects managedObjects, at time.Time
 			f.seen[path] = entry
 		}
 	}
+	// An existing ACL can suppress further connectable advertisements. After
+	// restart, use its cached endpoint only as a tentative CoC dial target.
+	// This is NOT a radio observation: do not update seen/pending/Selection.
+	// Ordinary admission, retry pacing and peer TLS authentication still apply.
+	if f.connected == nil {
+		f.connected = make(map[dbus.ObjectPath]connectedCandidate)
+	} else {
+		clear(f.connected)
+	}
+	// An invalidating signal can arrive while GetManagedObjects is in flight.
+	// Treat that snapshot as unsuitable for ACL bootstrap and try the next poll.
+	if f.connectedChange.After(started) {
+		objects = nil
+	}
+	for path, ifaces := range objects {
+		if len(f.connected) >= maxFreshAdvertisements {
+			break
+		}
+		if !f.devicePath(path) {
+			continue
+		}
+		// Live busy overrides cached ready.
+		if _, live := f.seen[path]; live {
+			continue
+		}
+		props := ifaces[deviceInterface]
+		connected, valid := props["Connected"].Value().(bool)
+		if !valid || !connected {
+			continue
+		}
+		advert, valid := matchingServiceData(serviceData(props["ServiceData"]), f.uuid, f.networkName)
+		if !valid {
+			continue
+		}
+		peer, valid := candidateFromProperties(path, props, advert, f.self)
+		if !valid {
+			continue
+		}
+		f.connected[path] = connectedCandidate{peer: peer, observed: at}
+		byAddress[peer.key()] = peer
+	}
 	peers := make([]candidate, 0, len(byAddress))
 	for _, peer := range byAddress {
 		peers = append(peers, peer)
@@ -179,12 +251,18 @@ func (f *advertisementFreshness) candidates(objects managedObjects, at time.Time
 	return peers, updates
 }
 
-// nativeReady rechecks the newest live endpoint hint immediately before a
-// queued dial. A busy announcement replaces ready without losing time discovery.
+// nativeReady rechecks a live advertisement or recent connected-link snapshot
+// before a queued dial. Neither path grants authenticated mesh readiness.
+// A busy announcement replaces ready without losing time discovery.
 func (f *advertisementFreshness) nativeReady(peer candidate, now time.Time) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	entry, ok := f.seen[peer.path]
+	if !ok {
+		connected, exists := f.connected[peer.path]
+		return exists && connected.peer == peer && !now.Before(connected.observed) &&
+			now.Sub(connected.observed) < advertisementFreshnessTTL
+	}
 	return ok && !now.Before(entry.seen) && now.Sub(entry.seen) < advertisementFreshnessTTL &&
 		entry.advert.NativeAccepting() && entry.advert.PSM == peer.psm && entry.advert.DeviceHint == peer.hint
 }

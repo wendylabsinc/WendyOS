@@ -22,6 +22,7 @@ The 64 GB minimum applies to removable NVME and SD card installations. On Jetson
 | Device | Root FS (A+B) | Config | Other |
 |--------|--------------|--------|-------|
 | Raspberry Pi (SD / NVME) | 8 GB | 64 MB | — |
+| Orange Pi 5 Pro (SD / eMMC / NVME) | 8 GB + 8 GB | 256 MB | 128 MB boot partition; data partition auto-expands |
 | Jetson Orin Nano / AGX Orin (SD / NVME) | 8 GB + 8 GB | 64 MB | 512 MB data partition (auto-expands) |
 | Jetson AGX Thor | Flashpack-managed internal partitions | N/A | Flashed over USB recovery; no external SD/NVME target |
 
@@ -40,6 +41,14 @@ See the device-specific pages for full partition layouts:
 | Raspberry Pi 3 | SD card, USB |
 
 A Pi 3B boots from USB only after USB boot mode has been enabled once; a Pi 3B+ does so out of the box.
+
+### Orange Pi
+
+| Device | Boot media |
+|--------|-----------|
+| Orange Pi 5 Pro | SD card, eMMC, NVME |
+
+NVME boot needs U-Boot on the eMMC or an SD card; see [Orange Pi 5 Pro](/docs/installation/wendyos-orange-pi-5-pro#boot-from-emmc-or-nvme).
 
 ### NVIDIA Jetson
 
@@ -67,5 +76,6 @@ See [Install wendy-agent on Linux](/docs/installation/linux).
 |-----|--------|
 | NVIDIA (CUDA) | Supported — Jetson and x86 systems with NVIDIA GPUs, via the `gpu` entitlement |
 | AMD (ROCm) | Supported on compatible x86 Linux hosts with `amdgpu`, via the `gpu` entitlement |
+| Arm Mali | Orange Pi 5 Pro (Mali-G610, `panthor`): the `gpu` entitlement grants the DRM render node |
 
 See [GPU access](/docs/hardware/gpu).

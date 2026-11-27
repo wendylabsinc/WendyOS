@@ -132,8 +132,12 @@ func enrollInstalledLite(ctx context.Context, port discovery.SerialPortInfo, aut
 }
 
 func waitInstalledLite(ctx context.Context, port discovery.SerialPortInfo, interactive bool) (discovery.SerialPortInfo, error) {
+	return waitInstalledLiteUSB(ctx, port, interactive, "enrollment", "enroll")
+}
+
+func waitInstalledLiteUSB(ctx context.Context, port discovery.SerialPortInfo, interactive bool, operation, action string) (discovery.SerialPortInfo, error) {
 	if port.Transport != discovery.SerialTransportNativeUSB {
-		return discovery.SerialPortInfo{}, fmt.Errorf("Wendy Lite enrollment requires native USB")
+		return discovery.SerialPortInfo{}, fmt.Errorf("Wendy Lite %s requires native USB", operation)
 	}
 	if err := waitInstalledLitePort(ctx, port.Port); err == nil {
 		return port, nil
@@ -152,10 +156,13 @@ func waitInstalledLite(ctx context.Context, port discovery.SerialPortInfo, inter
 			}
 		}
 		if !interactive {
-			return discovery.SerialPortInfo{}, fmt.Errorf("USB port %s changed after reboot; select the board with 'wendy device enroll'", port.Port)
+			if action == "enroll" {
+				return discovery.SerialPortInfo{}, fmt.Errorf("USB port %s changed after reboot; select the board with 'wendy device enroll'", port.Port)
+			}
+			return discovery.SerialPortInfo{}, fmt.Errorf("USB port %s changed after reboot; rerun the install interactively to select the board", port.Port)
 		}
 		selected, pickErr := selectESP32InstallDevice(ports, port, true, func(_ string, items []tui.PickerItem) (string, error) {
-			return pickFromItems("Select the newly flashed Wendy Lite device to enroll", items)
+			return pickFromItems("Select the newly flashed Wendy Lite device to "+action, items)
 		})
 		if pickErr != nil {
 			return discovery.SerialPortInfo{}, pickErr

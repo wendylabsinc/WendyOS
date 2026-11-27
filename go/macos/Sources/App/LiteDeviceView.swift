@@ -31,6 +31,7 @@ struct LiteDeviceView: View {
                     Section("Enrollment") {
                         DeviceEnrollmentSettings(session: model.deviceSession, deviceName: model.connected?.title ?? "", lite: true)
                     }
+                    LiteMeshSettings(session: model.deviceSession).id(model.deviceSession)
                 }.formStyle(.grouped)
             default: device
             }
@@ -97,5 +98,82 @@ struct LiteDeviceView: View {
             password = ""
             notice = "Wi-Fi configuration sent. Reconnect after the device restarts."
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+}
+
+private struct LiteMeshSettings: View {
+    let session: UInt64
+    @State private var actions = AsyncActions()
+    @State private var snapshot: DeviceNetworkSettings?
+    @State private var loading = false
+    @State private var saving = false
+    @State private var error: String?
+    @State private var notice: String?
+
+    var body: some View {
+        Section {
+            if let snapshot {
+                let enabled = snapshot.meshConfig & 1 != 0
+                LabeledContent("Participation", value: enabled ? "Enabled" : "Disabled")
+                LabeledContent("Status", value: snapshot.meshState.capitalized)
+                LabeledContent("Active links", value: snapshot.peers.formatted())
+                if !snapshot.meshDetail.isEmpty {
+                    Text(snapshot.meshDetail).font(.caption).foregroundStyle(.secondary)
+                }
+                Button(enabled ? "Disable mesh participation" : "Enable mesh participation", systemImage: "network") {
+                    actions.submit { await setParticipation(!enabled) }
+                }.disabled(loading || saving || !snapshot.meshAvailable)
+            }
+            if saving { ProgressView("Saving mesh settings…") }
+            else if loading { ProgressView("Reading mesh settings…") }
+            if let notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
+            if let error { FailureNote(message: error) }
+            Button("Refresh mesh status") { actions.submit { await refresh() } }
+                .disabled(loading || saving)
+        } header: {
+            Text("Wendy Mesh")
+        } footer: {
+            Text("Participation lets this device join the mesh using its configured Bluetooth and Wi-Fi connections. Disabling it can disconnect a device reached through the mesh.")
+        }
+        .task { await actions.run() }
+        .task(id: session) {
+            snapshot = nil
+            notice = nil
+            await refresh()
+        }
+    }
+
+    private func refresh() async {
+        guard !loading else { return }
+        loading = true
+        error = nil
+        defer { loading = false }
+        do {
+            let value = try await GoClient.shared.networkSettings(session: session)
+            guard !Task.isCancelled else { return }
+            snapshot = value
+        } catch {
+            guard !Task.isCancelled else { return }
+            snapshot = nil
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func setParticipation(_ enabled: Bool) async {
+        guard !saving else { return }
+        saving = true
+        error = nil
+        notice = nil
+        defer { saving = false }
+        do {
+            try await GoClient.shared.configureMesh(session: session, changed: 1, enabled: enabled ? 1 : 0)
+            guard !Task.isCancelled else { return }
+            notice = "Mesh participation \(enabled ? "enabled" : "disabled"). Active links show whether the device has connected to peers."
+            await refresh()
+        } catch {
+            guard !Task.isCancelled else { return }
+            snapshot = nil
+            self.error = "Could not confirm the change. Refresh or reconnect to check the device. \(error.localizedDescription)"
+        }
     }
 }

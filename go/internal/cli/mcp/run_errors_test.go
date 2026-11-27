@@ -24,7 +24,7 @@ func runProject(t *testing.T) string {
 }
 
 func TestRunWithoutConnectionOrDeviceIsNotConnected(t *testing.T) {
-	s := New(&config.Config{DefaultDevice: "must-not-be-used"}, nil)
+	s := New(&config.Config{}, nil)
 	s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
 		t.Fatal("run must not start a child without a target")
 		return "", false, nil

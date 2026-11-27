@@ -400,10 +400,18 @@ func TestACMEPreEnrollmentBakesEABMaterial(t *testing.T) {
 		return want, nil
 	}
 	name := "dev"
-	got, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
-		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
+	var got *acmeEnrollmentBake
+	out, err := captureCommandStdout(t, func() error {
+		var err error
+		got, err = resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
+			preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
+		return err
+	})
 	if err != nil {
 		t.Fatalf("resolveACMEPreEnrollment: %v", err)
+	}
+	if !strings.Contains(out, "✓ Cloud enrollment reserved") || strings.Contains(out, "Automatic ACME enrollment requires") || strings.Contains(out, "Pre-enrolling device with Wendy Cloud") {
+		t.Fatalf("output %q; want one short reserved line", out)
 	}
 	if got != want {
 		t.Fatalf("bake = %#v, want %#v", got, want)

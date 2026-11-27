@@ -68,7 +68,7 @@ func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
 	}
 	defer func() { release(err) }()
 
-	result, err := recordingEpisodeIndex(ctx, conn.DataService)
+	result, err := recordingEpisodeIndex(ctx, conn.DataService, true)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (b *Backend) VisualEpisodes(session uint64) ([]*pb.DataEpisode, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := recordingEpisodeIndex(ctx, conn.DataService)
+	r, err := recordingEpisodeIndex(ctx, conn.DataService, false)
 	if err != nil {
 		return nil, err
 	}

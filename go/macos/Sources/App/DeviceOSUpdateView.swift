@@ -1,5 +1,10 @@
 import SwiftUI
 
+struct OSReleaseSnapshot: Decodable, Sendable {
+    var deviceType, installed, latest, artifactURL, blockedReason: String
+    var available, current: Bool
+}
+
 struct OSUpdateSnapshot: Decodable, Sendable {
     struct Install: Decodable, Sendable {
         var active: Bool
@@ -38,6 +43,15 @@ struct OSUpdateSnapshot: Decodable, Sendable {
             default: "Outcome not yet verified"
             }
         }
+        func hasFinalResult(after baseline: Int64) -> Bool {
+            guard hasResult == true && timestamp > baseline else { return false }
+            switch outcome {
+            case "OUTCOME_COMMITTED", "OUTCOME_ROLLED_BACK": return (Int64(finalizedAtUnix ?? "") ?? 0) > 0
+            // The health gate never finalizes these; the device stays up on the slot it booted.
+            case "OUTCOME_ROLLBACK_FAILED", "OUTCOME_COMMIT_FAILED": return true
+            default: return false
+            }
+        }
         func verifies(_ install: Install, installedVersion: String?) -> Bool {
             hasResult == true && timestamp > install.baseline && outcome == "OUTCOME_COMMITTED" &&
                 newOsVersion?.isEmpty == false && newOsVersion == installedVersion && engineStatus?.pending == nil
@@ -45,8 +59,31 @@ struct OSUpdateSnapshot: Decodable, Sendable {
     }
     var status: Status
     var install: Install
+    var restartSupported: Bool?
+    /// The only states RestartAfterOSUpdate accepts: the updater reports its pending
+    /// update installed, or this connection's install finished and awaits a result.
+    var awaitsRestart: Bool {
+        guard !install.active else { return false }
+        if let pending = status.engineStatus?.pending { return pending.phase == "installed" }
+        return install.rebootRequired && status.timestamp <= install.baseline
+    }
+    /// Restarting from the app needs an authenticated connection, which the backend reports.
+    var canRestart: Bool { awaitsRestart && restartSupported == true }
 }
 extension GoClient {
+    func restartAfterOSUpdate(session: UInt64) async throws {
+        try await perform { try Self.finish(WDOSRestart(session)) }
+    }
+
+    func checkOSRelease(session: UInt64) async throws -> OSReleaseSnapshot {
+        try await perform {
+            guard let result = WDOSRelease(session) else { throw WendyError(message: "Missing OS release information.") }
+            defer { WDOSUpdateFree(result) }
+            try Self.check(result.pointee.status)
+            return try JSONDecoder().decode(OSReleaseSnapshot.self, from: Data(Self.string(result.pointee.json).utf8))
+        }
+    }
+
     func osUpdate(session: UInt64, artifact: String = "", start: Bool = false) async throws -> OSUpdateSnapshot {
         try await perform {
             try Self.withCString(artifact) { artifact in
@@ -62,27 +99,103 @@ extension GoClient {
 struct DeviceOSUpdateView: View {
     let session: UInt64
     let deviceName: String
+    #if os(iOS)
+    @ObservedObject private var backgroundUpdate = MobileOSUpdateTask.shared
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
+    #endif
     @State private var actions = AsyncActions()
     @State private var snapshot: OSUpdateSnapshot?
     @State private var info: DeviceInfoSnapshot?
-    @State private var artifact = ""
-    @State private var confirm = false
+    @State private var release: OSReleaseSnapshot?
+    @State private var releaseError: String?
+    @State private var customArtifact: String?
+    @State private var confirmedArtifact: String?
+    @State private var confirmRestart = false
+    @State private var promptedRestart = false
+    @State private var waitingForRestart = false
+    @State private var restartBaseline: Int64 = 0
     @State private var busy = false
     @State private var error: String?
     @State private var refreshID = 0
     @State private var checked: Date?
-    private var pending: Bool { snapshot?.status.engineStatus?.pending != nil }
+    @State private var loadedSession: UInt64?
+    private var pending: Bool {
+        guard let snapshot else { return false }
+        return snapshot.status.engineStatus?.pending != nil ||
+            snapshot.install.rebootRequired && snapshot.status.timestamp <= snapshot.install.baseline
+    }
     private var running: Bool { snapshot?.install.active == true }
+    private var awaitsRestart: Bool { snapshot?.awaitsRestart == true }
+    private var canRestart: Bool { snapshot?.canRestart == true }
+    private var pendingNote: String {
+        let phase = snapshot?.status.engineStatus?.pending?.phase ?? ""
+        if phase == "failed" {
+            return "The device's OS updater marked its pending update as failed, so restarting will not finish it. Check the device with Wendy CLI (wendy os update-status)."
+        }
+        return "The device's OS updater has not reported its pending update as installed (phase: \(phase.isEmpty ? "unknown" : phase)). Restart is offered once it does. Refresh status to check again."
+    }
+    private var backgroundBusy: Bool {
+        #if os(iOS)
+        backgroundUpdate.active
+        #else
+        false
+        #endif
+    }
+    #if os(iOS)
+    /// The same device across reconnects and routes; a background install outlives its session.
+    private var updateDevice: String {
+        guard model.deviceSession == session, let device = model.connected else { return "" }
+        return recordingDeviceID(device)
+    }
+    #endif
+    private var backgroundFailure: String? {
+        #if os(iOS)
+        backgroundUpdate.failure(device: updateDevice)
+        #else
+        nil
+        #endif
+    }
+    private var artifact: String { customArtifact ?? release?.artifactURL ?? "" }
     private var canStart: Bool {
-        !busy && !running && !pending && error == nil && checked.map { Date().timeIntervalSince($0) < 60 } == true &&
-            snapshot?.status.engineStatus?.connector?.isEmpty == false && !artifact.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !busy && !running && !pending && !backgroundBusy && error == nil && checked.map { Date().timeIntervalSince($0) < 60 } == true &&
+            snapshot?.status.engineStatus?.connector?.isEmpty == false && !artifact.isEmpty &&
+            (customArtifact != nil || release?.available == true && release?.blockedReason.isEmpty == true)
     }
     var body: some View {
         Form {
             Section("Operating system") {
                 LabeledContent("Device", value: deviceName)
                 if let info { LabeledContent("Installed", value: info.osVersion.isEmpty ? info.os : info.osVersion) }
-                if let checked { Text("Checked \(checked.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
+                else if let release, !release.installed.isEmpty { LabeledContent("Installed", value: release.installed) }
+            }
+            if let backgroundFailure {
+                Section("Last update attempt") {
+                    FailureNote(message: backgroundFailure)
+                    Button("Dismiss") { dismissBackgroundFailure() }
+                }
+            }
+            if !running && !pending {
+                Section("OS update") {
+                    if let customArtifact {
+                        Text("Custom artifact").font(.headline)
+                        Text(customArtifact).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        Button("Install custom update") { confirmedArtifact = artifact }.disabled(!canStart)
+                        Button("Use latest release") { self.customArtifact = nil }
+                    } else if let release {
+                        LabeledContent("Latest release", value: release.latest)
+                        if release.available {
+                            Button("Update to \(release.latest)") { confirmedArtifact = artifact }.disabled(!canStart)
+                        } else if release.current {
+                            Label("OS is up to date", systemImage: "checkmark.circle")
+                        }
+                        if !release.blockedReason.isEmpty { FailureNote(message: release.blockedReason) }
+                    }
+                    if let releaseError { FailureNote(message: "Could not check OS releases. \(releaseError)") }
+                    if backgroundBusy { ProgressView("Preparing OS update…") }
+                    else if busy { ProgressView("Checking for OS updates…") }
+                    Button("Check for updates") { refreshID += 1 }.disabled(busy)
+                }
             }
             if let snapshot {
                 if running {
@@ -90,13 +203,24 @@ struct DeviceOSUpdateView: View {
                         Text(snapshot.install.phase.capitalized)
                         if let fraction = snapshot.install.fraction { ProgressView(value: fraction) }
                         else { ProgressView() }
-                        Text("Keep the device powered on and Wendy open on this device until installation finishes. Switching devices or backgrounding the app interrupts the connection.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Keep the device powered on and connected. You can use other apps during installation. Force-quitting Wendy or switching devices interrupts the update.").font(.footnote).foregroundStyle(.secondary)
                     }
-                } else if pending || snapshot.install.rebootRequired && snapshot.status.timestamp <= snapshot.install.baseline {
+                } else if awaitsRestart {
                     Section("Restart required") {
-                        Text("The OS is installed but has not been verified. Restart the device using its local controls or Wendy CLI device shell, then reconnect and check the update result.")
-                        Text("This app cannot restart the device yet.").font(.footnote).foregroundStyle(.secondary)
+                        if canRestart {
+                            Text("Restart the device to finish installing the OS update. Wendy will check its health after it reconnects.")
+                            if waitingForRestart { ProgressView("Waiting for device to restart…") }
+                            else { Button("Restart device") { confirmRestart = true }.disabled(busy) }
+                        } else {
+                            Text("The OS is installed but has not been verified. Restart the device using its local controls or Wendy CLI device shell, then reconnect and check the update result.")
+                            Text("Restarting from this app requires an enrolled device and an authenticated connection.").font(.footnote).foregroundStyle(.secondary)
+                        }
                     }
+                } else if pending && !waitingForRestart {
+                    Section("Update pending") { Text(pendingNote) }
+                }
+                if waitingForRestart && !awaitsRestart {
+                    Section("Verifying update") { ProgressView("Waiting for device health checks…") }
                 }
                 if !snapshot.install.error.isEmpty { FailureNote(message: snapshot.install.error) }
                 if snapshot.status.hasResult == true {
@@ -124,52 +248,118 @@ struct DeviceOSUpdateView: View {
                     }
                 }
                 if !running && !pending {
-                    Section {
-                        TextField("OS artifact URL", text: $artifact).autocorrectionDisabled()
-                        Button("Install OS update") { confirm = true }.disabled(!canStart)
-                    } header: { Text("Install update") } footer: {
-                        Text(snapshot.status.engineStatus?.connector?.isEmpty == false ?
-                             "Use the OS artifact for this device’s hardware. The Agent checks compatibility before installation. Restart and post-boot health checks are required." :
-                             "This device has not reported a supported OS updater. Refresh or check its Agent version.")
+                    if snapshot.status.engineStatus?.connector?.isEmpty != false {
+                        Text("This device has not reported a supported OS updater. Refresh or check its Agent version.").font(.footnote).foregroundStyle(.secondary)
                     }
                 }
             }
-            if busy { ProgressView("Checking device…") }
+            if !running && !pending {
+                Section {
+                    NavigationLink("Advanced") {
+                        CustomOSArtifactView(initialURL: customArtifact ?? "") { customArtifact = $0 }
+                    }
+                }
+            }
             if let error { FailureNote(message: error) }
-            Button("Refresh status") { refreshID += 1 }.disabled(busy)
+            if running || pending { Button("Refresh status") { refreshID += 1 }.disabled(busy) }
         }
         .navigationTitle("OS update").formStyle(.grouped)
         .task { await actions.run() }
         #if os(iOS)
-        .onChange(of: running) { _, active in UIApplication.shared.isIdleTimerDisabled = active }
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        .onReceive(backgroundUpdate.$snapshot) { value in
+            if backgroundUpdate.session == session, let value { snapshot = value; checked = Date() }
+        }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { refreshID += 1 } }
         #endif
-        .task(id: "\(session):\(refreshID)") { snapshot = nil; info = nil; checked = nil; await refresh() }
+        .task(id: "\(session):\(refreshID)") { await refresh() }
         .task(id: running) { if running { await monitor() } }
-        .confirmationDialog("Install an OS update on \(deviceName)?", isPresented: $confirm, titleVisibility: .visible) {
-            Button("Install OS update", role: .destructive) { actions.submit { await start() } }
+        .task(id: waitingForRestart) { if waitingForRestart { await monitorRestart() } }
+        .onChange(of: canRestart) { _, needsRestart in
+            if needsRestart && !promptedRestart { promptedRestart = true; confirmRestart = true }
+        }
+        .confirmationDialog("Restart \(deviceName)?", isPresented: $confirmRestart, titleVisibility: .visible) {
+            Button("Restart device", role: .destructive) { actions.submit { await restart() } }
+            Button("Later", role: .cancel) { }
+        } message: {
+            Text("Running apps will stop and the device will briefly disconnect. Keep power connected while the update finishes.")
+        }
+        .confirmationDialog("Install an OS update on \(deviceName)?", isPresented: Binding(get: { confirmedArtifact != nil }, set: { if !$0 { confirmedArtifact = nil } }), titleVisibility: .visible) {
+            if let target = confirmedArtifact {
+                Button("Install OS update", role: .destructive) { actions.submit { await start(artifact: target) } }
+            }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("The operating system will be replaced. Keep power connected and plan for downtime while the device restarts. The update is only verified after post-boot health checks. Your selected artifact: \(artifact)")
+            Text("The operating system will be replaced. Keep power connected and plan for downtime while the device restarts. The update is only verified after post-boot health checks. Your selected artifact: \(confirmedArtifact ?? "")")
         }
     }
     private func refresh() async {
-        busy = true; defer { busy = false }; error = nil
+        if loadedSession != session {
+            snapshot = nil; info = nil; customArtifact = nil; confirmedArtifact = nil; loadedSession = session
+            promptedRestart = false; waitingForRestart = false
+        }
+        busy = true; defer { busy = false }; error = nil; releaseError = nil; release = nil; checked = nil
         do {
             let value = try await GoClient.shared.osUpdate(session: session)
             let deviceInfo = try await GoClient.shared.deviceInfo(session: session)
             guard !Task.isCancelled else { return }
             snapshot = value; info = deviceInfo; checked = Date()
         } catch { if !Task.isCancelled { self.error = "\(error.localizedDescription) Reconnect to this device and reopen OS update to check its result." } }
+        guard !Task.isCancelled, !running, !pending else { return }
+        do {
+            let value = try await GoClient.shared.checkOSRelease(session: session)
+            guard !Task.isCancelled else { return }
+            release = value
+        } catch { if !Task.isCancelled { releaseError = error.localizedDescription } }
     }
-    private func start() async {
-        guard canStart else { return }
+    private func start(artifact target: String) async {
+        guard canStart, target == artifact else {
+            // The check can expire or be replaced while the confirmation is open.
+            if error == nil { error = "The OS update did not start because the release information changed or is out of date. Check for updates, then confirm again." }
+            return
+        }
         busy = true; error = nil; defer { busy = false }
         do {
-            let value = try await GoClient.shared.osUpdate(session: session, artifact: artifact.trimmingCharacters(in: .whitespacesAndNewlines), start: true)
+            #if os(iOS)
+            try backgroundUpdate.start(session: session, scope: model.mobileCloudSelectionKey, device: updateDevice, name: deviceName, artifact: target)
+            #else
+            let value = try await GoClient.shared.osUpdate(session: session, artifact: target, start: true)
             guard !Task.isCancelled else { return }
             snapshot = value
+            #endif
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+    private func dismissBackgroundFailure() {
+        #if os(iOS)
+        backgroundUpdate.dismissFailure(device: updateDevice)
+        #endif
+    }
+    private func restart() async {
+        guard canRestart, !running, !busy else { return }
+        busy = true; error = nil; defer { busy = false }
+        do {
+            restartBaseline = snapshot?.status.timestamp ?? 0
+            try await GoClient.shared.restartAfterOSUpdate(session: session)
+            guard !Task.isCancelled else { return }
+            waitingForRestart = true
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+    private func monitorRestart() async {
+        let deadline = ContinuousClock.now + .seconds(300)
+        while !Task.isCancelled && ContinuousClock.now < deadline {
+            do {
+                try await Task.sleep(for: .seconds(5))
+                let value = try await GoClient.shared.osUpdate(session: session)
+                let deviceInfo = try await GoClient.shared.deviceInfo(session: session)
+                guard !Task.isCancelled else { return }
+                snapshot = value; info = deviceInfo; checked = Date()
+                // A failed commit leaves the update pending for a retry, so pending state cannot gate this.
+                if value.status.hasFinalResult(after: restartBaseline) { waitingForRestart = false; return }
+            } catch { if Task.isCancelled { return } }
+        }
+        if !Task.isCancelled {
+            waitingForRestart = false
+            error = "The device has not reported its update result yet. Reconnect and refresh status."
+        }
     }
     private func monitor() async {
         let deadline = Date().addingTimeInterval(45 * 60)
@@ -185,5 +375,30 @@ struct DeviceOSUpdateView: View {
                 return
             }
         }
+    }
+}
+
+private struct CustomOSArtifactView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var url: String
+    let select: (String) -> Void
+
+    init(initialURL: String, select: @escaping (String) -> Void) {
+        _url = State(initialValue: initialURL)
+        self.select = select
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("OS artifact URL", text: $url).autocorrectionDisabled()
+                Button("Use this artifact") {
+                    select(url.trimmingCharacters(in: .whitespacesAndNewlines))
+                    dismiss()
+                }.disabled(url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } header: { Text("Custom OS update") } footer: {
+                Text("Override the release catalog with an artifact for this device’s hardware. You will confirm installation on the OS update screen.")
+            }
+        }.formStyle(.grouped).navigationTitle("Advanced")
     }
 }

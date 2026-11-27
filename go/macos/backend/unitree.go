@@ -12,6 +12,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/unitreecloud"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc/status"
 )
 
 // UnitreeRobot deliberately excludes robot keys and account credentials.
@@ -145,7 +146,7 @@ func (b *Backend) PairUnitreeContext(ctx context.Context, session uint64, serial
 		if ctx.Err() != nil {
 			return errors.New("Go2 pairing timed out or was canceled. Check the Wendy device connection and retry.")
 		}
-		return errors.New("Unitree pairing failed. Check the robot address, sign in to Unitree, and verify the Wendy agent is up to date.")
+		return errors.New(unitree.SafeConnectionFailureMessage(status.Convert(err).Message()))
 	}
 	if response.GetRobot() == nil || !response.GetRobot().GetPaired() {
 		return errors.New("the Wendy device did not confirm the Unitree pairing")

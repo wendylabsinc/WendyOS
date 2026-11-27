@@ -119,13 +119,7 @@ func pairedSensorReachesROS2Node(t *testing.T, subscriber, rmw string, domain in
 			return mcusource.NewTCPTransport(tcpDialer{}, addr), nil
 		},
 		func(string) ros2camera.CameraWriter { return nil }, nil)
-	supervisor.SetSensorChannelOpener(func(p mcusource.SensorPairing, d *sensorlinkpb.SensorDescriptor) (mcusource.SensorChannelWriter, error) {
-		channel, err := bridge.OpenChannel(p.Key(), p.Name, d)
-		if err != nil {
-			return nil, err
-		}
-		return channel, nil
-	})
+	supervisor.SetGenericSink(bridge)
 	pairing := mcusource.SensorPairing{SourceAssetID: 7, OrgID: 1, Name: "porch-board"}
 	go func() { _ = supervisor.RunPairing(ctx, pairing, ln.Addr().String()) }()
 

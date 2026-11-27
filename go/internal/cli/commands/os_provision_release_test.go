@@ -234,7 +234,7 @@ func TestRefusedUnmountOnMacIsReportedOnlyWhenTheEjectFails(t *testing.T) {
 		_, _, provErr = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk4"}, nil, "lab-nano", nil, true, agentSeed{})
 		return nil
 	})
-	if provErr != nil || retried || !strings.Contains(out, "Config partition written: name lab-nano") {
+	if provErr != nil || retried || !strings.Contains(out, "✓ First-boot settings written") {
 		t.Fatalf("provisioning = %v, retry offered %v, output %q; want written, no retry", provErr, retried, out)
 	}
 	if err := diskInstallResult("WendyOS 1.0", "SD Card", provErr, nil); err != nil {
@@ -307,7 +307,7 @@ func TestProvisionConfigWithRetryNeverRetriesAStillMountedPartition(t *testing.T
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) || !strings.Contains(err.Error(), "still mounted") {
 				t.Fatalf("provisionConfigWithRetry = %v; want %q and the mount", err, c.wantErr)
 			}
-			if got := strings.Contains(out, "Config partition written"); got != c.written {
+			if got := strings.Contains(out, "First-boot settings written"); got != c.written {
 				t.Fatalf("output %q; written line printed = %v, want %v", out, got, c.written)
 			}
 		})
