@@ -40,6 +40,9 @@ type Graph struct {
 	DomainID            int
 	NetworkNamespacePID uint32
 	HostNetwork         bool
+	// SensorRead reports that the app holds the sensor-read entitlement, which
+	// is what allows it to read the generic channels of paired sensor sources.
+	SensorRead bool
 	// Verify confirms that InstanceKey still owns NetworkNamespacePID after a
 	// stable namespace handle is captured but before it is entered, and once
 	// more before discovery starts.

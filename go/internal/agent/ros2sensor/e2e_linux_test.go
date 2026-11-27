@@ -113,7 +113,7 @@ func pairedSensorReachesROS2Node(t *testing.T, subscriber, rmw string, domain in
 			return nil, nil
 		}
 		return []ros2camera.Graph{{Key: "app", InstanceKey: "app", DomainID: domain,
-			NetworkNamespacePID: pid, HostNetwork: !isolated}}, nil
+			NetworkNamespacePID: pid, HostNetwork: !isolated, SensorRead: true}}, nil
 	}
 	bridge := ros2sensor.New(zap.NewNop(), pool, apps)
 	go bridge.Run(ctx)

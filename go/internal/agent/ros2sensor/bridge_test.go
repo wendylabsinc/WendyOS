@@ -159,11 +159,17 @@ func testBridge(graphs ...ros2camera.Graph) (*Bridge, *fakeDomain) {
 }
 
 func isolatedApp(id string, pid uint32, domain int) ros2camera.Graph {
-	return ros2camera.Graph{Key: id, InstanceKey: id + "-container", DomainID: domain, NetworkNamespacePID: pid}
+	return ros2camera.Graph{Key: id, InstanceKey: id + "-container", DomainID: domain, NetworkNamespacePID: pid, SensorRead: true}
 }
 
 func hostApp(id string, pid uint32, domain int) ros2camera.Graph {
-	return ros2camera.Graph{Key: id, InstanceKey: id + "-container", DomainID: domain, NetworkNamespacePID: pid, HostNetwork: true}
+	return ros2camera.Graph{Key: id, InstanceKey: id + "-container", DomainID: domain, NetworkNamespacePID: pid, HostNetwork: true, SensorRead: true}
+}
+
+// withoutSensorRead is the same app without the sensor-read entitlement.
+func withoutSensorRead(g ros2camera.Graph) ros2camera.Graph {
+	g.SensorRead = false
+	return g
 }
 
 func temperatureChannel(id uint32, name string) *sensorlinkpb.SensorDescriptor {
@@ -202,7 +208,7 @@ func TestNoParticipantJoinsAnAppUntilAChannelIsOpen(t *testing.T) {
 	}
 }
 
-func TestChannelIsPublishedIntoEveryROS2App(t *testing.T) {
+func TestChannelIsPublishedIntoEveryROS2AppThatMayReadIt(t *testing.T) {
 	b, d := testBridge(
 		isolatedApp("robot", 4242, 17),
 		hostApp("nav", 5151, 0),
@@ -609,5 +615,67 @@ func TestTimingTopicClosesWithItsChannel(t *testing.T) {
 	_ = first.Close()
 	if len(lease.open()) != 1 || len(lease.timing()) != 1 || lease.timing()[0].pub.Topic != "rt/sensorlink/porch/other/timing" {
 		t.Fatalf("after closing one channel: %d reading and %d timing topics", len(lease.open()), len(lease.timing()))
+	}
+}
+
+func TestOnlyAppsWithTheSensorReadEntitlementGetTheTopics(t *testing.T) {
+	// sensor-read is what lets an app read paired sensor channels. A topic in
+	// an app's network would hand them over without it.
+	b, d := testBridge(
+		isolatedApp("entitled", 4242, 17),
+		withoutSensorRead(isolatedApp("plain", 4343, 17)),
+	)
+	if _, err := b.OpenChannel("asset:7", "porch", temperatureChannel(3, "temperature")); err != nil {
+		t.Fatal(err)
+	}
+	b.reconcile(context.Background())
+	leases := d.openLeases()
+	if len(leases) != 1 || leases[0].cfg.NetworkNamespacePID != 4242 {
+		t.Fatalf("%d participants; want one, in the network of the app with sensor-read", len(leases))
+	}
+
+	// The entitlement is read each time the apps are listed: an app redeployed
+	// with it gains the topics, and one redeployed without it loses them.
+	d.set(withoutSensorRead(isolatedApp("entitled", 4242, 17)), isolatedApp("plain", 4444, 17))
+	b.reconcile(context.Background())
+	if !leases[0].closed {
+		t.Fatal("participant stayed in the network of an app that no longer holds sensor-read")
+	}
+	leases = d.openLeases()
+	if len(leases) != 1 || leases[0].cfg.NetworkNamespacePID != 4444 {
+		t.Fatalf("%d participants after the redeploy; want one, in the newly entitled app", len(leases))
+	}
+}
+
+func TestHostNetworkGetsTheTopicsOnlyWhenEveryROS2AppOnItMayReadThem(t *testing.T) {
+	// Apps on the host's network share it: a topic published there reaches all
+	// of them on that domain, entitled or not.
+	b, d := testBridge(
+		hostApp("nav", 5151, 0),
+		withoutSensorRead(hostApp("viz", 6161, 0)),
+		hostApp("arm", 7171, 9),
+		withoutSensorRead(isolatedApp("plain", 4343, 0)), // has a network of its own
+	)
+	if _, err := b.OpenChannel("asset:7", "porch", temperatureChannel(3, "temperature")); err != nil {
+		t.Fatal(err)
+	}
+	b.reconcile(context.Background())
+	leases := d.openLeases()
+	if len(leases) != 1 || leases[0].cfg.DomainID != 9 || leases[0].cfg.NetworkNamespacePID != 0 {
+		t.Fatalf("%d participants; want one on the host's network, on domain 9 only", len(leases))
+	}
+
+	// The app without the entitlement stops: the rest of domain 0 may read.
+	d.set(hostApp("nav", 5151, 0), hostApp("arm", 7171, 9), withoutSensorRead(isolatedApp("plain", 4343, 0)))
+	b.reconcile(context.Background())
+	if n := len(d.openLeases()); n != 2 {
+		t.Fatalf("%d participants once every host-network app on domain 0 holds sensor-read, want 2", n)
+	}
+	// And comes back: the host's domain 0 is left again.
+	d.set(hostApp("nav", 5151, 0), withoutSensorRead(hostApp("viz", 6262, 0)), hostApp("arm", 7171, 9))
+	b.reconcile(context.Background())
+	open := d.openLeases()
+	if len(open) != 1 || open[0].cfg.DomainID != 9 {
+		t.Fatalf("%d participants after an app without sensor-read joined the host's domain 0, want only domain 9", len(open))
 	}
 }

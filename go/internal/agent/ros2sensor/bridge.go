@@ -55,8 +55,9 @@ func (l poolLease) NewWriter(pub rtps.Publication) (sampleWriter, error) {
 	return w, nil
 }
 
-// Bridge publishes open sensor channels into every running ROS 2 app. It
-// joins an app's ROS 2 network only while there is a channel to publish.
+// Bridge publishes open sensor channels into the running ROS 2 apps that hold
+// the sensor-read entitlement. It joins an app's ROS 2 network only while
+// there is a channel to publish.
 type Bridge struct {
 	logger  *zap.Logger
 	graphs  ros2camera.GraphSource
@@ -394,20 +395,33 @@ func (b *Bridge) reconcile(ctx context.Context) {
 			listed = false
 			b.logger.Debug("listing ROS 2 apps for sensor channels failed", zap.Error(err))
 		}
+		// A topic is readable by everything in the network it is published
+		// in, so it only goes where sensor-read allows it: into the network
+		// of an app that holds the entitlement, and onto the host's network
+		// only while every ROS 2 app there, on that domain, holds it.
+		hostDomainOpen := map[int]bool{}
 		for _, g := range graphs {
 			if g.DomainID < 0 || g.DomainID > 232 || g.NetworkNamespacePID == 0 {
 				continue
 			}
-			cfg := rtps.Config{DomainID: g.DomainID, Interface: loopback, Publish: true}
-			key := fmt.Sprintf("host:%d", g.DomainID)
-			if !g.HostNetwork {
-				cfg.NetworkNamespacePID = g.NetworkNamespacePID
-				if verify := g.Verify; verify != nil {
-					cfg.VerifyNetworkNamespace = func() bool { return verify(ctx) }
-				}
-				key = fmt.Sprintf("%s:%d:%d", g.InstanceKey, g.NetworkNamespacePID, g.DomainID)
+			if g.HostNetwork {
+				open, seen := hostDomainOpen[g.DomainID]
+				hostDomainOpen[g.DomainID] = g.SensorRead && (open || !seen)
+				continue
 			}
-			desired[key] = cfg
+			if !g.SensorRead {
+				continue
+			}
+			cfg := rtps.Config{DomainID: g.DomainID, Interface: loopback, Publish: true, NetworkNamespacePID: g.NetworkNamespacePID}
+			if verify := g.Verify; verify != nil {
+				cfg.VerifyNetworkNamespace = func() bool { return verify(ctx) }
+			}
+			desired[fmt.Sprintf("%s:%d:%d", g.InstanceKey, g.NetworkNamespacePID, g.DomainID)] = cfg
+		}
+		for domain, open := range hostDomainOpen {
+			if open {
+				desired[fmt.Sprintf("host:%d", domain)] = rtps.Config{DomainID: domain, Interface: loopback, Publish: true}
+			}
 		}
 	}
 
