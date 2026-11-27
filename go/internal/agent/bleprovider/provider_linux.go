@@ -889,6 +889,7 @@ func (r *runtime) scanOnce(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 		cancel()
 		return err
 	}
+	snapshotStarted := time.Now()
 	objects, err := getManaged(query, bus)
 	cancel()
 	if err != nil {
@@ -902,7 +903,7 @@ func (r *runtime) scanOnce(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 		return nil
 	}
 	now := time.Now()
-	peers := r.discoveredCandidates(objects, now)
+	peers := r.discoveredCandidates(objects, snapshotStarted, now)
 	r.startCandidates(ctx, peers, now)
 
 	r.maybeRestartDiscovery(ctx, bus, adapter, now)
@@ -952,12 +953,12 @@ func (r *runtime) startCandidates(ctx context.Context, peers []candidate, now ti
 
 }
 
-func (r *runtime) discoveredCandidates(objects managedObjects, at time.Time) []candidate {
+func (r *runtime) discoveredCandidates(objects managedObjects, started, at time.Time) []candidate {
 	// Device1.ServiceData is retained by BlueZ after an advertiser stops.
 	// Only live validated advertising observations refresh radio selection.
 	// Connected ACLs may also supply tentative CoC bootstrap targets; those
 	// never count as newly heard advertisements.
-	peers, newlySeen := r.freshness.candidates(objects, at)
+	peers, newlySeen := r.freshness.candidatesFromSnapshot(objects, started, at)
 	if len(newlySeen) > 0 {
 		r.discovery.observed(at)
 	}

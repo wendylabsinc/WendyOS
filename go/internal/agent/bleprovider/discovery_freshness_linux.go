@@ -43,6 +43,7 @@ type advertisementFreshness struct {
 	seen              map[dbus.ObjectPath]freshAdvertisement
 	partial           map[localNameKey]localNameParts
 	connected         map[dbus.ObjectPath]connectedCandidate
+	connectedChange   time.Time
 }
 
 func newAdvertisementFreshness(adapter dbus.ObjectPath, uuid, networkName string, self meshid.Device) *advertisementFreshness {
@@ -72,7 +73,7 @@ func (f *advertisementFreshness) observe(path dbus.ObjectPath, props map[string]
 				if len(raw) != 0 && raw[0] != AdvertisementVersion {
 					continue // Unsupported versions neither refresh nor withdraw v1.
 				}
-				f.forget(path) // Same v1 UUID now carries a different mesh/payload.
+				f.forget(path, at) // Same v1 UUID now carries a different mesh/payload.
 				return
 			}
 		}
@@ -117,6 +118,9 @@ func (f *advertisementFreshness) handle(signal *dbus.Signal, at time.Time) {
 			if changed {
 				f.mu.Lock()
 				delete(f.connected, signal.Path)
+				if at.After(f.connectedChange) {
+					f.connectedChange = at
+				}
 				f.mu.Unlock()
 				break
 			}
@@ -137,17 +141,20 @@ func (f *advertisementFreshness) handle(signal *dbus.Signal, at time.Time) {
 		}
 		for _, iface := range interfaces {
 			if iface == deviceInterface {
-				f.forget(path)
+				f.forget(path, at)
 				return
 			}
 		}
 	}
 }
 
-func (f *advertisementFreshness) forget(path dbus.ObjectPath) {
+func (f *advertisementFreshness) forget(path dbus.ObjectPath, at time.Time) {
 	f.mu.Lock()
 	delete(f.seen, path)
 	delete(f.connected, path)
+	if at.After(f.connectedChange) {
+		f.connectedChange = at
+	}
 	for key := range f.partial {
 		if key.path == path {
 			delete(f.partial, key)
@@ -156,9 +163,9 @@ func (f *advertisementFreshness) forget(path dbus.ObjectPath) {
 	f.mu.Unlock()
 }
 
-// candidates also returns the devices newly heard since the previous scan.
+// candidatesFromSnapshot also returns the devices newly heard since the previous scan.
 // Selection.Seen must follow advertisement events, not each cache poll.
-func (f *advertisementFreshness) candidates(objects managedObjects, at time.Time) ([]candidate, []dbus.ObjectPath) {
+func (f *advertisementFreshness) candidatesFromSnapshot(objects managedObjects, started, at time.Time) ([]candidate, []dbus.ObjectPath) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	byAddress := make(map[string]candidate)
@@ -197,6 +204,11 @@ func (f *advertisementFreshness) candidates(objects managedObjects, at time.Time
 		f.connected = make(map[dbus.ObjectPath]connectedCandidate)
 	} else {
 		clear(f.connected)
+	}
+	// An invalidating signal can arrive while GetManagedObjects is in flight.
+	// Treat that snapshot as unsuitable for ACL bootstrap and try the next poll.
+	if f.connectedChange.After(started) {
+		objects = nil
 	}
 	for path, ifaces := range objects {
 		if len(f.connected) >= maxFreshAdvertisements {
