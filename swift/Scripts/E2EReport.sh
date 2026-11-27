@@ -7,6 +7,8 @@ DEFAULT_PACKAGE_DIR="$SWIFT_DIR/WendyE2ETests"
 
 RUN_DIR=""
 PACKAGE_DIR="$DEFAULT_PACKAGE_DIR"
+TESTS_DIR=""
+SOURCE_REPO=""
 
 usage() {
   cat <<EOF
@@ -18,6 +20,8 @@ Options:
   --run-dir DIR      Required Swift E2E run directory produced by E2EAggregate.sh.
   --package-dir DIR  Swift package directory containing swift-e2e-testing;
                      defaults to $DEFAULT_PACKAGE_DIR.
+  --tests-dir DIR    Isolated tested Swift sources; parsed as data.
+  --repo DIR         Tested repository for test identities and Go coverage views.
   --help             Show this help message.
 EOF
 }
@@ -49,6 +53,14 @@ while [[ $# -gt 0 ]]; do
       RUN_DIR="$2"
       shift 2
       ;;
+    --repo)
+      SOURCE_REPO="$2"
+      shift 2
+      ;;
+    --tests-dir)
+      TESTS_DIR="$2"
+      shift 2
+      ;;
     --package-dir)
       PACKAGE_DIR="$2"
       shift 2
@@ -73,6 +85,8 @@ fi
 
 RUN_DIR="$(absolute_existing_dir_path "$RUN_DIR")"
 PACKAGE_DIR="$(absolute_existing_dir_path "$PACKAGE_DIR")"
+[[ -z "$TESTS_DIR" ]] || TESTS_DIR="$(absolute_existing_dir_path "$TESTS_DIR")"
+[[ -z "$SOURCE_REPO" ]] || SOURCE_REPO="$(absolute_existing_dir_path "$SOURCE_REPO")"
 REPORT_PATH="$RUN_DIR/index.html"
 
 run_test_result_files() {
@@ -104,7 +118,10 @@ sanitize_run_xunit
 set +e
 (
   cd "$PACKAGE_DIR"
-  swift run swift-e2e-testing report --run-dir "$RUN_DIR"
+  report_args=(--run-dir "$RUN_DIR")
+  [[ -z "$TESTS_DIR" ]] || report_args+=(--tests-dir "$TESTS_DIR")
+  [[ -z "$SOURCE_REPO" ]] || report_args+=(--repo "$SOURCE_REPO")
+  swift run swift-e2e-testing report "${report_args[@]}"
 )
 report_status=$?
 set -e

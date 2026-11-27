@@ -7,6 +7,7 @@ target. Every board builds `wendyos-image`; the board id selects the machine.
 |-----------|--------|----------|
 | `meta-tegra-extensions*` | NVIDIA Jetson (Orin, Thor) | `jetson-*` |
 | `meta-rpi-extensions` | Raspberry Pi 3/4/5 | `rpi*` |
+| `meta-rockchip-extensions` | Orange Pi 5 Pro | `orange-pi-5-pro` |
 | `meta-x86-extensions` | Generic x86_64 PC | `generic-x86-64` |
 | `meta-vm-extensions` | ARM64 and x86-64 VMs | `vm-arm64`, `vm-x86-64` |
 
@@ -66,6 +67,14 @@ installation guide.
 - **Board ids**: `rpi3`, `rpi4`, `rpi5`. One image per board boots from SD or a USB
   disk (Pi 3/4) or from SD or NVMe (Pi 5)
 - **Features**: I2C, SPI, serial console, USB gadget, A/B OTA
+- **Output**: `.wic` plus `.wic.bmap`
+
+### Rockchip (`meta-rockchip-extensions`)
+
+- **Board id**: `orange-pi-5-pro` (machine `orangepi-5-pro-wendyos`). One image boots
+  from microSD, eMMC or NVMe; U-Boot and its loaders sit before the first partition
+- **Features**: Ethernet, Wi-Fi, Mali GPU (`panthor`), NPU (`rocket`), A/B OTA
+  through `wendyos-rockchip.scr` and `uboot.env`. No USB gadget
 - **Output**: `.wic` plus `.wic.bmap`
 
 ## Common Recipes

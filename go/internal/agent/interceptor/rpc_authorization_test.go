@@ -162,6 +162,8 @@ func TestRPCDeviceExactMethods(t *testing.T) {
 		"/wendy.agent.services.v1.WendyContainerService/ListContainers",
 		"/wendy.agent.services.v1.WendyContainerService/WriteLayer",
 		"/wendy.agent.services.v1.WendyAgentService/GetAgentVersion",
+		// A peer device must never be able to reboot this one.
+		agentpbv2.WendyPowerService_Reboot_FullMethodName,
 		// Version/service lookalikes must not inherit the actual MeshDial grant.
 		"/wendy.agent.services.v1.WendyMeshService/MeshDial",
 		"/wendy.agent.services.v1.WendyWiFiService/Connect",

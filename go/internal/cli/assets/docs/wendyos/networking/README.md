@@ -75,6 +75,7 @@ WendyOS runs on multiple hardware platforms. Networking behaviour is identical a
 | Raspberry Pi 5 | `dwc2` | USB 2.0 |
 | Jetson AGX Orin / Orin Nano | `tegra-xudc` | USB 3.2 |
 | Dragonwing IQ8 | `a400000.usb` | USB 2.0 |
+| Orange Pi 5 Pro | None: no USB gadget; use Ethernet or Wi-Fi | — |
 | Other Linux (generic) | Detected at runtime | USB 2.0 fallback |
 
 The virtual machine boards (`vm-arm64-wendyos`, `vm-x86-64-wendyos`) do not use USB NCM gadget networking. They emulate a standard virtio network device instead.

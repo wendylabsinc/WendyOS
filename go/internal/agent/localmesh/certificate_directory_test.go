@@ -37,7 +37,8 @@ func TestDirectoryCertificateExchangeAvoidsWholeChainFrames(t *testing.T) {
 		toReceiver bool
 	}
 	var queue []delivery
-	for _, m := range sender.Reconcile(now) {
+	sender.seedAnnouncements("", now)
+	for _, m := range sender.drainAnnouncements(now, 2) {
 		queue = append(queue, delivery{m, true})
 	}
 	for steps := 0; len(queue) > 0; steps++ {

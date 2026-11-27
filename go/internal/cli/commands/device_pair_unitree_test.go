@@ -54,6 +54,33 @@ func unitreePairUpdate(m unitreePairModel, msg tea.Msg) (unitreePairModel, tea.C
 
 func unitreeKey(key string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)} }
 
+func TestDevicePairUnitreeShowsSafeConnectionFailure(t *testing.T) {
+	const busy = "Go2 is already connected to another controller. Disconnect the Unitree Go app or ask the other operator to disconnect, then retry."
+	for _, tc := range []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{"busy", busy, busy},
+		{"older agent busy", "Go2 is already connected to another controller. Arrange a handoff with its operator before retrying.", busy},
+		{"rejected key", "Go2 rejected the robot encryption key. Check that the serial number and IP address refer to the same robot.", "rejected the robot encryption key"},
+		{"unknown", "remote-secret", "connection setup failed"},
+		{"known prefix with secret", busy + " remote-secret", "connection setup failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &unitreePairTestClient{pairErr: status.Error(codes.Unavailable, tc.message)}
+			h := &unitreePairHandler{ctx: context.Background(), client: c}
+			result := h.pair(&agentpbv2.UnitreeRobot{Serial: "GO2-A", Address: "192.0.2.1"}, "", true)()
+			m := newUnitreePairModel(h)
+			m, _ = unitreePairUpdate(m, result)
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, tc.want) || strings.Contains(view, "remote-secret") {
+				t.Fatalf("pairing view did not safely show diagnostic: %s", view)
+			}
+		})
+	}
+}
+
 func TestDevicePairUnitreeLoginFormAndBackgroundResults(t *testing.T) {
 	c := &unitreePairTestClient{}
 	var loggedEmail, loggedPassword, loggedRegion string

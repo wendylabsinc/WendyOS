@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -149,7 +150,7 @@ func TestDownloadAgentFromGCS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch manifest: %v", err)
 	}
-	bin, ver, err := downloadAgentArtifactFromGCS(srv.URL, m, "", "amd64", false)
+	bin, ver, err := downloadAgentArtifactFromGCS(context.Background(), srv.URL, m, "", "amd64", false)
 	if err != nil {
 		t.Fatalf("downloadAgentArtifactFromGCS: %v", err)
 	}
@@ -162,7 +163,7 @@ func TestDownloadAgentFromGCSMissingArch(t *testing.T) {
 	m := &agentManifest{Latest: "v1", Versions: map[string]agentManifestVersion{
 		"v1": {Artifacts: map[string]agentManifestArtifact{"amd64": {Path: "p"}}},
 	}}
-	if _, _, err := downloadAgentArtifactFromGCS("http://unused", m, "", "arm64", false); err == nil {
+	if _, _, err := downloadAgentArtifactFromGCS(context.Background(), "http://unused", m, "", "arm64", false); err == nil {
 		t.Fatal("expected error for missing arch")
 	}
 }
@@ -180,7 +181,7 @@ func TestDownloadAgentFromGCSChecksumMismatch(t *testing.T) {
 	m := &agentManifest{Latest: "v1", Versions: map[string]agentManifestVersion{
 		"v1": {Artifacts: map[string]agentManifestArtifact{"amd64": {Path: "agent/v1/a.tar.gz", Checksum: "deadbeef"}}},
 	}}
-	if _, _, err := downloadAgentArtifactFromGCS(srv.URL, m, "", "amd64", false); err == nil {
+	if _, _, err := downloadAgentArtifactFromGCS(context.Background(), srv.URL, m, "", "amd64", false); err == nil {
 		t.Fatal("expected checksum mismatch error")
 	}
 }
@@ -348,7 +349,7 @@ func TestDownloadAgentArtifactFromGCSDarwinReturnsRawZipBytes(t *testing.T) {
 		}},
 	}}
 
-	got, ver, err := downloadAgentArtifactFromGCS(srv.URL, m, "darwin", "arm64", false)
+	got, ver, err := downloadAgentArtifactFromGCS(context.Background(), srv.URL, m, "darwin", "arm64", false)
 	if err != nil {
 		t.Fatalf("downloadAgentArtifactFromGCS: %v", err)
 	}
@@ -376,7 +377,7 @@ func TestDownloadAgentArtifactFromGCSDarwinChecksumMismatch(t *testing.T) {
 			"darwin-arm64": {Path: "agent/v1/a.zip", Checksum: "deadbeef"},
 		}},
 	}}
-	if _, _, err := downloadAgentArtifactFromGCS(srv.URL, m, "darwin", "arm64", false); err == nil {
+	if _, _, err := downloadAgentArtifactFromGCS(context.Background(), srv.URL, m, "darwin", "arm64", false); err == nil {
 		t.Fatal("expected checksum mismatch error")
 	}
 }
@@ -388,7 +389,7 @@ func TestDownloadAgentArtifactFromGCSMissingDarwinKey(t *testing.T) {
 	m := &agentManifest{Latest: "v1", Versions: map[string]agentManifestVersion{
 		"v1": {Artifacts: map[string]agentManifestArtifact{"arm64": {Path: "agent/v1/a.tar.gz"}}},
 	}}
-	_, _, err := downloadAgentArtifactFromGCS("http://unused", m, "darwin", "arm64", false)
+	_, _, err := downloadAgentArtifactFromGCS(context.Background(), "http://unused", m, "darwin", "arm64", false)
 	if err == nil {
 		t.Fatal("expected error for missing darwin-arm64 key")
 	}
@@ -402,7 +403,7 @@ func TestDownloadAgentArtifactFromGCSMissingLinuxKeyKeepsExistingWording(t *test
 	m := &agentManifest{Latest: "v1", Versions: map[string]agentManifestVersion{
 		"v1": {Artifacts: map[string]agentManifestArtifact{"amd64": {Path: "p"}}},
 	}}
-	_, _, err := downloadAgentArtifactFromGCS("http://unused", m, "", "arm64", false)
+	_, _, err := downloadAgentArtifactFromGCS(context.Background(), "http://unused", m, "", "arm64", false)
 	if err == nil {
 		t.Fatal("expected error for missing arch")
 	}
@@ -427,7 +428,7 @@ func TestDownloadAgentArtifactFromGCSErrorWordingIsPlatformAware(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := downloadAgentArtifactFromGCS(srv.URL, m, "", "arm64", false)
+	_, _, err := downloadAgentArtifactFromGCS(context.Background(), srv.URL, m, "", "arm64", false)
 	if err == nil {
 		t.Fatal("expected error for 404 linux download")
 	}
@@ -435,7 +436,7 @@ func TestDownloadAgentArtifactFromGCSErrorWordingIsPlatformAware(t *testing.T) {
 		t.Fatalf("linux wording changed: got %q, want %q", err.Error(), wantMsg)
 	}
 
-	_, _, err = downloadAgentArtifactFromGCS(srv.URL, m, "darwin", "arm64", false)
+	_, _, err = downloadAgentArtifactFromGCS(context.Background(), srv.URL, m, "darwin", "arm64", false)
 	if err == nil {
 		t.Fatal("expected error for 404 darwin download")
 	}
@@ -477,7 +478,7 @@ func TestDownloadAgentArtifactFromGCSDarwinZipSanityCheck(t *testing.T) {
 				}},
 			}}
 
-			bin, ver, err := downloadAgentArtifactFromGCS(srv.URL, m, "darwin", "arm64", false)
+			bin, ver, err := downloadAgentArtifactFromGCS(context.Background(), srv.URL, m, "darwin", "arm64", false)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")

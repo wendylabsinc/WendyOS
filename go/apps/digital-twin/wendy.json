@@ -1,0 +1,12 @@
+{
+  "appId": "dev.wendy.digital-twin",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8791 },
+    { "type": "persist", "name": "dev.wendy.digital-twin", "path": "/data" },
+    { "type": "admin" }
+  ],
+  "readiness": { "tcpSocket": { "port": 8791 }, "timeoutSeconds": 30 }
+}

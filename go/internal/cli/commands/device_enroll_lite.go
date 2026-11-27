@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -20,7 +21,7 @@ import (
 
 type liteEnrollmentOptions struct {
 	csrURL, timeURL, brokerHost       string
-	caCertsURL                        string
+	caCertsURL, estURL                string
 	deviceRoots, tsaRoots, httpsRoots string
 	brokerPort                        uint32
 }
@@ -44,8 +45,8 @@ func runSelectedDeviceEnrollment(cmd *cobra.Command, target *SelectedDevice, aut
 		}
 		return runLiteEnrollmentFn(cmd, *target.External, auth, name, opts)
 	}
-	if opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "" || opts.caCertsURL != "" {
-		return fmt.Errorf("trust bundle flags apply only to Wendy Lite devices")
+	if opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "" || opts.caCertsURL != "" || opts.estURL != "" {
+		return fmt.Errorf("trust bundle and EST flags apply only to Wendy Lite devices")
 	}
 	conn, err := connectFromSelectedDevice(target, resolveConfig{suppressProvisioningHint: true})
 	if err != nil {
@@ -108,7 +109,8 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if !challenge.GetUuidEnrollmentSupported() {
 		return errLiteUUIDUnsupported
 	}
-	name, err = enrollmentName(identity.Name, name)
+	org := cachedCloudOrganizationName(auth)
+	name, err = enrollmentName(identity.Name, name, newNameChecker(ctx, auth), org)
 	if err != nil {
 		return err
 	}
@@ -118,6 +120,9 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	}
 	if opts.caCertsURL != "" && (opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "") {
 		return fmt.Errorf("use either --ca-certs-url or explicit root bundle files")
+	}
+	if err := liteenroll.SetESTURL(cfg, opts.estURL); err != nil {
+		return err
 	}
 	timeClient, err := liteenroll.ProvisionTrustForProfile(cfg, opts.deviceRoots, opts.tsaRoots, opts.httpsRoots, trustProfile)
 	if err != nil {
@@ -137,7 +142,9 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 		if !challenge.GetUsbTrustSupported() {
 			return fmt.Errorf("firmware does not support trust bundle provisioning; update the board first")
 		}
-		timeClient, err = liteenroll.DiscoverTrustForProfile(ctx, cfg, opts.caCertsURL, trustProfile)
+		timeClient, err = liteenroll.DiscoverTrustForProfile(ctx, cfg, opts.caCertsURL, trustProfile, func(err error) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Wendy Net cross-chain trust was not provisioned: %v\nThe device can fetch its peer CA certificates later when it can reach PKI.\n", err)
+		})
 		if err != nil {
 			return err
 		}
@@ -160,7 +167,10 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 			return err
 		}
 	}
-	if len(cfg.SignedTime)+len(cfg.DeviceRoots)+len(cfg.TsaRoots)+len(cfg.HttpsRoots) > 65536 {
+	if err := liteenroll.EncodeTrustForDevice(cfg, challenge); err != nil {
+		return err
+	}
+	if len(cfg.SignedTime)+len(cfg.DeviceRoots)+len(cfg.TsaRoots)+len(cfg.HttpsRoots)+len(cfg.LiteDeviceIntermediates) > 65536 {
 		return fmt.Errorf("signed time and trust bundles exceed the firmware's 64 KiB enrollment limit")
 	}
 	cloud, err := dialCloudGRPC(auth)
@@ -172,7 +182,6 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if err != nil {
 		return err
 	}
-	mintCtx, cancel := context.WithTimeout(cloudCtx, 30*time.Second)
 	hardware := &cloudpb.DeviceHardware{}
 	if identity.ID != "" {
 		hardware.SerialNumber = proto.String(identity.ID)
@@ -183,8 +192,20 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if target.CPUArchitecture != "" {
 		hardware.Architecture = proto.String(target.CPUArchitecture)
 	}
-	asset, err := liteenroll.Mint(mintCtx, cloud, auth, cfg, name, hardware, trustProfile)
-	cancel()
+	// A refused name leaves cfg, its signed time and the board's challenge as
+	// they were, so the retry reuses them.
+	var asset string
+	retry := nameRetry{interactive: isInteractiveTerminal(), noTTYHint: noTTYHintEnroll, validate: validateHostnameArg, maxLen: maxHostnameLen, org: org}
+	err = retryTakenDeviceName(&name, retry, func(n string) error {
+		mintCtx, cancel := context.WithTimeout(cloudCtx, 30*time.Second)
+		defer cancel()
+		var mintErr error
+		asset, mintErr = liteenroll.Mint(mintCtx, cloud, auth, cfg, n, hardware, trustProfile)
+		return mintErr
+	})
+	if errors.Is(err, tui.ErrCancelled) {
+		return ErrUserCancelled
+	}
 	if err != nil {
 		if asset != "" {
 			return fmt.Errorf("asset %s was reserved but enrollment could not continue: %w", asset, err)

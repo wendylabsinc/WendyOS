@@ -15,6 +15,11 @@ that also runs on other boards can keep it.
 If your board is not set up yet, start with
 [Qualcomm Dragonwing IQ8 and IQ9](/docs/installation/wendyos-qualcomm-dragonwing).
 
+On an Orange Pi 5 Pro, the entitlement grants the Rockchip NPU (mainline `rocket`
+driver) at `/dev/accel/accel0`, and `wendy device info` reports `NPU: rockchip`.
+WendyOS supplies no NPU runtime there; your image brings its own. The rest of this
+page covers the Dragonwing.
+
 ## Check the board
 
 ```bash

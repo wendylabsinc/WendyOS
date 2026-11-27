@@ -1,0 +1,147 @@
+---
+title: How Wendy Net works
+description: How devices get an address, find their neighbors, prove who they are, learn about everyone else and pick a path.
+---
+
+This page follows one device from enrollment to its first packet. Start with the
+[overview](/docs/wendy-net) if you haven't seen it, and use the
+[setup guide](/docs/guides/wendy-net) when you're ready to turn it on.
+
+## One identity, one address
+
+When you enroll a device in your organization, it gets a certificate that names
+both the organization and the device. Wendy Net uses that certificate for
+everything: to prove who the device is, and to give it its address.
+
+The address is a private IPv6 address made from a fixed Wendy Net prefix,
+`fd45:b891:567f::/48`, and the end of the device's ID. Nothing assigns it at
+run time, so it never changes, and it is the same on every connection. Whether
+a packet arrives over Ethernet or Bluetooth, it is addressed to the same device.
+
+<Figure src="/images/wendy-net/one-address.webp" alt="A device with the example address fd45:b891:567f:4a1c:9e02:77b3:d16f:20a8, above the four connection types Ethernet, Wi-Fi, Wi-Fi Aware and Bluetooth" caption="One certificate gives one address, and every connection uses it. The address shown is an example." />
+
+The device's hostname plays no part in routing. You can rename a device without
+changing its address or its paths.
+
+## Finding the neighbors
+
+A device first has to find the devices it can reach directly, its neighbors. It
+looks on every kind of connection you have enabled for it:
+
+| Connection | How neighbors find each other |
+| --- | --- |
+| Ethernet and ordinary Wi-Fi | mDNS on the local network, with the service `_wendy-net._udp`. Links then use QUIC on UDP port 43023. |
+| Wi-Fi Aware | The Wi-Fi radios find each other directly, with no access point and no shared network. |
+| Bluetooth | Each device sends a small Bluetooth Low Energy advertisement, only 31 bytes long. |
+
+<Frames columns={3}>
+  <Frame src="/images/wendy-net/find-ethernet-wifi.webp" alt="Three devices on one network line, one announcing _wendy-net._udp over mDNS" caption="Ethernet and Wi-Fi: mDNS" />
+  <Frame src="/images/wendy-net/find-wifi-aware.webp" alt="Two devices joined by a dashed line, with a crossed-out access point beside them" caption="Wi-Fi Aware: no access point" />
+  <Frame src="/images/wendy-net/find-bluetooth.webp" alt="A device sending a row of 31 small cells" caption="Bluetooth: a 31-byte advertisement" />
+</Frames>
+
+Announcements carry tenant and device identifiers. On Ethernet and
+infrastructure Wi-Fi this information is visible to anyone on the local
+network. To suppress these announcements,
+disable Ethernet and infrastructure Wi-Fi in the device's Wendy Net settings.
+
+## Proving who they are
+
+An announcement is only a hint: anyone can claim to be anyone. So before a link
+carries any traffic, both devices present their enrollment certificates to each
+other over mutual TLS. Each side checks that the other's certificate is valid
+and that it belongs to the same organization. If either check fails, the link
+never comes up.
+
+<Figure src="/images/wendy-net/same-organization.webp" alt="Two devices joined by a link, with a third, dashed device below them left out, under the title Same organization" caption="Both devices must prove they belong to your organization. A device from outside is turned away." />
+
+The checks run again on every new connection and every reconnect, so a device
+whose certificate has expired can't link again.
+
+## Learning about everyone else
+
+Neighbors are the devices you can reach directly. Everyone else arrives by word
+of mouth.
+
+Each device writes a short manifest about itself, with its address, its name and
+the app services it offers, and signs it using its enrollment identity.
+Neighbors can relay the signed manifest unchanged. Each recipient checks the
+signature against the identity of the device that wrote it.
+
+<Frames columns={2}>
+  <Frame src="/images/wendy-net/signed-manifest.webp" alt="A card titled Manifest listing Address, Name and Services above a chain of six devices" caption="Each device signs a manifest with its address, name and services." />
+  <Frame src="/images/wendy-net/relay-not-forge.webp" alt="A chain of six devices with the words Relay it. Can't forge it." caption="Neighbors pass it along. They can relay it, but not forge it." />
+</Frames>
+
+When a link connects or reconnects, WendyOS shares the manifests its neighbor
+needs. While the link is up, WendyOS shares new versions as manifests change.
+On a busy link, the latest version goes out when there is room.
+
+A device only accepts a route to another device when that device's signed
+manifest says the address is really its own. WendyOS renews its own manifest
+after five minutes without a new publication. Each revision is valid for at
+most fifteen minutes, so a device that disappears ages out on its own.
+
+## Picking a path
+
+Every kind of link has a cost. Faster links cost less:
+
+| Link | Cost |
+| --- | ---: |
+| Ethernet | 64 |
+| Wi-Fi | 128 |
+| Wi-Fi Aware | 512 |
+| Bluetooth | 4096 |
+
+A route costs the sum of its hops, and traffic takes the cheapest route. Three
+fast hops can beat one Bluetooth hop: 64 + 128 + 512 = 704, which is far less
+than 4096.
+
+<Figure src="/images/wendy-net/cheapest-path.webp" alt="Two endpoints joined directly by a Bluetooth arc costing 4096, and by three hops below costing 64, 128 and 512, with the sum 704 highlighted" caption="704 beats 4096, so traffic takes the three fast hops." />
+
+When two neighbors share more than one kind of connection, Wendy Net carries
+their application traffic on the cheapest one. Ethernet beats Wi-Fi, Wi-Fi
+beats Wi-Fi Aware, and Wi-Fi Aware beats Bluetooth. The other connections stay
+up as standbys while the radios have room. Standby links still exchange routing
+and manifest updates.
+[Re-routing and path choice](/docs/wendy-net/rerouting#two-devices-several-connections)
+explains what standby links do, and [Multi-hop routing](/docs/wendy-net/multi-hop)
+covers longer routes.
+
+## Carrying the traffic
+
+Packets for another device go to the neighbor that is next on the cheapest
+route, and each device along the way passes them on. A device never sends
+Wendy Net traffic out of its ordinary uplink: if there is no route, the packet
+is dropped rather than leaked.
+
+Your apps don't see any of this. They connect to the address of the other app's
+service, and the address stays the same while the route changes underneath.
+
+## What your apps see
+
+An app that opts in to Wendy Net gets its own private network inside the device.
+On it, the agent answers mDNS for the app services that other devices advertise
+in their signed manifests, and gives each one an address in `10.99.0.0/16`. The
+app connects to that address with ordinary HTTP, TCP or UDP. The agent carries
+the connection to the other device, where only the ports that app published are
+reachable.
+
+<Figure src="/images/wendy-net/mdns-inside-your-app.webp" alt="An app panel browsing _http._tcp that shows the service 10.99.0.7:18080, linked by a dotted Bluetooth line to a device labelled Bluetooth only" caption="A service on another device appears in your app's mDNS, even when the only link to it is Bluetooth." />
+
+[Share and discover app services](/docs/guides/wendy-net-services) shows the
+`wendy.json` settings and a complete example.
+
+## What Wendy Net doesn't do
+
+- **It doesn't flood multicast between devices.** mDNS traffic stays on each
+  device. Apps see other devices' services because the agent answers from the
+  signed manifests. See [Wendy Net over Bluetooth](/docs/wendy-net/bluetooth#does-a-bluetooth-device-show-up-in-mdns).
+- **It doesn't combine links.** Traffic between two neighbors uses one link at
+  a time, and traffic to a destination follows one path at a time.
+- **It doesn't link devices across the Internet.** Links form between devices
+  that can find each other directly: on the same local network, or within
+  Wi-Fi Aware or Bluetooth range.
+- **It doesn't give apps Internet access by itself.** Internet access through
+  another device is a separate setting. See
+  [Reach the Internet through another device](/docs/wendy-net/internet-sharing).

@@ -5,7 +5,11 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"go.uber.org/zap"
 )
 
 type failingSharingCleanup struct {
@@ -45,5 +49,18 @@ func TestMeshSharingDeactivateRetainsCleanupFailure(t *testing.T) {
 	}
 	if err := m.Deactivate(); err != nil || cleanup.calls != 4 {
 		t.Fatalf("completed cleanup was not idempotent: calls=%d err=%v", cleanup.calls, err)
+	}
+}
+
+func TestMeshParticipationDoesNotStartInternetSharing(t *testing.T) {
+	m := &meshSharingManager{path: filepath.Join(t.TempDir(), "nan-mesh.json"), logger: zap.NewNop()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// A mesh node without credentials cannot create a Linux sharing policy.
+	// The absent config still enables participation, so this catches an
+	// attempt to start the sharing controller without an opt-in.
+	m.run(ctx, &localmesh.Node{})
+	if state := m.Status(); state.State != "disabled" || m.pendingCleanup != nil {
+		t.Fatalf("participation without Internet sharing opt-in: %+v", state)
 	}
 }

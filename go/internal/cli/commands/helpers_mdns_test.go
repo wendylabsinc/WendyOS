@@ -31,7 +31,7 @@ func TestResolveMDNSHost_MatchesByHostname(t *testing.T) {
 	lanBrowseFn = func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
 		return []models.LANDevice{
 			{Hostname: "other.local", IPAddress: "192.168.1.10"},
-			// Trailing dot and mixed case must still match the saved default.
+			// Trailing dot and mixed case must still match the requested host.
 			{Hostname: "Wendy-Thor.local.", IPAddress: "192.168.1.50"},
 		}, nil
 	}
@@ -112,29 +112,6 @@ func TestResolveAddrOnce_FallsBackToMDNSWhenOSResolverFails(t *testing.T) {
 	}
 }
 
-func TestDefaultDeviceUnreachableError(t *testing.T) {
-	cause := errors.New("connection refused")
-	err := defaultDeviceUnreachableError("wendyos-workshop-16.local", cause)
-	if !errors.Is(err, cause) {
-		t.Fatal("expected wrapped error to unwrap to the underlying cause")
-	}
-	msg := err.Error()
-	for _, want := range []string{"wendyos-workshop-16.local", "set but could not be reached", "get-default"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error %q missing %q", msg, want)
-		}
-	}
-	// A ".local" target carries the mDNS troubleshooting hint.
-	if !strings.Contains(msg, "5353") {
-		t.Errorf("expected mDNS hint for a .local default, got %q", msg)
-	}
-
-	// A non-".local" target must not carry the mDNS hint.
-	if msg := defaultDeviceUnreachableError("192.168.1.50", cause).Error(); strings.Contains(msg, "5353") {
-		t.Errorf("did not expect mDNS hint for an IP default, got %q", msg)
-	}
-}
-
 func TestMDNSBrowseTimeoutValue(t *testing.T) {
 	cases := []struct {
 		env  string
@@ -208,25 +185,5 @@ func TestResolveHostMDNSFallback(t *testing.T) {
 	}
 	if got := resolveHostMDNSFallback(context.Background(), "example.com"); got != "" {
 		t.Fatalf("resolveHostMDNSFallback(non-.local fail) = %q, want empty", got)
-	}
-}
-
-// The text must stay byte-identical to what fmt.Errorf used to build, and the
-// advice must now also be available as structured next steps.
-func TestDefaultDeviceUnreachableErrorCarriesNextSteps(t *testing.T) {
-	cause := errors.New("connection refused")
-	err := defaultDeviceUnreachableError("wendyos-workshop-16.local", cause)
-	confirm := "Confirm it with 'wendy device get-default'; change it with 'wendy device set-default' or clear it with 'wendy device unset-default'."
-	mdns := "Resolving a .local name needs mDNS: ensure avahi-daemon is running and UDP 5353 isn't firewalled (e.g. 'sudo ufw allow 5353/udp'), or connect by IP."
-	want := `default device "wendyos-workshop-16.local" is set but could not be reached: connection refused` +
-		"\n  " + confirm + "\n  " + mdns
-	if err.Error() != want {
-		t.Errorf("Error() = %q, want %q", err.Error(), want)
-	}
-	if got := NextSteps(err); len(got) != 2 || got[0] != confirm || got[1] != mdns {
-		t.Errorf("NextSteps = %q, want [confirm, mdns]", got)
-	}
-	if got := NextSteps(defaultDeviceUnreachableError("192.168.1.50", cause)); len(got) != 1 || got[0] != confirm {
-		t.Errorf("NextSteps for an IP default = %q, want only the confirm step", got)
 	}
 }

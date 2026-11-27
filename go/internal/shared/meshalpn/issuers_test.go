@@ -46,3 +46,25 @@ func TestNormalBinaryPrefixAndCachedInventory(t *testing.T) {
 		t.Fatal("ordinary full-chain fallback lost its application protocol")
 	}
 }
+
+func TestLeafOnlyOfferKeepsLegacyFallback(t *testing.T) {
+	const base = "wendy-local-mesh-ble/2"
+	issuer := Fingerprint{0x8a, 0x75}
+	for _, kind := range []byte{classicalClient, regularClient} {
+		offer := leafOffer(base, kind, issuer)
+		application, decodedKind, decodedIssuer := decodeLeafOffer(offer)
+		if application != base || decodedKind != kind || decodedIssuer != issuer ||
+			Application(offer) != base || len(offer) != len(base)+5+1+16 {
+			t.Fatalf("invalid leaf-only offer for role %d", kind)
+		}
+		if selected := Select([]string{base}, []string{offer, base}, func(Fingerprint) bool { return true }); selected != base {
+			t.Fatal("legacy prefix negotiation treated a leaf-only offer as a prefix")
+		}
+		if Offered([]string{offer}, base)[issuer] {
+			t.Fatal("leaf-only offer was confused with cache inventory")
+		}
+	}
+	if _, kind, _ := decodeLeafOffer(leafOffer(base, 0x7f, issuer)); kind != 0 {
+		t.Fatal("unknown leaf-only role was accepted")
+	}
+}

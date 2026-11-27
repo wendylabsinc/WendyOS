@@ -19,7 +19,7 @@ var fetchDefaultCloudAllAssetsFn = func(ctx context.Context, auth *config.AuthCo
 }
 
 // cloudSelectorChooseStep is the hint a selector miss has always ended with.
-const cloudSelectorChooseStep = "Choose another device with --device or 'wendy device set-default'."
+const cloudSelectorChooseStep = "Choose another device with --device."
 
 // explainCloudSelectorMissV2 explains why a tenant selector's asset is not
 // among the online devices. It asks Cloud once more, for every enrolled
@@ -93,6 +93,6 @@ func cloudSelectorNewEntry(auth *config.AuthConfig, old cloudDiscoveryDevice, on
 	if len(candidates) != 1 {
 		return "", false
 	}
-	entry, err := cloudDiscoveryDeviceDefault(auth, candidates[0])
+	entry, err := cloudDiscoverySelector(auth, candidates[0])
 	return entry, err == nil
 }

@@ -13,9 +13,11 @@ import (
 
 // Config represents the top-level CLI configuration.
 type Config struct {
-	Auth          []AuthConfig     `json:"auth,omitempty"`
-	Analytics     *AnalyticsConfig `json:"analytics,omitempty"`
-	DefaultDevice string           `json:"defaultDevice,omitempty"`
+	// LegacyDefaultDevice is read only to explain migration from older CLIs.
+	// It never selects a device and is omitted on the next config save.
+	LegacyDefaultDevice string           `json:"-"`
+	Auth                []AuthConfig     `json:"auth,omitempty"`
+	Analytics           *AnalyticsConfig `json:"analytics,omitempty"`
 	// SessionBrokerIdleTimeout controls the grace period after the final user
 	// lease/operation ends. Empty uses five minutes; housekeeping is not a lease.
 	SessionBrokerIdleTimeout string `json:"sessionBrokerIdleTimeout,omitempty"`
@@ -38,6 +40,9 @@ type Config struct {
 	// update notice has already been printed, so scripts and agents see it
 	// once per release instead of after every command.
 	CLIUpdateNoticeShown string `json:"cliUpdateNoticeShown,omitempty"`
+	// CLIUpdateNoticeShownAt is when that notice was last printed, RFC3339. A
+	// person at a terminal sees it again a day later, until they update.
+	CLIUpdateNoticeShownAt string `json:"cliUpdateNoticeShownAt,omitempty"`
 	// CLIUpdatePromptVersion is no longer read; it is still written so older
 	// CLIs, whose snooze applied to this release only, honor a deferral.
 	CLIUpdatePromptVersion string `json:"cliUpdatePromptVersion,omitempty"`
@@ -246,9 +251,15 @@ func Load() (*Config, error) {
 	}
 
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	legacy := struct {
+		*Config
+		DefaultDevice string `json:"defaultDevice"`
+	}{Config: &cfg}
+	if err := json.Unmarshal(data, &legacy); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+
+	cfg.LegacyDefaultDevice = legacy.DefaultDevice
 
 	// Older clients can rewrite the config while dropping newer identity fields.
 	// Recover the PKI identity from the certificate instead of interpreting an

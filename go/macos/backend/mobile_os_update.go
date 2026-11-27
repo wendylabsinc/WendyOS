@@ -11,14 +11,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type mobileOSRun struct {
-	mu      sync.Mutex
-	session uint64
-	state   OSInstallState
+	mu              sync.Mutex
+	session         uint64
+	state           OSInstallState
+	cancel          context.CancelFunc
+	preparedSession uint64
+	cancelled       bool
 }
 type OSInstallState struct {
 	Active         bool   `json:"active"`
@@ -31,6 +35,52 @@ type OSInstallState struct {
 type OSUpdateSnapshot struct {
 	Status  json.RawMessage `json:"status"`
 	Install OSInstallState  `json:"install"`
+	// RestartSupported mirrors RestartAfterOSUpdate, which needs an authenticated connection.
+	RestartSupported bool `json:"restartSupported"`
+}
+
+func (b *Backend) CheckOSRelease(session uint64) (*commands.DesktopOSRelease, error) {
+	ctx, done := b.begin()
+	if session == 0 {
+		done()
+		return nil, errors.New("select a device first")
+	}
+	conn, err := b.connection(session)
+	if err != nil {
+		done()
+		return nil, err
+	}
+	info, err := commands.DesktopOSReleaseIdentity(ctx, conn)
+	// The public catalog can take tens of seconds on a slow network. Fetch it
+	// without the request lock; the lookup still ends with this connection.
+	life := b.life
+	done()
+	if err != nil {
+		return nil, err
+	}
+	return commands.DesktopResolveOSRelease(life, info)
+}
+
+// PrepareMobileOSUpdate admits one foreground request before it enters the
+// serialized bridge queue. Expiration can then cancel even a not-yet-started RPC.
+func (b *Backend) PrepareMobileOSUpdate(session uint64) {
+	b.osUpdate.mu.Lock()
+	defer b.osUpdate.mu.Unlock()
+	b.osUpdate.preparedSession = session
+	b.osUpdate.cancelled = false
+}
+
+// CancelMobileOSUpdate interrupts only the matching update, including preflight.
+// It does not wait on the backend request lock, so iOS expiration can stop work promptly.
+func (b *Backend) CancelMobileOSUpdate(session uint64) {
+	b.osUpdate.mu.Lock()
+	defer b.osUpdate.mu.Unlock()
+	if b.osUpdate.preparedSession == session {
+		b.osUpdate.cancelled = true
+	}
+	if b.osUpdate.session == session && b.osUpdate.cancel != nil {
+		b.osUpdate.cancel()
+	}
 }
 
 // GetOSUpdateStatus is read-only; progress is scoped to the connection that
@@ -55,7 +105,34 @@ func (b *Backend) MobileOSUpdate(session uint64, artifact string, start bool) (*
 	b.osUpdate.mu.Unlock()
 	// Do not serialize a live engine probe against each progress poll.
 	if state.Active && !start {
-		return &OSUpdateSnapshot{Status: json.RawMessage(`{}`), Install: state}, nil
+		return &OSUpdateSnapshot{Status: json.RawMessage(`{}`), Install: state, RestartSupported: conn.IsMTLS}, nil
+	}
+	var runCtx context.Context
+	var stop context.CancelFunc
+	handedOff := false
+	if start {
+		if anyActive {
+			return nil, errors.New("an OS update is already running; check its status")
+		}
+		runCtx, stop = context.WithTimeout(b.life, 45*time.Minute)
+		b.osUpdate.mu.Lock()
+		if b.osUpdate.preparedSession == session && b.osUpdate.cancelled {
+			b.osUpdate.mu.Unlock()
+			stop()
+			return nil, context.Canceled
+		}
+		if b.osUpdate.session != session {
+			b.osUpdate.state = OSInstallState{}
+		}
+		b.osUpdate.session = session
+		b.osUpdate.cancel = stop
+		b.osUpdate.mu.Unlock()
+		defer func() {
+			if !handedOff {
+				stop()
+			}
+		}()
+		ctx = runCtx
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -64,9 +141,6 @@ func (b *Backend) MobileOSUpdate(session uint64, artifact string, start bool) (*
 		return nil, err
 	}
 	if start {
-		if anyActive {
-			return nil, errors.New("an OS update is already running; check its status")
-		}
 		if state.RebootRequired && result.GetCreatedAtUnix() <= state.Baseline {
 			return nil, errors.New("the installed update still needs a restart and a verified outcome")
 		}
@@ -75,7 +149,9 @@ func (b *Backend) MobileOSUpdate(session uint64, artifact string, start bool) (*
 		}
 		// A long-running update must not hold the backend's request lock. Its life
 		// ends with this connection, not with navigation away from the screen.
-		runCtx, stop := context.WithTimeout(b.life, 45*time.Minute)
+		if err := runCtx.Err(); err != nil {
+			return nil, err
+		}
 		stream, err := client.UpdateOS(runCtx, &pb.UpdateOSRequest{ArtifactUrl: artifact})
 		if err != nil {
 			stop()
@@ -86,6 +162,7 @@ func (b *Backend) MobileOSUpdate(session uint64, artifact string, start bool) (*
 		b.osUpdate.session = session
 		b.osUpdate.state = state
 		b.osUpdate.mu.Unlock()
+		handedOff = true
 		go func() {
 			defer stop()
 			final := consumeOSUpdate(stream.Recv, state, func(next OSInstallState) {
@@ -103,7 +180,7 @@ func (b *Backend) MobileOSUpdate(session uint64, artifact string, start bool) (*
 		}()
 	}
 	encoded, err := protojson.Marshal(result)
-	return &OSUpdateSnapshot{Status: encoded, Install: state}, err
+	return &OSUpdateSnapshot{Status: encoded, Install: state, RestartSupported: conn.IsMTLS}, err
 }
 func validateOSUpdateStart(artifact string, result *pb.GetOSUpdateStatusResponse) error {
 	u, err := url.Parse(artifact)

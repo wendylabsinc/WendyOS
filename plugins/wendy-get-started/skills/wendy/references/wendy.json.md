@@ -89,6 +89,7 @@ Enables GPU or board-telemetry access on supported devices.
 When enabled:
 - **NVIDIA Jetson**: Adds application to video group, injects NVIDIA CDI specs, sets CUDA env vars
 - **Raspberry Pi**: Exposes `/dev/vcio` (VideoCore mailbox) for board telemetry (power, voltage, temperature)
+- **Qualcomm Adreno, Arm Mali (Orange Pi 5 Pro)**: Grants the DRM render node (`/dev/dri/renderD*`) and the render and video groups
 
 **Note**: GPU entitlement behavior is hardware-specific.
 
@@ -102,6 +103,7 @@ Enables on-SoC neural accelerator access for on-device inference.
 
 When enabled:
 - **Qualcomm (Hexagon DSP)**: Bind-mounts the non-secure `/dev/fastrpc-*` nodes and `/dev/dma_heap/system`, and adds the app to the `fastrpc` and `dmaheap` groups
+- **Rockchip (Orange Pi 5 Pro)**: Bind-mounts the mainline `rocket` NPU's `/dev/accel/accel*` node and adds the app to the `render` group
 - **Other hardware**: No grant; the entitlement is inert
 
 **Note**: the `-secure` FastRPC nodes are the signed-PD path and are never granted.

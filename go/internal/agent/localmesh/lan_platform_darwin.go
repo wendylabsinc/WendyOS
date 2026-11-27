@@ -26,19 +26,26 @@ func hardwarePorts(output string) map[string]bool {
 	}
 	return ports
 }
-func scanLANInterfaces(ethernet, wifi bool) ([]lanInterface, error) {
+func scanLANInterfaces(ethernet, wifi bool) (lanScan, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "/usr/sbin/networksetup", "-listallhardwareports").Output()
 	if err != nil {
-		return nil, err
+		return lanScan{}, err
 	}
 	ports := hardwarePorts(string(out))
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return nil, err
+		return lanScan{}, err
 	}
-	var result []lanInterface
+	result := lanScan{hardware: make(map[string]bool, 2)}
+	for _, wireless := range ports {
+		if wireless {
+			result.hardware[CarrierInfrastructureWiFi] = true
+		} else {
+			result.hardware[CarrierEthernet] = true
+		}
+	}
 	for _, iface := range interfaces {
 		isWiFi, known := ports[iface.Name]
 		if !known || iface.Flags&(net.FlagUp|net.FlagRunning|net.FlagMulticast) != net.FlagUp|net.FlagRunning|net.FlagMulticast {
@@ -63,7 +70,7 @@ func scanLANInterfaces(ethernet, wifi bool) ([]lanInterface, error) {
 			if ip == nil || !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() {
 				continue
 			}
-			result = append(result, lanInterface{iface: iface, ip: ip, net: network, cost: cost, transport: transport})
+			result.interfaces = append(result.interfaces, lanInterface{iface: iface, ip: ip, net: network, cost: cost, transport: transport})
 		}
 	}
 	return result, nil

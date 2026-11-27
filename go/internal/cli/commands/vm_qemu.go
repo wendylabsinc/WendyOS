@@ -41,9 +41,12 @@ var (
 	}
 	findQEMUFirmwareFn    = vm.FindFirmware
 	installQEMUFirmwareFn = installQEMUFirmwareViaBrew
-	ensureQEMUFirmwareFn  = func(ctx context.Context) (string, error) {
-		return ensureQEMUFirmwareForHostOS(ctx, runtime.GOOS, vm.BrewPrefix())
+	ensureQEMUFirmwareFn  = func(ctx context.Context, arch vm.Arch) (vm.Firmware, error) {
+		return ensureQEMUFirmwareForHostOS(ctx, arch, runtime.GOOS, vm.BrewPrefix())
 	}
+	// defaultGuestArchFn is the guest architecture a new simulator gets on
+	// this host. Every command-layer use of the default goes through it.
+	defaultGuestArchFn = vm.DefaultArch
 )
 
 // vmAssumeYes accepts the VM prompts -- installing QEMU, and downloading the
@@ -54,17 +57,30 @@ var (
 var vmAssumeYes bool
 
 // linuxQEMUPackageManager names the packages a Linux package manager installs
-// QEMU's ARM64 emulator and UEFI firmware from.
+// each guest's emulator and UEFI firmware from.
 type linuxQEMUPackageManager struct {
-	name     string   // the executable
-	qemu     []string // the emulator and its firmware
-	firmware []string // the firmware alone, for a host that already has QEMU
+	name     string               // the executable
+	qemu     map[vm.Arch][]string // the emulator and its firmware
+	firmware map[vm.Arch][]string // the firmware alone, for a host that already has QEMU
 }
 
 // linuxQEMUPackageManagers are tried in order; the first on PATH is used.
 var linuxQEMUPackageManagers = []linuxQEMUPackageManager{
-	{name: "apt-get", qemu: []string{"qemu-system-arm", "qemu-efi-aarch64"}, firmware: []string{"qemu-efi-aarch64"}},
-	{name: "dnf", qemu: []string{"qemu-system-aarch64", "edk2-aarch64"}, firmware: []string{"edk2-aarch64"}},
+	{name: "apt-get",
+		qemu:     map[vm.Arch][]string{vm.ArchARM64: {"qemu-system-arm", "qemu-efi-aarch64"}, vm.ArchAMD64: {"qemu-system-x86", "ovmf"}},
+		firmware: map[vm.Arch][]string{vm.ArchARM64: {"qemu-efi-aarch64"}, vm.ArchAMD64: {"ovmf"}}},
+	{name: "dnf",
+		qemu:     map[vm.Arch][]string{vm.ArchARM64: {"qemu-system-aarch64", "edk2-aarch64"}, vm.ArchAMD64: {"qemu-system-x86", "edk2-ovmf"}},
+		firmware: map[vm.Arch][]string{vm.ArchARM64: {"edk2-aarch64"}, vm.ArchAMD64: {"edk2-ovmf"}}},
+}
+
+// guestKey maps the zero architecture to ARM64, the key the package and
+// message tables use for it.
+func guestKey(arch vm.Arch) vm.Arch {
+	if arch == vm.ArchAMD64 {
+		return vm.ArchAMD64
+	}
+	return vm.ArchARM64
 }
 
 // Seams so tests can describe a Linux host and never run its package manager.
@@ -78,19 +94,24 @@ var (
 // Non-interactive runs need --yes to authorize installation, except on Linux,
 // which always asks first.
 //
-// Homebrew's qemu also ships the aarch64 UEFI firmware, as do the Linux
-// packages, so accepting here resolves FindFirmware's separate failure at the
-// same time.
-func ensureQEMUForHostOS(ctx context.Context, hostOS string) error {
+// Homebrew's qemu also ships the UEFI firmware for both guests, and the Linux
+// packages include it, so accepting here resolves FindFirmware's separate
+// failure at the same time.
+func ensureQEMUForHostOS(ctx context.Context, arch vm.Arch, hostOS string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := findQEMUFn(hostOS); err == nil {
+	if _, err := findQEMUFn(arch, hostOS); err == nil {
 		return nil
 	}
-	notFound := fmt.Errorf("qemu-system-aarch64 not found: install QEMU (%s). The ARM64 emulator runs the WendyOS guest on both ARM64 and x86_64 PCs", qemuInstallHintForHostOS(hostOS))
+	var notFound error
+	if guestKey(arch) == vm.ArchAMD64 {
+		notFound = fmt.Errorf("%s not found: install QEMU (%s). The x86-64 emulator runs this simulator's x86-64 WendyOS guest", arch.QEMUBinary(), qemuInstallHintFor(arch, hostOS))
+	} else {
+		notFound = fmt.Errorf("qemu-system-aarch64 not found: install QEMU (%s). The ARM64 emulator runs the WendyOS guest on both ARM64 and x86_64 PCs", qemuInstallHintFor(arch, hostOS))
+	}
 	if hostOS == "linux" {
-		return ensureQEMUOnLinux(ctx, notFound)
+		return ensureQEMUOnLinux(ctx, arch, notFound)
 	}
 
 	if !isInteractiveTerminalFn() && !vmAssumeYes {
@@ -111,7 +132,7 @@ func ensureQEMUForHostOS(ctx context.Context, hostOS string) error {
 		return notFound
 	}
 	if !vmAssumeYes {
-		cliLogln("QEMU runs the simulator and is not installed. Wendy can install it with `%s`.", qemuInstallHintForHostOS(hostOS))
+		cliLogln("QEMU runs the simulator and is not installed. Wendy can install it with `%s`.", qemuInstallHintFor(arch, hostOS))
 		accepted, err := qemuConfirmFn(ctx, "Do you want to install QEMU?")
 		if err != nil {
 			return err
@@ -135,9 +156,9 @@ func ensureQEMUForHostOS(ctx context.Context, hostOS string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := findQEMUFn(hostOS); err != nil {
+	if _, err := findQEMUFn(arch, hostOS); err != nil {
 		if hostOS == "windows" {
-			return fmt.Errorf("QEMU installation finished but qemu-system-aarch64.exe was not found on PATH or in %%ProgramFiles%%\\qemu; check the installation and retry")
+			return fmt.Errorf("QEMU installation finished but %s.exe was not found on PATH or in %%ProgramFiles%%\\qemu; check the installation and retry", arch.QEMUBinary())
 		}
 		return errors.New("QEMU was installed via Homebrew but is not yet on PATH; " +
 			"open a new terminal or run: eval \"$(brew shellenv)\"")
@@ -146,17 +167,17 @@ func ensureQEMUForHostOS(ctx context.Context, hostOS string) error {
 }
 
 // ensureQEMUOnLinux installs the emulator together with its firmware.
-func ensureQEMUOnLinux(ctx context.Context, notFound error) error {
+func ensureQEMUOnLinux(ctx context.Context, arch vm.Arch, notFound error) error {
 	installed, err := offerLinuxQEMUPackages(ctx, "QEMU", "QEMU runs the simulator and is not installed.",
-		func(m linuxQEMUPackageManager) []string { return m.qemu })
+		func(m linuxQEMUPackageManager) []string { return m.qemu[guestKey(arch)] })
 	if err != nil {
 		return err
 	}
 	if !installed {
 		return notFound
 	}
-	if _, err := findQEMUFn("linux"); err != nil {
-		return errors.New("QEMU was installed but qemu-system-aarch64 is still not on PATH; check the installation and retry")
+	if _, err := findQEMUFn(arch, "linux"); err != nil {
+		return fmt.Errorf("QEMU was installed but %s is still not on PATH; check the installation and retry", arch.QEMUBinary())
 	}
 	return nil
 }
@@ -235,72 +256,74 @@ func installQEMUViaBrew(ctx context.Context) error {
 }
 
 // ensureQEMUFirmwareForHostOS also covers hosts where QEMU is already on PATH
-// but the ARM64 firmware was not installed or is unusable.
-func ensureQEMUFirmwareForHostOS(ctx context.Context, hostOS, brewPrefix string) (string, error) {
+// but the guest's firmware was not installed or is unusable.
+func ensureQEMUFirmwareForHostOS(ctx context.Context, arch vm.Arch, hostOS, brewPrefix string) (vm.Firmware, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return vm.Firmware{}, err
 	}
-	firmware, err := findQEMUFirmwareFn(hostOS, brewPrefix)
+	firmware, err := findQEMUFirmwareFn(arch, hostOS, brewPrefix)
 	if err == nil {
 		return firmware, nil
 	}
+	label := guestKey(arch).Label()
 	if hostOS == "linux" && errors.Is(err, vm.ErrFirmwareNotFound) {
-		return ensureQEMUFirmwareOnLinux(ctx, brewPrefix, err)
+		return ensureQEMUFirmwareOnLinux(ctx, arch, brewPrefix, err)
 	}
 	if hostOS != "darwin" || !errors.Is(err, vm.ErrFirmwareNotFound) {
-		return "", err
+		return vm.Firmware{}, err
 	}
 	if !isInteractiveTerminalFn() && !vmAssumeYes {
-		return "", err
+		return vm.Firmware{}, err
 	}
 	if _, lookErr := brewLookPathFn("brew"); lookErr != nil {
-		return "", err
+		return vm.Firmware{}, err
 	}
 	if !vmAssumeYes {
-		cliLogln("The simulator needs ARM64 firmware. Homebrew supplies it with QEMU; Wendy can install or reinstall that package to restore it.")
-		accepted, confirmErr := qemuConfirmFn(ctx, "Do you want to install QEMU's ARM64 firmware?")
+		cliLogln("The simulator needs %s firmware. Homebrew supplies it with QEMU; Wendy can install or reinstall that package to restore it.", label)
+		accepted, confirmErr := qemuConfirmFn(ctx, "Do you want to install QEMU's "+label+" firmware?")
 		if confirmErr != nil {
-			return "", confirmErr
+			return vm.Firmware{}, confirmErr
 		}
 		if !accepted {
-			return "", err
+			return vm.Firmware{}, err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return vm.Firmware{}, err
 	}
-	if installErr := installQEMUFirmwareFn(ctx); installErr != nil {
+	if installErr := installQEMUFirmwareFn(ctx, arch); installErr != nil {
 		if errors.Is(installErr, ErrUserCancelled) {
-			return "", installErr
+			return vm.Firmware{}, installErr
 		}
-		return "", fmt.Errorf("installing QEMU's ARM64 firmware via Homebrew: %w", installErr)
+		return vm.Firmware{}, fmt.Errorf("installing QEMU's %s firmware via Homebrew: %w", label, installErr)
 	}
-	firmware, err = findQEMUFirmwareFn(hostOS, brewPrefix)
+	firmware, err = findQEMUFirmwareFn(arch, hostOS, brewPrefix)
 	if err != nil {
-		return "", fmt.Errorf("QEMU was installed via Homebrew but its ARM64 firmware is still unavailable: %w", err)
+		return vm.Firmware{}, fmt.Errorf("QEMU was installed via Homebrew but its %s firmware is still unavailable: %w", label, err)
 	}
 	return firmware, nil
 }
 
 // ensureQEMUFirmwareOnLinux installs only the firmware package: QEMU itself has
 // its own check, which runs first.
-func ensureQEMUFirmwareOnLinux(ctx context.Context, brewPrefix string, notFound error) (string, error) {
-	installed, err := offerLinuxQEMUPackages(ctx, "QEMU's ARM64 firmware", "The simulator needs QEMU's ARM64 firmware, which is not installed.",
-		func(m linuxQEMUPackageManager) []string { return m.firmware })
+func ensureQEMUFirmwareOnLinux(ctx context.Context, arch vm.Arch, brewPrefix string, notFound error) (vm.Firmware, error) {
+	what := "QEMU's " + guestKey(arch).Label() + " firmware"
+	installed, err := offerLinuxQEMUPackages(ctx, what, "The simulator needs "+what+", which is not installed.",
+		func(m linuxQEMUPackageManager) []string { return m.firmware[guestKey(arch)] })
 	if err != nil {
-		return "", err
+		return vm.Firmware{}, err
 	}
 	if !installed {
-		return "", notFound
+		return vm.Firmware{}, notFound
 	}
-	firmware, err := findQEMUFirmwareFn("linux", brewPrefix)
+	firmware, err := findQEMUFirmwareFn(arch, "linux", brewPrefix)
 	if err != nil {
-		return "", fmt.Errorf("QEMU's ARM64 firmware was installed but is still unavailable: %w", err)
+		return vm.Firmware{}, fmt.Errorf("%s was installed but is still unavailable: %w", what, err)
 	}
 	return firmware, nil
 }
 
-func installQEMUFirmwareViaBrew(ctx context.Context) error {
+func installQEMUFirmwareViaBrew(ctx context.Context, arch vm.Arch) error {
 	// Installing an existing formula does not restore missing package files.
 	// Reinstall only if Homebrew owns an installed QEMU package.
 	installed, err := exec.CommandContext(ctx, "brew", "list", "--versions", "qemu").Output()
@@ -308,7 +331,7 @@ func installQEMUFirmwareViaBrew(ctx context.Context) error {
 		return ctx.Err()
 	}
 	if err == nil && len(bytes.TrimSpace(installed)) > 0 {
-		return brewPackageWithSpinner(ctx, "reinstall", "qemu", "Restoring QEMU's ARM64 firmware via Homebrew...")
+		return brewPackageWithSpinner(ctx, "reinstall", "qemu", "Restoring QEMU's "+guestKey(arch).Label()+" firmware via Homebrew...")
 	}
 	return installQEMUViaBrew(ctx)
 }
@@ -332,6 +355,16 @@ func brewPackageWithSpinner(ctx context.Context, action, formula, label string) 
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	cmd.Stdin = nil
+
+	// JSON and noninteractive callers cannot open a terminal for a spinner.
+	// Keep the same cancellable command and failure diagnostics in both paths.
+	if jsonOutput || !isInteractiveTerminal() {
+		if err := cmd.Run(); err != nil {
+			_, _ = os.Stderr.Write(out.Bytes())
+			return err
+		}
+		return nil
+	}
 
 	prog := tui.NewProgressProgram(tui.NewSpinner(label))
 
@@ -375,18 +408,22 @@ func brewPackageWithSpinner(ctx context.Context, action, formula, label string) 
 // firmware. The single source for that advice: the VM command's help, the
 // missing-emulator error and the missing-firmware error all read it.
 func qemuInstallHint() string {
-	return qemuInstallHintForHostOS(runtime.GOOS)
+	return qemuInstallHintFor(defaultGuestArchFn(), runtime.GOOS)
 }
 
-func qemuInstallHintForHostOS(hostOS string) string {
+// qemuInstallHintFor names the packages that install the emulator and UEFI
+// firmware for the guest architecture on the host.
+func qemuInstallHintFor(arch vm.Arch, hostOS string) string {
 	switch hostOS {
 	case "darwin":
 		return "brew install qemu"
 	case "windows":
 		return "winget install --id SoftwareFreedomConservancy.QEMU --exact --source winget"
-	default:
-		return "apt install qemu-system-arm qemu-efi-aarch64, or dnf install qemu-system-aarch64 edk2-aarch64"
 	}
+	if guestKey(arch) == vm.ArchAMD64 {
+		return "apt install qemu-system-x86 ovmf, or dnf install qemu-system-x86 edk2-ovmf"
+	}
+	return "apt install qemu-system-arm qemu-efi-aarch64, or dnf install qemu-system-aarch64 edk2-aarch64"
 }
 
 // socketVMNetStartTimeout bounds the wait for the daemon to bind its socket.

@@ -23,7 +23,7 @@ func TestMCPSimulatorAgentSetupSkipsCompatibleAndRejectsOtherTargets(t *testing.
 			info.CpuArchitecture = "arm64"
 			previousConnect, previousResolve := simulatorUpdateConnect, simulatorUpdateResolve
 			t.Cleanup(func() { simulatorUpdateConnect, simulatorUpdateResolve = previousConnect, previousResolve })
-			simulatorUpdateResolve = func(string, string, bool) ([]byte, string, string, error) {
+			simulatorUpdateResolve = func(context.Context, string, string, bool) ([]byte, string, string, error) {
 				t.Fatal("unexpected update for an incompatible target or already capable agent")
 				return nil, "", "", nil
 			}
@@ -94,7 +94,7 @@ func TestMCPSimulatorAgentSetupUploadsOfficialArtifactAndVerifiesCapability(t *t
 				}
 				return next, fresh, nil
 			}
-			simulatorUpdateResolve = func(osName, arch string, nightly bool) ([]byte, string, string, error) {
+			simulatorUpdateResolve = func(_ context.Context, osName, arch string, nightly bool) ([]byte, string, string, error) {
 				if osName != "wendyos" || arch != "arm64" || nightly {
 					t.Fatal("unexpected artifact platform or channel")
 				}
@@ -119,5 +119,32 @@ func TestMCPSimulatorAgentSetupUploadsOfficialArtifactAndVerifiesCapability(t *t
 				t.Fatalf("expected one upload, got %d", uploads)
 			}
 		})
+	}
+}
+
+func TestVerifySimulatorUpdateTargetMatchesTheRecordedArchitecture(t *testing.T) {
+	conn := &grpcclient.AgentConnection{SimulatorName: "sim"}
+	info := func(deviceType, cpu string) *agentpb.GetAgentVersionResponse {
+		return &agentpb.GetAgentVersionResponse{Os: "wendyos", DeviceType: &deviceType, CpuArchitecture: cpu}
+	}
+	for _, tc := range []struct {
+		arch      vm.Arch
+		board     string
+		cpu       string
+		wantMatch bool
+	}{
+		{vm.ArchAMD64, "vm-x86-64", "amd64", true},
+		{vm.ArchARM64, "vm-arm64", "arm64", true},
+		{vm.ArchARM64, "vm-x86-64", "amd64", false},
+		{vm.ArchAMD64, "vm-x86-64", "arm64", false},
+		{vm.ArchAMD64, "generic-x86-64", "amd64", false},
+	} {
+		err := verifySimulatorUpdateTarget(conn, info(tc.board, tc.cpu), "sim", tc.arch)
+		if (err == nil) != tc.wantMatch {
+			t.Errorf("recorded %s, agent %s/%s: %v", tc.arch, tc.board, tc.cpu, err)
+		}
+		if err != nil && err.Error() != `agent update requires the verified WendyOS VM "sim"` {
+			t.Errorf("error text = %q", err)
+		}
 	}
 }

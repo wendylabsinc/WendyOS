@@ -48,10 +48,10 @@ capabilities and installed CLI validation:
 | --- | --- | --- | --- |
 | `network` | none | `mode` as `host` or `none` | Defaults to host networking when `mode` is empty; `host` removes the network namespace and mounts host DNS config. |
 | `http` | `port` | none | Declares the app's HTTP port for clients and VM forwarding; the app must listen on that port. It does not start a server or establish readiness. |
-| `gpu` | none | none | Jetson: adds NVIDIA device nodes, env vars, CDI wiring. Raspberry Pi: exposes `/dev/vcio` for board telemetry. |
+| `gpu` | none | none | Jetson: adds NVIDIA device nodes, env vars, CDI wiring. Raspberry Pi: exposes `/dev/vcio` for board telemetry. Adreno/Mali: DRM render node only. |
 | `display` | none | none | Grants `/dev/dri` (GPU render nodes) and the WendyOS compositor's Wayland socket; allows the container to present to a locally-attached monitor as a Wayland client. Requires a display-enabled WendyOS image; on headless images the socket is absent so nothing renders. On Jetson, GPU graphics userspace is injected from the host via CDI. At most one per app. |
 | `audio` | none | none | Adds audio group, mounts `/dev/snd`, allows sound devices, and mounts PipeWire/Pulse sockets when present. |
-| `camera` | none | `mode`, `allowlist` | Canonical V4L2/camera entitlement; allows major 81, bind-mounts host `/dev` for live camera hotplug, and bind-mounts `/run/udev` read-only for libcamera CSI enumeration. |
+| `camera` | none | `mode`, `allowlist` | Canonical V4L2/camera entitlement; apps share the camera unless `"mode": "direct"` (exact) gives the real device; allows major 81, bind-mounts host `/dev` for live camera hotplug, and bind-mounts `/run/udev` read-only for libcamera CSI enumeration. |
 | `video` | none | `mode`, `allowlist` | Deprecated compatibility alias for `camera`; prefer `camera` in new configs. |
 | `persist` | `name`, `path` | none | Creates/binds `/var/lib/wendy/volumes/<name>` to the container `path`; volume names are shared across apps. Linux/WendyOS mounts are `noexec`. |
 | `bluetooth` | none | `mode` | Uses a filtered `xdg-dbus-proxy` socket for BlueZ. Do not assume unrestricted host D-Bus access. |

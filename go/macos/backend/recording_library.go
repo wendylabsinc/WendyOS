@@ -101,6 +101,8 @@ func (b *Backend) recordingConnection(id uint64, selector string, secure bool, l
 }
 
 type RecordingEpisode struct {
+	ContentKinds *[]string // nil means file metadata is unavailable; empty means known empty
+
 	ID, Title, Trigger, Kind, UploadState, Campaign string
 	Topics                                          []string
 	PreviewCounts                                   []uint64
@@ -115,6 +117,14 @@ type RecordingLibrary struct {
 }
 
 func (b *Backend) RecordingLibrary(id uint64, selector string, secure bool) (result RecordingLibrary, err error) {
+	return b.recordingLibrary(id, selector, secure, false)
+}
+
+func (b *Backend) RecordingMediaLibrary(id uint64, selector string, secure bool) (RecordingLibrary, error) {
+	return b.recordingLibrary(id, selector, secure, true)
+}
+
+func (b *Backend) recordingLibrary(id uint64, selector string, secure, includeMedia bool) (result RecordingLibrary, err error) {
 	ctx, conn, done, err := b.recordingConnection(id, selector, secure, time.Minute)
 	if err != nil {
 		return RecordingLibrary{}, err
@@ -124,7 +134,7 @@ func (b *Backend) RecordingLibrary(id uint64, selector string, secure bool) (res
 	// the scoped mobile catalog, which already retains completed metadata.
 	// Re-inspecting here made every refresh spend up to two seconds repeating
 	// work and delayed first paint even when every tag was already cached.
-	return readRecordingLibrary(ctx, conn.DataService)
+	return readRecordingLibrary(ctx, conn.DataService, includeMedia)
 }
 
 func (b *Backend) PlayRecording(id uint64, selector string, secure bool, episode string) (*VisualSnapshot, error) {
@@ -173,8 +183,8 @@ func exportRecordings(ctx context.Context, client pb.DataServiceClient, episodes
 	return paths, nil
 }
 
-func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient) (RecordingLibrary, error) {
-	list, err := recordingEpisodeIndex(ctx, client)
+func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient, media ...bool) (RecordingLibrary, error) {
+	list, err := recordingEpisodeIndex(ctx, client, len(media) > 0 && media[0])
 	if err != nil {
 		return RecordingLibrary{}, err
 	}
@@ -197,11 +207,12 @@ func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient) (Rec
 
 // Large libraries can contain megabytes of names and repeated metadata. Ask
 // gRPC to compress the response, while retaining compatibility with agents
-// that predate compression support. This is a read-only, idempotent request.
-func recordingEpisodeIndex(ctx context.Context, client pb.DataServiceClient) (*pb.DataEpisodesResponse, error) {
-	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20), grpc.UseCompressor(gzip.Name))
+// that predate compression support. Only callers that filter by media should
+// request the additional file metadata. This is a read-only, idempotent request.
+func recordingEpisodeIndex(ctx context.Context, client pb.DataServiceClient, includeMedia bool) (*pb.DataEpisodesResponse, error) {
+	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{IncludeMedia: includeMedia}, grpc.MaxCallRecvMsgSize(64<<20), grpc.UseCompressor(gzip.Name))
 	if status.Code(err) == codes.Unimplemented {
-		return client.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20))
+		return client.Episodes(ctx, &pb.DataEpisodesRequest{IncludeMedia: includeMedia}, grpc.MaxCallRecvMsgSize(64<<20))
 	}
 	return list, err
 }
@@ -247,7 +258,17 @@ func readRecordingDetails(ctx context.Context, client pb.DataServiceClient, ids 
 }
 func summarizeRecording(e *pb.DataEpisode, m *data.Manifest) RecordingEpisode {
 	row := RecordingEpisode{ID: e.GetId(), Title: e.GetName(), Started: e.GetStartedUnixNanos(), Bytes: e.GetSizeBytes(), Duration: -1}
+	if e.GetMedia() != nil {
+		files := make([]data.File, 0, len(e.GetMedia().GetFiles()))
+		for _, file := range e.GetMedia().GetFiles() {
+			files = append(files, data.File{Path: file.GetPath(), MediaType: file.GetMediaType()})
+		}
+		kinds := galleryContentKinds(data.Manifest{Files: files})
+		row.ContentKinds = &kinds
+	}
 	if m != nil {
+		kinds := galleryContentKinds(*m)
+		row.ContentKinds = &kinds
 		row.DetailsLoaded = true
 		row.Campaign = m.Trigger.CampaignName
 		row.Trigger, row.Duration, row.UploadState = m.Trigger.Reason, savedDuration(m), m.Upload.State
@@ -280,7 +301,7 @@ type savedEpisode[T any] struct {
 }
 
 func inspectSavedEpisodes[T any](ctx context.Context, client pb.DataServiceClient, manifestBudget time.Duration, summarize func(*pb.DataEpisode, *data.Manifest) T) ([]savedEpisode[T], error) {
-	list, err := recordingEpisodeIndex(ctx, client)
+	list, err := recordingEpisodeIndex(ctx, client, false)
 	if err != nil {
 		return nil, err
 	}

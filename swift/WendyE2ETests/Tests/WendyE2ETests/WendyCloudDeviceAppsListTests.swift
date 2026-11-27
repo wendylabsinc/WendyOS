@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WendyE2ETesting
 
@@ -29,25 +30,13 @@ struct `'wendy cloud device apps list'` {
     }
 
     /**
-     `--device` selects the cloud device and skips local discovery and pickers.
-     The command does not read or change the saved default device when an
-     explicit target is supplied.
-     */
-    @Test(
-        .disabled(
-            "WDY-1949: explicit cloud-device selection needs isolated auth and tunnel fixtures."
-        )
-    )
-    func `uses explicit device selection without prompting`() async throws {}
-
-    /**
      Without an explicit or configured device in a non-interactive context,
      reports that a device selection is required, emits no prompt escape
      sequences, and performs no device operation.
      */
     @Test(
         .disabled(
-            "WDY-1949: missing cloud-device selection can only be observed after injecting valid isolated auth."
+            "Cloud v2 auto-selects a sole online device; refusal needs a controlled multi-device roster."
         )
     )
     func `reports missing device selection in non-interactive mode`() async throws {}
@@ -93,15 +82,52 @@ struct `'wendy cloud device apps list'` {
     func `lists deployed applications`() async throws {}
 
     /**
-     With `--json`, emits application objects with stable field names and value
-     types. JSON mode emits no table formatting and no stderr on success.
+     Lists applications on the explicitly selected Cloud v2 device through its
+     Cloud tunnel. Stdout is a JSON array, including an empty array on an empty
+     device. Every entry has a name and running state; optional version, port,
+     failure and service fields retain machine-readable types.
+
+     The roster first verifies the fixture's tenant, asset UUID, name and PKI
+     identity. An unrelated saved default is never selected. No applications
+     are created or changed and credentials and target settings are preserved.
      */
-    @Test(
-        .disabled(
-            "WDY-1952: JSON application schema needs seeded cloud tunnel and managed-agent container state."
-        )
-    )
-    func `prints JSON application inventory`() async throws {}
+    @Test(.enabled(if: CloudReferenceFixture.enabled))
+    func `prints JSON application inventory`() async throws {
+        let target = try CloudReferenceFixture.target()
+        try await CloudReferenceFixture.scenario().run { cli, _ in
+            try await CloudReferenceFixture.prepare(cli, target: target)
+            let rows = try await CloudReferenceFixture.roster(cli, target: target, all: false)
+            try CloudReferenceFixture.selected(rows, target: target)
+            let result = try await LocalCLIAssertions.run(
+                cli,
+                ["cloud", "device", "apps", "list"] + target.flags,
+                exit: 0
+            )
+            CloudReferenceFixture.tunnelNotice(result, target: target)
+            let apps = try #require(
+                try JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [[String: Any]]
+            )
+            var names = Set<String>()
+            for app in apps {
+                let name = try #require(app["name"] as? String)
+                #expect(!name.isEmpty)
+                #expect(names.insert(name).inserted)
+                let state = try #require(app["runningState"] as? String)
+                #expect(!state.isEmpty)
+                if let version = app["version"] { #expect(version is String) }
+                if let count = app["failureCount"] { #expect(count is Int) }
+                if let port = app["httpPort"] { #expect(port is Int) }
+                if let services = app["services"] {
+                    let entries = try #require(services as? [[String: Any]])
+                    for service in entries {
+                        #expect(service["name"] is String)
+                        #expect(service["runningState"] is String)
+                    }
+                }
+            }
+            try await CloudReferenceFixture.preserved(cli)
+        }
+    }
 
     /**
      Rejects flags that are not part of the command's documented interface.

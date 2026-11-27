@@ -82,12 +82,29 @@ struct `'wendy cloud enroll-device'` {
      no prompts open, no network connection is attempted, and the original file
      remains byte-for-byte unchanged.
      */
-    @Test(
-        .disabled(
-            "WDY-1959: invalid auth configuration is not read until after local device connection and optional WiFi inspection."
-        )
-    )
-    func `reports invalid CLI configuration before acting`() async throws {}
+    @Test
+    func `reports invalid CLI configuration before acting`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.prepare(cli, config: "{ malformed config\n")
+            let result = try await LocalCLIAssertions.run(
+                cli,
+                [
+                    "cloud", "enroll-device", "--json", "--device", "127.0.0.1:1", "--cloud-grpc",
+                    "127.0.0.1:1",
+                ],
+                exit: 1,
+                monitorNetwork: true
+            )
+            try LocalCLIAssertions.error(
+                result,
+                code: "error",
+                exit: 1,
+                message: "parsing config: invalid character"
+            )
+            #expect(!result.stderr.contains("\u{1B}"))
+            try await LocalCLIAssertions.unchanged(cli)
+        }
+    }
 
     /**
      Rejects flags that are not part of the command's documented interface.

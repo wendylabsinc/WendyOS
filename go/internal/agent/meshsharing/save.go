@@ -45,6 +45,10 @@ func atomicConfigFile(path string, data []byte) error {
 	if err = os.Rename(file.Name(), path); err != nil {
 		return err
 	}
+	return syncConfigDir(dir)
+}
+
+func syncConfigDir(dir string) error {
 	handle, err := os.Open(dir)
 	if err != nil {
 		return err

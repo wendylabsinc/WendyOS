@@ -115,8 +115,15 @@ Cloud endpoint of a saved sign-in. Hosted Wendy Cloud needs no overrides.
 | --- | --- |
 | `--broker-host`, `--broker-port` | Your deployment uses a separate Lite relay. |
 | `--csr-url` | Your administrator supplies a custom certificate enrollment URL. |
+| `--est-url` | Your administrator supplies an HTTPS EST `/cacerts` URL for the board's later peer CA refresh. You can use it with explicit root bundles. |
+| `--ca-certs-url` | Your deployment uses a separate CA discovery URL during enrollment, such as a legacy PEM or binary CMS service. Use this flag with automatic root discovery. |
 | `--device-roots`, `--https-roots` | Your administrator supplies custom CA certificate bundles. Provide both files together. |
 | `--time-url`, `--tsa-roots` | Your administrator supplies a custom signed-time service and its trusted CA bundle. |
+
+If you pass both URLs, the CLI uses `--ca-certs-url` for discovery and saves
+`--est-url` for board refresh. With automatic root discovery, the CLI uses
+`--est-url` for discovery as well when you omit `--ca-certs-url`. The board uses
+the configured HTTPS roots to authenticate the EST refresh service.
 
 The default signed-time service is Sigstore. Keep firmware current so it can
 verify that service. Certificate bundles are saved on the board for later boots.

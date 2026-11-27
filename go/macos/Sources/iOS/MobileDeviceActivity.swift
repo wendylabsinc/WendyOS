@@ -197,7 +197,7 @@ struct MobileDeviceActivity: View {
         .environment(\.recordingPosters, posters)
         .navigationDestination(item: $updateRoute) { session in
             if model.selectedDeviceReady, model.deviceSession == session, let device = model.connected {
-                DeviceInfoView(session: session, deviceName: device.title).navigationTitle("Device update")
+                DeviceAgentUpdateView(session: session, deviceName: device.title)
             } else { ContentUnavailableView("Device changed", systemImage: "bolt.slash") }
         }
         .navigationDestination(isPresented: Binding(get: { inspecting != nil }, set: { if !$0 { inspecting = nil } })) {

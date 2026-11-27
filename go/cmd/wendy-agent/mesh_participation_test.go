@@ -12,7 +12,7 @@ import (
 )
 
 func TestParticipationDisabledNeverStarts(t *testing.T) {
-	for _, value := range []string{"", `{"participate":false}`, `{"participate":false,"roam":true}`, `broken`} {
+	for _, value := range []string{`{}`, `{"participate":false}`, `{"participate":false,"roam":true}`, `broken`} {
 		t.Run(value, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "nan-mesh.json")
 			if value != "" {
@@ -46,7 +46,9 @@ func TestParticipationDisableDrainsAndReenablePreservesCarriers(t *testing.T) {
 		}
 	}
 	for cycle := 0; cycle < 2; cycle++ {
-		save(meshsharing.Config{Participate: true})
+		if cycle != 0 {
+			save(meshsharing.Config{Participate: true})
+		}
 		started, cancelSeen, allowDrain := make(chan struct{}), make(chan struct{}), make(chan struct{})
 		type result struct {
 			enabled bool
@@ -97,8 +99,8 @@ func TestParticipationDisableDrainsAndReenablePreservesCarriers(t *testing.T) {
 	}
 }
 
-func TestParticipationRemovalCorruptionAndParentCancellation(t *testing.T) {
-	for _, mode := range []string{"removed", "corrupt", "parent", "runtime-error"} {
+func TestParticipationCorruptionAndParentCancellation(t *testing.T) {
+	for _, mode := range []string{"corrupt", "parent", "runtime-error"} {
 		t.Run(mode, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "nan-mesh.json")
 			if err := meshsharing.SaveConfig(path, meshsharing.Config{Participate: true}); err != nil {
@@ -109,10 +111,6 @@ func TestParticipationRemovalCorruptionAndParentCancellation(t *testing.T) {
 			cause := errors.New("carrier cleanup failed")
 			enabled, err := runWhileMeshParticipating(ctx, path, time.Millisecond, func(active context.Context) error {
 				switch mode {
-				case "removed":
-					if err := os.Remove(path); err != nil {
-						t.Fatal(err)
-					}
 				case "corrupt":
 					if err := os.WriteFile(path, []byte("broken"), 0600); err != nil {
 						t.Fatal(err)
@@ -130,9 +128,6 @@ func TestParticipationRemovalCorruptionAndParentCancellation(t *testing.T) {
 					return nil
 				}
 			})
-			if mode == "removed" && (enabled || err != nil) {
-				t.Fatalf("removed: %t %v", enabled, err)
-			}
 			if mode == "corrupt" && (enabled || err == nil) {
 				t.Fatalf("corrupt: %t %v", enabled, err)
 			}

@@ -33,5 +33,9 @@ let package = Package(
                 .target(name: "LinuxVideo"),
             ]
         ),
+        .testTarget(
+            name: "LinuxVideoTests",
+            dependencies: ["LinuxVideo", "CLinuxVideo"]
+        ),
     ]
 )

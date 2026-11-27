@@ -21,9 +21,9 @@ import (
 
 const tcpConfigName = "local-mesh.json"
 
-// RunConfiguredTCP runs the explicitly configured topology. The configured
-// peer list controls eligibility; crossed authenticated connections converge
-// to one preferred direction. A missing config leaves the local mesh disabled.
+// RunConfiguredTCP starts a node using the saved or default carrier settings.
+// A configured TCP peer list controls eligibility, and crossed authenticated
+// connections converge to one preferred direction.
 func RunConfiguredTCP(parent context.Context, configDir string, id TCPIdentity) error {
 	return RunConfiguredTCPObserved(parent, configDir, id, nil)
 }
@@ -51,14 +51,21 @@ func RunConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	return runConfiguredWithNode(parent, configDir, id, observe, net.Listen)
 }
 
-func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdentity, observe func(*Node, *TCPConfig), listen func(string, string) (net.Listener, error)) error {
-	var credentials *Credentials
-	var err error
-	if id.TimePolicy == nil {
-		credentials, err = NewCredentials(id.Certificate, id.Chain, id.Key)
-	} else {
-		credentials, err = NewCredentialsWithTimePolicy(id.Certificate, id.Chain, id.Key, *id.TimePolicy)
+// RunTCPConfigWithNode starts the runtime from an already validated carrier
+// snapshot, keeping startup and its watcher on the same configuration.
+func RunTCPConfigWithNode(parent context.Context, configDir string, id TCPIdentity, cfg *TCPConfig, observe func(*Node, *TCPConfig)) error {
+	if cfg == nil {
+		return nil
 	}
+	credentials, err := id.MeshCredentials()
+	if err != nil {
+		return err
+	}
+	return runTCPConfigWithNode(parent, configDir, id, credentials, cfg, observe, net.Listen)
+}
+
+func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdentity, observe func(*Node, *TCPConfig), listen func(string, string) (net.Listener, error)) error {
+	credentials, err := id.MeshCredentials()
 	if err != nil {
 		return err
 	}
@@ -66,8 +73,12 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	if err != nil || cfg == nil {
 		return err
 	}
+	return runTCPConfigWithNode(parent, configDir, id, credentials, cfg, observe, listen)
+}
+
+func runTCPConfigWithNode(parent context.Context, configDir string, id TCPIdentity, credentials *Credentials, cfg *TCPConfig, observe func(*Node, *TCPConfig), listen func(string, string) (net.Listener, error)) error {
 	stateDir := filepath.Join(configDir, "local-mesh")
-	if err = os.MkdirAll(stateDir, 0700); err != nil {
+	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return err
 	}
 	// Keep the node alive while radio providers drain their links on parent
@@ -75,6 +86,7 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	defer cancel()
 	var listener net.Listener
+	var err error
 	if cfg.Listen != "" {
 		listener, err = listen("tcp", cfg.Listen)
 		if err != nil {

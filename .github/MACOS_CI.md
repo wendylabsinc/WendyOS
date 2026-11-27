@@ -30,17 +30,31 @@ account must have an unlocked login keychain. Unlock it interactively as that
 account with `security unlock-keychain ~/Library/Keychains/login.keychain-db`;
 do not pass the password through workflow logs or commit it to configuration.
 The existing macOS disk-image regression job also requires noninteractive sudo
-to execute its disposable disk fixture. Use `sudo visudo` to allow the exact
-command and temporary executable path for each runner installation. For example,
-with the runner account `wendy` and installation `/Users/wendy/actions-runner`:
+to execute its disposable disk fixture. Allow the exact command and temporary
+executable path for each runner installation in a drop-in file, created with
+`sudo visudo -f /etc/sudoers.d/wendy-ci`. For example, with the runner account
+`wendy` and installation `/Users/wendy/actions-runner`:
 
 ```sudoers
 wendy ALL=(root) NOPASSWD: /usr/bin/env WENDY_E2E_DISKIMAGE\=1 /Users/wendy/actions-runner/_work/_temp/install.test *
 ```
 
-Validate with `sudo visudo -c`. Adjust the executable path for each runner's
-`RUNNER_TEMP`. The workflow builds this executable, so this grants trusted CI
-code root access on the runner.
+Adjust the executable path for each runner's `RUNNER_TEMP`, which is
+`<work folder>/_temp`. Keep the rule out of the main `/etc/sudoers`. When several rules match, sudo
+uses the last one, and macOS's `%admin ALL = (ALL) ALL` line still asks an
+administrator account for a password if the rule is placed above it. The
+drop-in directory is read at the end of that file. Validate with
+`sudo visudo -c`, then confirm the rule applies without a password, as the
+runner account:
+
+```sh
+sudo -k
+sudo -n -l /usr/bin/env WENDY_E2E_DISKIMAGE=1 "<RUNNER_TEMP>/install.test" -test.v
+```
+
+The second command prints the command when the rule matches, and fails with
+`a password is required` when it does not. The workflow builds this executable,
+so this grants trusted CI code root access on the runner.
 
 The shared `setup-macos-ci` action repairs missing base tools and exposes
 Homebrew's Python. This avoids the hosted Python installer's sudo requirement

@@ -147,14 +147,32 @@ final class CameraFeed: ObservableObject, Identifiable {
 
 struct CameraFeedDisplay: View {
     @ObservedObject var feed: CameraFeed
+    var open: (() -> Void)? = nil
+
     var body: some View {
         if let frame = feed.thermalFrame {
-            ThermalCameraDisplay(feed: feed, frame: frame)
-        } else if let image = feed.jpeg {
-            Image(decorative: image, scale: 1).resizable().scaledToFit()
+            ThermalCameraDisplay(feed: feed, frame: frame, open: open)
         } else {
-            CameraDisplayView(decoder: feed.decoder)
+            Group {
+                if let image = feed.jpeg {
+                    Image(decorative: image, scale: 1).resizable().scaledToFit()
+                } else {
+                    CameraDisplayView(decoder: feed.decoder)
+                }
+            }
+            .modifier(CameraFeedTap(open: open))
         }
+    }
+}
+
+// Only displays given open take taps; others leave them to a parent's
+// gesture or Button.
+struct CameraFeedTap: ViewModifier {
+    let open: (() -> Void)?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let open {
+            content.contentShape(Rectangle()).onTapGesture { open() }
+        } else { content }
     }
 }
 
