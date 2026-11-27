@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
@@ -208,7 +209,7 @@ func TestChannelIsPublishedIntoEveryROS2App(t *testing.T) {
 		}
 	}
 
-	ch.WriteSample(f32le(21.5))
+	ch.WriteFrame(&sensorlink.SensorFrame{Payload: f32le(21.5)})
 	for _, l := range leases {
 		writers := l.open()
 		if len(writers) != 1 || writers[0].count() != 1 {
@@ -227,7 +228,7 @@ func TestAppsThatStartAndStopGainAndLoseTheChannel(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.reconcile(context.Background())
-	ch.WriteSample(f32le(1)) // no ROS 2 app is running: nowhere to publish
+	ch.WriteFrame(&sensorlink.SensorFrame{Payload: f32le(1)}) // no ROS 2 app is running: nowhere to publish
 
 	d.set(isolatedApp("robot", 4242, 17))
 	b.reconcile(context.Background())
@@ -235,7 +236,7 @@ func TestAppsThatStartAndStopGainAndLoseTheChannel(t *testing.T) {
 	if len(first) != 1 {
 		t.Fatalf("%d participants after the app started, want 1", len(first))
 	}
-	ch.WriteSample(f32le(2))
+	ch.WriteFrame(&sensorlink.SensorFrame{Payload: f32le(2)})
 	if got := first[0].open()[0].count(); got != 1 {
 		t.Fatalf("app received %d samples, want only the one sent after it started", got)
 	}
@@ -250,7 +251,7 @@ func TestAppsThatStartAndStopGainAndLoseTheChannel(t *testing.T) {
 	if len(second) != 1 || second[0].cfg.NetworkNamespacePID != 4343 {
 		t.Fatalf("participants after restart = %d", len(second))
 	}
-	ch.WriteSample(f32le(3))
+	ch.WriteFrame(&sensorlink.SensorFrame{Payload: f32le(3)})
 	if got := second[0].open()[0].count(); got != 1 {
 		t.Fatalf("restarted app received %d samples, want 1", got)
 	}
@@ -260,7 +261,7 @@ func TestAppsThatStartAndStopGainAndLoseTheChannel(t *testing.T) {
 	if n := len(d.openLeases()); n != 0 {
 		t.Fatalf("%d participants left after every app stopped", n)
 	}
-	ch.WriteSample(f32le(4))
+	ch.WriteFrame(&sensorlink.SensorFrame{Payload: f32le(4)})
 }
 
 func TestClosingTheLastChannelReleasesEveryParticipant(t *testing.T) {
@@ -282,7 +283,7 @@ func TestClosingTheLastChannelReleasesEveryParticipant(t *testing.T) {
 	if lease.closed || len(open) != 1 || open[0].pub.Topic != "rt/sensorlink/porch/imu" {
 		t.Fatalf("after closing one channel: lease closed=%v, %d writers", lease.closed, len(open))
 	}
-	temperature.WriteSample(f32le(1)) // ignored, not a crash
+	temperature.WriteFrame(&sensorlink.SensorFrame{Payload: f32le(1)}) // ignored, not a crash
 
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
@@ -298,7 +299,7 @@ func TestParticipantThatCannotJoinIsRetried(t *testing.T) {
 	d.refuse = true
 	ch, _ := b.OpenChannel("asset:7", "porch", temperatureChannel(3, "temperature"))
 	b.reconcile(context.Background())
-	ch.WriteSample(f32le(1))
+	ch.WriteFrame(&sensorlink.SensorFrame{Payload: f32le(1)})
 	if n := len(d.openLeases()); n != 0 {
 		t.Fatalf("%d participants", n)
 	}
@@ -323,7 +324,7 @@ func TestAppListThatCannotBeReadKeepsWhatIsPublishing(t *testing.T) {
 	if len(leases) != 1 {
 		t.Fatal("a failed listing was taken to mean every app stopped")
 	}
-	ch.WriteSample(f32le(1))
+	ch.WriteFrame(&sensorlink.SensorFrame{Payload: f32le(1)})
 	if got := leases[0].open()[0].count(); got != 1 {
 		t.Fatalf("app received %d samples", got)
 	}
@@ -355,8 +356,8 @@ func TestBadSampleOrFailingWriterDoesNotStopTheChannel(t *testing.T) {
 	broken, healthy := leases[0].open()[0], leases[1].open()[0]
 	broken.fail = errors.New("message too long")
 
-	ch.WriteSample([]byte{1, 2, 3}) // not a whole sample
-	ch.WriteSample(f32le(21.5))
+	ch.WriteFrame(&sensorlink.SensorFrame{Payload: []byte{1, 2, 3}}) // not a whole sample
+	ch.WriteFrame(&sensorlink.SensorFrame{Payload: f32le(21.5)})
 	if healthy.count() != 1 {
 		t.Fatalf("healthy app received %d samples, want the one valid sample", healthy.count())
 	}
@@ -416,5 +417,79 @@ func TestMountPublishesASourcesSensorChannelsUntilReleased(t *testing.T) {
 	}
 	if publish(&sensorlink.SensorFrame{ChannelID: 3, Payload: f32le(22)}) {
 		t.Fatal("a frame was taken after the mount was released")
+	}
+}
+
+// testClock is the device's clock under the test's control.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+func (c *testClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+func stampOf(t *testing.T, payload []byte) time.Time {
+	t.Helper()
+	m := decodeTemperature(t, payload)
+	return time.Unix(int64(m.sec), int64(m.nanosec))
+}
+
+func TestReadingIsStampedWhenTheSourceTookItNotWhenItArrived(t *testing.T) {
+	b, d := testBridge(isolatedApp("robot", 4242, 17))
+	clock := &testClock{t: time.Unix(1_700_000_000, 0)}
+	b.now = clock.now
+	ch, err := b.OpenChannel("asset:7", "porch", temperatureChannel(3, "temperature"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.reconcile(context.Background())
+	writer := d.openLeases()[0].open()[0]
+
+	// The board has been up five seconds and reads its sensor once a second.
+	// Its second frame is held up 300 ms on the way.
+	clock.advance(time.Second)
+	first := clock.now()
+	ch.WriteFrame(&sensorlink.SensorFrame{TsUs: 5_000_000, Payload: f32le(20)})
+	clock.advance(1300 * time.Millisecond)
+	ch.WriteFrame(&sensorlink.SensorFrame{Seq: 1, TsUs: 6_000_000, Payload: f32le(21)})
+	clock.advance(700 * time.Millisecond)
+	ch.WriteFrame(&sensorlink.SensorFrame{Seq: 2, TsUs: 7_000_000, Payload: f32le(22)})
+
+	if writer.count() != 3 {
+		t.Fatalf("app received %d readings, want 3", writer.count())
+	}
+	for i, want := range []time.Time{first, first.Add(time.Second), first.Add(2 * time.Second)} {
+		if got := stampOf(t, writer.samples[i]); !got.Equal(want) {
+			t.Fatalf("reading %d is stamped %s, want %s: one second after the one before, as the board took it",
+				i, got.UTC().Format(time.RFC3339Nano), want.UTC().Format(time.RFC3339Nano))
+		}
+	}
+}
+
+func TestReadingWithoutASourceTimeIsStampedOnArrival(t *testing.T) {
+	b, d := testBridge(isolatedApp("robot", 4242, 17))
+	clock := &testClock{t: time.Unix(1_700_000_000, 0)}
+	b.now = clock.now
+	ch, _ := b.OpenChannel("asset:7", "porch", temperatureChannel(3, "temperature"))
+	b.reconcile(context.Background())
+	writer := d.openLeases()[0].open()[0]
+
+	// ts_us is zero when a source does not stamp its frames, and a value that
+	// cannot be a time is treated the same way.
+	for i, ts := range []uint64{0, 0, ^uint64(0)} {
+		clock.advance(1300 * time.Millisecond)
+		ch.WriteFrame(&sensorlink.SensorFrame{Seq: uint32(i), TsUs: ts, Payload: f32le(20)})
+		if got := stampOf(t, writer.samples[i]); !got.Equal(clock.now()) {
+			t.Fatalf("reading %d (ts_us %d) is stamped %s, want its arrival %s", i, ts, got, clock.now())
+		}
 	}
 }

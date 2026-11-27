@@ -27,9 +27,11 @@ const schemaTemperature = "wendy.temperature.celsius.f32le.v1"
 type encoding struct {
 	// ddsType is the type name on the wire; rosType is how ROS 2 tools show it.
 	ddsType, rosType string
-	// encode returns the serialized messages for one frame. It may return
-	// both messages and an error when only part of the frame was usable.
-	encode func(now time.Time, payload []byte) ([][]byte, error)
+	// encode returns the serialized messages for one frame. stamp is when the
+	// frame's first reading was taken and period the time between readings,
+	// zero when the source does not say. It may return both messages and an
+	// error when only part of the frame was usable.
+	encode func(stamp time.Time, period time.Duration, payload []byte) ([][]byte, error)
 }
 
 // encodingFor picks the ROS 2 message for a sensor channel. A schema this
@@ -40,8 +42,8 @@ func encodingFor(f *sensorlinkpb.SensorFormat, frameID string) encoding {
 		return encoding{
 			ddsType: "sensor_msgs::msg::dds_::Temperature_",
 			rosType: "sensor_msgs/msg/Temperature",
-			encode: func(now time.Time, payload []byte) ([][]byte, error) {
-				return encodeTemperature(now, frameID, payload)
+			encode: func(stamp time.Time, period time.Duration, payload []byte) ([][]byte, error) {
+				return encodeTemperature(stamp, period, frameID, payload)
 			},
 		}
 	}
@@ -49,17 +51,17 @@ func encodingFor(f *sensorlinkpb.SensorFormat, frameID string) encoding {
 	return encoding{
 		ddsType: "std_msgs::msg::dds_::UInt8MultiArray_",
 		rosType: "std_msgs/msg/UInt8MultiArray",
-		encode: func(_ time.Time, payload []byte) ([][]byte, error) {
+		encode: func(_ time.Time, _ time.Duration, payload []byte) ([][]byte, error) {
 			return [][]byte{encodeBytes(schema, payload)}, nil
 		},
 	}
 }
 
 // encodeTemperature serializes one sensor_msgs/msg/Temperature per float32
-// sample in payload. The stamp is the time the agent received the frame: a
-// source's own clock is not wall time. Variance is 0, which ROS 2 defines as
-// unknown.
-func encodeTemperature(now time.Time, frameID string, payload []byte) ([][]byte, error) {
+// reading in payload. stamp is when the first reading was taken; each later
+// one is stamped a period after the one before, as the source took them.
+// Variance is 0, which ROS 2 defines as unknown.
+func encodeTemperature(stamp time.Time, period time.Duration, frameID string, payload []byte) ([][]byte, error) {
 	if len(payload) == 0 || len(payload)%4 != 0 {
 		return nil, fmt.Errorf("temperature frame of %d bytes is not a whole number of 4-byte samples", len(payload))
 	}
@@ -71,9 +73,10 @@ func encodeTemperature(now time.Time, frameID string, payload []byte) ([][]byte,
 			bad = errors.New("temperature sample is not a finite number")
 			continue
 		}
+		taken := stamp.Add(time.Duration(off/4) * period)
 		e := cdr.NewEncoder()
-		e.Int32(int32(now.Unix())) // std_msgs/Header: stamp, then frame_id
-		e.Uint32(uint32(now.Nanosecond()))
+		e.Int32(int32(taken.Unix())) // std_msgs/Header: stamp, then frame_id
+		e.Uint32(uint32(taken.Nanosecond()))
 		e.String(frameID)
 		e.Float64(celsius)
 		e.Float64(0)

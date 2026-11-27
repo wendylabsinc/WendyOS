@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -60,6 +61,8 @@ type Bridge struct {
 	logger  *zap.Logger
 	graphs  ros2camera.GraphSource
 	acquire acquireFunc
+	// now is the device's clock; tests replace it.
+	now func() time.Time
 
 	// reconcileMu admits one reconcile at a time.
 	reconcileMu sync.Mutex
@@ -96,7 +99,7 @@ func New(logger *zap.Logger, pool *rtps.Pool, graphs ros2camera.GraphSource) *Br
 
 func newBridge(logger *zap.Logger, graphs ros2camera.GraphSource, acquire acquireFunc) *Bridge {
 	return &Bridge{
-		logger: logger, graphs: graphs, acquire: acquire,
+		logger: logger, graphs: graphs, acquire: acquire, now: time.Now,
 		wake:     make(chan struct{}, 1),
 		channels: map[*Channel]struct{}{}, topics: map[string]*Channel{},
 		leases: map[string]*graphLease{}, announced: map[string]string{},
@@ -168,8 +171,7 @@ func (b *Bridge) Mount(p mcusource.SensorPairing, descriptors []*sensorlinkpb.Se
 		if c == nil || done {
 			return false
 		}
-		c.WriteSample(f.Payload)
-		return true
+		return c.WriteFrame(f)
 	}
 	release := func() {
 		mu.Lock()
@@ -192,6 +194,14 @@ type Channel struct {
 	b     *Bridge
 	topic string
 	enc   encoding
+	// period is the time between two readings, zero when the source does not
+	// say how often it reads.
+	period time.Duration
+	// opened is the start of the steady time the source's clock is placed on.
+	opened time.Time
+
+	clockMu sync.Mutex
+	clock   sourceClock
 
 	// Guarded by b.mu.
 	closed   bool
@@ -212,7 +222,10 @@ func (b *Bridge) OpenChannel(sourceKey, sourceName string, d *sensorlinkpb.Senso
 	}
 	source := sourceToken(sourceName, sourceKey)
 	base := topicFor(sourceName, sourceKey, d.GetName(), d.GetChannelId())
-	c := &Channel{b: b, enc: encodingFor(d.GetSensor(), "sensorlink/"+source)}
+	c := &Channel{b: b, enc: encodingFor(d.GetSensor(), "sensorlink/"+source), opened: b.now()}
+	if rate := d.GetSensor().GetRateHz(); rate > 0 {
+		c.period = time.Second / time.Duration(rate)
+	}
 
 	b.mu.Lock()
 	c.topic = base
@@ -235,16 +248,35 @@ func (b *Bridge) OpenChannel(sourceKey, sourceName string, d *sensorlinkpb.Senso
 	return c, nil
 }
 
-// WriteSample publishes the payload of one frame of the channel. A frame
-// that cannot be published is dropped and reported in the log; the channel
-// stays open.
-func (c *Channel) WriteSample(payload []byte) {
-	messages, err := c.enc.encode(time.Now(), payload)
+// stamp returns when the first reading of a frame was taken, on this device's
+// wall clock. That is the time its source stamped it, moved to this device's
+// clock. A frame its source did not stamp, or stamped with a value that cannot
+// be a time, is placed at its arrival: nothing else is known about it.
+func (c *Channel) stamp(tsUs uint64, arrival time.Time) time.Time {
+	if tsUs == 0 || tsUs > math.MaxInt64/uint64(time.Microsecond) {
+		return arrival
+	}
+	steady := arrival.Sub(c.opened)
+	c.clockMu.Lock()
+	taken, _ := c.clock.place(time.Duration(tsUs)*time.Microsecond, steady, c.period)
+	c.clockMu.Unlock()
+	return arrival.Add(taken - steady)
+}
+
+// WriteFrame publishes one frame of the channel, stamped with the time its
+// source took it, and reports whether any of it could be turned into a
+// message. A frame that cannot be published is dropped and reported in the
+// log; the channel stays open.
+func (c *Channel) WriteFrame(f *sensorlink.SensorFrame) bool {
+	// Read the clock before anything else: the frame is placed by when it
+	// arrived, and time spent waiting for a lock below is not part of that.
+	arrival := c.b.now()
+	messages, err := c.enc.encode(c.stamp(f.TsUs, arrival), c.period, f.Payload)
 	b := c.b
 	b.mu.Lock()
 	if c.closed {
 		b.mu.Unlock()
-		return
+		return false
 	}
 	writers := make([]sampleWriter, 0, len(b.leases))
 	for _, gl := range b.leases {
@@ -261,7 +293,7 @@ func (c *Channel) WriteSample(payload []byte) {
 		}
 	}
 	if err == nil {
-		return
+		return true
 	}
 	b.mu.Lock()
 	warn := time.Since(c.lastWarn) >= warnInterval
@@ -272,6 +304,7 @@ func (c *Channel) WriteSample(payload []byte) {
 	if warn {
 		b.logger.Warn("sensor sample was not published to ROS 2", zap.String("topic", c.topic), zap.Error(err))
 	}
+	return len(messages) > 0
 }
 
 // Close stops publishing the channel and frees its topic name.
