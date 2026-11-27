@@ -19,6 +19,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"google.golang.org/grpc/status"
@@ -151,6 +152,13 @@ func directCommandTarget(conn *grpcclient.AgentConnection, address string) comma
 			return commandTarget{}
 		}
 		return commandTarget{Device: address, Selector: address, Transport: "cloud", CloudGRPC: u.Host, BrokerURL: os.Getenv("WENDY_BROKER_URL")}
+	}
+	if strings.HasPrefix(conn.DevicePinKey, "private-alias/") &&
+		(address == "" || meshname.IsShortHostname(address) || address == conn.DevicePinKey) {
+		return commandTarget{Device: conn.DevicePinKey, Transport: "direct"}
+	}
+	if meshname.IsShortHostname(address) {
+		return commandTarget{Device: address, Transport: "direct"}
 	}
 	if conn.SimulatorName != "" {
 		// The named alias retains the VM's identity when its forwarded port changes.

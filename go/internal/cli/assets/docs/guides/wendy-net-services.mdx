@@ -144,14 +144,14 @@ check: verify an actual request to the discovered server.
 An app can also connect to a specific enrolled device without browsing or
 publishing a DNS-SD service. Enroll both devices in the same Wendy Cloud
 organization. The client agent must support short device DNS. Run the
-[UUID lookup below](#verify-short-dns-from-the-client-app) to check the installed
+[DNS check below](#verify-short-dns-from-the-client-app) to check the installed
 client directly. For offline friendly names learned through mesh, the destination
 agent also needs support for publishing its Cloud-registered name to the signed
 directory. See the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases)
 for availability. Keep the client in network mode `mesh` and
 [publish the server's incoming ports](#1-give-the-publishing-app-wendy-net-access).
 Use the destination's certificate UUID for `<device-uuid>`. The
-[verification steps below](#verify-short-dns-from-the-client-app) show how to
+[inventory lookup below](#look-up-a-device-uuid) shows how to
 retrieve it. Use either name with the **published** port:
 
 ```text
@@ -206,7 +206,20 @@ directory nor the Cloud roster knows the name, or if the sources tie it to
 more than one device. Use `device-<uuid>.wendy.internal` to select one device
 explicitly.
 
-### Verify short DNS from the client app
+### Select a device in the CLI
+
+Use the same `*.wendy.internal` hostname with `--device` on the Wendy CLI.
+First sign in through the browser with `wendy cloud login`, then select the
+device's organization with `wendy auth use` if you have multiple contexts.
+This obtains the operator certificate used to authenticate the CLI connection;
+a service-account login does not provide it. CLI device selection does not require
+a desktop VPN or an app network entitlement on your computer. See the
+[CLI device selection guide](/docs/advanced/clients/wendy-cli/device-selection#private-wendy-net-hostnames).
+
+{/* scripts/prepare-content.mjs publishes clients/wendy-cli/device-selection.md
+    under advanced/clients/wendy-cli/device-selection; the export crawl checks this link. */}
+
+### Look up a device UUID
 
 From a terminal signed in to the destination's Wendy Cloud organization, list
 its enrolled devices, including offline devices:
@@ -219,7 +232,18 @@ Find the destination by its `name` and copy the UUID in `pkiDeviceName`.
 For example, a device entry can contain
 `"pkiDeviceName": "00000000-0000-4000-8000-000000000001"`.
 If `pkiDeviceName` is missing, use the `id` field if it contains a UUID.
-For a device with only a numeric ID, try the friendly-name check below.
+For a device with only a numeric ID, use a Cloud selector in the CLI. From an
+app, skip to the [friendly-name check](#check-a-friendly-hostname) if the device
+has an enrolled Cloud name.
+
+### Verify short DNS from the client app
+
+{/* Keep this heading's existing #verify-short-dns-from-the-client-app anchor.
+    UUID inventory lookup has its own heading above; existing DNS links still land here. */}
+
+For a UUID-based DNS check, [look up the destination's UUID](#look-up-a-device-uuid)
+in Cloud inventory. If the device has only a numeric ID, skip to the
+[friendly-name check](#check-a-friendly-hostname) if it has an enrolled Cloud name.
 
 Confirm the enrolled client's `wendy.json` uses network mode `mesh` and
 `serviceCIDR` set to `10.99.0.0/16`. Inside its app container, set
@@ -234,6 +258,8 @@ address for a well-formed UUID even if no device has that UUID. Verify the
 device in the inventory and connect to the published port to confirm
 reachability. If the lookup returns no address, check client enrollment,
 network mode, and short DNS support in the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
+
+#### Check a friendly hostname
 
 For an offline friendly-name check, verify the destination agent's support
 for Cloud-registered name publication before running the next command.

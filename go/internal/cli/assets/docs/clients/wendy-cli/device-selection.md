@@ -20,6 +20,107 @@ Failing to connect to an explicit device results in a failure.
 
 A value made only of digits, such as `283`, is rejected: it is not a hostname or IP address, and the system resolver would turn it into an unrelated address. If it is a Wendy Cloud asset ID, use its cloud selector (`--device cloud://<cloud-grpc-host:port>/org/<org-id>/asset/283`) or `wendy cloud device <command> --device 283`. The error prints the exact selector when you are logged in.
 
+### Private Wendy Net hostnames
+
+Sign in with [`wendy cloud login`](./commands/cloud/login.md). If you have
+multiple Cloud contexts, run [`wendy auth use`](./commands/auth/use.md) and
+select the context for the device's enrolled organization. The CLI searches
+for the hostname through mesh, LAN, and Cloud within that organization.
+
+The selected context must hold an operator certificate for that organization
+on this computer. Personal browser sign-in with `wendy cloud login` obtains
+and saves this certificate. A [service-account login](./commands/auth/login.md#service-account-login) supplies Cloud API access
+without this certificate and cannot select private hostnames. If the
+certificate is missing, sign in again using the personal browser flow before
+retrying; the CLI rejects a missing certificate before discovery starts.
+
+To use the UUID hostname, follow
+[Look up a device UUID](/docs/guides/wendy-net-services#look-up-a-device-uuid)
+and set `DEVICE_UUID` to the returned certificate UUID. This inventory lookup
+requires an active Cloud login and includes offline devices. Devices with
+only a numeric asset ID use a Cloud selector.
+
+```sh
+wendy --device jetson.wendy.internal device info
+wendy --device "device-${DEVICE_UUID}.wendy.internal" device info
+```
+
+The first example uses a friendly hostname; the second uses the device's
+certificate UUID. A successful `device info` command prints the selected
+device's information.
+
+Valid enrolled DNS labels keep their repeated hyphens, so `jetson--a` and
+`jetson-a` refer to different names. A legacy display name such as `Jetson A`
+becomes `jetson-a.wendy.internal`.
+
+The CLI gathers LAN, Wendy Net, and Cloud candidates in parallel. For UUID
+hostnames, direct LAN gets a 500 ms head start before the CLI chooses another
+ready route. If the initial scan finds no matching LAN candidate, reports no
+discovery error, and no mesh or Cloud route is ready, the CLI can scan LAN
+for up to another 2.5 seconds. It can stop early when another route is ready.
+It does not extend the scan after a discovered LAN candidate fails to connect.
+For friendly hostnames, the CLI allows up to 3 seconds for LAN
+and Cloud discovery to check for conflicts. If it still needs a route, Wendy
+Net discovery can run for up to 15 seconds, including over Bluetooth. Probing
+a discovered mesh route can take another 15 seconds.
+
+Bluetooth-only management remains unverified: hardware validation timed out
+with BLE as the device's only active Wendy Net carrier, despite a visible
+signed route. If a BLE-only connection times out, make the device reachable
+over LAN or Cloud and retry.
+
+Friendly hostnames require a trusted binding from the signed Wendy Net
+directory, authenticated Cloud inventory, or a saved pin. If the directory
+reports incomplete results, it may have omitted another device with the same
+name. In that case, the CLI refuses the name even when Cloud inventory or a
+saved pin has a match. Use the UUID form when a name is ambiguous or the
+directory is incomplete.
+
+For LAN access when Cloud is unavailable, use the credentials for the device's
+organization and choose the hostname form:
+
+- **Friendly hostname.** When LAN discovery is the only available source, the
+  CLI requires a saved pin for that private hostname in the selected
+  organization. An ordinary LAN pin, such as `jetson.local` or a bare
+  hostname, does not establish the binding.
+  To save it, connect once by the exact friendly hostname while Cloud
+  inventory is reachable or the device appears in the signed Wendy Net
+  directory. The CLI verifies the peer's certificate before saving the
+  binding.
+- **UUID hostname.** A reachable LAN sighting is enough. The CLI verifies
+  the peer's certificate against the UUID in the hostname, so you can connect
+  without a prior online connection or saved pin.
+
+See [Device identity](#device-identity) for unexpected identity changes.
+
+The CLI refuses a saved selector from another organization before starting
+discovery. Switch back to the original organization with `wendy auth use` and
+retry. A pin under the selected organization's key that points to a device in
+another organization also causes a refusal before discovery.
+
+When LAN discovery is the only available source, a saved private hostname
+can still reach its original device. If Cloud inventory or a complete Wendy
+Net directory identifies a different device by that name, the CLI refuses
+the connection and asks you to verify the change.
+
+After verifying an intentional replacement or an invalid saved pin, use the
+[sign-in context commands](./commands/auth/login.md#auth-contexts) to find the
+intended organization with `wendy auth status` and select it with `wendy auth use`.
+Then unpin the hostname:
+
+```sh
+wendy device unpin jetson.wendy.internal
+```
+
+The CLI clears the selected organization's binding. It also clears the exact
+legacy hostname pin if it belongs to that organization or has no recorded
+organization UUID. With no enrolled organization selected, the command can
+still clear the exact legacy hostname pin. To clear a scoped binding in another
+organization, switch to its context first. Check the replacement's UUID
+using the inventory lookup above, then reconnect by hostname while Cloud
+inventory is reachable or the device appears in the signed Wendy Net
+directory. If the replacement has yet to be enrolled, complete enrollment
+first.
 
 ## 2. `WENDY_DEVICE`
 
@@ -109,6 +210,9 @@ replacement. It does not authorize learning an identity from the next
 connection: refresh the trusted inventory binding, or complete enrollment if
 the device is unprovisioned. Keep the pin and verify the device if the change
 was unexpected.
+
+For organization-scoped pins, see
+[Private Wendy Net hostnames](#private-wendy-net-hostnames).
 
 Loopback addresses share the pin of their bare host, whatever the port:
 `127.0.0.1:50051` and `127.0.0.1:50061` are both checked against the
