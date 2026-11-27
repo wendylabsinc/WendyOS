@@ -309,7 +309,8 @@ func (b *TelemetryBuffer) rotateWriter(sig SignalType) error {
 // MaxTotalBytes. Callers must hold b.mu, except during NewTelemetryBuffer
 // initialization where no concurrent writers exist yet.
 func (b *TelemetryBuffer) evictIfNeeded() {
-	for b.totalSegmentSize() > b.cfg.MaxTotalBytes {
+	total := b.totalSegmentSize()
+	for total > b.cfg.MaxTotalBytes {
 		oldest := b.findOldestSegment()
 		if oldest == "" {
 			break
@@ -318,10 +319,11 @@ func (b *TelemetryBuffer) evictIfNeeded() {
 			b.logger.Warn("telemetry buffer: failed to evict segment", zap.String("file", oldest), zap.Error(err))
 			break
 		}
+		total = b.totalSegmentSize()
 	}
-	if b.totalSegmentSize() > b.cfg.MaxTotalBytes {
+	if total > b.cfg.MaxTotalBytes {
 		b.logger.Warn("telemetry buffer: cannot evict below quota; only active segments remain",
-			zap.Int64("total_bytes", b.totalSegmentSize()),
+			zap.Int64("total_bytes", total),
 			zap.Int64("max_bytes", b.cfg.MaxTotalBytes))
 	}
 }

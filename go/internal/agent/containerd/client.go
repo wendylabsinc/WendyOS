@@ -5694,7 +5694,9 @@ func (c *Client) ListContainers(ctx context.Context) ([]*agentpb.AppContainer, e
 	var order []string
 
 	for _, ctr := range ctrs {
-		info, err := ctr.Info(ctx)
+		// Containers already fetched these records for this enumeration. Keep
+		// its metadata snapshot and still query each task's live status below.
+		info, err := ctr.Info(ctx, containerd.WithoutRefreshedMetadata)
 		if err != nil {
 			c.logger.Warn("Failed to get container info", zap.String("id", ctr.ID()), zap.Error(err))
 			continue
