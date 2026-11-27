@@ -36,7 +36,10 @@ func runConfiguredNetCarriers(ctx context.Context, configDir string, id localmes
 		return err
 	}
 	if err := recoverNetCarrierState(ctx); err != nil {
-		return fmt.Errorf("recover Wendy Net Internet sharing: %w", err)
+		err = fmt.Errorf("recover Wendy Net state: %w", err)
+		sharing.carriers.begin("", nil)
+		sharing.setState(services.LocalMeshRuntimeStatus{Available: true, State: "failed", Detail: err.Error()})
+		return err
 	}
 	participating, err := runWhileMeshParticipating(ctx, filepath.Join(configDir, "nan-mesh.json"), 2*time.Second, func(active context.Context) error {
 		return runEnabledMeshCarriers(active, configDir, id, logger, catalog, vips, sharing, observe, agent...)
@@ -61,6 +64,10 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 		epoch := sharing.carriers.begin("unreadable configuration", []string{"local-net"})
 		sharing.carriers.fail(epoch, err)
 		return err
+	}
+	if initial == nil {
+		sharing.carriers.begin("", nil)
+		return nil
 	}
 	var cfg localmesh.TCPConfig
 	err = json.Unmarshal(initial, &cfg)
@@ -92,13 +99,20 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 		return err
 	}
 	credentials, err := id.MeshCredentials()
-	if err == nil {
-		_, err = localmesh.LoadTCPConfig(path, credentials.Device)
-	}
 	if err != nil {
 		sharing.carriers.fail(epoch, err)
 		return err
 	}
+	parsed, err := localmesh.ParseTCPConfig(initial, credentials.Device)
+	if err != nil {
+		sharing.carriers.fail(epoch, err)
+		return err
+	}
+	if parsed == nil {
+		sharing.carriers.end(epoch)
+		return nil
+	}
+	id.PreparedCredentials = credentials
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	defer func() {
@@ -130,7 +144,7 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 	var stopProviders context.CancelFunc
 	var providersDone sync.WaitGroup
 	defer func() { runErr = errors.Join(runErr, sharing.Deactivate()) }()
-	return localmesh.RunConfiguredWithNode(runCtx, configDir, id, func(node *localmesh.Node, cfg *localmesh.TCPConfig) {
+	return localmesh.RunTCPConfigWithNode(runCtx, configDir, id, parsed, func(node *localmesh.Node, cfg *localmesh.TCPConfig) {
 		if node == nil {
 			// The final defer retries and propagates any retained sharing
 			// cleanup failure after all carriers and the node have drained.

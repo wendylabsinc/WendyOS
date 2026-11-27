@@ -78,6 +78,7 @@ func (h *meshCarrierHealth) status(sharing services.LocalMeshRuntimeStatus) serv
 	}
 	out := sharing // Preserve authenticated peers and signed gateway identity.
 	out.Available = true
+	out.CarrierConfig = h.config
 	out.Carriers = make(map[string]string, len(h.carriers))
 	ready, absent, initializing, failed := 0, 0, false, false
 	for name, value := range h.carriers {

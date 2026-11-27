@@ -315,12 +315,24 @@ func TestLocalMeshAdminCanDisableLastCarrierWithoutTCPConfig(t *testing.T) {
 	if err != nil || carriers != nil {
 		t.Fatalf("explicitly disabled carriers must stay off: %+v %v", carriers, err)
 	}
+	// The original carrier file is absent, the format older agents expect.
+	path := filepath.Join(dir, "local-mesh.json")
+	if _, err := localmesh.ReadTCPConfigFile(path); !os.IsNotExist(err) {
+		t.Fatalf("legacy carrier reader did not see absent settings: %v", err)
+	}
 	clean := NewLocalMeshAdminService(nil, dir, func() (meshid.Tenant, meshid.Device) { return tenant, device })
 	got, err := clean.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{})
 	cfg := got.GetConfigured()
 	if err != nil || !cfg.GetParticipate() || cfg.GetEthernet() || cfg.GetInfrastructureWifi() || cfg.GetNan() || cfg.GetBle() ||
 		got.GetState() != "waiting" || !strings.Contains(got.GetDetail(), "All carriers are disabled.") {
 		t.Fatalf("saved override fell back to default carriers: %+v %v", got, err)
+	}
+	if _, err = clean.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Ethernet: proto.Bool(true)}); err != nil {
+		t.Fatal(err)
+	}
+	carriers, err = localmesh.LoadTCPConfig(path, device)
+	if err != nil || carriers == nil || !carriers.Ethernet || carriers.NAN || carriers.BLE || carriers.InfrastructureWiFi {
+		t.Fatalf("new config did not replace the all-off selection: %+v %v", carriers, err)
 	}
 }
 
@@ -485,5 +497,88 @@ func TestLocalMeshStatusShowsEachCarrier(t *testing.T) {
 	detail := "Carriers: Ethernet: ok (eth0); Infrastructure Wi-Fi: fault (bind failed); Bluetooth: no hardware; Wi-Fi Aware: disabled."
 	if err != nil || got.GetDetail() != detail {
 		t.Fatalf("expected %q, got %q, %v", detail, got.GetDetail(), err)
+	}
+}
+
+func TestLocalMeshStatusWaitsForNewCarrierSnapshot(t *testing.T) {
+	tenant, device := adminTenant(t), adminDevice(t)
+	dir := t.TempDir()
+	svc := NewLocalMeshAdminService(nil, dir, func() (meshid.Tenant, meshid.Device) { return tenant, device })
+	ctx := ctxWithIdentity(t, userPrincipal(adminTenantID, "alice"))
+	path := filepath.Join(dir, "local-mesh.json")
+	snapshot, err := localmesh.ReadTCPConfigSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := LocalMeshRuntimeStatus{Available: true, State: "mesh-active", CarrierConfig: string(snapshot), Carriers: map[string]string{"ble": "ok"}}
+	svc.SetRuntimeStatusSource(func() LocalMeshRuntimeStatus { return runtime })
+	if _, err := svc.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Ble: proto.Bool(false)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{})
+	if err != nil || got.GetState() != "pending-runtime" || got.GetRuntimeAvailable() ||
+		!strings.Contains(got.GetDetail(), "Bluetooth: disabled") {
+		t.Fatalf("previous carrier config was still credited as active: %+v %v", got, err)
+	}
+	snapshot, err = localmesh.ReadTCPConfigSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.CarrierConfig = string(snapshot)
+	runtime.Carriers = map[string]string{"ethernet": "ok"}
+	got, err = svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{})
+	if err != nil || got.GetState() != "mesh-active" || !strings.Contains(got.GetDetail(), "Ethernet: ok") {
+		t.Fatalf("current carrier observation was lost: %+v %v", got, err)
+	}
+}
+
+func TestLocalMeshJoinDoesNotPublishParticipationWhenCarrierSaveFails(t *testing.T) {
+	tenant, device := adminTenant(t), adminDevice(t)
+	dir := t.TempDir()
+	svc := NewLocalMeshAdminService(nil, dir, func() (meshid.Tenant, meshid.Device) { return tenant, device })
+	ctx := ctxWithIdentity(t, userPrincipal(adminTenantID, "alice"))
+	if err := meshsharing.SaveConfig(svc.sharingPath, meshsharing.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := meshsharing.SaveCarrierConfig(svc.carrierPath, device, localmesh.TCPConfig{Ethernet: true}); err != nil {
+		t.Fatal(err)
+	}
+	// The active document is readable, but writing the all-off override
+	// fails because a directory occupies the override path.
+	if err := os.Mkdir(localmesh.DisabledCarrierConfigPath(svc.carrierPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Participate: proto.Bool(true), Ethernet: proto.Bool(false)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("carrier write should fail: %v", err)
+	}
+	got, err := svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{})
+	if err != nil || got.GetConfigured().GetParticipate() || !got.GetConfigured().GetEthernet() {
+		t.Fatalf("failed join changed saved policy: %+v %v", got, err)
+	}
+}
+
+func TestLocalMeshSavingInheritedCarriersKeepsRuntimeCurrent(t *testing.T) {
+	tenant, device := adminTenant(t), adminDevice(t)
+	dir := t.TempDir()
+	svc := NewLocalMeshAdminService(nil, dir, func() (meshid.Tenant, meshid.Device) { return tenant, device })
+	ctx := ctxWithIdentity(t, userPrincipal(adminTenantID, "alice"))
+	snapshot, err := localmesh.ReadTCPConfigSnapshot(svc.carrierPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetRuntimeStatusSource(func() LocalMeshRuntimeStatus {
+		return LocalMeshRuntimeStatus{Available: true, State: "mesh-active", CarrierConfig: string(snapshot),
+			Carriers: map[string]string{"ethernet": "ok"}}
+	})
+	if _, err := svc.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Ethernet: proto.Bool(true)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(svc.carrierPath); err != nil {
+		t.Fatalf("explicit save did not persist carrier choices: %v", err)
+	}
+	got, err := svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{})
+	if err != nil || got.GetState() != "mesh-active" || !got.GetRuntimeAvailable() {
+		t.Fatalf("persisting the current policy invalidated its runtime: %+v %v", got, err)
 	}
 }

@@ -2,6 +2,7 @@ package meshsharing
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -9,13 +10,22 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-// SaveCarrierConfig replaces only local-mesh.json. Persist an explicit
-// override when the last carrier is disabled so the defaults stay off.
+// SaveCarrierConfig persists carrier choices independently of participation.
+// An explicit all-off override prevents the defaults from taking effect.
 func SaveCarrierConfig(path string, self meshid.Device, config localmesh.TCPConfig) error {
-	if config.Listen == "" && config.TLSListen == "" && len(config.Peers) == 0 && !config.NAN && !config.BLE && !config.Ethernet && !config.InfrastructureWiFi {
-		return atomicConfigFile(path, []byte("{\"noCarriers\":true}\n"))
-	}
 	dir := filepath.Dir(path)
+	if config.Listen == "" && config.TLSListen == "" && len(config.Peers) == 0 && !config.NAN && !config.BLE && !config.Ethernet && !config.InfrastructureWiFi {
+		// Persist the override before removing the active config. The active
+		// file always wins, so an interrupted write preserves the old state.
+		// Earlier agents ignore the override and see the same empty carrier set.
+		if err := atomicConfigFile(localmesh.DisabledCarrierConfigPath(path), []byte("disabled\n")); err != nil {
+			return err
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return syncConfigDir(dir)
+	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}

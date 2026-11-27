@@ -18,6 +18,7 @@ import (
 )
 
 type LocalMeshRuntimeStatus struct {
+	CarrierConfig      string
 	Carriers           map[string]string
 	Available          bool
 	State, Detail      string
@@ -98,19 +99,23 @@ func (s *LocalMeshAdminService) enrolledIdentity() (meshid.Tenant, meshid.Device
 	return tenant, device, nil
 }
 
-func (s *LocalMeshAdminService) read(device meshid.Device) (meshsharing.Config, localmesh.TCPConfig, error) {
+func (s *LocalMeshAdminService) read(device meshid.Device) (meshsharing.Config, localmesh.TCPConfig, string, error) {
 	sharing, err := meshsharing.LoadConfig(s.sharingPath)
 	if err != nil {
-		return meshsharing.Config{}, localmesh.TCPConfig{}, err
+		return meshsharing.Config{}, localmesh.TCPConfig{}, "", err
 	}
-	carriers, err := localmesh.LoadTCPConfig(s.carrierPath, device)
+	snapshot, err := localmesh.ReadTCPConfigSnapshot(s.carrierPath)
 	if err != nil {
-		return meshsharing.Config{}, localmesh.TCPConfig{}, err
+		return meshsharing.Config{}, localmesh.TCPConfig{}, "", err
+	}
+	carriers, err := localmesh.ParseTCPConfig(snapshot, device)
+	if err != nil {
+		return meshsharing.Config{}, localmesh.TCPConfig{}, "", err
 	}
 	if carriers == nil {
-		return sharing, localmesh.TCPConfig{}, nil
+		return sharing, localmesh.TCPConfig{}, string(snapshot), nil
 	}
-	return sharing, *carriers, nil
+	return sharing, *carriers, string(snapshot), nil
 }
 
 // savedIntent reports the saved configuration with no runtime observation.
@@ -169,15 +174,17 @@ func describeCarriers(out *pb.LocalMeshStatus, carriers localmesh.TCPConfig, obs
 	return out
 }
 
-func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
+func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig, snapshot string) *pb.LocalMeshStatus {
 	out := savedIntent(sharing, carriers)
 	var observed map[string]string
 	if s.runtime != nil {
 		runtime := s.runtime()
 		observed = runtime.Carriers
-		// The runtime polls saved configuration. Its previous disabled state
-		// does not describe a newly saved opt-in, even on the next status RPC.
-		if sharing.Participate && runtime.State == "disabled" {
+		// Ignore observations from the old carrier or participation policy
+		// until the supervisor has applied the saved configuration.
+		if (runtime.CarrierConfig != "" && runtime.CarrierConfig != snapshot) ||
+			(sharing.Participate && runtime.State == "disabled") ||
+			(!sharing.Participate && len(observed) != 0) {
 			return describeCarriers(out, carriers, nil)
 		}
 		out.RuntimeAvailable = runtime.Available
@@ -202,11 +209,11 @@ func (s *LocalMeshAdminService) GetLocalMeshStatus(ctx context.Context, _ *pb.Ge
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sharing, carriers, err := s.read(device)
+	sharing, carriers, snapshot, err := s.read(device)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "reading wendy net configuration: %v", err)
 	}
-	return s.response(sharing, carriers), nil
+	return s.response(sharing, carriers, snapshot), nil
 }
 
 func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.ConfigureLocalMeshRequest) (*pb.LocalMeshStatus, error) {
@@ -219,11 +226,11 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sharing, carriers, err := s.read(device)
+	sharing, carriers, _, err := s.read(device)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "reading wendy net configuration: %v", err)
 	}
-	previous := sharing
+	previous, previousCarriers := sharing, carriers
 	shareChanged := req.Participate != nil || req.Roam != nil || req.ShareUplink != nil
 	carrierChanged := req.Nan != nil || req.Ble != nil || req.Ethernet != nil || req.InfrastructureWifi != nil
 	if req.Participate != nil {
@@ -250,15 +257,23 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	if err = sharing.Validate(); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	// The two independent documents are each fsync-and-rename atomic. Save
-	// sharing first so radio enablement cannot run before its policy exists.
-	// Roll it back if writing the carrier document fails.
+	// When joining from disabled, install the requested carriers before
+	// publishing participation. When leaving, withdraw participation first.
+	carriersFirst := carrierChanged && !previous.Participate && sharing.Participate
+	if carriersFirst {
+		if err = meshsharing.SaveCarrierConfig(s.carrierPath, device, carriers); err != nil {
+			return nil, status.Errorf(codes.Internal, "saving wendy net carriers: %v", err)
+		}
+	}
 	if shareChanged {
 		if err = meshsharing.SaveConfig(s.sharingPath, sharing); err != nil {
+			if carriersFirst {
+				err = errors.Join(err, meshsharing.SaveCarrierConfig(s.carrierPath, device, previousCarriers))
+			}
 			return nil, status.Errorf(codes.Internal, "saving wendy net sharing policy: %v", err)
 		}
 	}
-	if carrierChanged {
+	if carrierChanged && !carriersFirst {
 		if err = meshsharing.SaveCarrierConfig(s.carrierPath, device, carriers); err != nil {
 			if shareChanged {
 				err = errors.Join(err, meshsharing.SaveConfig(s.sharingPath, previous))

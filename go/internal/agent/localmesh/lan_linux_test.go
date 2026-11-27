@@ -153,17 +153,24 @@ func TestLANPeerProcess(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("mesh node did not start")
 	}
-	waitCost := func(cost uint16) {
+	peer := lanDevice(t, 460)
+	if lanIdentityDevice(t, cfg.Identity) == peer {
+		peer = lanDevice(t, 445)
+	}
+	waitCarrier := func(cost uint16, transport string) {
 		t.Helper()
 		deadline := time.Now().Add(25 * time.Second)
 		for time.Now().Before(deadline) {
-			links := node.Snapshot().Links
-			if len(links) == 1 && links[0].Device == map[bool]meshid.Device{true: lanDevice(t, 445), false: lanDevice(t, 460)}[lanIdentityDevice(t, cfg.Identity) == lanDevice(t, 460)] && links[0].Cost == cost && links[0].Transport == map[uint16]string{EthernetLinkCost: "ethernet", WiFiLinkCost: "infrastructure-wifi"}[cost] {
-				return
+			// A standby link can stay authenticated during promotion. Assert
+			// which carrier has the installed route to the peer.
+			for _, link := range node.Snapshot().Links {
+				if link.Device == peer && link.Cost == cost && link.Transport == transport && link.ForwardingReady {
+					return
+				}
 			}
 			time.Sleep(150 * time.Millisecond)
 		}
-		t.Fatalf("authenticated LAN link did not settle to cost/carrier %d: %+v", cost, node.Snapshot().Links)
+		t.Fatalf("no forwarding-ready %s link of cost %d: %+v", transport, cost, node.Snapshot().Links)
 	}
 	if lanIdentityDevice(t, cfg.Identity) == lanDevice(t, 460) {
 		var listener net.Listener
@@ -233,7 +240,7 @@ func TestLANPeerProcess(t *testing.T) {
 			}
 			return errors.New("LAN mDNS/QUIC link did not route HTTP")
 		}
-		waitCost(EthernetLinkCost)
+		waitCarrier(EthernetLinkCost, CarrierEthernet)
 		if cfg.Concurrent > 0 {
 			results := make(chan error, cfg.Concurrent)
 			for range cfg.Concurrent {
@@ -244,7 +251,7 @@ func TestLANPeerProcess(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			waitCost(EthernetLinkCost) // Routing and authenticated link survive the loss burst.
+			waitCarrier(EthernetLinkCost, CarrierEthernet) // Routing and authenticated link survive the loss burst.
 		} else if err := request(); err != nil {
 			t.Fatal(err)
 		}
@@ -252,7 +259,7 @@ func TestLANPeerProcess(t *testing.T) {
 			if err := os.WriteFile(cfg.DisableFile, []byte("off"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			waitCost(WiFiLinkCost)
+			waitCarrier(WiFiLinkCost, CarrierInfrastructureWiFi)
 			if err := request(); err != nil {
 				t.Fatal(err)
 			}

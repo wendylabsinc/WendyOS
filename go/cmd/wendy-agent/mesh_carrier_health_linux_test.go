@@ -30,7 +30,7 @@ func TestCarrierRecoveryFailureStopsStartup(t *testing.T) {
 	if !errors.Is(err, want) || *calls != 1 {
 		t.Fatalf("recovery failure lost: calls=%d error=%v", *calls, err)
 	}
-	if state := sharing.Status(); state.Available || state.State != "" {
+	if state := sharing.Status(); !state.Available || state.State != "failed" || len(state.Carriers) != 0 {
 		t.Fatalf("started carriers after failed recovery: %+v", state)
 	}
 }

@@ -62,7 +62,8 @@ For each carrier, `status` shows whether it is disabled, operating, missing
 hardware, or experiencing a fault. A carrier can also be starting or waiting
 for an eligible interface. A ready carrier can operate while others are
 missing or waiting. `topology` shows each device's observed peers and routes.
-Check the devices whose reachability you need to verify.
+Check the devices whose reachability you need to verify. The JSON response
+keeps the carrier breakdown in its human-readable `detail` field.
 
 If no peer appears, confirm that both devices participate, belong to the same
 organization, and share an enabled connection type. On Ethernet or ordinary

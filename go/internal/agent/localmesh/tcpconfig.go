@@ -84,14 +84,29 @@ func ReadTCPConfigFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-// ReadTCPConfigSnapshot returns the effective carrier document. The default
-// carrier selection applies only when there is no saved carrier configuration.
+// DisabledCarrierConfigPath records an explicit all-carriers-off choice
+// separately so earlier agents still see an absent carrier config.
+func DisabledCarrierConfigPath(path string) string { return path + ".disabled" }
+
+// ReadTCPConfigSnapshot returns the effective carrier document. A nil
+// snapshot means the administrator explicitly disabled all carriers.
 func ReadTCPConfigSnapshot(path string) ([]byte, error) {
 	data, err := ReadTCPConfigFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return []byte(`{"ethernet":true,"infrastructureWifi":true,"ble":true,"nan":true}`), nil
+	if !errors.Is(err, os.ErrNotExist) {
+		return data, err
 	}
-	return data, err
+	override, err := ReadTCPConfigFile(DisabledCarrierConfigPath(path))
+	if errors.Is(err, os.ErrNotExist) {
+		data, err := json.Marshal(TCPConfig{Ethernet: true, InfrastructureWiFi: true, BLE: true, NAN: true})
+		return append(data, '\n'), err
+	}
+	if err != nil {
+		return nil, err
+	}
+	if string(override) != "disabled\n" {
+		return nil, errors.New("invalid Wendy Net carrier disable override")
+	}
+	return nil, nil
 }
 
 func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
@@ -99,13 +114,20 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseTCPConfig(data, self)
+}
+
+// ParseTCPConfig validates an effective snapshot for this device.
+func ParseTCPConfig(data []byte, self meshid.Device) (*TCPConfig, error) {
+	if data == nil {
+		return nil, nil
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	// Accept retired fields from pre-upgrade files only at the disk boundary.
 	// They no longer enable a carrier and are omitted when settings are saved.
 	var stored struct {
 		TCPConfig
-		NoCarriers   bool            `json:"noCarriers"`
 		LeafListen   json.RawMessage `json:"leafListen"`
 		LeafBLEPeers json.RawMessage `json:"leafBLEPeers"`
 		LeafTimeURL  json.RawMessage `json:"leafTimeURL"`
@@ -120,12 +142,6 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 	cfg := stored.TCPConfig
 	retired := len(stored.LeafListen) != 0 || len(stored.LeafBLEPeers) != 0 || len(stored.LeafTimeURL) != 0
 	hasCarrier := cfg.NAN || cfg.BLE || cfg.Ethernet || cfg.InfrastructureWiFi || cfg.TLSListen != ""
-	if stored.NoCarriers {
-		if hasCarrier || cfg.Listen != "" || len(cfg.Peers) != 0 {
-			return nil, errors.New("noCarriers cannot be combined with configured carriers")
-		}
-		return nil, nil
-	}
 	if retired && !hasCarrier && cfg.Listen == "" && len(cfg.Peers) == 0 {
 		return nil, nil
 	}
