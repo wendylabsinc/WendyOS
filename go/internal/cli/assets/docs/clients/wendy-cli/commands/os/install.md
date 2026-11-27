@@ -207,7 +207,11 @@ The UNO Q keeps its boot firmware on the same eMMC, so the flash also rewrites i
 
 ## Linux Desktop / Headless Mac path
 
-Choosing **Linux Desktop** or **Headless Mac** (or `--device-type linux-desktop` / `--device-type headless-mac`) does not write a drive. The command prints the `agent.sh` one-liner from the [Linux installation guide](/docs/installation/linux) (the script auto-detects the target platform). For Linux it passes `--network-access network`; on a Mac, choose **Allow Other Devices** when Wendy Agent first opens. When `--pre-enroll` is supplied and a valid auth session exists, a 1-hour enrollment token is embedded in the command; the agent self-enrolls on first startup without a separate `wendy device enroll` step. In a terminal, a CLI that is not logged in is offered a login first, and an expired login a new sign-in, as for the other install targets. Run `wendy discover` afterwards to find the device.
+Choose **Linux Desktop** or **Headless Mac**, or pass `--device-type linux-desktop` or `--device-type headless-mac`, to print an `agent.sh` install command.
+
+The Linux command enables network access. On Mac, choose **Allow Other Devices** when Wendy Agent opens. Run `wendy discover` after installation.
+
+Accept [pre-enrollment](#pre-enrollment) or pass `--pre-enroll` to include a token that enrolls the agent on first startup. Run the printed command within one hour, before the token expires. See the [Linux installation guide](/docs/installation/linux) for setup details.
 
 ### Privileges
 
@@ -247,7 +251,9 @@ The `--wifi` flag accepts `key=value` pairs separated by commas. Keys: `ssid` (r
 wendy install --pre-enroll
 ```
 
-Requires a Wendy Cloud login. In a terminal, an install on a CLI that is not logged in offers to log in first, before anything is downloaded or written, whether or not `--pre-enroll` was passed; declining installs without enrollment. Without a terminal, `--pre-enroll` fails when there is no `wendy auth login` session. The CLI creates an enrollment token via Wendy Cloud and writes provisioning JSON to the config partition so the device enrolls and receives mTLS certificates on first boot. Without `--pre-enroll`, the device boots unenrolled and can be enrolled later with `wendy device enroll`. For WendyOS images, Wendy Cloud registers the device under its name, so a blank name is not auto-generated when pre-enrolling: pass `--device-name` or enter a name when prompted. The device is given that same name. Without a terminal, `--pre-enroll` without `--device-name` fails before anything is written.
+Pre-enrollment configures the device to join Wendy Cloud on first boot. In a terminal, the installer offers enrollment and prompts you to log in if needed, including when your session has expired. Declining continues without enrollment; `--pre-enroll=false` skips the prompt. You can enroll later with `wendy device enroll`.
+
+Without a terminal, run `wendy auth login` before using `--pre-enroll`. WendyOS images also require `--device-name`; interactive installs ask for it. With `--cloud-grpc`, log in to that Cloud endpoint beforehand.
 
 ### Flags reference
 
