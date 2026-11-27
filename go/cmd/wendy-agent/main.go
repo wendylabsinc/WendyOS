@@ -692,6 +692,7 @@ func main() {
 	unitreeSvc := services.NewUnitreeService(ctx, filepath.Join(configPath, "unitree-pairings.json"), unitreePairingOwner(deviceScope(provisioningSvc), unitreeEnrolled))
 	defer unitreeSvc.Close()
 	unitreeRobotSvc := services.NewUnitreeRobotService(unitreeSvc, logger)
+	videoSvc.SetUnitreeCameras(unitreeRobotSvc)
 	if err := unitreeSvc.Restore(); err != nil {
 		logger.Warn("loading Unitree pairings failed", zap.Error(err))
 	}

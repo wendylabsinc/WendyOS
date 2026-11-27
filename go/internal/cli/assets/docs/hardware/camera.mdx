@@ -297,6 +297,10 @@ device immediately at startup may briefly find it output-only while the first
 ROS 2 frame configures the capture format. Retry the initial format/open step
 for up to the agent's 15-second first-frame window.
 
+## Paired Go2 cameras
+
+Go2 robots paired with `wendy device pair --unitree` appear in `camera list` with their connection status. Use the listed ID with `camera view --id <id>` or the `unitree:<serial>:front` identity with `--stable-id` to view H.264 video at the robot's default mode; these cameras do not expose a `/dev/video` node or a Wendy Data capture source.
+
 ## IP Cameras
 
 WendyOS also manages network (RTSP/ONVIF) cameras alongside local USB and CSI ones. A discovered camera is registered by its MAC address — the one identity that survives a DHCP address change — and given a device ID from a reserved band, `200`–`255`.
