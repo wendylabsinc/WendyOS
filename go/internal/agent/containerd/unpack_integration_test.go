@@ -326,3 +326,32 @@ func TestIntegrationPrepareImageDoesNotStageRootfsOnDetachedLayers(t *testing.T)
 	ensureUnpacked(t, c, ctx, image)
 	requireImageRootfs(t, c, ctx, img)
 }
+
+// A layer is committed and reused under the diff ID the caller claims, so a
+// caller could otherwise plant its own files under another image's base layer
+// chain ID. The snapshot must hold exactly the claimed content.
+func TestIntegrationPrepareImageRefusesALayerThatIsNotItsDiffID(t *testing.T) {
+	c, ctx := newIntegrationClient(t)
+	planted := singleFileTar(t, "planted.txt")
+	plantedDigest := digest.FromBytes(planted)
+	if err := c.WriteLayer(ctx, plantedDigest.String(), bytes.NewReader(planted), int64(len(planted))); err != nil {
+		t.Fatal(err)
+	}
+	claimed := digest.FromBytes(singleFileTar(t, "base.txt"))
+	header := &agentpb.RunContainerLayerHeader{
+		Digest:      plantedDigest.String(),
+		DiffId:      claimed.String(),
+		Size:        int64(len(planted)),
+		Compression: agentpb.RunContainerLayerHeader_COMPRESSION_NONE,
+	}
+	config, err := json.Marshal(ocispec.Image{Platform: ocispec.Platform{OS: "linux", Architecture: runtime.GOARCH}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PrepareImage(ctx, "planted-"+uuid.NewString()[:8]+":latest", []*agentpb.RunContainerLayerHeader{header}, config); err == nil {
+		t.Fatal("PrepareImage committed a layer under a diff ID it does not unpack to")
+	}
+	if _, err := c.client.SnapshotService(c.snapshotter).Stat(ctx, identity.ChainID([]digest.Digest{claimed}).String()); err == nil {
+		t.Fatal("a snapshot exists under the claimed layer's chain ID")
+	}
+}

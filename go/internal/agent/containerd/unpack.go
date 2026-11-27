@@ -436,9 +436,16 @@ func (c *Client) applyLayerSnapshotAttempt(
 	if standalone && parentChainID != "" {
 		mounts = standaloneLayerApplyMounts(mounts)
 	}
-	if _, err := c.client.DiffService().Apply(ctx, layerDesc, mounts); err != nil {
+	applied, err := c.client.DiffService().Apply(ctx, layerDesc, mounts)
+	if err != nil {
 		c.removeActiveSnapshot(cleanupCtx, sn, activeKey, "active snapshot after apply failure", layer)
 		return false, fmt.Errorf("applying layer %d: %w", layer, err)
+	}
+	// The snapshot is committed and later reused under the claimed diff ID,
+	// so it must hold exactly that content.
+	if applied.Digest.String() != diffID {
+		c.removeActiveSnapshot(cleanupCtx, sn, activeKey, "active snapshot after diff ID mismatch", layer)
+		return false, fmt.Errorf("layer %d unpacks to %s, not its claimed diff ID %s", layer, applied.Digest, diffID)
 	}
 
 	labels := map[string]string{
