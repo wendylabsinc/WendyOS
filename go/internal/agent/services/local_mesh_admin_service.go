@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
@@ -17,6 +18,7 @@ import (
 )
 
 type LocalMeshRuntimeStatus struct {
+	Carriers           map[string]string
 	Available          bool
 	State, Detail      string
 	AuthenticatedPeers int
@@ -117,6 +119,10 @@ func savedIntent(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.L
 	state, detail := "disabled", "Wendy net is disabled."
 	if sharing.Participate {
 		state, detail = "pending-runtime", "Configuration is saved; awaiting runtime state."
+		if !carriers.Ethernet && !carriers.InfrastructureWiFi && !carriers.BLE && !carriers.NAN &&
+			carriers.Listen == "" && carriers.TLSListen == "" {
+			state, detail = "waiting", "All carriers are disabled."
+		}
 	}
 	return &pb.LocalMeshStatus{Configured: &pb.LocalMeshConfiguration{
 		Participate: sharing.Participate, Roam: sharing.Roam, ShareUplink: sharing.ShareUplink,
@@ -125,20 +131,60 @@ func savedIntent(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.L
 	}, State: state, Detail: detail}
 }
 
+// describeCarriers combines saved choices with the last observed state of
+// enabled carriers. Disabled settings take precedence over a draining runtime.
+func describeCarriers(out *pb.LocalMeshStatus, carriers localmesh.TCPConfig, observed map[string]string) *pb.LocalMeshStatus {
+	var details []string
+	for _, carrier := range []struct {
+		id, label  string
+		configured bool
+	}{
+		{localmesh.CarrierEthernet, "Ethernet", carriers.Ethernet},
+		{localmesh.CarrierInfrastructureWiFi, "Infrastructure Wi-Fi", carriers.InfrastructureWiFi},
+		{"ble", "Bluetooth", carriers.BLE},
+		{"nan", "Wi-Fi Aware", carriers.NAN},
+		{"tcp", "TCP", carriers.Listen != "" || len(carriers.Peers) != 0},
+		{"tls", "TLS", carriers.TLSListen != ""},
+	} {
+		if !carrier.configured && (carrier.id == "tcp" || carrier.id == "tls") {
+			continue
+		}
+		state := "disabled"
+		if out.GetConfigured().GetParticipate() && carrier.configured {
+			state = observed[carrier.id]
+			if state == "" {
+				state = "starting"
+			}
+		}
+		details = append(details, carrier.label+": "+state)
+	}
+	if state := observed["local-net"]; state != "" {
+		details = append(details, "Local net: "+state)
+	}
+	detail := "Carriers: " + strings.Join(details, "; ") + "."
+	if out.Detail != "" {
+		detail += " " + out.Detail
+	}
+	out.Detail = detail
+	return out
+}
+
 func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
 	out := savedIntent(sharing, carriers)
+	var observed map[string]string
 	if s.runtime != nil {
 		runtime := s.runtime()
+		observed = runtime.Carriers
 		// The runtime polls saved configuration. Its previous disabled state
 		// does not describe a newly saved opt-in, even on the next status RPC.
 		if sharing.Participate && runtime.State == "disabled" {
-			return out
+			return describeCarriers(out, carriers, nil)
 		}
 		out.RuntimeAvailable = runtime.Available
 		if runtime.State != "" {
 			out.State = runtime.State
 		}
-		if runtime.Detail != "" {
+		if runtime.State != "" || runtime.Detail != "" {
 			out.Detail = runtime.Detail
 		}
 		if runtime.AuthenticatedPeers > 0 {
@@ -146,7 +192,7 @@ func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers lo
 		}
 		out.GatewayPrincipal = runtime.GatewayPrincipal
 	}
-	return out
+	return describeCarriers(out, carriers, observed)
 }
 
 func (s *LocalMeshAdminService) GetLocalMeshStatus(ctx context.Context, _ *pb.GetLocalMeshStatusRequest) (*pb.LocalMeshStatus, error) {
@@ -230,5 +276,5 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	// The runtime polls the saved documents. Even an unchanged request can be
 	// a retry before it applies the previous change. Always acknowledge saved
 	// intent; GetLocalMeshStatus provides runtime observations.
-	return savedIntent(sharing, carriers), nil
+	return describeCarriers(savedIntent(sharing, carriers), carriers, nil), nil
 }

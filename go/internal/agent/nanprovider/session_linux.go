@@ -131,6 +131,12 @@ func prepareSharedSession(ctx context.Context, id meshid.Device) (own bool, err 
 	defer unlock()
 	status, err := helperOutput(ctx, "status")
 	if err != nil && !absentNANStatus(status, err) {
+		// Generic Linux hosts can lack both the WendyOS helper and any Wi-Fi
+		// PHY. Missing tooling with a PHY present remains a setup fault.
+		phys, scanErr := os.ReadDir("/sys/class/ieee80211")
+		if errors.Is(scanErr, os.ErrNotExist) || (scanErr == nil && len(phys) == 0) {
+			return own, fmt.Errorf("%w: no Wi-Fi PHY", localmesh.ErrNoCarrierHardware)
+		}
 		return own, err
 	}
 	// A stopped nan0 still belongs to its existing creator. Recovering our
@@ -177,8 +183,9 @@ func prepareSharedSession(ctx context.Context, id meshid.Device) (own bool, err 
 			return own, fmt.Errorf("reset abandoned NAN session: %w", err)
 		}
 	}
-	if err := runHelper(ctx, "start"); err != nil {
-		return own, err
+	output, err := helperOutput(ctx, "start")
+	if err != nil {
+		return own, nanStartupError(output, err)
 	}
 	if plan.own {
 		currentSocket, err := nanControlSocketIdentity()
@@ -442,6 +449,16 @@ func (p Provider) runNDIEpoch(parent context.Context, id meshid.Device, logger *
 			}()
 		}
 	}
+}
+
+func nanStartupError(output string, err error) error {
+	// Older and current WendyOS helpers report this before changing the radio.
+	const missing = "No NAN-capable parent interface is available"
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && strings.TrimSpace(output) == missing {
+		return fmt.Errorf("%w: %s", localmesh.ErrNoCarrierHardware, missing)
+	}
+	return err
 }
 
 func absentNANStatus(output string, err error) bool {

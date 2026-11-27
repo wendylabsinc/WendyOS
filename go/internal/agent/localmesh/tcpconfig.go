@@ -84,11 +84,18 @@ func ReadTCPConfigFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
+// ReadTCPConfigSnapshot returns the effective carrier document. The default
+// carrier selection applies only when there is no saved carrier configuration.
+func ReadTCPConfigSnapshot(path string) ([]byte, error) {
 	data, err := ReadTCPConfigFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return []byte(`{"ethernet":true,"infrastructureWifi":true,"ble":true,"nan":true}`), nil
 	}
+	return data, err
+}
+
+func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
+	data, err := ReadTCPConfigSnapshot(path)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +105,7 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 	// They no longer enable a carrier and are omitted when settings are saved.
 	var stored struct {
 		TCPConfig
+		NoCarriers   bool            `json:"noCarriers"`
 		LeafListen   json.RawMessage `json:"leafListen"`
 		LeafBLEPeers json.RawMessage `json:"leafBLEPeers"`
 		LeafTimeURL  json.RawMessage `json:"leafTimeURL"`
@@ -111,12 +119,18 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 	}
 	cfg := stored.TCPConfig
 	retired := len(stored.LeafListen) != 0 || len(stored.LeafBLEPeers) != 0 || len(stored.LeafTimeURL) != 0
-	if retired && cfg.Listen == "" && len(cfg.Peers) == 0 && !cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi && cfg.TLSListen == "" {
-		// A file containing only retired carriers is equivalent to no config.
+	hasCarrier := cfg.NAN || cfg.BLE || cfg.Ethernet || cfg.InfrastructureWiFi || cfg.TLSListen != ""
+	if stored.NoCarriers {
+		if hasCarrier || cfg.Listen != "" || len(cfg.Peers) != 0 {
+			return nil, errors.New("noCarriers cannot be combined with configured carriers")
+		}
+		return nil, nil
+	}
+	if retired && !hasCarrier && cfg.Listen == "" && len(cfg.Peers) == 0 {
 		return nil, nil
 	}
 	if cfg.Listen == "" {
-		if (!cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi && cfg.TLSListen == "") || len(cfg.Peers) != 0 {
+		if !hasCarrier || len(cfg.Peers) != 0 {
 			return nil, errors.New("listen is required for configured TCP peers; enable a carrier for discovery-only networking")
 		}
 	} else if err := validateTCPAddress(cfg.Listen, true); err != nil {

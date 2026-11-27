@@ -123,7 +123,7 @@ func TestLANPeerProcess(t *testing.T) {
 				nodeReady <- node
 				go func() {
 					logger, _ := zap.NewDevelopment()
-					_ = runLANWithScan(ctx, LANConfig{Credentials: node.Credentials, Node: node, Ethernet: true, Selection: NewPeerSelection(node.Snapshot), Logger: logger}, func() ([]lanInterface, error) {
+					_ = runLANWithScan(ctx, LANConfig{Credentials: node.Credentials, Node: node, Ethernet: true, Selection: NewPeerSelection(node.Snapshot), Logger: logger}, func() (lanScan, error) {
 						result := []lanInterface{{iface: *iface, ip: ip, net: &net.IPNet{IP: net.IPv4(10, 201, 0, 0), Mask: net.CIDRMask(30, 32)}, cost: EthernetLinkCost, transport: "ethernet"}}
 						if cfg.Dual {
 							if _, err := os.Stat(cfg.DisableFile); err == nil {
@@ -131,7 +131,7 @@ func TestLANPeerProcess(t *testing.T) {
 							}
 							wifiIface, err := net.InterfaceByName("wllan1")
 							if err != nil {
-								return nil, err
+								return lanScan{}, err
 							}
 							wifiIP := net.IPv4(10, 202, 0, 1)
 							if lanIdentityDevice(t, cfg.Identity) == lanDevice(t, 460) {
@@ -139,7 +139,7 @@ func TestLANPeerProcess(t *testing.T) {
 							}
 							result = append(result, lanInterface{iface: *wifiIface, ip: wifiIP, net: &net.IPNet{IP: net.IPv4(10, 202, 0, 0), Mask: net.CIDRMask(30, 32)}, cost: WiFiLinkCost, transport: "infrastructure-wifi"})
 						}
-						return result, nil
+						return lanScan{interfaces: result}, nil
 					})
 				}()
 			}
