@@ -170,15 +170,47 @@ func TestCloudTunnelForwardSurvivesRenewal(t *testing.T) {
 		conn.Close()
 	}
 	echoes(t, first, "still on the first tunnel\n")
-	if n := opens.Load(); n != 2 {
-		t.Fatalf("opened %d tunnels, want 2: the first and its renewal", n)
-	}
 	first.Close()
 	select {
 	case <-firstClosed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the replaced tunnel stayed open after its last connection ended")
 	}
+	if n := opens.Load(); n != 2 {
+		t.Fatalf("opened %d tunnels, want 2: the first and its renewal", n)
+	}
+}
+
+// Renewal opens the next tunnel in the background: while it opens, new
+// connections keep using the current tunnel rather than wait for it.
+func TestCloudTunnelForwardRenewsInBackground(t *testing.T) {
+	release, renewed := make(chan struct{}), make(chan struct{})
+	var opens atomic.Int32
+	mux := &forwardMux{
+		open: func() (*cloudrelay.MuxClient, error) {
+			if opens.Add(1) > 1 {
+				defer close(renewed)
+				<-release
+				return nil, errors.New("renewal failed")
+			}
+			c, _ := fakeMuxTunnel(t, time.Now().Add(muxRenewBefore-time.Minute))
+			return c, nil
+		},
+		fallback: func(context.Context) (net.Conn, error) {
+			return nil, errors.New("a connection opened a tunnel of its own")
+		},
+	}
+	addr := startForward(t, mux.dial)
+	for i := range 3 {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		echoes(t, conn, fmt.Sprintf("while renewing %d\n", i))
+		conn.Close()
+	}
+	close(release)
+	<-renewed
 }
 
 // oldAgent answers GetAgentVersion without TCPMuxFeature.

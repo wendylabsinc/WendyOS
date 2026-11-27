@@ -228,9 +228,9 @@ func (d cloudDiscoveryDevice) serveTunnelForward(ctx context.Context, ln net.Lis
 }
 
 const (
-	// muxRenewBefore is how long before its relay ends a forward stops
-	// starting connections on its tunnel and opens a new one. Connections
-	// already on the old tunnel run until the relay ends it.
+	// muxRenewBefore is how long before its relay ends a forward opens a new
+	// tunnel in the background; new connections move to it once it is open.
+	// Connections already on the old tunnel run until the relay ends it.
 	muxRenewBefore = 5 * time.Minute
 	// muxRetryAfter spaces attempts to open a forward's tunnel after one
 	// failed; connections each open their own tunnel meanwhile.
@@ -246,9 +246,10 @@ type forwardMux struct {
 	open     func() (*cloudrelay.MuxClient, error)
 	fallback func(context.Context) (net.Conn, error)
 
-	mu      sync.Mutex
-	current *cloudrelay.MuxClient
-	retryAt time.Time
+	mu       sync.Mutex
+	current  *cloudrelay.MuxClient
+	renewing bool
+	retryAt  time.Time
 }
 
 func (m *forwardMux) dial(ctx context.Context) (net.Conn, error) {
@@ -276,12 +277,24 @@ func (m *forwardMux) replace(c *cloudrelay.MuxClient) {
 }
 
 // client returns the forward's tunnel, opening a new one when there is none
-// or the current one is closed or near its relay end.
+// or the current one is closed. Near its relay end the current one keeps
+// serving while renew opens its replacement.
 func (m *forwardMux) client() *cloudrelay.MuxClient {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.current != nil && m.current.Usable(muxRenewBefore) {
-		return m.current
+	c := m.current
+	if c != nil && c.Usable(muxRenewBefore) {
+		return c
+	}
+	if c != nil && c.Usable(0) && (m.renewing || !time.Now().Before(m.retryAt)) {
+		if !m.renewing {
+			m.renewing = true
+			go m.renew()
+		}
+		return c
+	}
+	if m.renewing {
+		return nil
 	}
 	m.replace(nil)
 	if time.Now().Before(m.retryAt) {
@@ -294,6 +307,18 @@ func (m *forwardMux) client() *cloudrelay.MuxClient {
 	}
 	m.current = c
 	return c
+}
+
+func (m *forwardMux) renew() {
+	c, err := m.open()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.renewing = false
+	if err != nil {
+		m.retryAt = time.Now().Add(muxRetryAfter)
+		return
+	}
+	m.replace(c)
 }
 
 // openForwardMux opens one multiplexed tunnel to remotePort, secured with
