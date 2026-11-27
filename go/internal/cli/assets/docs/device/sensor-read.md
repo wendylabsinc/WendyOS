@@ -22,9 +22,13 @@ Use the existing `wendy.agent.services.v2.WendySensorService` generated client:
 4. If a source disconnects, refresh the manifest and retry with backoff. There is
    no manifest-watch RPC; rediscover periodically to find newly connected sources.
 
-The agent forwards opaque payloads. Thermal conversion, units, calibration,
-heatmaps, ROS topics and application-specific alarms belong in your app.
+The agent forwards opaque payloads on this socket. Thermal conversion, units,
+calibration, heatmaps and application-specific alarms belong in your app.
 Neither four channels nor any particular sensor model is assumed.
+
+A ROS 2 app that holds this entitlement also gets the channels as ROS 2 topics,
+with each reading stamped with the time the source took it. See
+[Sensor channels in ROS 2 apps](/docs/clients/wendy-cli/commands/device/pair#sensor-channels-in-ros-2-apps).
 
 ## Source identity
 

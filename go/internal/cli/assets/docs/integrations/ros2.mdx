@@ -348,10 +348,15 @@ into Foxglove Studio with [Wendy for Foxglove](/docs/integrations/foxglove).
 
 When a [paired SensorLink source](/docs/clients/wendy-cli/commands/device/pair#sensor-channels-in-ros-2-apps)
 offers sensor channels other than a camera or microphone, the agent publishes
-them inside every ROS 2 app on the device, on `/sensorlink/<source>/<channel>`.
-A temperature channel is a `sensor_msgs/msg/Temperature`; other channels are
+them inside the ROS 2 apps that hold the `sensor-read` entitlement, on
+`/sensorlink/<source>/<channel>`. A temperature channel is a
+`sensor_msgs/msg/Temperature`; other channels are
 `std_msgs/msg/UInt8MultiArray`. Your app subscribes to them like any other
-topic, with no extra `wendy.json` setting.
+topic.
+
+A reading is stamped with the time the source took it, moved to the device's
+clock. A second topic, `/sensorlink/<source>/<channel>/timing`, says how that
+time is known.
 
 ## Related
 
