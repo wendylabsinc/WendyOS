@@ -14,6 +14,10 @@ type Options struct {
 	Manifest      *sensorlinkpb.SensorManifest
 	Frames        [][]byte // looped on every subscribed camera channel
 	FrameInterval time.Duration
+	// TsUs gives the time a frame is stamped with, from its sequence number,
+	// for a source whose clock is its own, as a board's is. Nil stamps frames
+	// with the wall clock.
+	TsUs func(seq uint32) uint64
 }
 
 // Serve accepts sensorlink connections until ctx is cancelled or ln closes.
@@ -70,8 +74,12 @@ func handleConn(ctx context.Context, conn net.Conn, opts Options) {
 			return
 		case <-ticker.C:
 			payload := opts.Frames[int(seq)%len(opts.Frames)]
+			tsUs := uint64(time.Now().UnixMicro())
+			if opts.TsUs != nil {
+				tsUs = opts.TsUs(seq)
+			}
 			for _, ch := range sub.ChannelId {
-				data := &sensorlinkpb.SensorData{ChannelId: ch, FrameSeq: seq, TsUs: uint64(time.Now().UnixMicro()), Flags: sensorlink.FlagKeyframe | sensorlink.FlagLastChunk, Payload: payload}
+				data := &sensorlinkpb.SensorData{ChannelId: ch, FrameSeq: seq, TsUs: tsUs, Flags: sensorlink.FlagKeyframe | sensorlink.FlagLastChunk, Payload: payload}
 				if err := sensorlink.WriteMessage(conn, &sensorlinkpb.Envelope{Msg: &sensorlinkpb.Envelope_Data{Data: data}}); err != nil {
 					return
 				}
