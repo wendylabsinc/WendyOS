@@ -207,3 +207,113 @@ func TestSetUSBNetworkInterfacesJoinsADeviceToItsHardwarePort(t *testing.T) {
 		}
 	}
 }
+
+// checkUSBNetworkInterfaces joins devices to ports and compares the interface
+// each device ends up with, in order, against want.
+func checkUSBNetworkInterfaces(t *testing.T, devices []models.USBDevice, ports []darwinHardwarePort, want []string) {
+	t.Helper()
+	setUSBNetworkInterfaces(devices, ports)
+	for i, dev := range devices {
+		if dev.NetworkInterface != want[i] {
+			t.Errorf("%s: NetworkInterface = %q, want %q", dev.Name, dev.NetworkInterface, want[i])
+		}
+	}
+}
+
+// macOS names the network port after the USB product string but keeps only its
+// first 31 characters. A board with the product string
+// "WendyOS warehouse-robot-station-01" showed up on macOS 26.6.2 as the port
+// "WendyOS warehouse-robot-station".
+func TestSetUSBNetworkInterfacesJoinsAPortNameMacOSCut(t *testing.T) {
+	ports := []darwinHardwarePort{
+		{displayName: "Wi-Fi", bsdName: "en0"},
+		{displayName: "WendyOS warehouse-robot-station", bsdName: "en11"},
+		{displayName: "WendyOS Device hackathon-device", bsdName: "en12"},
+		// The cut is counted in characters, so it never splits one that takes
+		// several bytes. Product strings are ASCII in practice.
+		{displayName: "WendyOS Device warehouse-roboté", bsdName: "en13"},
+	}
+	devices := []models.USBDevice{
+		{Name: "WendyOS warehouse-robot-station-01"},
+		{Name: "WendyOS Device hackathon-device-5"},
+		{Name: "WendyOS Device warehouse-roboté-01"},
+	}
+
+	checkUSBNetworkInterfaces(t, devices, ports, []string{"en11", "en12", "en13"})
+}
+
+// A cut name that several boards or several ports share proves nothing, just
+// like a whole name. Two boards whose names are equal after the cut cannot be
+// told apart by name, whether both of their ports are up or only one is.
+func TestSetUSBNetworkInterfacesLeavesASharedCutNameUnjoined(t *testing.T) {
+	twoBoards := func() []models.USBDevice {
+		return []models.USBDevice{
+			{Name: "WendyOS warehouse-robot-station-01"},
+			{Name: "WendyOS warehouse-robot-station-02"},
+		}
+	}
+	twoPorts := []darwinHardwarePort{
+		{displayName: "WendyOS warehouse-robot-station", bsdName: "en11"},
+		{displayName: "WendyOS warehouse-robot-station", bsdName: "en12"},
+	}
+
+	t.Run("two boards, two ports", func(t *testing.T) {
+		checkUSBNetworkInterfaces(t, twoBoards(), twoPorts, []string{"", ""})
+	})
+	t.Run("two boards, one port", func(t *testing.T) {
+		checkUSBNetworkInterfaces(t, twoBoards(), twoPorts[:1], []string{"", ""})
+	})
+	t.Run("one board, two ports", func(t *testing.T) {
+		checkUSBNetworkInterfaces(t, twoBoards()[:1], twoPorts, []string{""})
+	})
+}
+
+// Only a port name of exactly 31 characters can be a cut name. Any other port
+// name still has to equal the device's name.
+func TestSetUSBNetworkInterfacesNeedsEqualNamesBelowTheMacOSCut(t *testing.T) {
+	ports := []darwinHardwarePort{
+		{displayName: "WendyOS a", bsdName: "en11"},
+		{displayName: "WendyOS warehouse-robot-statio", bsdName: "en12"},   // 30 characters
+		{displayName: "WendyOS Device hackathon-device-", bsdName: "en13"}, // 32 characters
+	}
+	devices := []models.USBDevice{
+		{Name: "WendyOS ab"},
+		{Name: "WendyOS warehouse-robot-station-01"},
+		{Name: "WendyOS Device hackathon-device-5"},
+	}
+
+	checkUSBNetworkInterfaces(t, devices, ports, []string{"", "", ""})
+}
+
+// A device whose whole name is on a port is joined by that name alone, as
+// before: the cut name is tried only when no port carries the whole name, and
+// a port goes to the device that has its exact name.
+func TestSetUSBNetworkInterfacesPrefersAnExactNameOverACutOne(t *testing.T) {
+	t.Run("a port with the whole name and one with the cut name", func(t *testing.T) {
+		ports := []darwinHardwarePort{
+			{displayName: "WendyOS warehouse-robot-station", bsdName: "en11"},
+			{displayName: "WendyOS warehouse-robot-station-01", bsdName: "en12"},
+		}
+		devices := []models.USBDevice{{Name: "WendyOS warehouse-robot-station-01"}}
+		checkUSBNetworkInterfaces(t, devices, ports, []string{"en12"})
+	})
+	t.Run("a device with the port's name and one cut to it", func(t *testing.T) {
+		ports := []darwinHardwarePort{
+			{displayName: "WendyOS warehouse-robot-station", bsdName: "en11"},
+		}
+		devices := []models.USBDevice{
+			{Name: "WendyOS warehouse-robot-station-01"},
+			{Name: "WendyOS warehouse-robot-station"},
+		}
+		checkUSBNetworkInterfaces(t, devices, ports, []string{"", "en11"})
+	})
+	t.Run("two ports with the whole name and one with the cut name", func(t *testing.T) {
+		ports := []darwinHardwarePort{
+			{displayName: "WendyOS warehouse-robot-station", bsdName: "en11"},
+			{displayName: "WendyOS warehouse-robot-station-01", bsdName: "en12"},
+			{displayName: "WendyOS warehouse-robot-station-01", bsdName: "en13"},
+		}
+		devices := []models.USBDevice{{Name: "WendyOS warehouse-robot-station-01"}}
+		checkUSBNetworkInterfaces(t, devices, ports, []string{""})
+	})
+}

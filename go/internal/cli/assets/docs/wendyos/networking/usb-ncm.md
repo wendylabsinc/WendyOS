@@ -20,7 +20,7 @@ USB Configuration c.1 (CDC+ACM)
 
 USB descriptor strings set on the gadget:
 - **Manufacturer**: `Wendy Labs Inc`
-- **Product**: `WendyOS Device <device-name>`
+- **Product**: `WendyOS <device-name>`
 - **Serial number**: device serial (from device tree, tegra fuse, `/proc/cpuinfo`, or `eth0` MAC)
 
 USB IDs:
