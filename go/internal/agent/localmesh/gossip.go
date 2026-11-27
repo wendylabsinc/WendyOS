@@ -174,19 +174,14 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 // manifestPayload recovers one previously advertised record by its store key.
 // The pool checks the exact digest so a replacement cannot serve different bytes.
 func (d *Directory) manifestPayload(principal string, now time.Time) []byte {
-	d.mu.Lock()
-	d.expireLocked(now)
-	e, ok := d.entries[principal]
-	d.mu.Unlock()
+	w, ok := d.manifestRecord(principal)
 	if !ok {
 		return nil
 	}
-	// Recheck the exact immutable wire after unlocking. Calling the public
-	// guard under d.mu would deadlock; copying before expiry could revive it.
-	if _, ok := d.CurrentRecordChain(e.wire, now); !ok {
+	if _, ok := d.CurrentRecordChain(w, now); !ok {
 		return nil
 	}
-	data, _ := netwire.Marshal(e.wire)
+	data, _ := netwire.Marshal(w)
 	return data
 }
 

@@ -501,18 +501,18 @@ replies share the existing maintenance tick and control queue. LAN also exposes
 the fixed signed-time relay on port 43025 for bootstrap, and BLE advertises a
 separate ciphertext-only HTTPS relay on PSM 130.
 
-Changed records immediately advertise a HAVE digest. Duplicate revisions do not
-renew their expiry. Reconciliation advertises live digests periodically to repair
-reconnects; full signed records are sent only on request between routers. A repair
-pass uses only free control-queue slots and resumes from its last admitted
-principal on the existing maintenance tick; it stops when the pass completes.
-Insufficient queue space does not consume a certificate-description stamp.
+Each authenticated router carrier advertises the current inventory on attach,
+starting with the local proof. Later directory changes schedule HAVE messages
+only for the changed origins. Each carrier retains pending origin keys while
+replies or a full control queue block them, then advertises the latest live
+digest for each pending origin as space frees up on the maintenance tick.
+Full signed records are sent only on request between routers. Duplicate
+revisions do not renew their expiry.
 The node uses one 15-minute manifest lease for route, presence and services.
 An edit publishes immediately when idle; edits within one second coalesce into
 the latest complete state. Five quiet minutes after a successful publication
-trigger refresh. Reconciliation runs every five minutes, with bounded repair
-continuation on the one-second maintenance tick. These intervals are separate
-from Babel's one-second datagram Hello and 16-second Update intervals;
+trigger refresh. This interval is separate from Babel's one-second datagram
+Hello and 16-second Update intervals;
 reliable stream links can use a longer per-link Hello interval. Origin revisions
 remain durable; receiver payloads and ten-duration watermarks are RAM state, so
 restart can first-learn a delayed record for one local lease.

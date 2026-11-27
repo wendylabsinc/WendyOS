@@ -10,7 +10,7 @@ import (
 
 // Reconnect must eventually transfer a directory larger than one link queue,
 // including the certificate request/response repair for a restarted receiver.
-func TestDirectoryReconciliationProgressBeyondLinkQueue(t *testing.T) {
+func TestDirectoryInventoryProgressBeyondLinkQueue(t *testing.T) {
 	self, _ := testCredentials(t)
 	now := time.Now()
 	const origins = 132
@@ -47,18 +47,19 @@ func TestDirectoryReconciliationProgressBeyondLinkQueue(t *testing.T) {
 	sender, receiver := NewSynchronizer(source, cache), NewSynchronizer(dest, destCache)
 	node := &Node{}
 	peer := &nodePeer{control: make(chan ControlMessage, 128), sync: sender}
-	node.reconcilePeer(peer, now)
+	sender.seedAnnouncements(self.Device.Key(), now)
+	node.flushAnnouncements(peer, now)
 	for round := 0; round < 6; round++ {
 		for len(peer.control) > 0 {
 			message := <-peer.control
 			exchangeDirectoryMessages(t, sender, receiver, []ControlMessage{message}, now)
 		}
-		node.continueReconcilePeer(peer, now)
+		node.flushAnnouncements(peer, now)
 	}
 	if len(peer.control) != 0 {
-		t.Fatal("completed repair pass kept retransmitting records")
+		t.Fatal("completed inventory kept retransmitting records")
 	}
 	if got := len(dest.Snapshot(now)); got != origins {
-		t.Fatalf("reconciliation repeatedly starved directory tail: received %d of %d origins", got, origins)
+		t.Fatalf("inventory starved directory tail: received %d of %d origins", got, origins)
 	}
 }
