@@ -79,10 +79,17 @@ type Bridge struct {
 	announced map[string]string
 }
 
-// graphLease is the participant in one graph and its writer per channel.
+// graphLease is the participant in one graph and its writers per channel.
 type graphLease struct {
 	lease   participantLease
-	writers map[*Channel]sampleWriter
+	writers map[*Channel]*channelWriters
+}
+
+// channelWriters are the two topics of one channel in one graph: its readings,
+// and how the time of each frame of readings is known. Either may be missing
+// for a while when it could not be opened.
+type channelWriters struct {
+	readings, timing sampleWriter
 }
 
 // New returns a bridge that takes its participants from pool and the running
@@ -194,6 +201,11 @@ type Channel struct {
 	b     *Bridge
 	topic string
 	enc   encoding
+	// source identifies the paired source, and frameID names it in message
+	// headers.
+	source, frameID string
+	// sampleBytes is the size of one reading.
+	sampleBytes int
 	// period is the time between two readings, zero when the source does not
 	// say how often it reads.
 	period time.Duration
@@ -222,7 +234,9 @@ func (b *Bridge) OpenChannel(sourceKey, sourceName string, d *sensorlinkpb.Senso
 	}
 	source := sourceToken(sourceName, sourceKey)
 	base := topicFor(sourceName, sourceKey, d.GetName(), d.GetChannelId())
-	c := &Channel{b: b, enc: encodingFor(d.GetSensor(), "sensorlink/"+source), opened: b.now()}
+	frameID := "sensorlink/" + source
+	c := &Channel{b: b, enc: encodingFor(d.GetSensor(), frameID), source: sourceKey, frameID: frameID,
+		sampleBytes: int(d.GetSensor().GetSampleBytes()), opened: b.now()}
 	if rate := d.GetSensor().GetRateHz(); rate > 0 {
 		c.period = time.Second / time.Duration(rate)
 	}
@@ -242,52 +256,74 @@ func (b *Bridge) OpenChannel(sourceKey, sourceName string, d *sensorlinkpb.Senso
 	if fresh {
 		b.logger.Info("publishing sensor channel to ROS 2 apps",
 			zap.String("source", sourceKey), zap.String("channel", d.GetName()),
-			zap.String("topic", c.topic), zap.String("type", c.enc.rosType))
+			zap.String("topic", c.topic), zap.String("type", c.enc.rosType),
+			zap.String("timing_topic", c.topic+timingSuffix), zap.String("timing_type", timingROSType))
 	}
 	b.wakeUp()
 	return c, nil
 }
 
-// stamp returns when the first reading of a frame was taken, on this device's
-// wall clock. That is the time its source stamped it, moved to this device's
-// clock. A frame its source did not stamp, or stamped with a value that cannot
-// be a time, is placed at its arrival: nothing else is known about it.
-func (c *Channel) stamp(tsUs uint64, arrival time.Time) time.Time {
-	if tsUs == 0 || tsUs > math.MaxInt64/uint64(time.Microsecond) {
-		return arrival
+// place works out when the first reading of a frame was taken, on this
+// device's wall clock, and how that is known. It is the time the source
+// stamped the frame with, moved to this device's clock. A frame its source did
+// not stamp, or stamped with a value that cannot be a time, is placed at its
+// arrival: nothing else is known about it.
+func (c *Channel) place(f *sensorlink.SensorFrame, arrival time.Time) timing {
+	t := timing{stamp: arrival, sequence: f.Seq, period: c.period, sourceUs: f.TsUs}
+	if c.sampleBytes > 0 {
+		t.readings = len(f.Payload) / c.sampleBytes
+	}
+	if f.TsUs == 0 || f.TsUs > math.MaxInt64/uint64(time.Microsecond) {
+		return t
 	}
 	steady := arrival.Sub(c.opened)
 	c.clockMu.Lock()
-	taken, _ := c.clock.place(time.Duration(tsUs)*time.Microsecond, steady, c.period)
+	taken, uncertainty := c.clock.place(time.Duration(f.TsUs)*time.Microsecond, steady, c.period)
+	t.segment = c.clock.segment
 	c.clockMu.Unlock()
-	return arrival.Add(taken - steady)
+	t.stamp, t.placed, t.mapping = arrival.Add(taken-steady), true, uncertainty
+	return t
 }
 
 // WriteFrame publishes one frame of the channel, stamped with the time its
 // source took it, and reports whether any of it could be turned into a
-// message. A frame that cannot be published is dropped and reported in the
-// log; the channel stays open.
+// message. How that time is known goes out on the channel's timing topic
+// first, one message per frame. A frame that cannot be published is dropped
+// and reported in the log; the channel stays open.
 func (c *Channel) WriteFrame(f *sensorlink.SensorFrame) bool {
 	// Read the clock before anything else: the frame is placed by when it
 	// arrived, and time spent waiting for a lock below is not part of that.
 	arrival := c.b.now()
-	messages, err := c.enc.encode(c.stamp(f.TsUs, arrival), c.period, f.Payload)
+	when := c.place(f, arrival)
+	messages, err := c.enc.encode(when.stamp, c.period, f.Payload)
+	var timingMessage []byte
+	if len(messages) > 0 {
+		timingMessage = when.encode(c.frameID, c.topic, c.source)
+	}
 	b := c.b
 	b.mu.Lock()
 	if c.closed {
 		b.mu.Unlock()
 		return false
 	}
-	writers := make([]sampleWriter, 0, len(b.leases))
+	writers := make([]channelWriters, 0, len(b.leases))
 	for _, gl := range b.leases {
 		if w := gl.writers[c]; w != nil {
-			writers = append(writers, w)
+			writers = append(writers, *w)
 		}
 	}
 	b.mu.Unlock()
-	for _, message := range messages {
-		for _, w := range writers {
-			if werr := w.Write(message); werr != nil && err == nil {
+	for _, w := range writers {
+		if w.timing != nil && timingMessage != nil {
+			if werr := w.timing.Write(timingMessage); werr != nil && err == nil {
+				err = werr
+			}
+		}
+		if w.readings == nil {
+			continue
+		}
+		for _, message := range messages {
+			if werr := w.readings.Write(message); werr != nil && err == nil {
 				err = werr
 			}
 		}
@@ -321,7 +357,11 @@ func (c *Channel) Close() error {
 	var writers []sampleWriter
 	for _, gl := range b.leases {
 		if w := gl.writers[c]; w != nil {
-			writers = append(writers, w)
+			for _, topic := range []sampleWriter{w.readings, w.timing} {
+				if topic != nil {
+					writers = append(writers, topic)
+				}
+			}
 			delete(gl.writers, c)
 		}
 	}
@@ -405,7 +445,7 @@ func (b *Bridge) reconcile(ctx context.Context) {
 			continue
 		}
 		b.mu.Lock()
-		b.leases[key] = &graphLease{lease: lease, writers: map[*Channel]sampleWriter{}}
+		b.leases[key] = &graphLease{lease: lease, writers: map[*Channel]*channelWriters{}}
 		b.mu.Unlock()
 	}
 
@@ -413,16 +453,29 @@ func (b *Bridge) reconcile(ctx context.Context) {
 	defer b.mu.Unlock()
 	for key, gl := range b.leases {
 		for c := range b.channels {
-			if gl.writers[c] != nil {
-				continue
+			w := gl.writers[c]
+			if w == nil {
+				w = &channelWriters{}
+				gl.writers[c] = w
 			}
-			w, err := gl.lease.NewWriter(rtps.Publication{Topic: "rt" + c.topic, Type: c.enc.ddsType})
-			if err != nil {
-				b.logger.Debug("opening a sensor channel in a ROS 2 app failed; will retry",
-					zap.String("graph", key), zap.String("topic", c.topic), zap.Error(err))
-				continue
+			for _, topic := range []struct {
+				writer *sampleWriter
+				pub    rtps.Publication
+			}{
+				{&w.readings, rtps.Publication{Topic: "rt" + c.topic, Type: c.enc.ddsType}},
+				{&w.timing, rtps.Publication{Topic: "rt" + c.topic + timingSuffix, Type: timingDDSType}},
+			} {
+				if *topic.writer != nil {
+					continue
+				}
+				opened, err := gl.lease.NewWriter(topic.pub)
+				if err != nil {
+					b.logger.Debug("opening a sensor channel in a ROS 2 app failed; will retry",
+						zap.String("graph", key), zap.String("topic", topic.pub.Topic), zap.Error(err))
+					continue
+				}
+				*topic.writer = opened
 			}
-			gl.writers[c] = w
 		}
 	}
 }

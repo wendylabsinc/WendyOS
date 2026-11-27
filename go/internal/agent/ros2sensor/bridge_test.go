@@ -3,6 +3,8 @@ package ros2sensor
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 // fakeWriter records what one topic's writer on one graph was asked to send.
 type fakeWriter struct {
 	pub     rtps.Publication
+	onWrite func(topic string)
 	mu      sync.Mutex
 	samples [][]byte
 	closed  bool
@@ -31,6 +34,9 @@ func (w *fakeWriter) Write(payload []byte) error {
 		return w.fail
 	}
 	w.samples = append(w.samples, append([]byte(nil), payload...))
+	if w.onWrite != nil {
+		w.onWrite(w.pub.Topic)
+	}
 	return nil
 }
 func (w *fakeWriter) Close() error {
@@ -53,6 +59,7 @@ func (w *fakeWriter) isClosed() bool {
 // fakeLease is one publishing participant the bridge acquired.
 type fakeLease struct {
 	cfg     rtps.Config
+	onWrite func(topic string)
 	done    chan struct{}
 	mu      sync.Mutex
 	writers []*fakeWriter
@@ -62,7 +69,7 @@ type fakeLease struct {
 func (l *fakeLease) NewWriter(pub rtps.Publication) (sampleWriter, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	w := &fakeWriter{pub: pub}
+	w := &fakeWriter{pub: pub, onWrite: l.onWrite}
 	l.writers = append(l.writers, w)
 	return w, nil
 }
@@ -78,12 +85,18 @@ func (l *fakeLease) Close() error {
 	}
 	return nil
 }
-func (l *fakeLease) open() []*fakeWriter {
+
+// open returns the writers of the topics that carry readings; timing returns
+// the writers of the topics that say how each frame's time is known.
+func (l *fakeLease) open() []*fakeWriter   { return l.openWriters(false) }
+func (l *fakeLease) timing() []*fakeWriter { return l.openWriters(true) }
+
+func (l *fakeLease) openWriters(timing bool) []*fakeWriter {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var out []*fakeWriter
 	for _, w := range l.writers {
-		if !w.isClosed() {
+		if !w.isClosed() && strings.HasSuffix(w.pub.Topic, "/timing") == timing {
 			out = append(out, w)
 		}
 	}
@@ -93,6 +106,7 @@ func (l *fakeLease) open() []*fakeWriter {
 // fakeDomain stands in for the pool and for the list of running ROS 2 apps.
 type fakeDomain struct {
 	mu      sync.Mutex
+	writes  []string // topics, in the order they were written to
 	graphs  []ros2camera.Graph
 	leases  []*fakeLease
 	refuse  bool
@@ -111,6 +125,12 @@ func (d *fakeDomain) acquire(_ context.Context, cfg rtps.Config) (participantLea
 		return nil, errors.New("network namespace is gone")
 	}
 	l := &fakeLease{cfg: cfg, done: make(chan struct{})}
+	// Called from a writer, never while d.mu is held.
+	l.onWrite = func(topic string) {
+		d.mu.Lock()
+		d.writes = append(d.writes, topic)
+		d.mu.Unlock()
+	}
 	d.leases = append(d.leases, l)
 	return l, nil
 }
@@ -491,5 +511,103 @@ func TestReadingWithoutASourceTimeIsStampedOnArrival(t *testing.T) {
 		if got := stampOf(t, writer.samples[i]); !got.Equal(clock.now()) {
 			t.Fatalf("reading %d (ts_us %d) is stamped %s, want its arrival %s", i, ts, got, clock.now())
 		}
+	}
+}
+
+func TestEveryFrameSaysHowItsSampleTimeIsKnown(t *testing.T) {
+	b, d := testBridge(isolatedApp("robot", 4242, 17))
+	clock := &testClock{t: time.Unix(1_700_000_000, 0)}
+	b.now = clock.now
+	ch, _ := b.OpenChannel("asset:7", "porch", temperatureChannel(3, "temperature"))
+	b.reconcile(context.Background())
+	lease := d.openLeases()[0]
+	if len(lease.timing()) != 1 {
+		t.Fatalf("%d timing topics for one channel", len(lease.timing()))
+	}
+	readings, timings := lease.open()[0], lease.timing()[0]
+	if timings.pub != (rtps.Publication{Topic: "rt/sensorlink/porch/temperature/timing", Type: "diagnostic_msgs::msg::dds_::DiagnosticArray_"}) {
+		t.Fatalf("timing topic = %+v", timings.pub)
+	}
+
+	ch.WriteFrame(&sensorlink.SensorFrame{Seq: 40, TsUs: 5_000_000, Payload: f32le(20)})
+	clock.advance(1300 * time.Millisecond)
+	ch.WriteFrame(&sensorlink.SensorFrame{Seq: 41, TsUs: 6_000_000, Payload: f32le(21, 22)})
+	if readings.count() != 3 || timings.count() != 2 {
+		t.Fatalf("%d readings and %d timing messages, want 3 and one per frame (2)", readings.count(), timings.count())
+	}
+
+	// One timing message per frame, stamped like the frame's first reading so
+	// that the two can be matched, and published right before the readings.
+	second := decodeTiming(t, timings.samples[1])
+	if want := stampOf(t, readings.samples[1]); !second.stamp.Equal(want) {
+		t.Fatalf("timing is stamped %s and the reading it describes %s", second.stamp, want)
+	}
+	wantOrder := []string{"rt/sensorlink/porch/temperature/timing", "rt/sensorlink/porch/temperature",
+		"rt/sensorlink/porch/temperature/timing", "rt/sensorlink/porch/temperature", "rt/sensorlink/porch/temperature"}
+	if !reflect.DeepEqual(d.writes, wantOrder) {
+		t.Fatalf("published in the order %v", d.writes)
+	}
+	if second.frameID != "sensorlink/porch" || second.name != "/sensorlink/porch/temperature" || second.hardwareID != "asset:7" {
+		t.Fatalf("timing names %q, %q on %q", second.frameID, second.name, second.hardwareID)
+	}
+	for key, want := range map[string]string{
+		"sequence": "41", "readings": "2", "sample_period_nanos": "1000000000",
+		"native_clock_domain": "SENSORLINK_SOURCE", "native_timestamp_nanos": "6000000000",
+		"mapping_segment": "sensorlink-source-1",
+	} {
+		if second.values[key] != want {
+			t.Errorf("%s = %q, want %q (all: %v)", key, second.values[key], want, second.values)
+		}
+	}
+}
+
+func TestRawByteChannelGetsItsSampleTimeFromTheTimingTopic(t *testing.T) {
+	b, d := testBridge(isolatedApp("robot", 4242, 17))
+	clock := &testClock{t: time.Unix(1_700_000_000, 0)}
+	b.now = clock.now
+	// A schema with no ROS 2 message of its own is published as bytes, and a
+	// byte array has no header to carry a time in.
+	ch, _ := b.OpenChannel("asset:7", "porch", &sensorlinkpb.SensorDescriptor{ChannelId: 4, Name: "imu",
+		Format: &sensorlinkpb.SensorDescriptor_Sensor{Sensor: &sensorlinkpb.SensorFormat{Schema: "wendy.imu.v1", SampleBytes: 6, RateHz: 100}}})
+	b.reconcile(context.Background())
+	lease := d.openLeases()[0]
+	first := clock.now()
+	ch.WriteFrame(&sensorlink.SensorFrame{Seq: 1, TsUs: 5_000_000, Payload: make([]byte, 12)})
+	clock.advance(25 * time.Millisecond)
+	ch.WriteFrame(&sensorlink.SensorFrame{Seq: 2, TsUs: 5_020_000, Payload: make([]byte, 12)})
+	if len(lease.timing()) != 1 || lease.timing()[0].count() != 2 {
+		t.Fatalf("raw-byte channel has %d timing topics", len(lease.timing()))
+	}
+	got := decodeTiming(t, lease.timing()[0].samples[1])
+	if !got.stamp.Equal(first.Add(20*time.Millisecond)) || got.values["readings"] != "2" || got.values["sample_period_nanos"] != "10000000" {
+		t.Fatalf("second frame: stamp %s, values %v", got.stamp, got.values)
+	}
+}
+
+func TestFrameWithNothingToPublishHasNoTimingEither(t *testing.T) {
+	b, d := testBridge(isolatedApp("robot", 4242, 17))
+	ch, _ := b.OpenChannel("asset:7", "porch", temperatureChannel(3, "temperature"))
+	b.reconcile(context.Background())
+	lease := d.openLeases()[0]
+	if ch.WriteFrame(&sensorlink.SensorFrame{TsUs: 5_000_000, Payload: []byte{1, 2, 3}}) {
+		t.Fatal("a frame that is not whole readings was reported as published")
+	}
+	if n := lease.timing()[0].count(); n != 0 {
+		t.Fatalf("%d timing messages for a frame none of which was published", n)
+	}
+}
+
+func TestTimingTopicClosesWithItsChannel(t *testing.T) {
+	b, d := testBridge(isolatedApp("robot", 4242, 17))
+	first, _ := b.OpenChannel("asset:7", "porch", temperatureChannel(3, "temperature"))
+	_, _ = b.OpenChannel("asset:7", "porch", temperatureChannel(4, "other"))
+	b.reconcile(context.Background())
+	lease := d.openLeases()[0]
+	if len(lease.open()) != 2 || len(lease.timing()) != 2 {
+		t.Fatalf("%d reading and %d timing topics for two channels", len(lease.open()), len(lease.timing()))
+	}
+	_ = first.Close()
+	if len(lease.open()) != 1 || len(lease.timing()) != 1 || lease.timing()[0].pub.Topic != "rt/sensorlink/porch/other/timing" {
+		t.Fatalf("after closing one channel: %d reading and %d timing topics", len(lease.open()), len(lease.timing()))
 	}
 }
