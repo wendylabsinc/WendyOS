@@ -20,14 +20,19 @@ import (
 const testedCompanionBuildID = "wendy-0123456789abcdef01234567"
 
 type testLiteCompanion struct {
-	buildID string
-	readErr error
-	pushErr error
-	pushed  []byte
+	buildID    string
+	readErrors []error
+	pushErr    error
+	pushed     []byte
 }
 
 func (c *testLiteCompanion) HostedCompanionBuildID(context.Context) (string, error) {
-	return c.buildID, c.readErr
+	if len(c.readErrors) > 0 {
+		err := c.readErrors[0]
+		c.readErrors = c.readErrors[1:]
+		return "", err
+	}
+	return c.buildID, nil
 }
 
 func (c *testLiteCompanion) PushHostedCompanion(_ context.Context, path string, _ func(uint32, uint32)) error {
@@ -68,6 +73,17 @@ func TestLiteCompanionUpdatesOnlyOnMismatch(t *testing.T) {
 	device.pushErr = errors.New("radio disconnected")
 	if changed, err := updateLiteCompanion(t.Context(), io.Discard, device, companion, server.URL); changed || !errors.Is(err, device.pushErr) {
 		t.Fatalf("interrupted OTA: changed=%v, error=%v", changed, err)
+	}
+}
+
+func TestLiteCompanionRetriesLostStatusReply(t *testing.T) {
+	device := &testLiteCompanion{
+		buildID:    testedCompanionBuildID,
+		readErrors: []error{context.DeadlineExceeded},
+	}
+	id, err := readLiteCompanionBuildID(t.Context(), device)
+	if err != nil || id != testedCompanionBuildID {
+		t.Fatalf("status after lost reply: ID=%q, error=%v", id, err)
 	}
 }
 

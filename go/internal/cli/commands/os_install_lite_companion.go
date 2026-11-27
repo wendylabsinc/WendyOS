@@ -138,11 +138,14 @@ func readLiteCompanionBuildID(ctx context.Context, client liteCompanionClient) (
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	for {
-		id, err := client.HostedCompanionBuildID(ctx)
-		if !errors.Is(err, liteclient.ErrHostedCompanionUnavailable) {
+		queryCtx, finishQuery := context.WithTimeout(ctx, 8*time.Second)
+		id, err := client.HostedCompanionBuildID(queryCtx)
+		finishQuery()
+		if !errors.Is(err, liteclient.ErrHostedCompanionUnavailable) && !errors.Is(err, context.DeadlineExceeded) {
 			return id, err
 		}
-		// WendyCom can accept USB connections before ESP-Hosted comes up.
+		// WendyCom may be ready before ESP-Hosted, and a status reply can
+		// be lost during radio startup. Retrying this query is read-only.
 		select {
 		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():

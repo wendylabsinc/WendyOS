@@ -1102,6 +1102,7 @@ func (*WendyComHostedCompanionOtaEndParams) Descriptor() ([]byte, []int) {
 type WendyComHostedCompanionInfo struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Version from the running co-processor's ESP-IDF application descriptor.
+	// Empty for a radio whose ESP-Hosted protocol predates that descriptor RPC.
 	BuildId       string `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
