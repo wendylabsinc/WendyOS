@@ -152,3 +152,27 @@ func TestObjectSearchCompletionCannotReleaseNewOperator(t *testing.T) {
 		t.Fatal("old sighting stopped or released newer owner")
 	}
 }
+
+func TestSearchCameraViewPreservesValidatedControllerCaptureTime(t *testing.T) {
+	r, _ := readySiteRobot()
+	owner, err := r.BeginLocalizationSearch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	now := time.Now()
+	r.observed.ClockOffset = 250 * time.Millisecond
+	r.observed.Pose.Received = now
+	r.observed.Pose.Captured = now
+	r.observed.CloudAt = now
+	view, err := owner.SearchCameraView(now.Add(r.observed.ClockOffset).UnixNano(), now.Add(-time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.CapturedAt().Equal(now) {
+		t.Fatalf("gateway clock was not converted: got %s want %s", view.CapturedAt(), now)
+	}
+	if _, err := owner.SearchCameraView(now.Add(-time.Second).UnixNano(), now.Add(-2*time.Second)); err == nil {
+		t.Fatal("accepted camera without matching controller pose")
+	}
+}

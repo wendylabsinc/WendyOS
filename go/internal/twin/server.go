@@ -19,6 +19,7 @@ import (
 var ErrRobotBusy = errors.New("robot is controlled by another session; close it or wait 15 seconds after it disconnects")
 
 type robotSession struct {
+	localizationCamera         *localizationCameraJob // protected by searchMu
 	activeObjectMu             sync.Mutex
 	activeObject               *activeObjectJob
 	objectMu                   sync.Mutex
@@ -66,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	s.cameraWorker = make(chan struct{}, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/camera-alignment", s.cameraRequest)
+	mux.HandleFunc("POST /v1/robot/localize-view", s.localizationCameraView)
 	mux.HandleFunc("PUT /v1/rooms/{id}/localization-geometry", s.localizationGeometry)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /v1/rooms", func(w http.ResponseWriter, r *http.Request) { v, e := s.Store.List(); respondRoom(w, r, v, e) })

@@ -22,7 +22,14 @@ func provideRobotSearchView(ctx context.Context, serial, requestID string, recei
 	capture func(context.Context, string) (string, cameraSnapshot, int64, error),
 	dial func(context.Context) (net.Conn, error),
 ) (map[string]any, error) {
-	search, ok := receipt["object_search"].(map[string]any)
+	return provideRobotCameraView(ctx, serial, requestID, receipt, "object_search", "/v1/robot/find-view", capture, dial)
+}
+
+func provideRobotCameraView(ctx context.Context, serial, requestID string, receipt map[string]any, field, path string,
+	capture func(context.Context, string) (string, cameraSnapshot, int64, error),
+	dial func(context.Context) (net.Conn, error),
+) (map[string]any, error) {
+	search, ok := receipt[field].(map[string]any)
 	if receipt["state"] != "running" || !ok {
 		return receipt, nil
 	}
@@ -31,7 +38,7 @@ func provideRobotSearchView(ctx context.Context, serial, requestID string, recei
 		return receipt, nil
 	}
 	if _, err := uuid.Parse(viewID); err != nil || len(requestID) < 8 || len(requestID) > 80 || serial == "" {
-		return nil, errors.New("invalid object-search frame demand identity")
+		return nil, errors.New("invalid robot camera frame demand identity")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -43,7 +50,7 @@ func provideRobotSearchView(ctx context.Context, serial, requestID string, recei
 		return nil, fmt.Errorf("fresh Go2 capture: %w", err)
 	}
 	if selected != serial {
-		return nil, errors.New("camera target changed during object search")
+		return nil, errors.New("camera target changed during robot search")
 	}
 	if cutoff <= 0 || shot.timestampNS > math.MaxInt64 || shot.timestampNS <= uint64(cutoff) {
 		return nil, errors.New("Go2 camera frame is not newer than the gateway clock cutoff")
@@ -53,7 +60,7 @@ func provideRobotSearchView(ctx context.Context, serial, requestID string, recei
 	}
 	cfg, err := jpeg.DecodeConfig(bytes.NewReader(shot.jpeg))
 	if err != nil || shot.width != 1280 || shot.height != 720 || cfg.Width != 1280 || cfg.Height != 720 {
-		return nil, errors.New("object search requires native 1280x720 Go2 JPEG")
+		return nil, errors.New("robot search requires native 1280x720 Go2 JPEG")
 	}
 	data, err := json.Marshal(map[string]any{
 		"serial": serial, "request_id": requestID, "view_id": viewID,
@@ -68,9 +75,9 @@ func provideRobotSearchView(ctx context.Context, serial, requestID string, recei
 	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) }}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return errors.New("object-search frame redirect refused")
+		return errors.New("robot camera frame redirect refused")
 	}}
-	request, err := http.NewRequestWithContext(postCtx, http.MethodPost, "http://digital-twin/v1/robot/find-view", bytes.NewReader(data))
+	request, err := http.NewRequestWithContext(postCtx, http.MethodPost, "http://digital-twin"+path, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -82,14 +89,14 @@ func provideRobotSearchView(ctx context.Context, serial, requestID string, recei
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return nil, fmt.Errorf("object-search frame rejected (%d): %s", response.StatusCode, bytes.TrimSpace(message))
+		return nil, fmt.Errorf("robot camera frame rejected (%d): %s", response.StatusCode, bytes.TrimSpace(message))
 	}
 	var out map[string]any
 	if err := json.NewDecoder(io.LimitReader(response.Body, 256<<10)).Decode(&out); err != nil {
 		return nil, err
 	}
 	if out == nil {
-		return nil, errors.New("object-search frame response is missing its command receipt")
+		return nil, errors.New("robot camera frame response is missing its command receipt")
 	}
 	return out, nil
 }

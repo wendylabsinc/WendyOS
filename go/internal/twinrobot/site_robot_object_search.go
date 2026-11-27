@@ -24,6 +24,7 @@ type ObjectSearchProgress struct {
 // SearchCameraView is immutable evidence owned by this controller generation.
 // It contains no room alignment and cannot authorize object approach.
 type SearchCameraView struct {
+	captured          time.Time
 	pose              sitenav.Pose
 	generation, epoch uint64
 }
@@ -52,7 +53,7 @@ func (o *LocalizationSearchOwner) SearchCameraView(received int64, after time.Ti
 	if math.Abs(pose.Received.Sub(at).Seconds()) > .15 || math.Abs(r.observed.CloudAt.Sub(at).Seconds()) > .75 {
 		return nil, errors.New("search frame has no receipt-time-matched odometry and LiDAR")
 	}
-	view := &SearchCameraView{pose: pose, generation: o.generation, epoch: o.epoch}
+	view := &SearchCameraView{captured: at, pose: pose, generation: o.generation, epoch: o.epoch}
 	if err := o.checkSearchCameraViewLocked(view); err != nil {
 		return nil, err
 	}
@@ -127,3 +128,6 @@ func (o *LocalizationSearchOwner) FinishSearchCameraView(view *SearchCameraView)
 	o.cancel()
 	return nil
 }
+
+// CapturedAt is the validated frame receipt time in the controller clock.
+func (v *SearchCameraView) CapturedAt() time.Time { return v.captured }
