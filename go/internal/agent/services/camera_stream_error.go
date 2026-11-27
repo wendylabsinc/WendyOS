@@ -127,9 +127,10 @@ func isBusyErrno(err error) bool {
 	return errors.Is(err, unix.EBUSY)
 }
 
-// retryWhileBusy re-runs op briefly while it reports EBUSY, covering the gap between a dying
-// producer's hub closing and its deferred fd close running. One retry only: getOrCreateHub
-// does the substantive waiting, and against another application retrying cannot succeed.
+// retryWhileBusy re-runs op once, briefly, while it reports EBUSY. The agent's own earlier
+// capture has released the device before this one starts (holdCamera), so the holder is
+// another process: one that is leaving gets a moment, and against one that stays retrying
+// cannot succeed.
 func retryWhileBusy(ctx context.Context, op func() unix.Errno) unix.Errno {
 	const (
 		retries = 1

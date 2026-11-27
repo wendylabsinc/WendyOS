@@ -1273,9 +1273,8 @@ func (c *cameraCapture) writeEncodedFrame(stream *cameraSegmentStream, frame *vi
 // Between intervals the capture stays subscribed and discards frames instead
 // of unsubscribing: receiving and dropping a shared frame pointer is a channel
 // receive, while hub churn closes the device file descriptor, restarts the
-// producer pipeline, and rejoining races hub teardown (bounded by
-// maxHubRetries * hubTeardownTimeout) and then waits a full group of pictures
-// for the next keyframe.
+// producer pipeline, and rejoining waits for the device to be released and
+// then a full group of pictures for the next keyframe.
 func (c *cameraCapture) writeSnapshot(frame *videoFrame) error {
 	offset, randomAccess := frameRandomAccess(frame)
 	// A frame truncated by the maxFrameBytes cap loses its alignment promise

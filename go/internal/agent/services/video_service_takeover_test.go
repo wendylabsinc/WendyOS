@@ -378,9 +378,7 @@ func installSlowProducers(svc *VideoService, teardown time.Duration) *fakeProduc
 }
 
 // A takeover whose outgoing producer does not release the device in time must
-// be abandoned with a named refusal. Starting the replacement anyway would
-// fail to bind (EBUSY) and take the camera from every parameter-less
-// subscriber that had reattached to the replacement hub.
+// be abandoned with a named refusal.
 func TestTakeoverAbortsWhenTheCameraDoesNotReleaseInTime(t *testing.T) {
 	svc := newTestVideoService(nil, nil)
 	fp := installSlowProducers(svc, 2*hubTeardownTimeout)

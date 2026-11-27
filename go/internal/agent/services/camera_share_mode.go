@@ -339,11 +339,8 @@ func hubLacksFramesFor(err error) bool {
 // explicit viewers' streams end with a message that names the shared mode, its
 // parameter-less subscribers rejoin, and the camera restarts at defaults.
 //
-// It never waits on a recording, but it is not instant: each of its
-// maxHubRetries attempts can wait on a dying hub inside getOrCreateHubKind (up
-// to maxHubRetries × hubTeardownTimeout), and a takeover waits up to one more
-// hubTeardownTimeout for the old producer to let go. With today's constants
-// the worst case is about 6 s; the usual case is no wait, or one takeover.
+// It never waits on a recording, and waits only in a takeover, up to
+// hubTeardownTimeout for the old producer to let go.
 func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID uint32, mode sharedMode, preset appconfig.EncodePreset) (shareSubscription, error) {
 	kind, known := shareFrameKinds[mode.Format]
 	if !known {
