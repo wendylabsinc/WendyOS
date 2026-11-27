@@ -464,7 +464,7 @@ for test_name in "${TESTS[@]}"; do
         loopback_scope=""
         if [[ "$device_os" == "wendyos" ]]; then
             case "$DEVICE_TYPE" in
-                dragonwing-iq-8275|dragonwing-iq-9075|arduino-uno-q) loopback_scope="video-audio" ;;
+                dragonwing-iq-8275|dragonwing-iq-9075|arduino-uno-q|orange-pi-5-pro) loopback_scope="video-audio" ;;
                 jetson-orin-nano|jetson-agx-orin|jetson-agx-orin-emmc|jetson-agx-thor) loopback_scope="video" ;;
                 raspberry-pi-3|raspberry-pi-4|raspberry-pi-5|generic-x86-64|vm-arm64|vm-x86-64)
                     skip_test "$test_name" "no loopback image contract for $DEVICE_TYPE"

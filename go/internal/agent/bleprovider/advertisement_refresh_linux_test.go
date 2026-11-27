@@ -74,37 +74,85 @@ func TestAdvertisementRefreshCoalescesAndStops(t *testing.T) {
 	}
 }
 func TestAdvertisementRefreshTransientErrorRetries(t *testing.T) {
-	// A failed refresh must not kill the provider loop (previously one
-	// controller-busy took down every established link); only a changed
-	// BlueZ owner is fatal.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	requests := make(chan struct{}, 1)
-	calls := 0
+	calls := make(chan time.Time, 4)
 	done := make(chan error, 1)
 	go func() {
+		attempt := 0
 		done <- runAdvertisementRefresh(ctx, requests, 40*time.Millisecond, func(context.Context) error {
-			calls++
-			if calls == 1 {
+			attempt++
+			calls <- time.Now()
+			if attempt <= 2 {
 				return errors.New("bus send failed")
 			}
 			return nil
 		})
 	}()
+	// A single admission/capability event must survive transient failures;
+	// another connection must not be needed to restore discoverability.
 	requests <- struct{}{}
-	time.Sleep(100 * time.Millisecond)
-	requests <- struct{}{}
-	time.Sleep(100 * time.Millisecond)
+	var previous time.Time
+	for attempt := 0; attempt < 3; attempt++ {
+		select {
+		case at := <-calls:
+			if !previous.IsZero() && at.Sub(previous) < 35*time.Millisecond {
+				t.Fatal("retry bypassed refresh rate limit")
+			}
+			previous = at
+		case <-time.After(time.Second):
+			t.Fatal("failed refresh was lost without another request")
+		}
+	}
+	select {
+	case <-calls:
+		t.Fatal("successful refresh kept retrying")
+	case <-time.After(100 * time.Millisecond):
+	}
 	cancel()
 	select {
 	case err := <-done:
-		if err != nil || calls != 2 {
-			t.Fatal(err, calls)
+		if err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Second):
 		t.Fatal("not joined")
 	}
 }
+func TestAdvertisementRefreshRetryWaitCancels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	requests := make(chan struct{}, 1)
+	requests <- struct{}{}
+	attempted := make(chan struct{})
+	done := make(chan error, 1)
+	calls := 0
+	go func() {
+		done <- runAdvertisementRefresh(ctx, requests, time.Hour, func(context.Context) error {
+			calls++
+			if calls == 1 {
+				close(attempted)
+			}
+			return errors.New("bus send failed")
+		})
+	}()
+	select {
+	case <-attempted:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil || calls != 1 {
+			t.Fatal(err, calls)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancellation waited for retry interval")
+	}
+}
+
 func TestAdvertisementRefreshOwnerChangeStillFatal(t *testing.T) {
 	requests := make(chan struct{}, 1)
 	requests <- struct{}{}

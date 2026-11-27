@@ -928,7 +928,8 @@ function Flash({
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [flashed, setFlashed] = useState(false);
-  const pi = deviceType.startsWith("raspberry-");
+  const diskImage =
+    deviceType.startsWith("raspberry-") || deviceType === "orange-pi-5-pro";
   const act = async (name: string, action: () => Promise<unknown>) => {
     setBusy(name);
     setError("");
@@ -978,6 +979,7 @@ function Flash({
             <option value="raspberry-pi-5">Raspberry Pi 5</option>
             <option value="raspberry-pi-4">Raspberry Pi 4</option>
             <option value="raspberry-pi-3">Raspberry Pi 3</option>
+            <option value="orange-pi-5-pro">Orange Pi 5 Pro</option>
             <option value="jetson-orin-nano">
               Jetson Orin Nano developer kit
             </option>
@@ -988,7 +990,7 @@ function Flash({
               Jetson AGX Thor developer kit
             </option>
           </select>
-          {pi ? (
+          {diskImage ? (
             <>
               <div className="desktop-field-heading">
                 <Label htmlFor="drive">SD card or USB drive</Label>
@@ -1028,8 +1030,8 @@ function Flash({
               </select>
               <p className="desktop-muted">
                 {drivesScanned && drives.length === 0
-                  ? "No flashable drives found. Insert the Pi's SD card or USB drive and try again."
-                  : "Insert the Pi's storage into this computer, then find drives. The system drive is excluded by Wendy."}
+                  ? "No flashable drives found. Insert the board's SD card or USB drive and try again."
+                  : "Insert the board's storage into this computer, then find drives. The system drive is excluded by Wendy."}
               </p>
             </>
           ) : (
@@ -1049,7 +1051,7 @@ function Flash({
             }}
           />
           <Button
-            disabled={!!busy || (pi && !drive)}
+            disabled={!!busy || (diskImage && !drive)}
             onClick={() =>
               void act("plan", async () => {
                 setPlan(await api.plan({ deviceType, drive, version }));

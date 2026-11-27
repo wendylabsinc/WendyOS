@@ -259,7 +259,7 @@ func TestLiteInstallChecksGivenNameBeforeFlashing(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubOrgDeviceNames(t, []string{"brave-dolphin"}, nil)
-	err := installESP32Firmware(context.Background(), false, "esp32c6_generic_native",
+	err := installESP32Firmware(context.Background(), false, "", "esp32c6_generic_native",
 		discovery.SerialPortInfo{Port: "/dev/ttyACM0"}, wifiCLIOptions{NoWifi: true}, "brave-dolphin",
 		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"})
 	want := "Another device in your organization already uses brave-dolphin. Pass a different --device-name.\n  If that is this device's old entry, remove it with: wendy cloud device unenroll --device brave-dolphin"

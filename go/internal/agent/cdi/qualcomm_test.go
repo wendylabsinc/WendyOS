@@ -135,6 +135,33 @@ func TestApplyQualcommNPURuntime_InjectsTransportAtOwnPrefix(t *testing.T) {
 	}
 }
 
+// A restart re-applies the runtime to a spec that already carries it: nothing is
+// added, the library path is not prepended twice, and the transport still counts.
+func TestApplyQualcommNPURuntime_ReapplyKeepsSpec(t *testing.T) {
+	dir := useQualcommRuntimeDir(t, "share/dsp/cdsp/fastrpc_shell_unsigned_3")
+	stageFastrpcNode(t, dir, "fastrpc-cdsp")
+	stageTransport(t, dir, "libcdsprpc.so.1.0.0")
+
+	spec := newQualcommSpec()
+	ApplyQualcommNPURuntime(spec)
+	mounts, env := slices.Clone(spec.Mounts), slices.Clone(spec.Process.Env)
+	result := ApplyQualcommNPURuntime(spec)
+	if !result.HasDSP || !result.TransportApplied || result.Mounts != 0 {
+		t.Fatalf("result = %+v; want the carried transport counted and nothing added", result)
+	}
+	if !slices.EqualFunc(mounts, spec.Mounts, func(a, b oci.Mount) bool { return a.Destination == b.Destination }) || !slices.Equal(env, spec.Process.Env) {
+		t.Fatalf("re-apply changed the spec: mounts %+v env %v", spec.Mounts, spec.Process.Env)
+	}
+
+	// After a reboot the tmpfs stage is empty until something stages it again.
+	if err := os.RemoveAll(qualcommNPUStageDir); err != nil {
+		t.Fatal(err)
+	}
+	if result := ApplyQualcommNPURuntime(spec); result.TransportApplied {
+		t.Fatalf("result = %+v; a bind of an empty stage counted as the transport", result)
+	}
+}
+
 // An app's own search path must survive, with ours taking precedence for the transport.
 func TestApplyQualcommNPURuntime_PrependsToExistingLibraryPath(t *testing.T) {
 	dir := useQualcommRuntimeDir(t)

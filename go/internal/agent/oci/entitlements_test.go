@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
+	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
@@ -267,6 +268,7 @@ func installFakeVCIO(t *testing.T, major int64) string {
 	})
 
 	vcioDevicePath = p
+	withHostGPUs(t, gpudiscovery.Device{Path: "/dev/dri/renderD128", Vendor: "broadcom", Driver: "v3d"})
 	statMajor = func(q string) (int64, error) {
 		if q == p {
 			return major, nil
@@ -2312,6 +2314,7 @@ func installFakeNvidiaDevTree(t *testing.T, numbers map[string][2]int64) string 
 	// These tests exercise the NVIDIA path; point kfd at a node that cannot
 	// exist so applyGPU never takes the AMD branch even on an AMD test host.
 	kfdDevicePath = filepath.Join(dev, "no-such-kfd")
+	withHostGPUs(t)
 
 	nvidiaDeviceGlobs = []string{
 		filepath.Join(dev, "nvidia*"),
@@ -2763,6 +2766,7 @@ func installFakeFastrpcDevTree(t *testing.T, nodes map[string][2]int64, heap *[2
 	})
 
 	fastrpcDeviceGlob = filepath.Join(dir, "fastrpc-*")
+	installFakeAccelRoot(t, t.TempDir())
 	dmaHeapDevicePath = heapPath
 	dtModelPath = modelPath
 	statDeviceNode = func(path string) (int64, int64, error) {
@@ -3071,11 +3075,142 @@ func TestApplyNPU_LeavesFirmwareMasked(t *testing.T) {
 	}
 }
 
+// withHostGPUs pins GPU discovery to the given devices for one test.
+func withHostGPUs(t *testing.T, devices ...gpudiscovery.Device) {
+	t.Helper()
+	orig := hostGPUs
+	t.Cleanup(func() { hostGPUs = orig })
+	hostGPUs = func() []gpudiscovery.Device { return devices }
+}
+
+func installFakeAccelRoot(t *testing.T, root string) {
+	t.Helper()
+	orig := accelRoot
+	t.Cleanup(func() { accelRoot = orig })
+	accelRoot = root
+}
+
+// fakeAccelNode is a /dev/accel node and the sysfs device it hangs off.
+type fakeAccelNode struct {
+	parent string // under /sys
+	driver string // PCI driver bound to parent, if any
+	num    [2]int64
+}
+
+// The kernel's layouts: rocket hangs its node off an "rknn" platform device no
+// driver binds; the Intel VPU hangs its node off its bound PCI device.
+const (
+	rocketAccelParent   = "devices/platform/rknn"
+	intelVPUAccelParent = "devices/pci0000:00/0000:00:0b.0"
+)
+
+// writeFakeAccelNode lays out /dev/accel/<name> and its sysfs class entry as the kernel does.
+func writeFakeAccelNode(t *testing.T, root, name string, n fakeAccelNode) string {
+	t.Helper()
+	node := filepath.Join(root, "dev", "accel", name)
+	minor := filepath.Join(root, "sys", n.parent, "accel", name)
+	class := filepath.Join(root, "sys", "class", "accel")
+	for _, dir := range []string{filepath.Dir(node), minor, class} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := map[string]string{
+		filepath.Join(minor, "device"): "../../../" + filepath.Base(n.parent),
+		filepath.Join(class, name):     filepath.Join("../..", n.parent, "accel", name),
+	}
+	if n.driver != "" {
+		links[filepath.Join(root, "sys", n.parent, "driver")] = "../../../bus/pci/drivers/" + n.driver
+	}
+	for link, target := range links {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(node, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
+
+// installFakeAccelNPU lays out the given /dev/accel nodes with no FastRPC nodes.
+func installFakeAccelNPU(t *testing.T, nodes map[string]fakeAccelNode) string {
+	t.Helper()
+	root := t.TempDir()
+	nums := map[string][2]int64{}
+	for name, n := range nodes {
+		nums[writeFakeAccelNode(t, root, name, n)] = n.num
+	}
+	origGlob, origStat, origRender := fastrpcDeviceGlob, statDeviceNode, lookupRenderGID
+	t.Cleanup(func() { fastrpcDeviceGlob, statDeviceNode, lookupRenderGID = origGlob, origStat, origRender })
+	installFakeAccelRoot(t, root)
+	fastrpcDeviceGlob = filepath.Join(root, "dev", "fastrpc-*")
+	statDeviceNode = func(path string) (int64, int64, error) {
+		if mm, ok := nums[path]; ok {
+			return mm[0], mm[1], nil
+		}
+		return 0, 0, os.ErrNotExist
+	}
+	lookupRenderGID = func() (uint32, bool) { return 107, true }
+	return root
+}
+
+// The mainline Rockchip NPU is a DRM accel node: bound at its own major:minor
+// with the render group, and none of the FastRPC runtime's environment.
+func TestApplyNPU_GrantsRockchipAccelNode(t *testing.T) {
+	root := installFakeAccelNPU(t, map[string]fakeAccelNode{
+		"accel0": {parent: rocketAccelParent, num: [2]int64{261, 0}},
+		"accel1": {parent: intelVPUAccelParent, driver: "intel_vpu", num: [2]int64{261, 1}},
+	})
+
+	spec := npuSpec(t)
+
+	node := filepath.Join(root, "dev", "accel", "accel0")
+	if m, ok := mountForDest(spec, node); !ok || m.Type != "bind" || m.Source != node {
+		t.Errorf("npu entitlement did not bind %s: %+v", node, m)
+	}
+	if !hasExactDeviceRule(spec, 261, 0) || countMajorRule(spec, 261) != 1 {
+		t.Error("npu entitlement must allow exactly the NPU's major:minor")
+	}
+	if !hasGID(spec, 107) {
+		t.Error("npu entitlement did not add the render GID")
+	}
+	if hasMountDest(spec, filepath.Join(root, "dev", "accel", "accel1")) || hasExactDeviceRule(spec, 261, 1) {
+		t.Error("npu entitlement granted an accel node of an unknown device")
+	}
+	if hasEnv(spec, fastrpcProcessAttrsEnv) || hasEnv(spec, "MACHINE_NAME") {
+		t.Error("a Rockchip NPU got the FastRPC runtime environment")
+	}
+	if got := AccelNPUs(root); len(got) != 1 || got[0].Vendor != "rockchip" || got[0].Path != node {
+		t.Errorf("AccelNPUs = %+v, want the rocket node as rockchip", got)
+	}
+}
+
+func TestApplyNPU_UnknownAccelDeviceAddsNothing(t *testing.T) {
+	installFakeAccelNPU(t, map[string]fakeAccelNode{
+		"accel0": {parent: intelVPUAccelParent, driver: "intel_vpu", num: [2]int64{261, 0}},
+	})
+	base := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	spec := npuSpec(t)
+	if len(spec.Mounts) != len(base.Mounts) || hasGID(spec, 107) {
+		t.Error("npu entitlement changed the spec for an unknown accel device")
+	}
+}
+
 // installFakeQualcommDevTree stands in for a Qualcomm SoC such as the Dragonwing
 // IQ-8275: an Adreno GPU behind the msm DRM driver, so a render node and no
-// vendor control node (no /dev/kfd, no /dev/nvidia*). It pins the Qualcomm
-// probe so the suite needs no Qualcomm sysfs tree.
+// vendor control node (no /dev/kfd, no /dev/nvidia*). It pins GPU discovery
+// so the suite needs no Qualcomm sysfs tree.
 func installFakeQualcommDevTree(t *testing.T, renderNodes map[string][2]int64) string {
+	t.Helper()
+	return installFakeRenderNodeGPU(t, renderNodes,
+		gpudiscovery.Device{Path: "/dev/dri/card0", Vendor: "qualcomm", Driver: "msm_dpu"},
+		gpudiscovery.Device{Path: "/dev/dri/renderD128", Vendor: "qualcomm", Driver: "msm_dpu"})
+}
+
+// installFakeRenderNodeGPU lays out /dev/dri render nodes for a SoC GPU and
+// pins GPU discovery to the given devices.
+func installFakeRenderNodeGPU(t *testing.T, renderNodes map[string][2]int64, gpus ...gpudiscovery.Device) string {
 	t.Helper()
 	dev := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dev, "dri"), 0o755); err != nil {
@@ -3091,20 +3226,18 @@ func installFakeQualcommDevTree(t *testing.T, renderNodes map[string][2]int64) s
 	}
 
 	origKFD := kfdDevicePath
-	origQualcomm := qualcommGPUPresent
 	origRenderGlobs := renderDeviceGlobs
 	origStatChar := statCharDevice
 	origRender := lookupRenderGID
 	t.Cleanup(func() {
 		kfdDevicePath = origKFD
-		qualcommGPUPresent = origQualcomm
 		renderDeviceGlobs = origRenderGlobs
 		statCharDevice = origStatChar
 		lookupRenderGID = origRender
 	})
 
 	kfdDevicePath = filepath.Join(dev, "absent-kfd")
-	qualcommGPUPresent = func() bool { return true }
+	withHostGPUs(t, gpus...)
 	renderDeviceGlobs = []string{filepath.Join(dev, "dri", "renderD*")}
 	statCharDevice = func(p string) (int64, int64, error) {
 		if nums, ok := renderNums[p]; ok {
@@ -3173,6 +3306,66 @@ func TestApplyGPU_QualcommWithoutRenderNodeAddsNoDevices(t *testing.T) {
 	}
 	if hasMajorRule(spec, 195) {
 		t.Error("Qualcomm host must not get the NVIDIA major-195 fallback rule")
+	}
+}
+
+// rockchipMaliGPUs is the Orange Pi 5 Pro's DRM tree: the display-only
+// rockchip-drm card has no vendor, panthor drives the Mali-G610.
+var rockchipMaliGPUs = []gpudiscovery.Device{
+	{Path: "/dev/dri/card0", Driver: "rockchip-drm"},
+	{Path: "/dev/dri/card1", Vendor: "arm", Driver: "panthor"},
+}
+
+// TestApplyGPU_ArmMaliExposesRenderNodeOnly: a Mali board gets the panthor
+// render node and the render/video groups, never the NVIDIA static fallback.
+func TestApplyGPU_ArmMaliExposesRenderNodeOnly(t *testing.T) {
+	dev := installFakeRenderNodeGPU(t, map[string][2]int64{"renderD128": {226, 128}, "card0": {226, 0}, "card1": {226, 1}}, rockchipMaliGPUs...)
+
+	spec := gpuSpec(t)
+
+	if _, ok := deviceForPath(spec, filepath.Join(dev, "dri", "renderD128")); !ok || !hasExactDeviceRule(spec, 226, 128) {
+		t.Error("Mali GPU entitlement did not grant the DRM render node")
+	}
+	for _, card := range []string{"card0", "card1"} {
+		if _, ok := deviceForPath(spec, filepath.Join(dev, "dri", card)); ok {
+			t.Errorf("Mali GPU entitlement granted the display node %s", card)
+		}
+	}
+	if !hasGID(spec, 107) || !hasGID(spec, videoGroupGID) {
+		t.Error("Mali GPU entitlement did not add the render and video GIDs")
+	}
+	if hasMajorRule(spec, 195) || hasMountDest(spec, "/dev/vcio") {
+		t.Error("Mali host got another vendor's grant")
+	}
+	for _, d := range spec.Linux.Devices {
+		if strings.Contains(d.Path, "nvidia") {
+			t.Errorf("Mali host must not get NVIDIA device nodes, got %q", d.Path)
+		}
+	}
+	for _, e := range spec.Process.Env {
+		if strings.HasPrefix(e, "NVIDIA_") {
+			t.Errorf("Mali host must not get NVIDIA env vars, got %q", e)
+		}
+	}
+}
+
+func TestRenderNodeGPUPresent(t *testing.T) {
+	gpu := func(vendor string) gpudiscovery.Device { return gpudiscovery.Device{Vendor: vendor} }
+	for name, tc := range map[string]struct {
+		devices []gpudiscovery.Device
+		want    bool
+	}{
+		"mali":                      {rockchipMaliGPUs, true},
+		"adreno":                    {[]gpudiscovery.Device{gpu("qualcomm")}, true},
+		"mali beside an nvidia gpu": {append([]gpudiscovery.Device{gpu("nvidia")}, rockchipMaliGPUs...), false},
+		"raspberry pi":              {[]gpudiscovery.Device{gpu("broadcom")}, false},
+		"intel":                     {[]gpudiscovery.Device{gpu("intel")}, false},
+		"display only":              {rockchipMaliGPUs[:1], false},
+		"no gpu":                    {nil, false},
+	} {
+		if got := renderNodeGPUPresent(tc.devices); got != tc.want {
+			t.Errorf("%s: renderNodeGPUPresent = %v, want %v", name, got, tc.want)
+		}
 	}
 }
 

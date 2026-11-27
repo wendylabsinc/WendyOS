@@ -16,6 +16,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// ErrSourceRejectedCertificate reports that a source refused this agent's
+// certificate.
+var ErrSourceRejectedCertificate = liteclient.ErrSourceRejectedCertificate
+
+// ErrSourceMayHaveRejectedCertificate reports an ambiguous TLS read failure
+// while connecting to a source.
+var ErrSourceMayHaveRejectedCertificate = liteclient.ErrSourceMayHaveRejectedCertificate
+
 const (
 	// Wendy Lite TLS and protocol handshakes need their own connection budget.
 	wendycomConnectTimeout = 15 * time.Second

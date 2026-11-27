@@ -430,7 +430,52 @@ func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(
 	default:
 		return fmt.Errorf("unknown app type %d", appType)
 	}
+	return c.pushFile(context.Background(), path, onProgress, uploadCommands{
+		begin: func(size uint32) *wendypb.WendyComCommand {
+			return &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_AppPushBegin{
+				AppPushBegin: &wendypb.WendyComAppPushBeginParams{Size: size, AppType: pbAppType},
+			}}
+		},
+		write: func(offset uint32, data []byte) *wendypb.WendyComCommand {
+			return &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_AppPushData{
+				AppPushData: &wendypb.WendyComAppPushDataParams{Offset: offset, Data: data},
+			}}
+		},
+		end: &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_AppPushEnd{
+			AppPushEnd: &wendypb.WendyComAppPushEndParams{},
+		}},
+	})
+}
 
+// PushHostedCompanion streams a radio OTA image through the P4's physical link.
+func (c *WendyLiteClient) PushHostedCompanion(ctx context.Context, path string, onProgress func(written, total uint32)) error {
+	return c.pushFile(ctx, path, onProgress, uploadCommands{
+		begin: func(size uint32) *wendypb.WendyComCommand {
+			return &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_HostedCompanionOtaBegin{
+				HostedCompanionOtaBegin: &wendypb.WendyComHostedCompanionOtaBeginParams{Size: size},
+			}}
+		},
+		write: func(offset uint32, data []byte) *wendypb.WendyComCommand {
+			return &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_HostedCompanionOtaWrite{
+				HostedCompanionOtaWrite: &wendypb.WendyComHostedCompanionOtaWriteParams{Offset: offset, Data: data},
+			}}
+		},
+		end: &wendypb.WendyComCommand{Params: &wendypb.WendyComCommand_HostedCompanionOtaEnd{
+			HostedCompanionOtaEnd: &wendypb.WendyComHostedCompanionOtaEndParams{},
+		}},
+		// A missing USB reply must not consume the entire OTA budget.
+		timeout: 15 * time.Second,
+	})
+}
+
+type uploadCommands struct {
+	begin   func(size uint32) *wendypb.WendyComCommand
+	write   func(offset uint32, data []byte) *wendypb.WendyComCommand
+	end     *wendypb.WendyComCommand
+	timeout time.Duration
+}
+
+func (c *WendyLiteClient) pushFile(ctx context.Context, path string, onProgress func(written, total uint32), commands uploadCommands) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
@@ -442,21 +487,23 @@ func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(
 		return fmt.Errorf("stat: %w", err)
 	}
 	if info.Size() > math.MaxUint32 {
-		return fmt.Errorf("app file too large: %d bytes exceeds 4 GiB limit", info.Size())
+		return fmt.Errorf("upload file too large: %d bytes exceeds 4 GiB limit", info.Size())
 	}
 	size := uint32(info.Size())
 
-	resp, err := c.sendCommand(&wendypb.WendyComCommand{
-		RequestId: c.requestIdGen.Add(1),
-		Params: &wendypb.WendyComCommand_AppPushBegin{
-			AppPushBegin: &wendypb.WendyComAppPushBeginParams{Size: size, AppType: pbAppType},
-		},
-	}, 0)
-	if err != nil {
-		return fmt.Errorf("push begin: %w", err)
+	send := func(cmd *wendypb.WendyComCommand) error {
+		cmd.RequestId = c.requestIdGen.Add(1)
+		resp, err := c.sendCommandContext(ctx, cmd, commands.timeout)
+		if err != nil {
+			return err
+		}
+		if err := resultToError(resp.Result); err != nil {
+			return fmt.Errorf("device returned error: %w", err)
+		}
+		return nil
 	}
-	if err := resultToError(resp.Result); err != nil {
-		return fmt.Errorf("push begin: device returned error: %w", err)
+	if err := send(commands.begin(size)); err != nil {
+		return fmt.Errorf("push begin: %w", err)
 	}
 
 	buf := make([]byte, c.link.preferredChunkSize())
@@ -464,20 +511,8 @@ func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
-			resp, serr := c.sendCommand(&wendypb.WendyComCommand{
-				RequestId: c.requestIdGen.Add(1),
-				Params: &wendypb.WendyComCommand_AppPushData{
-					AppPushData: &wendypb.WendyComAppPushDataParams{
-						Offset: offset,
-						Data:   buf[:n],
-					},
-				},
-			}, 0)
-			if serr != nil {
-				return fmt.Errorf("push data at offset %d: %w", offset, serr)
-			}
-			if err := resultToError(resp.Result); err != nil {
-				return fmt.Errorf("push data at offset %d: device returned error: %w", offset, err)
+			if err := send(commands.write(offset, buf[:n])); err != nil {
+				return fmt.Errorf("push data at offset %d: %w", offset, err)
 			}
 			offset += uint32(n)
 			if onProgress != nil {
@@ -492,19 +527,35 @@ func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(
 		}
 	}
 
-	resp, err = c.sendCommand(&wendypb.WendyComCommand{
+	if err := send(commands.end); err != nil {
+		return fmt.Errorf("push end: %w", err)
+	}
+	return nil
+}
+
+var ErrHostedCompanionUnavailable = errors.New("ESP-Hosted companion unavailable")
+
+func (c *WendyLiteClient) HostedCompanionBuildID(ctx context.Context) (string, error) {
+	resp, err := c.sendCommandContext(ctx, &wendypb.WendyComCommand{
 		RequestId: c.requestIdGen.Add(1),
-		Params: &wendypb.WendyComCommand_AppPushEnd{
-			AppPushEnd: &wendypb.WendyComAppPushEndParams{},
+		Params: &wendypb.WendyComCommand_GetHostedCompanion{
+			GetHostedCompanion: &wendypb.WendyComGetHostedCompanionParams{},
 		},
 	}, 0)
 	if err != nil {
-		return fmt.Errorf("push end: %w", err)
+		return "", err
+	}
+	if resp.Result == wendypb.WendyComResult_WENDY_COM_RESULT_BAD_STATE {
+		return "", ErrHostedCompanionUnavailable
 	}
 	if err := resultToError(resp.Result); err != nil {
-		return fmt.Errorf("push end: device returned error: %w", err)
+		return "", err
 	}
-	return nil
+	info := resp.GetHostedCompanion()
+	if info == nil {
+		return "", fmt.Errorf("missing ESP-Hosted companion information")
+	}
+	return info.BuildId, nil
 }
 
 // PushConf writes a configuration to the device's wendy_conf partition. The
@@ -914,6 +965,8 @@ func resultToError(result wendypb.WendyComResult) error {
 		return errors.New("WiFi is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_BLE:
 		return errors.New("BLE is not supported by this device")
+	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_ESPNOW:
+		return errors.New("ESP-NOW is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_NAN:
 		return errors.New("NAN is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_BLE_PROFILE_UNSUPPORTED:
@@ -1073,6 +1126,13 @@ func (c *WendyLiteClient) failAll(err error) {
 // sendCommand subscribes for the matching response, sends the command, and
 // waits for the response or the timeout. A timeout <= 0 means no deadline.
 func (c *WendyLiteClient) sendCommand(cmd *wendypb.WendyComCommand, timeout time.Duration) (*wendypb.WendyComResponse, error) {
+	return c.sendCommandContext(context.Background(), cmd, timeout)
+}
+
+func (c *WendyLiteClient) sendCommandContext(ctx context.Context, cmd *wendypb.WendyComCommand, timeout time.Duration) (*wendypb.WendyComResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Subscribe before sending so a fast reply can't slip past us.
 	sub, err := c.subscribe(func(m *wendypb.WendyComMessage) bool {
 		r := m.GetResponse()
@@ -1101,6 +1161,8 @@ func (c *WendyLiteClient) sendCommand(cmd *wendypb.WendyComCommand, timeout time
 		return msg.GetResponse(), nil
 	case <-timer:
 		return nil, fmt.Errorf("timeout waiting for response to request %d", cmd.RequestId)
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -1377,6 +1439,8 @@ func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, ad
 		c.link = nil
 		if setup.Err() != nil {
 			err = setup.Err()
+		} else if rejection := sourceCertificateRejection(err); rejection != nil {
+			return fmt.Errorf("SensorLink handshake: %w (%s): %w", rejection, describeRejection(leaf, conn.ConnectionState().PeerCertificates), err)
 		}
 		return fmt.Errorf("SensorLink handshake: %w", err)
 	}
