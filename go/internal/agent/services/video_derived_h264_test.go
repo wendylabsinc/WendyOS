@@ -379,8 +379,22 @@ func (f *h264V4L2) capture(ctx context.Context, emit func([]byte, frameTimestamp
 
 func captureFakeH264Camera(t *testing.T, subscribe func(h *deviceHub)) (*VideoService, *deviceHub, *h264V4L2) {
 	t.Helper()
+	return captureFakeH264CameraListing(t, [][2]uint32{{640, 480}}, subscribe)
+}
+
+// captureFakeH264CameraListing captures a camera that lists these H.264 sizes.
+func captureFakeH264CameraListing(t *testing.T, sizes [][2]uint32, subscribe func(h *deviceHub)) (*VideoService, *deviceHub, *h264V4L2) {
+	t.Helper()
+	withRawModes(t, map[uint32][][2]uint32{v4l2PixFmtH264: sizes})
 	prevSize := captureSizeFor
-	captureSizeFor = func(string, uint32, uint32, uint32) (uint32, uint32) { return 640, 480 }
+	captureSizeFor = func(string, uint32, uint32, uint32) (width, height uint32) {
+		for _, size := range sizes {
+			if size[0] <= defaultMaxDefaultWidth && size[1] <= defaultMaxDefaultHeight && size[0]*size[1] > width*height {
+				width, height = size[0], size[1]
+			}
+		}
+		return width, height
+	}
 	t.Cleanup(func() { captureSizeFor = prevSize })
 	withFrameRates(t, map[uint32][]uint32{v4l2PixFmtH264: {30}})
 
@@ -444,8 +458,30 @@ func TestCaptureLocalCamera_H264CameraHandsOnItsOwnFramesAndDecodesPicturesFromT
 		t.Fatalf("the hub's layer = %+v, want one decoding 640x480 H.264", layer)
 	}
 	waitUntil(t, "the child is fed from a frame it can start on", func() bool { return layer.counts().fed > 0 })
-	if cfg := v4l2.asked.Load(); cfg.pixelFormat != v4l2PixFmtH264 || cfg.width != 0 || cfg.height != 0 {
-		t.Errorf("the camera was asked for %+v, want H.264 at the size the capture chooses", cfg)
+	if cfg := v4l2.asked.Load(); cfg.pixelFormat != v4l2PixFmtH264 || cfg.width != 640 || cfg.height != 480 {
+		t.Errorf("the camera was asked for %s at %dx%d, want H.264 at the 640x480 its frames are declared at", fourccName(cfg.pixelFormat), cfg.width, cfg.height)
+	}
+}
+
+func TestCaptureLocalCamera_H264CameraWithNoSizeWithinTheDefaultLimitIsAskedForTheSizeDeclared(t *testing.T) {
+	fakeGStreamer(t, 0, "gdpdepay", "gdppay")
+	var idNative int
+	var native chan *videoFrame
+	svc, h, v4l2 := captureFakeH264CameraListing(t, [][2]uint32{{3840, 2160}, {1920, 1080}}, func(h *deviceHub) {
+		idNative, native, _ = h.subscribeKind(nativeFrames)
+	})
+	defer h.unsubscribe(idNative)
+
+	if frame := waitForFrame(t, native, "the camera's own H.264"); frame.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || !frame.native {
+		t.Fatalf("got codec=%v native=%v, want the camera's own access unit", frame.codec, frame.native)
+	}
+	declared, declined, _ := svc.ownFramesFor("/dev/video4", &agentpb.StreamVideoRequest{})
+	if declined != "" || declared.width != 1920 || declared.height != 1080 {
+		t.Fatalf("own frames = %+v (declined %q), want them declared at 1920x1080", declared, declined)
+	}
+	if cfg := v4l2.asked.Load(); cfg.pixelFormat != v4l2PixFmtH264 || cfg.width != declared.width || cfg.height != declared.height {
+		t.Errorf("the camera was asked for %s at %dx%d, want H.264 at the %dx%d its frames are declared at",
+			fourccName(cfg.pixelFormat), cfg.width, cfg.height, declared.width, declared.height)
 	}
 }
 

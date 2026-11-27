@@ -53,6 +53,17 @@ func hcService(t *testing.T, decoderElements ...string) *VideoService {
 	return s
 }
 
+// hcLargeOnlyService describes a camera whose H.264 sizes are all above the
+// default capture limit: an Elgato Facecam Pro lists these, largest first.
+func hcLargeOnlyService(t *testing.T, decoderElements ...string) *VideoService {
+	const nv12 = 0x3231564E
+	large := [][2]uint32{{3840, 2160}, {1920, 1080}}
+	s := shareTestService(t, []uint32{v4l2PixFmtH264, v4l2PixFmtMJPEG, nv12},
+		map[uint32][][2]uint32{v4l2PixFmtH264: large, v4l2PixFmtMJPEG: large}, []uint32{15, 30})
+	hcCanDecode(s, decoderElements...)
+	return s
+}
+
 // hcOwnFrame is one H.264 access unit as the camera's native capture hands it
 // on.
 func hcOwnFrame(sampleID uint64, randomAccess bool, kernelNs int64) *videoFrame {
@@ -181,11 +192,79 @@ func TestShareDecision_H264CameraIsDecodedByTheFirstDecoderPresent(t *testing.T)
 	}
 }
 
+func TestOwnFrames_AnH264CameraWithNoSizeWithinTheDefaultLimitDeclaresItsSmallest(t *testing.T) {
+	s := hcLargeOnlyService(t, "avdec_h264")
+	own, declined, native := s.ownFramesAtDefaults(usbCam().GetPath())
+	want := ownFrames{codec: agentpb.VideoCodec_VIDEO_CODEC_H264, width: 1920, height: 1080, framerate: 30}
+	if own != want || declined != "" || !native {
+		t.Fatalf("own frames = %+v (declined %q, native %v), want %+v", own, declined, native, want)
+	}
+	if want := (rateQuery{v4l2PixFmtH264, 1920, 1080}); latestRateQuery() != want {
+		t.Errorf("rate query = %+v, want the size declared, %+v", latestRateQuery(), want)
+	}
+}
+
+func TestNativeH264CaptureSize(t *testing.T) {
+	large := [][2]uint32{{3840, 2160}, {1920, 1080}, {2560, 1440}}
+	for name, tc := range map[string]struct {
+		listed [][2]uint32
+		req    *agentpb.StreamVideoRequest
+		want   [2]uint32
+	}{
+		"a size within the default limit is the largest such": {[][2]uint32{{640, 480}, {1280, 720}, {1920, 1080}}, &agentpb.StreamVideoRequest{}, [2]uint32{1280, 720}},
+		"none within the limit is the smallest listed":        {large, &agentpb.StreamVideoRequest{}, [2]uint32{1920, 1080}},
+		"a size the request names is kept":                    {large, &agentpb.StreamVideoRequest{Width: 3840, Height: 2160}, [2]uint32{3840, 2160}},
+		"no discrete size listed":                             {nil, &agentpb.StreamVideoRequest{}, [2]uint32{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			shareTestService(t, []uint32{v4l2PixFmtH264}, map[uint32][][2]uint32{v4l2PixFmtH264: tc.listed}, nil)
+			defaulted := captureSizeFor
+			captureSizeFor = func(path string, pixfmt, width, height uint32) (uint32, uint32) {
+				if width != 0 && height != 0 {
+					return width, height
+				}
+				return defaulted(path, pixfmt, width, height)
+			}
+			if w, h := nativeH264CaptureSize("/dev/video4", tc.req); [2]uint32{w, h} != tc.want {
+				t.Errorf("size = %dx%d, want %dx%d", w, h, tc.want[0], tc.want[1])
+			}
+		})
+	}
+}
+
+func TestShareDecision_H264CameraWithNoSizeWithinTheDefaultLimitGetsANodeInEveryFormat(t *testing.T) {
+	const pictureTooLarge = "a 1920x1080 picture exceeds the 4128768-byte raw frame limit"
+	for name, tc := range map[string]struct {
+		decoder     []string
+		whyNoPixels string
+	}{
+		"with a decoder":    {[]string{"avdec_h264"}, pictureTooLarge},
+		"without a decoder": {nil, hcNoDecoder},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := hcLargeOnlyService(t, tc.decoder...)
+			own := sharedMode{Width: 1920, Height: 1080, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes}
+			for _, format := range []string{appconfig.CameraFormatNative, appconfig.CameraFormatH264} {
+				asked := own
+				asked.Format = format
+				if d := s.shareDecisionFor(context.Background(), usbCam(), format); d != (shareDecision{Shared: true, Mode: asked, PresetIgnored: hcPresetIgnoredFor(format)}) {
+					t.Errorf("%s: decision = %+v, want %+v as asked", format, d, asked)
+				}
+			}
+			want := shareDecision{Shared: true, Mode: own, AskedFormat: appconfig.CameraFormatPixels, AskedWhyNot: tc.whyNoPixels}
+			if d := s.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels); d != want {
+				t.Errorf("pixels: decision = %+v\nwant               %+v", d, want)
+			}
+		})
+	}
+}
+
 // What cannot be declared in any format stays the real camera: the native
 // capture takes this camera, and nothing says at what size before it runs.
 func TestShareDecision_H264CameraWithNoListedSizeStaysUnshared(t *testing.T) {
-	s := hcService(t, "avdec_h264")
-	captureSizeFor = func(string, uint32, uint32, uint32) (uint32, uint32) { return 0, 0 }
+	s := shareTestService(t, []uint32{v4l2PixFmtYUYV, v4l2PixFmtH264},
+		map[uint32][][2]uint32{v4l2PixFmtYUYV: {{640, 480}}}, []uint32{15, 30})
+	hcCanDecode(s, "avdec_h264")
 	want := shareDecision{Reason: "the camera's own frames cannot be declared before they are captured: " +
 		"H.264: the camera lists no H.264 frame size a capture without one chooses, so its size is known only once it runs"}
 	for _, format := range appconfig.CameraFormats {

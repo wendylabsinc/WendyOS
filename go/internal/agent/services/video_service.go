@@ -3260,13 +3260,13 @@ func (s *VideoService) setV4L2FrameInterval(fd int, path string, fps uint32) {
 	}
 }
 
-func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest) error {
+func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, width, height, framerate uint32) error {
 	return s.v4l2Capture(ctx, s.nativeH264Emit(path, broadcast), path, v4l2CaptureConfig{
 		pixelFormat:   v4l2PixFmtH264,
-		width:         req.GetWidth(),
-		height:        req.GetHeight(),
+		width:         width,
+		height:        height,
 		tuneKeyframes: true,
-		framerate:     req.GetFramerate(),
+		framerate:     framerate,
 		formatUnsupported: func(msg string) error {
 			return nativeH264NotSupported{msg: msg}
 		},

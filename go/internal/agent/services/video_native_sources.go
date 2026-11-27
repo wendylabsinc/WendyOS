@@ -110,7 +110,7 @@ func (s *VideoService) nativeH264Frames(path string, req *agentpb.StreamVideoReq
 	if !slices.Contains(offered, v4l2PixFmtH264) {
 		return ownFrames{}, "the camera offers no H.264", true
 	}
-	width, height := captureSizeFor(path, v4l2PixFmtH264, req.GetWidth(), req.GetHeight())
+	width, height := nativeH264CaptureSize(path, req)
 	if width == 0 || height == 0 {
 		return ownFrames{}, "the camera lists no H.264 frame size a capture without one chooses, so its size is known only once it runs", false
 	}
@@ -121,13 +121,38 @@ func (s *VideoService) nativeH264Frames(path string, req *agentpb.StreamVideoReq
 	return ownFrames{codec: agentpb.VideoCodec_VIDEO_CODEC_H264, width: width, height: height, framerate: framerate}, "", false
 }
 
+// nativeH264CaptureSize is the size the camera's H.264 is declared at and
+// captured at. The default size limit decides among the sizes within it; a
+// camera that lists H.264 only above it is captured at the smallest it lists.
+func nativeH264CaptureSize(path string, req *agentpb.StreamVideoRequest) (width, height uint32) {
+	width, height = captureSizeFor(path, v4l2PixFmtH264, req.GetWidth(), req.GetHeight())
+	if width == 0 || height == 0 {
+		return smallestFrameSize(enumerateRawFrameSizes(path, v4l2PixFmtH264))
+	}
+	return width, height
+}
+
+func smallestFrameSize(sizes [][2]uint32) (width, height uint32) {
+	for _, size := range sizes {
+		area := uint64(size[0]) * uint64(size[1])
+		if area != 0 && (width == 0 || area < uint64(width)*uint64(height)) {
+			width, height = size[0], size[1]
+		}
+	}
+	return width, height
+}
+
 var nativeH264Source = nativeCaptureSource{
 	format: "H.264",
 	frames: (*VideoService).nativeH264Frames,
 	accept: func(s *VideoService, cam localCamera) (func(context.Context) error, string) {
 		var pictures *derivedLayer
-		if frames, declined, _ := s.nativeH264Frames(cam.path, cam.req); declined == "" && cam.hub != nil {
-			pictures, _ = s.pictureLayerFor(cam.hub, cam.path, frames)
+		width, height := cam.req.GetWidth(), cam.req.GetHeight()
+		if frames, declined, _ := s.nativeH264Frames(cam.path, cam.req); declined == "" {
+			width, height = frames.width, frames.height
+			if cam.hub != nil {
+				pictures, _ = s.pictureLayerFor(cam.hub, cam.path, frames)
+			}
 		}
 		send := cam.sendDeciding(func() {
 			if pictures != nil {
@@ -136,7 +161,9 @@ var nativeH264Source = nativeCaptureSource{
 			}
 			cam.sink.rawNotOffered(fixedReason(h264RawWhy))
 		})
-		capture := func(ctx context.Context) error { return s.streamV4L2Native(ctx, send, cam.path, cam.req) }
+		capture := func(ctx context.Context) error {
+			return s.streamV4L2Native(ctx, send, cam.path, width, height, cam.req.GetFramerate())
+		}
 		if pictures == nil {
 			return capture, ""
 		}

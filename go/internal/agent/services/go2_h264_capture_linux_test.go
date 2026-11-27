@@ -46,7 +46,7 @@ func TestGo2NativeH264CaptureChild(t *testing.T) {
 		encoded = append(encoded, data...)
 		count++
 		return count < frames
-	}, "/dev/video128", &agentpb.StreamVideoRequest{Width: 640, Height: 360, Framerate: uint32(rate)})
+	}, "/dev/video128", 640, 360, uint32(rate))
 	if err != nil || count != frames {
 		t.Fatalf("Go2 native service capture failed: frames=%d err=%v", count, err)
 	}
