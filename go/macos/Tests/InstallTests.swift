@@ -68,6 +68,19 @@ final class InstallTests: XCTestCase {
         let nano = InstallGuide(board: .orinNano, method: .recoveryNVMe)
         XCTAssertTrue(nano.preparation.joined().contains("pin 9 (GND) and pin 10 (FC REC)"))
     }
+    func testOrangePiInstallsADiskImageFromMicroSD() {
+        XCTAssertEqual(InstallBoard.orangePi5Pro.methods, [.sd])
+        let guide = InstallGuide(board: .orangePi5Pro, method: .sd)
+        XCTAssertEqual(
+            guide.arguments,
+            ["install", "--device-type", "orange-pi-5-pro", "--storage", "sd"]
+        )
+        XCTAssertNil(guide.bootVideo, "the boot video shows a Raspberry Pi")
+        XCTAssertEqual(
+            guide.documentation.absoluteString,
+            "https://docs.wendy.dev/latest/installation/wendyos-orange-pi-5-pro"
+        )
+    }
     @MainActor func testInstallerEnvironmentDoesNotInheritRemoteTargetOrAutomation() {
         let env = InstallSession.environment(source: [
             "HOME": "/tmp/test", "WENDY_AGENT_SOCKET": "/tmp/remote", "CI": "true",

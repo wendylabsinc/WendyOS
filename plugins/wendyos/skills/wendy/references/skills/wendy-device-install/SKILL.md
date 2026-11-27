@@ -1,6 +1,6 @@
 ---
 name: wendy-device-install
-description: Install WendyOS on a new Raspberry Pi or Jetson, install the Wendy Agent on a robot or Linux host, or diagnose first boot after flashing. Use for board setup and empty discovery on new hardware; use wendy-install for the developer machine's CLI and wendy-device-debug for an already working installation.
+description: Install WendyOS on a new Raspberry Pi, Orange Pi 5 Pro or Jetson, install the Wendy Agent on a robot or Linux host, or diagnose first boot after flashing. Use for board setup and empty discovery on new hardware; use wendy-install for the developer machine's CLI and wendy-device-debug for an already working installation.
 ---
 
 # Device installation
@@ -74,7 +74,8 @@ If a flash is interrupted, inspect its phase before retrying.
 
 Choose a device name and networking before executing: `--device-name`,
 `--wifi ssid=<name>,password=<pw>`, or `--no-wifi` for Ethernet; without a
-terminal one Wi-Fi choice is required. Use the user's existing credential
+terminal one Wi-Fi choice is required. The Orange Pi 5 Pro and Pi 3 have no USB
+link, so they need Ethernet or Wi-Fi. Use the user's existing credential
 input mechanism; keep passwords and enrollment tokens out of reusable commands,
 PRs and logs. Cloud pre-enrollment is optional. `provisioning_start` enrolls an
 already running agent; it cannot install an OS on a blank board.

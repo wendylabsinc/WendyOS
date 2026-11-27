@@ -1,0 +1,100 @@
+---
+title: Orange Pi 5 Pro
+description: Install WendyOS on your Orange Pi 5 Pro
+---
+
+WendyOS runs on the Orange Pi 5 Pro (Rockchip RK3588S), with the Wendy agent built in.
+One image boots from a microSD card, an eMMC module or an NVMe SSD.
+
+<Callout type="info">
+  The Orange Pi 5 Pro has no USB connection to your computer: its USB-C port only powers the board. It connects over Ethernet or Wi-Fi, so plan for one of them before you start.
+</Callout>
+
+## What you need
+
+- An Orange Pi 5 Pro and a USB-C power supply rated for the board
+- A microSD card of at least 32 GB (64 GB recommended, see [Requirements](/docs/wendyos/requirements)), and a card reader for your computer
+- An Ethernet cable to the same network as your computer, or the name and password of a Wi-Fi network
+
+## Installation steps
+
+<Steps>
+  <Step>
+    ### Connect the microSD card to your computer
+
+    Insert your microSD card into a card reader connected to your development computer.
+    Use a microSD-to-SD adapter if your reader takes full-size SD cards.
+  </Step>
+
+  <Step>
+    ### Install WendyOS
+
+    Use the `wendy` CLI to install the operating system:
+
+    ```bash
+    wendy install
+    ```
+
+    Select **Orange Pi 5 Pro**, then your drive. WendyOS downloads and writes to your
+    microSD card; you'll enter your administrator password to write the image.
+
+    Without Ethernet, set up Wi-Fi now. The installer offers to, or you can pass it directly:
+
+    ```bash
+    wendy install --device-type orange-pi-5-pro --wifi-ssid "MyNetwork" --wifi-password "hunter2"
+    ```
+
+    The CLI also offers optional first-boot provisioning, such as pre-enrolling the device
+    to Wendy Cloud. See [`wendy install`](/docs/advanced/clients/wendy-cli/commands/os/install) for more.
+  </Step>
+
+  <Step>
+    ### Insert the card and power on
+
+    With the board powered off, insert the microSD card into the board's microSD slot.
+    Connect the Ethernet cable if you use one, then connect power to the USB-C port.
+  </Step>
+
+  <Step>
+    ### Discover your device
+
+    Wait 1–2 minutes for WendyOS to boot. The first boot also grows `/data` to fill the card. Then run:
+
+    ```bash
+    wendy discover
+    ```
+
+    Match the name you chose during installation. On macOS, allow **Local Network** access
+    when prompted. If the board is missing, check that Ethernet or Wi-Fi connects it to the
+    same network as your computer; see [Discovering devices](/docs/device/discovering-devices).
+  </Step>
+</Steps>
+
+## Boot from eMMC or NVMe
+
+The same image also boots from an eMMC module or an NVMe SSD. Write it with
+`wendy install` through a USB adapter or enclosure, then fit the module or SSD to the board.
+
+The board looks for WendyOS on the microSD card first, then the eMMC, then the NVMe SSD,
+and boots the first one it finds. A WendyOS card in the slot always wins, so you can
+recover a board from a fresh card. If the eMMC module holds another operating system,
+its boot loader starts first and may ignore the card; remove the module.
+
+The board cannot load its boot loader (U-Boot) from NVMe. To boot from NVMe, it needs
+U-Boot on the eMMC or a microSD card whose boot partition has no `wendyos-rockchip.scr`;
+otherwise it boots that disk instead. For example, use a WendyOS card from which you
+deleted `wendyos-rockchip.scr`.
+
+## Hardware notes
+
+| Feature | Orange Pi 5 Pro |
+| --- | --- |
+| Networking | Gigabit Ethernet (Motorcomm YT6801) and Wi-Fi 5 (AP6256). No USB gadget |
+| GPU | Arm Mali-G610 (`panthor` driver), granted by the [`gpu` entitlement](/docs/hardware/gpu) |
+| NPU | Rockchip NPU (`rocket` driver) at `/dev/accel/accel0`, granted by the `npu` entitlement |
+| Debug UART | `ttyS2` (UART2), 1500000 baud, 8N1. See [Debug UART](/docs/advanced/wendyos/services/uart) |
+| OS updates | A/B root file systems selected by U-Boot. See [U-Boot](/docs/advanced/wendyos/services/uboot#rockchip-orange-pi-5-pro) |
+
+## Next steps
+
+Your Orange Pi is ready. Continue with [the app tutorial](/docs/getting-started/app#2-create-an-app) to create and run your first app.

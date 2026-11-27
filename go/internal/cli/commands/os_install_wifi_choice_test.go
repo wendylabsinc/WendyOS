@@ -266,6 +266,7 @@ func TestInstallCommandWithoutTerminalChecksWiFiBeforeAnyWork(t *testing.T) {
 func TestInstallAsksWiFi(t *testing.T) {
 	for deviceType, want := range map[string]bool{
 		"raspberry-pi-5":     true,
+		"orange-pi-5-pro":    true,
 		"jetson-agx-thor":    true,
 		"dragonwing-iq-9075": true,
 		"":                   false,

@@ -1324,6 +1324,7 @@ var deviceTypeNames = map[string]string{
 	"dragonwing-iq-8275": "Dragonwing IQ-8275",
 	"dragonwing-iq-9075": "Dragonwing IQ-9075",
 	"arduino-uno-q":      "Arduino UNO Q",
+	"orange-pi-5-pro":    "Orange Pi 5 Pro",
 	"x86_64":             "x86-64",
 	"vm-arm64":           "ARM64 VM",
 	"vm-x86-64":          "x86-64 VM",
