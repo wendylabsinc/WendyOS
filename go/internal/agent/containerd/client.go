@@ -1763,7 +1763,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		oldHadData := false
 		retiredMesh := false
 		oldHadNAN := false
-		oldHadNPU := false
+		oldUsesFastRPC := false
 		oldSharedCamera := false
 		if oldLabels, labelErr := existing.Labels(ctx); labelErr == nil {
 			oldSharedCamera = sharesCamera(oldLabels)
@@ -1771,8 +1771,8 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 			oldHadSystemAPI = entitlementsContain(oldEntitlements, appconfig.EntitlementNotifications)
 			oldHadData = entitlementsContain(oldEntitlements, appconfig.EntitlementEpisodeWrite)
 			oldHadNAN = hasNANEntitlement(oldEntitlements)
-			oldHadNPU = entitlementsContain(oldEntitlements, appconfig.EntitlementNPU)
 			oldSpec, _ := existing.Spec(ctx)
+			oldUsesFastRPC = entitlementsContain(oldEntitlements, appconfig.EntitlementNPU) && specMayUseFastRPC(oldSpec)
 			if oldLabels[labelKeyNetworkIdentity] == desiredNetworkIdentity {
 				reusedNetworkSandbox, _ = c.reusableNetworkSandbox(ctx, containerName, desiredNetworkIdentity)
 				if reusedNetworkSandbox == nil && oldSpec != nil {
@@ -1804,7 +1804,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		c.logger.Info("Removing existing container", zap.String("container_name", containerName))
 		// Terminate the old task's whole process group — not just init — and
 		// wait for it to exit. NAN apps get grace for supplicant cleanup;
-		// NPU apps must finish owner-directed SDK cleanup without forced kill.
+		// FastRPC NPU apps must finish owner-directed SDK cleanup without forced kill.
 		// A surviving process keeps devices/ports the new container needs
 		// (WDY-1818: /dev/video0 held for hours after replace).
 		if task, taskErr := existing.Task(ctx, nil); taskErr == nil {
@@ -1816,10 +1816,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 			// The container and NAN operation keys retain ownership while
 			// graceful task exit waits outside the global metadata mutex.
 			c.mu.Unlock()
-			termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN, oldHadNPU)
+			termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN, oldUsesFastRPC)
 			c.mu.Lock()
 			if termErr != nil {
-				if oldHadNPU {
+				if oldUsesFastRPC {
 					oldNPUTaskRetained = true
 					return termErr
 				}
@@ -1839,8 +1839,8 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 			}
 			// Task may be orphaned (shim crashed). Force-delete via the task
 			// service only when it is safe to use the legacy forced path.
-			if err := c.recoverReplacedTaskLookup(ctx, containerName, oldHadNPU, taskErr); err != nil {
-				oldNPUTaskRetained = oldHadNPU
+			if err := c.recoverReplacedTaskLookup(ctx, containerName, oldUsesFastRPC, taskErr); err != nil {
+				oldNPUTaskRetained = oldUsesFastRPC
 				return err
 			}
 		}
@@ -1857,10 +1857,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 				// The container and NAN operation keys retain ownership while
 				// graceful task exit waits outside the global metadata mutex.
 				c.mu.Unlock()
-				termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN, oldHadNPU)
+				termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN, oldUsesFastRPC)
 				c.mu.Lock()
 				if termErr != nil {
-					if oldHadNPU {
+					if oldUsesFastRPC {
 						oldNPUTaskRetained = true
 						return termErr
 					}
@@ -4772,10 +4772,10 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	}
 
 	// Ordinary apps receive group-wide TERM and bounded escalation so no
-	// descendant retains devices/ports (WDY-1818). NPU apps must instead let
-	// their owner release SDK resources before descendants exit.
+	// descendant retains devices/ports. FastRPC NPU apps must instead let their
+	// owner release SDK resources before descendants exit.
 	var stopErr error
-	if entitlementsContain(parseEntitlementsFromAnnotations(labels), appconfig.EntitlementNPU) {
+	if entitlementsContain(parseEntitlementsFromAnnotations(labels), appconfig.EntitlementNPU) && specMayUseFastRPC(spec) {
 		stopErr = c.terminateNPUTask(ctx, task, containerID)
 	} else {
 		stopErr = c.terminateTask(ctx, task, containerID, syscall.SIGTERM, stopGracePeriod, killWaitTimeout)
