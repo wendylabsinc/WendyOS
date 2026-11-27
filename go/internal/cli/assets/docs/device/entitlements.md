@@ -27,7 +27,7 @@ The dedicated server implements only `WendySensorService.GetSensorManifest` and
 `StreamSensors`; it cannot pair devices, read credentials, or manage containers.
 It grants access to all paired generic channels, not a per-source allowlist.
 A ROS 2 app that holds it also gets those channels as
-[ROS 2 topics](/docs/clients/wendy-cli/commands/device/pair#sensor-channels-in-ros-2-apps).
+[ROS 2 topics](/docs/advanced/clients/wendy-cli/commands/device/pair#sensor-channels-in-ros-2-apps).
 
 Refresh the manifest after reconnecting: channel IDs belong to the current
 source connection and may change. Disconnects end affected subscriptions; slow

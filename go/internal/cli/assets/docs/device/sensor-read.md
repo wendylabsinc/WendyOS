@@ -28,7 +28,7 @@ Neither four channels nor any particular sensor model is assumed.
 
 A ROS 2 app that holds this entitlement also gets the channels as ROS 2 topics,
 with each reading stamped with the time the source took it. See
-[Sensor channels in ROS 2 apps](/docs/clients/wendy-cli/commands/device/pair#sensor-channels-in-ros-2-apps).
+[Sensor channels in ROS 2 apps](/docs/advanced/clients/wendy-cli/commands/device/pair#sensor-channels-in-ros-2-apps).
 
 ## Source identity
 
