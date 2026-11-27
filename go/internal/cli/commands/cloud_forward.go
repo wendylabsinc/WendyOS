@@ -239,6 +239,10 @@ const (
 
 var errMuxUnsupported = errors.New("the device does not carry several forwarded connections in one tunnel")
 
+// errMuxProbe: the support check itself failed, for example while the
+// management channel is still opening. The next connection checks again.
+var errMuxProbe = errors.New("checking whether the device carries several forwarded connections in one tunnel")
+
 // forwardMux carries a forward's connections in one multiplexed tunnel
 // (cloudrelay.TCPMuxFeature). Without one, a connection uses fallback, a
 // tunnel of its own, and sees no error.
@@ -302,11 +306,18 @@ func (m *forwardMux) client() *cloudrelay.MuxClient {
 	}
 	c, err := m.open()
 	if err != nil {
-		m.retryAt = time.Now().Add(muxRetryAfter)
+		m.failed(err)
 		return nil
 	}
 	m.current = c
 	return c
+}
+
+// failed spaces the next open after err, unless only the support check failed.
+func (m *forwardMux) failed(err error) {
+	if !errors.Is(err, errMuxProbe) {
+		m.retryAt = time.Now().Add(muxRetryAfter)
+	}
 }
 
 func (m *forwardMux) renew() {
@@ -315,7 +326,7 @@ func (m *forwardMux) renew() {
 	defer m.mu.Unlock()
 	m.renewing = false
 	if err != nil {
-		m.retryAt = time.Now().Add(muxRetryAfter)
+		m.failed(err)
 		return
 	}
 	m.replace(c)
@@ -327,7 +338,10 @@ func (d cloudDiscoveryDevice) openForwardMux(ctx context.Context, auth *config.A
 	probeCtx, cancel := context.WithTimeout(ctx, cloudTCPFeatureTimeout)
 	version, err := agent.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 	cancel()
-	if err != nil || !slices.Contains(version.GetFeatureset(), cloudrelay.TCPMuxFeature) {
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errMuxProbe, err)
+	}
+	if !slices.Contains(version.GetFeatureset(), cloudrelay.TCPMuxFeature) {
 		return nil, errMuxUnsupported
 	}
 	service, err := cloudrelay.PortService("tcp", remotePort)

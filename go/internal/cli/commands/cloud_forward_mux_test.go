@@ -267,3 +267,44 @@ func TestCloudTunnelForwardFallsBackForOldAgent(t *testing.T) {
 		t.Fatalf("%d connections used their own tunnel, want 1", n)
 	}
 }
+
+// slowAgent's support check times out, as it can while the management channel
+// is still opening.
+type slowAgent struct{ agentpb.WendyAgentServiceClient }
+
+func (slowAgent) GetAgentVersion(context.Context, *agentpb.GetAgentVersionRequest, ...grpc.CallOption) (*agentpb.GetAgentVersionResponse, error) {
+	return nil, context.DeadlineExceeded
+}
+
+// A support check that times out falls back for that connection only; the
+// next connection checks again instead of falling back for a minute.
+func TestCloudTunnelForwardRechecksAfterProbeTimeout(t *testing.T) {
+	id := "00000000-0000-4000-8000-000000000042"
+	asset := &cloudpbv2.Asset{Id: id}
+	d := cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: id}
+	agent := &grpcclient.AgentConnection{AgentService: slowAgent{}}
+	var opens atomic.Int32
+	mux := &forwardMux{
+		open: func() (*cloudrelay.MuxClient, error) {
+			opens.Add(1)
+			return d.openForwardMux(t.Context(), &config.AuthConfig{}, agent, 3000)
+		},
+		fallback: func(context.Context) (net.Conn, error) {
+			caller, device := net.Pipe()
+			go func() { defer device.Close(); _, _ = io.Copy(device, device) }()
+			return caller, nil
+		},
+	}
+	addr := startForward(t, mux.dial)
+	for i := range 2 {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		echoes(t, conn, fmt.Sprintf("through a tunnel of its own %d\n", i))
+		conn.Close()
+	}
+	if n := opens.Load(); n != 2 {
+		t.Fatalf("checked support %d times for 2 connections, want 2", n)
+	}
+}
