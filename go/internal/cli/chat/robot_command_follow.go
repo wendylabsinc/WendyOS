@@ -20,6 +20,20 @@ func (e *robotMonitoringError) Unwrap() error { return e.err }
 
 func (t *robotCommandTools) ExecuteResult(ctx context.Context, call ToolCall) (result ToolResult, err error) {
 	var attempt *robotCommandAttempt
+	defer func() {
+		// An initial dispatch or a user retry can fail before the follow loop
+		// starts. Keep those unresolved outcomes out of model narration too.
+		if err == nil || attempt == nil {
+			return
+		}
+		t.mu.Lock()
+		sent := attempt.sent
+		t.mu.Unlock()
+		var monitoringErr *robotMonitoringError
+		if sent && !result.CommandNotStarted && !errors.As(err, &monitoringErr) {
+			err = &robotMonitoringError{err: err}
+		}
+	}()
 	result, err = t.executeCommandOnce(ctx, call, true, &attempt)
 	var args struct{ Action string }
 	_ = json.Unmarshal(call.Arguments, &args)
@@ -93,11 +107,19 @@ func emitRobotProgress(ctx context.Context, call ToolCall, message string) {
 	}
 }
 
+var errRobotReceiptInvalid = errors.New("invalid robot receipt; the command outcome remains unresolved")
+
 var errRobotReceiptUnknown = errors.New("the controller no longer has this command receipt; the earlier movement outcome remains unknown")
 
 // lookupRobotAttempt can only read the original receipt. It never enters the
 // dispatch path, even after a missing receipt, reconnect, timeout or retry.
-func (t *robotCommandTools) lookupRobotAttempt(ctx context.Context, call ToolCall, attempt *robotCommandAttempt) (ToolResult, error) {
+func (t *robotCommandTools) lookupRobotAttempt(ctx context.Context, call ToolCall, attempt *robotCommandAttempt) (result ToolResult, err error) {
+	defer func() {
+		var monitoringErr *robotMonitoringError
+		if err != nil && !errors.As(err, &monitoringErr) {
+			err = &robotMonitoringError{err: err}
+		}
+	}()
 	t.mu.Lock()
 	if attempt.stopped {
 		result := attempt.result
@@ -126,7 +148,7 @@ func (t *robotCommandTools) lookupRobotAttempt(ctx context.Context, call ToolCal
 	if !available {
 		return ToolResult{}, errors.New("receipt lookup is unavailable under the current tool policy; no movement was sent")
 	}
-	result, err := executeControlBase(ctx, t.base, call)
+	result, err = executeControlBase(ctx, t.base, call)
 	t.mu.Lock()
 	if attempt.stopped {
 		result, err = attempt.result, nil
@@ -159,13 +181,20 @@ func (t *robotCommandTools) bindRobotTarget(attempt *robotCommandAttempt, serial
 	return nil
 }
 
-func (t *robotCommandTools) recordRobotReceipt(attempt *robotCommandAttempt, result *ToolResult, stoppedAttempt *robotCommandAttempt) error {
+func (t *robotCommandTools) recordRobotReceipt(attempt *robotCommandAttempt, result *ToolResult, stoppedAttempt *robotCommandAttempt) (err error) {
+	defer func() {
+		// Receipt-only reconciliation can happen before the caller selects an
+		// attempt. Its invalid evidence still must end the turn as unresolved.
+		if err != nil {
+			err = &robotMonitoringError{err: err}
+		}
+	}()
 	if err := t.bindRobotTarget(attempt, result.RobotSerial); err != nil {
 		return err
 	}
 	var receipt robotReceipt
 	if json.Unmarshal([]byte(result.Text), &receipt) != nil || receipt.State == "" {
-		return errors.New("invalid robot receipt; the command outcome remains unresolved")
+		return errRobotReceiptInvalid
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()

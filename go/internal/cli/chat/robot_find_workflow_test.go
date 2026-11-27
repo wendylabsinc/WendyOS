@@ -143,23 +143,25 @@ func TestObjectFindWorkflowPreservesApprovalCancellationAndPolicy(t *testing.T) 
 }
 
 func TestObjectFindWorkflowRejectsAmbiguousScopeAndPriorRestrictions(t *testing.T) {
-	for _, prompt := range []string{"Find README", "Find the bug", "Find my position", "Find the blue chair without moving", "Find the blue chair, remain where you are", "Find the blue chair, freeze", "Find the blue chair if the floor is clear", "Find the blue chair in this image", "What does the Go2 see?", "Say 'Find the blue chair'", "\"Find the blue chair\"", "If asked, find the blue chair"} {
+	for _, prompt := range []string{"Find README", "Find the bug", "Find my position", "Find the blue chair without moving", "Find the blue chair, remain where you are", "Find the blue chair, freeze", "Find the blue chair if the floor is clear", "Find the blue chair in this image", "What does the Go2 see?", "Say 'Find the blue chair'", "\"Find the blue chair\"", "If asked, find the blue chair", "Walk to the nearest human without moving", "Make the go2 find a chair in this image", "Navigate to the door if I approve"} {
 		if got := requestedObjectSearch(prompt); got != "" {
 			t.Fatalf("ambiguous request authorized movement: %q -> %q", prompt, got)
 		}
 	}
-	for _, prompt := range []string{"Find the blue chair", "please Find a door!", "Find the small black trash bin."} {
+	for _, prompt := range []string{"Find the blue chair", "please Find a door!", "Find the small black trash bin.", "Make the go2 find a blue chair", "Walk to the nearest human", "Navigate to the door", "Go to the blue chair"} {
 		if requestedObjectSearch(prompt) == "" {
 			t.Fatal("lost simple physical object request", prompt)
 		}
 	}
-	for _, prior := range []string{"Do not move until I explicitly ask you to walk.", "Remaining exactly where you are is nonnegotiable.", "You may look, but leave your feet planted.", "stop", "Explain the statement 'you may move'."} {
+	for _, prior := range []string{"Do not move until I explicitly ask you to walk.", "Remaining exactly where you are is nonnegotiable.", "You may look, but leave your feet planted.", "stop"} {
 		if automaticObjectSearchHistory([]Message{{Role: "user", Content: prior}}) {
 			t.Fatal("ignored earlier restriction/uncertainty", prior)
 		}
 	}
-	if !automaticObjectSearchHistory([]Message{{Role: "user", Content: "Find the door"}}) {
-		t.Fatal("prior uncomplicated search blocked")
+	for _, prior := range []string{"Find the door", "Hello", "What is the battery level?", "Localize with motion then search", "Retry", "Explain the statement 'you may move'."} {
+		if !automaticObjectSearchHistory([]Message{{Role: "user", Content: prior}}) {
+			t.Fatal("ordinary conversation disabled default movement", prior)
+		}
 	}
 }
 
@@ -286,5 +288,143 @@ func TestObjectFindWorkflowDisabledForCustomSessionInstructions(t *testing.T) {
 		if engine.allowAutomaticObjectSearch != (instructions == "") {
 			t.Fatal("custom instruction scope not enforced")
 		}
+	}
+}
+
+func navigableObjectResult(query string) ToolResult {
+	result := missedObjectResult(query)
+	var body map[string]any
+	_ = json.Unmarshal([]byte(result.Text), &body)
+	body["seen"], body["navigable"], body["evidence_id"] = true, true, "fresh-evidence"
+	raw, _ := json.Marshal(body)
+	result.Text = string(raw)
+	return result
+}
+
+func TestNavigationFindWorkflowCompletesRequestedApproach(t *testing.T) {
+	for _, visible := range []bool{true, false} {
+		t.Run(map[bool]string{true: "visible", false: "search then approach"}[visible], func(t *testing.T) {
+			base := &commandMetadataExecutor{engineTestExecutor: &engineTestExecutor{tools: []Tool{findObjectWorkflowTool(), robotCommandTestTool()}}}
+			searches, looks, approaches, approvals := 0, 0, 0, 0
+			base.runResult = func(_ context.Context, call ToolCall) (ToolResult, error) {
+				var args map[string]any
+				_ = json.Unmarshal(call.Arguments, &args)
+				if call.Name == "robot_find_object" {
+					looks++
+					if args["query"] != "the nearest human" {
+						t.Fatal("changed target", args)
+					}
+					if looks > 1 && (args["serial"] != "robot-a" || args["model"] != "vision-a") {
+						t.Fatal("fresh lookup lost binding", args)
+					}
+					if !visible && looks == 1 {
+						return missedObjectResult("the nearest human"), nil
+					}
+					return navigableObjectResult("the nearest human"), nil
+				}
+				switch args["action"] {
+				case "find_active":
+					searches++
+					if args["serial"] != "robot-a" || args["model"] != "vision-a" || args["query"] != "the nearest human" {
+						t.Fatal(args)
+					}
+					if searches == 1 {
+						return ToolResult{Text: `{"state":"running"}`, RobotSerial: "robot-a"}, nil
+					}
+					if args["receipt_only"] != true || commandIdentity(t, call) != commandIdentity(t, base.calls[1]) {
+						t.Fatal("search restarted", args)
+					}
+					return ToolResult{Text: `{"state":"completed","object_search":{"seen":true,"query":"the nearest human","navigable":false}}`, RobotSerial: "robot-a"}, nil
+				case "go_to_object":
+					approaches++
+					if args["serial"] != "robot-a" || args["evidence_id"] != "fresh-evidence" {
+						t.Fatal("unverified approach", args)
+					}
+					return ToolResult{Text: `{"state":"completed","message":"Arrived"}`, RobotSerial: "robot-a"}, nil
+				}
+				t.Fatal("unexpected action", args)
+				return ToolResult{}, nil
+			}
+			providerCalls := 0
+			engine := NewEngine(engineTestProvider(func(context.Context, []Message, []Tool, func(string)) (Message, error) {
+				providerCalls++
+				if approaches != 1 {
+					t.Fatal("model asked before requested approach completed")
+				}
+				return Message{Content: "Arrived at the observed person."}, nil
+			}), &robotCommandTools{base: base, followInterval: time.Millisecond}, "")
+			enableObjectWorkflow(engine)
+			err := engine.Turn(context.Background(), "Walk to the nearest human", nil, func(context.Context, ToolCall) (bool, error) { approvals++; return true, nil })
+			if err != nil || providerCalls != 1 || approaches != 1 {
+				t.Fatal(err, providerCalls, approaches)
+			}
+			if visible && (looks != 1 || searches != 0 || approvals != 2) || !visible && (looks != 2 || searches != 2 || approvals != 4) {
+				t.Fatal(looks, searches, approvals)
+			}
+		})
+	}
+}
+
+func TestNavigationFindWorkflowRequiresFreshBoundNavigableEvidence(t *testing.T) {
+	for _, mode := range []string{"find only", "not navigable", "missing evidence", "wrong robot", "wrong model", "wrong query", "wrong source", "denied approach", "stop", "failed search", "unrefreshed search"} {
+		t.Run(mode, func(t *testing.T) {
+			f := &robotFindWorkflow{query: "blue chair", navigate: true, serial: "robot-a", model: "vision-a"}
+			call := ToolCall{Name: "robot_find_object", Arguments: json.RawMessage(`{"query":"blue chair","serial":"robot-a","model":"vision-a"}`)}
+			result := navigableObjectResult("blue chair")
+			var body map[string]any
+			_ = json.Unmarshal([]byte(result.Text), &body)
+			switch mode {
+			case "find only":
+				f.navigate = false
+			case "not navigable":
+				body["navigable"] = false
+			case "missing evidence":
+				delete(body, "evidence_id")
+			case "wrong robot":
+				result.RobotSerial = "robot-b"
+			case "wrong model":
+				body["model"] = "other-model"
+			case "wrong query":
+				body["query"] = "red chair"
+			case "wrong source":
+				body["source"] = "unverified"
+			case "denied approach":
+				f.observeCall(ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"go_to_object"}`)})
+			case "stop":
+				f.observeCall(ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"stop"}`)})
+			case "failed search", "unrefreshed search":
+				active := ToolCall{Name: "robot_command", Arguments: json.RawMessage(`{"action":"find_active","query":"blue chair","serial":"robot-a","model":"vision-a"}`)}
+				f.observeCall(active)
+				if mode == "failed search" {
+					_ = f.observeResult(active, ToolResult{Text: `{"state":"failed","object_search":{"seen":true,"query":"blue chair"}}`, RobotSerial: "robot-a"}, nil)
+				}
+			}
+			raw, _ := json.Marshal(body)
+			result.Text = string(raw)
+			_ = f.observeResult(call, result, nil)
+			if f.queued != nil {
+				t.Fatal("unsafe automatic approach", f.queued)
+			}
+		})
+	}
+}
+
+func TestNavigationFindWorkflowPreservesApproachApproval(t *testing.T) {
+	base := &commandMetadataExecutor{engineTestExecutor: &engineTestExecutor{tools: []Tool{findObjectWorkflowTool(), robotCommandTestTool()}}}
+	base.runResult = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "robot_find_object" {
+			t.Fatal("denied approach executed")
+		}
+		return navigableObjectResult("blue chair"), nil
+	}
+	engine := NewEngine(engineTestProvider(func(context.Context, []Message, []Tool, func(string)) (Message, error) {
+		return Message{Content: "Approach was not authorized."}, nil
+	}), &robotCommandTools{base: base}, "")
+	enableObjectWorkflow(engine)
+	if err := engine.Turn(context.Background(), "Approach blue chair", nil, func(_ context.Context, call ToolCall) (bool, error) { return call.Name == "robot_find_object", nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(base.calls) != 1 {
+		t.Fatal("approach repeated", base.calls)
 	}
 }
