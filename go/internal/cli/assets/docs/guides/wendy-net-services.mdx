@@ -217,7 +217,7 @@ a desktop VPN or an app network entitlement on your computer. See the
 {/* scripts/prepare-content.mjs publishes clients/wendy-cli/device-selection.md
     under advanced/clients/wendy-cli/device-selection; the export crawl checks this link. */}
 
-### Verify short DNS from the client app
+### Look up a device UUID
 
 From a terminal signed in to the destination's Wendy Cloud organization, list
 its enrolled devices, including offline devices:
@@ -230,7 +230,12 @@ Find the destination by its `name` and copy the UUID in `pkiDeviceName`.
 For example, a device entry can contain
 `"pkiDeviceName": "00000000-0000-4000-8000-000000000001"`.
 If `pkiDeviceName` is missing, use the `id` field if it contains a UUID.
-For a device with only a numeric ID, try the friendly-name check below.
+For a device with only a numeric ID, use a Cloud selector in the CLI or try
+the friendly-name DNS check below from an app.
+
+### Verify short DNS from the client app
+
+First [look up the destination's UUID](#look-up-a-device-uuid) in Cloud inventory.
 
 Confirm the enrolled client's `wendy.json` uses network mode `mesh` and
 `serviceCIDR` set to `10.99.0.0/16`. Inside its app container, set

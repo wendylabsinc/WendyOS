@@ -29,17 +29,16 @@ for the hostname through mesh, LAN, and Cloud within that organization.
 
 The selected context must hold an operator certificate for that organization
 on this computer. Personal browser sign-in with `wendy cloud login` obtains
-and saves this certificate. A service-account login supplies Cloud API access
+and saves this certificate. A [service-account login](./commands/auth/login.md#service-account-login) supplies Cloud API access
 without this certificate and cannot select private hostnames. If the
 certificate is missing, sign in again using the personal browser flow before
 retrying; the CLI rejects a missing certificate before discovery starts.
 
-To use the UUID hostname, set `DEVICE_UUID` to the device's `pkiDeviceName`
-from `wendy cloud discover --all --json`. This command requires an active
-Cloud login and includes offline devices. If `pkiDeviceName` is missing,
-use `id` if it is a UUID. Devices with only a numeric asset ID use a Cloud
-selector. See the
-[inventory lookup example](/docs/guides/wendy-net-services#verify-short-dns-from-the-client-app).
+To use the UUID hostname, follow
+[Look up a device UUID](/docs/guides/wendy-net-services#look-up-a-device-uuid)
+and set `DEVICE_UUID` to the returned certificate UUID. This inventory lookup
+requires an active Cloud login and includes offline devices. Devices with
+only a numeric asset ID use a Cloud selector.
 
 ```sh
 wendy --device jetson.wendy.internal device info
@@ -53,11 +52,17 @@ becomes `jetson-a.wendy.internal`.
 The CLI gathers LAN, Wendy Net, and Cloud candidates in parallel. For UUID
 hostnames, direct LAN gets a 500 ms head start before the CLI chooses another
 ready route. If no route is ready after the initial LAN scan, LAN discovery
-can continue for another 2.5 seconds while the CLI waits for a usable route.
+can continue for another 2.5 seconds, for a total LAN scan budget of 3 seconds,
+while the CLI waits for a usable route.
 For friendly hostnames, the CLI allows up to 3 seconds for LAN
 and Cloud discovery to check for conflicts. If it still needs a route, Wendy
 Net discovery can run for up to 15 seconds, including over Bluetooth. Probing
 a discovered mesh route can take another 15 seconds.
+
+Bluetooth-only management remains unverified: hardware validation timed out
+with BLE as the device's only active Wendy Net carrier, despite a visible
+signed route. If a BLE-only connection times out, make the device reachable
+over LAN or Cloud and retry.
 
 Friendly hostnames require a trusted binding from the signed Wendy Net
 directory, authenticated Cloud inventory, or a saved pin. If the directory
@@ -95,7 +100,8 @@ the connection and asks you to verify the change.
 
 After verifying an intentional replacement or an invalid saved pin, select
 the intended organization's context with `wendy auth use` and unpin the
-hostname. Run `wendy auth status` to list saved contexts and their organizations:
+hostname. Use the [sign-in context commands](./commands/auth/login.md#auth-contexts)
+to list saved contexts with `wendy auth status` and switch with `wendy auth use`:
 
 ```sh
 wendy device unpin jetson.wendy.internal
