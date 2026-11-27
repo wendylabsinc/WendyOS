@@ -146,6 +146,7 @@ func sessionEngine(provider Provider, executor Executor, opts SessionOptions) (*
 	}
 	engine := NewEngine(provider, memory, prompt)
 	engine.robotControlMode = opts.Profile.Name == "device-control"
+	engine.allowAutomaticObjectSearch = engine.robotControlMode && opts.SystemInstructions == "" && opts.ApprovedTools == nil
 	engine.skipAutomaticLearning = compactLocalControl(opts)
 	engine.SetMemoryEnabled(!opts.NoMemory)
 	return engine, nil

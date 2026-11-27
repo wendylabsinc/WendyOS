@@ -32,8 +32,9 @@ type Engine struct {
 	memory    *MemoryTools
 	// Local robot control skips the extra post-turn model request. Recall and
 	// explicit memory tools remain available under the normal memory setting.
-	skipAutomaticLearning bool
-	robotControlMode      bool
+	skipAutomaticLearning      bool
+	robotControlMode           bool
+	allowAutomaticObjectSearch bool
 }
 
 func NewEngine(provider Provider, executor Executor, system string) *Engine {
@@ -97,6 +98,10 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 	e.messages = append(e.messages, Message{Role: "user", Content: prompt})
 	turnStart := len(e.messages) - 1
 	localizationNudges := 0
+	var objectSearch *robotFindWorkflow
+	if query := requestedObjectSearch(prompt); e.automaticObjectSearchAllowed(ctx, e.messages[:turnStart]) && query != "" {
+		objectSearch = &robotFindWorkflow{query: query}
+	}
 	memoryWarned := false
 	lastFailedTool, consecutiveFailures := "", 0
 	for round := 0; round < e.maxRounds; round++ {
@@ -130,8 +135,21 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 			}
 		}
 		var message Message
-		if forced := e.robotEvidenceCall(prompt, available, round); forced != nil {
+		if objectSearch != nil && !e.automaticObjectSearchAllowed(ctx, e.messages[:turnStart]) {
+			objectSearch = nil
+		}
+		forced, workflowErr := objectSearch.nextCall(available, round)
+		if workflowErr != nil {
+			return workflowErr
+		}
+		if forced == nil {
+			forced = e.robotEvidenceCall(prompt, available, round)
+		}
+		if forced != nil {
 			message = Message{ToolCalls: []ToolCall{*forced}}
+			if objectSearch != nil && forced.Name == "robot_command" {
+				message.Content = "The object is not in the current view. I'll search nearby viewpoints with bounded movement."
+			}
 		} else {
 			message, err = e.provider.Stream(ctx, messages, available, func(chunk string) {
 				streamed.WriteString(chunk)
@@ -202,6 +220,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		}
 		var turnErr error
 		for i, call := range message.ToolCalls {
+			objectSearch.observeCall(call)
 			var result string
 			var images []Image
 			var callFailure error
@@ -241,6 +260,11 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 					result = output.Text
 					if toolErr == nil {
 						images, toolErr = validateImages(output.Images)
+					}
+					if ctx.Err() == nil {
+						if workflowErr := objectSearch.observeResult(call, output, toolErr); workflowErr != nil {
+							turnErr = workflowErr
+						}
 					}
 					if e.memory != nil && ctx.Err() == nil {
 						e.memory.observe(call, output, toolErr)
