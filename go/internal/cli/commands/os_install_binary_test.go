@@ -97,6 +97,7 @@ func TestInstallAgentImageArchitecture(t *testing.T) {
 		{"wrong x86_64", "", "amd64", []gpt.Type{gpt.LinuxRootArm64}, "image is arm64"},
 		{"GPT takes precedence", "raspberry-pi-5", "arm64", []gpt.Type{gpt.LinuxRootX86_64}, "image is amd64"},
 		{"device fallback", "raspberry-pi-5", "arm64", nil, ""},
+		{"Orange Pi device fallback", "orange-pi-5-pro", "arm64", nil, ""},
 		{"x86 device fallback", "x86_64", "amd64", nil, ""},
 		{"unknown local image", "", "arm64", nil, "cannot determine"},
 		{"unknown device", "new-device", "arm64", nil, "cannot determine"},
@@ -131,6 +132,7 @@ func TestInstallBinaryCommandPreflight(t *testing.T) {
 		{[]string{"--binary", filepath.Join(t.TempDir(), "missing")}, "reading --binary"},
 		{[]string{"--binary", arm, "--device-type", "x86_64", "--no-wifi"}, "image is amd64"},
 		{[]string{"--binary", x86, "--device-type", "raspberry-pi-5", "--no-wifi"}, "image is arm64"},
+		{[]string{"--binary", x86, "--device-type", "orange-pi-5-pro", "--no-wifi"}, "image is arm64"},
 		{[]string{"--binary", x86, "--device-type", "jetson-agx-thor", "--no-wifi"}, "image is arm64"},
 		{[]string{"--binary", x86, "--device-type", "dragonwing-iq-8275", "--no-wifi"}, "image is arm64"},
 		{[]string{"--binary", arm, "--device-type", "linux-desktop"}, "only when installing a WendyOS image"},
@@ -191,15 +193,15 @@ func TestInstallLocalAgentProvisioningRetry(t *testing.T) {
 			agent := &localInstallAgent{data: installTestELF(elf.EM_AARCH64), arch: "arm64"}
 			failure := errors.New("config write failed")
 			calls := 0
-			provisionConfigPartitionFn = func(_ drive, _ []wendyconf.WifiCredential, _ string, _ []byte, got agentSeed) error {
+			provisionConfigPartitionFn = func(_ drive, _ []wendyconf.WifiCredential, _ string, _ []byte, got agentSeed) (string, error) {
 				calls++
 				if got.local != agent {
 					t.Fatal("retry lost the local agent")
 				}
 				if succeeds && calls == 2 {
-					return nil
+					return "local", nil
 				}
-				return failure
+				return "", failure
 			}
 			_, _, err := provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, true, agentSeed{local: agent})
 			if calls != 2 || succeeds && err != nil || !succeeds && !errors.Is(err, failure) {

@@ -67,6 +67,8 @@ func (s *Store) resetLocalization(frame, serial string, reset func() error) erro
 	source := "go2:" + serial
 	if _, exists := r.Sources[source]; exists && len(r.Sources) == 1 {
 		r.Points = nil
+		r.PointLayers = nil
+		r.LegacyPoints = nil
 		r.FloorTiles = nil
 		delete(r.Sources, source)
 		changed = true

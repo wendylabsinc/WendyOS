@@ -505,10 +505,10 @@ func TestPickedDeviceCancelledDuringClockRecoveryDoesNotFallBackToBluetooth(t *t
 	}
 }
 
-// Q4 of the mesh-1 report: after `wendy device unset-default` the picker chose
-// the device, and the rejection went straight to "TLS authentication failed"
-// without any time proof. A picked device now gets the same clock recovery, on
-// the same endpoint, and its pin is still enforced on the recovered connection.
+// Q4 of the mesh-1 report: when the picker chose the device, the rejection went
+// straight to "TLS authentication failed" without any time proof. A picked
+// device now gets the same clock recovery, on the same endpoint, and its pin is
+// still enforced on the recovered connection.
 func TestPickedDeviceGetsClockRecovery(t *testing.T) {
 	isolateConnectionRecovery(t)
 	stubNonInteractive(t)

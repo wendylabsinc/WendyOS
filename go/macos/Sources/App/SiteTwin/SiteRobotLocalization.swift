@@ -60,6 +60,33 @@ struct RobotSuggestionFreshness {
     }
 }
 
+// Recovery observes new evidence indefinitely while the map is open. It never
+// grants another movement attempt, and repeated packets cannot consume CPU.
+struct RobotPassiveLocalization {
+    private(set) var active = false
+    private var revision: UInt64?
+    private var cameraSequence: UInt64?
+    private var nextAttempt = Date.distantPast
+
+    mutating func start(after revision: UInt64? = nil, now: Date = .now) {
+        active = true
+        self.revision = revision
+        cameraSequence = nil
+        nextAttempt = now.addingTimeInterval(1)
+    }
+
+    mutating func cancel() { active = false }
+
+    mutating func takeAttempt(revision: UInt64, cameraSequence: UInt64?, now: Date = .now) -> Bool {
+        guard active, now >= nextAttempt,
+              self.revision != revision || (cameraSequence != nil && self.cameraSequence != cameraSequence) else { return false }
+        self.revision = revision
+        self.cameraSequence = cameraSequence
+        nextAttempt = now.addingTimeInterval(2)
+        return true
+    }
+}
+
 // Each robot's references are bound to the exact imported model and revision.
 // These saved surfaces are localization targets, never navigation free space.
 struct RobotSavedMap: Codable, Sendable {
@@ -271,10 +298,10 @@ enum RobotRotationState: Equatable {
         case .idle: nil
         case .waitingForMeasurements: "Go2 will stay still until fresh LiDAR and odometry arrive, then continue automatically."
         case .waitingForClearView: "Checking fresh LiDAR and floor coverage. Discovery resumes when safe."
-        case .checking(let turn): "Checking clearance for turn \(turn) of 12."
-        case .turning(let turn): "Turn \(turn) of 12. Keep Go2 in sight and its turning area clear."
-        case .matching(let turn): "Comparing the view after turn \(turn) of 12 with your room."
-        case .advancing(let move): "Viewpoint move \(move) of 3. Go2 moves about 40 cm on observed clear floor."
+        case .checking(let turn): "Checking clearance for turn \(turn) of 6."
+        case .turning(let turn): "Turn \(turn) of 6. Keep Go2 in sight and its turning area clear."
+        case .matching(let turn): "Comparing the view after turn \(turn) of 6 with your room."
+        case .advancing(let move): "Viewpoint move \(move) of 3. Go2 chooses a clear nearby viewpoint, turning as needed."
         case .settling(let move): "Stopped after viewpoint move \(move) of 3. Waiting for fresh LiDAR before matching."
         case .stopped(let reason): reason
         }
@@ -291,7 +318,7 @@ struct RobotPositionSearch {
     private(set) var remainingTurns = 0
     private(set) var direction: Int32 = 0
     private var deadline = Date.distantPast
-    mutating func start(now: Date) { active = true; outcome = nil; remainingTurns = 12; direction = 0; deadline = now.addingTimeInterval(300) }
+    mutating func start(now: Date) { active = true; outcome = nil; remainingTurns = 6; direction = 0; deadline = now.addingTimeInterval(300) }
     mutating func resumeAfterCalibration(now: Date) { if active { deadline = now.addingTimeInterval(300) } }
     mutating func shouldRetryLocalization(pose: Bool, scanReady: Bool, measurementsReady: Bool, aligned: Bool,
                                          rematchAfterLook: Bool, attempts: Int, now: Date,

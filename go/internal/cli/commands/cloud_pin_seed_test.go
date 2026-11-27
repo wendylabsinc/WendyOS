@@ -117,7 +117,7 @@ func TestUUIDCloudLookupKeepsPinnedNameRefused(t *testing.T) {
 		if pin != before {
 			t.Fatalf("attempt %d: a Cloud lookup replaced the pinned identity: %+v", attempt, pin)
 		}
-		selector := cloudDefaultSelector("online-device", expectedIdentityForPin(pin))
+		selector := cloudNameSelector("online-device", expectedIdentityForPin(pin))
 		if _, err := pickCloudDiscoveryDevice(context.Background(), auth, selector, ""); err == nil {
 			t.Fatalf("attempt %d reached the name's new holder", attempt)
 		}

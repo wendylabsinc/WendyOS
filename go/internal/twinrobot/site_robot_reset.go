@@ -27,6 +27,7 @@ func (r *SiteRobot) ResetLocalization(sequence uint64, frame string) error {
 	r.floorY = 0
 	r.localizations = nil
 	r.localizationSequence = 0
+	r.roomTracking = nil
 	r.fusionTracker = sitenav.PoseTracker{}
 	r.fusionFrame = ""
 	r.fusionEpoch = 0

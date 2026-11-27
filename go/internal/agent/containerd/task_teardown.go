@@ -3,12 +3,17 @@ package containerd
 import (
 	"context"
 	"fmt"
+	"slices"
 	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"go.uber.org/zap"
+
+	localoci "github.com/wendylabsinc/wendy/go/internal/agent/oci"
 )
 
 const (
@@ -37,17 +42,33 @@ type teardownTask interface {
 
 // terminateReplacedTask gives a NAN app time to cancel its publish and NDP
 // handles before replacing its container. Those handles live in the host
-// supplicant and survive an abrupt app SIGKILL. NPU apps use their owner's
-// ordered teardown without forced escalation. Other apps retain the existing
-// immediate whole-process-group kill behavior; NAN grace remains bounded.
-func (c *Client) terminateReplacedTask(ctx context.Context, task teardownTask, containerID string, oldHadNAN, oldHadNPU bool) error {
-	if oldHadNPU {
+// supplicant and survive an abrupt app SIGKILL. FastRPC NPU apps use their
+// owner's ordered teardown without forced escalation. Other apps retain the
+// existing immediate whole-process-group kill behavior; NAN grace remains bounded.
+func (c *Client) terminateReplacedTask(ctx context.Context, task teardownTask, containerID string, oldHadNAN, oldUsesFastRPC bool) error {
+	if oldUsesFastRPC {
 		return c.terminateNPUTask(ctx, task, containerID)
 	}
 	if oldHadNAN {
 		return c.terminateTask(ctx, task, containerID, syscall.SIGTERM, nanReplacementGracePeriod, killWaitTimeout)
 	}
 	return c.terminateTask(ctx, task, containerID, syscall.SIGKILL, killWaitTimeout, killWaitTimeout)
+}
+
+// specMayUseFastRPC reports whether a task from spec may hold a FastRPC session;
+// other NPUs are released by the kernel on exit. An unreadable spec counts.
+func specMayUseFastRPC(spec *oci.Spec) bool {
+	if spec == nil {
+		return true
+	}
+	for _, m := range spec.Mounts {
+		if localoci.IsFastrpcNode(m.Destination) {
+			return true
+		}
+	}
+	return spec.Linux != nil && slices.ContainsFunc(spec.Linux.Devices, func(d specs.LinuxDevice) bool {
+		return localoci.IsFastrpcNode(d.Path)
+	})
 }
 
 // terminateNPUTask lets the owner release its FastRPC/HTP resources in order.

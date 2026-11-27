@@ -17,14 +17,12 @@ The Dockerfile pins **Mojo 1.0.0** and installs the compiler inside the build co
 
 This tutorial uses the CPU. It does not require a GPU entitlement or MAX.
 
-## Choose a default device
+## Choose your device
 
-Run `wendy discover`, highlight your device with the arrow keys, and press `d` to make it the default. Press Ctrl+C to leave discovery. Wendy remembers this choice for subsequent commands.
-
-If you already know the hostname, you can set it directly in one line:
+Run `wendy discover` to find your device's hostname, then press Ctrl+C to leave discovery. Point this terminal at the device so the commands below use it:
 
 ```bash
-wendy device set-default <hostname>
+export WENDY_DEVICE=<hostname>
 ```
 
 ## Write the program

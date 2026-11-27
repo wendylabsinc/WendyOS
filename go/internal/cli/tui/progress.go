@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/progress"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const maxProgressDetailLines = 4
@@ -30,17 +31,18 @@ type ProgressDoneMsg struct {
 
 // ProgressModel is a reusable Bubble Tea progress bar.
 type ProgressModel struct {
-	progress progress.Model
-	title    string
-	details  []string
-	hints    hintRotator
-	width    int
-	percent  float64
-	written  int64
-	total    int64
-	done     bool
-	err      error
-	showErr  bool
+	progress  progress.Model
+	title     string
+	details   []string
+	hints     hintRotator
+	width     int
+	percent   float64
+	written   int64
+	total     int64
+	done      bool
+	err       error
+	showErr   bool
+	transient bool
 }
 
 func NewProgress(title string) ProgressModel {
@@ -59,6 +61,15 @@ func NewProgress(title string) ProgressModel {
 // otherwise print it twice.
 func (m ProgressModel) WithoutErrorView() ProgressModel {
 	m.showErr = false
+	return m
+}
+
+// Transient draws the title and bar on one line and leaves nothing on screen
+// once done, so the caller can print its own result line; a failure stays.
+func (m ProgressModel) Transient() ProgressModel {
+	m.transient = true
+	m.progress.ShowPercentage = false
+	m.progress.Width = 30
 	return m
 }
 
@@ -130,6 +141,28 @@ func (m ProgressModel) View() string {
 		byteInfo = fmt.Sprintf("  (%s)", FormatBytes(m.written))
 	}
 	details := m.detailView()
+
+	if m.transient && !(m.done && m.err != nil) {
+		if m.done {
+			return ""
+		}
+		count := ""
+		if m.total > 0 {
+			count = fmt.Sprintf("  %s / %s", FormatBytes(m.written), FormatBytes(m.total))
+		} else if m.written > 0 {
+			count = "  " + FormatBytes(m.written)
+		}
+		bar := m.progress
+		if m.width > 0 {
+			// Keep the label, bar and byte count on one line.
+			bar.Width = max(10, min(30, m.width-lipgloss.Width(m.title)-lipgloss.Width(count)-5))
+		}
+		out := details + fmt.Sprintf("  %s  %s%s\n", m.title, bar.ViewAs(m.percent), count)
+		if hint := m.hints.view(m.width); hint != "" {
+			out += hint + "\n"
+		}
+		return out
+	}
 
 	if m.done && m.err != nil {
 		if !m.showErr {

@@ -71,7 +71,7 @@ func desktopRememberCloudTarget(ctx context.Context, auth *config.AuthConfig, as
 	if !ok {
 		return
 	}
-	selector, err := cloudDiscoveryDeviceDefault(auth, asset)
+	selector, err := cloudDiscoverySelector(auth, asset)
 	if err != nil {
 		return
 	}

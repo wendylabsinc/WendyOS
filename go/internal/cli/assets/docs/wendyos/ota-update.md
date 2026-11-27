@@ -10,10 +10,10 @@ A `map<string, string>` of raw, display-only connector diagnostics emitted by
 `wendyos-update status --json --verbose`. Keys and values are connector-specific
 and additive:
 
-| Connector | Example keys |
-|---|---|
-| `tegrauefi` | `RootfsStatusSlotA`, `RootfsStatusSlotB`, EFI boot-chain and capsule variable names |
-| `ubootenv` | uboot environment variable names |
+| Connector | Boards | Example keys |
+|---|---|---|
+| `tegrauefi` | NVIDIA Jetson | `RootfsStatusSlotA`, `RootfsStatusSlotB`, EFI boot-chain and capsule variable names |
+| `ubootenv` | Raspberry Pi, Orange Pi 5 Pro | uboot environment variable names |
 
 The field is absent when the caller did not request engine status
 (`include_engine_status: false`). Consumers must treat unknown keys as

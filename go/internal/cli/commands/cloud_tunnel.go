@@ -84,17 +84,17 @@ func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.Auth
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyCloudDefaultIdentity(deviceName, expected, cloudDiscoveryIdentity(auth, asset)); err != nil {
+	if err := verifyCloudPinnedIdentity(deviceName, expected, cloudDiscoveryIdentity(auth, asset)); err != nil {
 		return nil, err
 	}
 	return asset.connect(ctx, auth, brokerURL)
 }
 
-func verifyCloudDefaultIdentity(deviceName string, expected *certs.WendyIdentity, actual certs.WendyIdentity) error {
+func verifyCloudPinnedIdentity(deviceName string, expected *certs.WendyIdentity, actual certs.WendyIdentity) error {
 	if expected == nil || expected.SameEntity(actual) {
 		return nil
 	}
-	return refuseIdentity("Cloud device %q has identity %s, which does not match the identity saved for the default device (%s). Choose the device explicitly or update the saved default if it was re-enrolled.", deviceName, actual.IdentityKey(), expected.IdentityKey())
+	return refuseIdentity("Cloud device %q has identity %s, which does not match the identity saved for it (%s). Choose the device explicitly, or clear the saved identity with 'wendy device unpin' if it was re-enrolled.", deviceName, actual.IdentityKey(), expected.IdentityKey())
 }
 
 func cloudDiscoveryIdentity(auth *config.AuthConfig, asset cloudDiscoveryDevice) certs.WendyIdentity {
@@ -163,14 +163,24 @@ func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig
 	// Provisioned agents serve mTLS on agentPort+1 (50052) for remote clients; the
 	// plaintext port (50051) is shut down after provisioning. (On-device containers
 	// with the admin entitlement can reach the agent via the local unix socket.)
+	features := new(cloudTCPFeatures)
+	if asset.v2 != nil {
+		features = cloudTCPFeaturesFor(ctx, auth, asset)
+	}
 	dialOpt := clouddefaults.TunnelDialer(func(tunnelCtx context.Context) (net.Conn, error) {
-		return asset.openTunnel(carryTunnelSession(tunnelCtx, ctx), brokerConn, auth, defaultAgentPort+1)
+		// A new management transport may reach a restarted or rolled-back
+		// agent. Keep a recent negative observation to throttle failed probes.
+		if observed := features.last.Load(); observed != nil && observed.halfClose {
+			features.last.CompareAndSwap(observed, nil)
+		}
+		return asset.openTunnel(carryTunnelSession(tunnelCtx, ctx), brokerConn, auth, defaultAgentPort+1, false)
 	})
 
 	cert := auth.Certificates[0]
 	expectedIdentity := cloudDiscoveryIdentity(auth, asset)
 	agentConn, err := connectCloudAgentTransport(ctx, cert, expectedIdentity,
 		dialOpt,
+		grpc.WithChainUnaryInterceptor(features.observeVersion),
 		grpc.WithInitialWindowSize(8*1024*1024),
 		grpc.WithInitialConnWindowSize(16*1024*1024),
 		grpc.WithReadBufferSize(256*1024),
@@ -201,13 +211,15 @@ func connectCloudDiscoveryTransport(ctx context.Context, auth *config.AuthConfig
 	}
 	agentConn.CertInfo = &cert
 	agentConn.RegistryDialer = func(registryCtx context.Context, port int) (net.Conn, error) {
-		return asset.openTunnel(carryTunnelSession(registryCtx, ctx), brokerConn, auth, uint32(port))
+		halfClose := agentConn.IsCloudV2 && port != defaultAgentPort+1 && features.halfClose(registryCtx, agentConn.AgentService)
+		return asset.openTunnel(carryTunnelSession(registryCtx, ctx), brokerConn, auth, uint32(port), halfClose)
 	}
 	// Pin reconnect to this exact asset (by id) so a post-restart reconnect
 	// can't drift to a different cloud device — the asset name may be empty or
 	// ambiguous, and re-running device discovery while the agent is mid-restart
 	// can match whichever other device happens to be reachable.
 	agentConn.Reconnect = func(rctx context.Context) (*grpcclient.AgentConnection, error) {
+		features.last.Store(nil)
 		return asset.reconnect(carryTunnelSession(rctx, ctx), auth, brokerURL)
 	}
 	if brokerConn != nil {
@@ -328,7 +340,7 @@ func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *co
 	}, stream.CloseSend), nil
 }
 
-func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32) (net.Conn, error) {
+func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32, halfClose bool) (net.Conn, error) {
 	if d.legacy != nil {
 		return openBrokerTunnel(ctx, brokerConn, auth, d.legacy.GetId(), remotePort)
 	}
@@ -336,7 +348,7 @@ func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.C
 	if err != nil {
 		return nil, err
 	}
-	return openAuthorizedTunnel(ctx, auth, d.key, service)
+	return openAuthorizedTunnel(ctx, auth, d.key, service, halfClose)
 }
 
 func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool) error, closeSend func() error) net.Conn {
@@ -654,8 +666,7 @@ func pickCloudDeviceFromRoster(ctx context.Context, auth *config.AuthConfig, dev
 		if asset != nil {
 			// With no --device, resolveCloudAsset picks the org's only online
 			// device without asking (the roster above is online-only). Say so,
-			// rather than leaving the target implicit. Note this is not the configured default device: the
-			// cloud path does not consult that setting.
+			// rather than leaving the target implicit.
 			if deviceName == "" {
 				noteImplicitDevice(asset.GetName(), implicitSoleCloudDevice)
 			}

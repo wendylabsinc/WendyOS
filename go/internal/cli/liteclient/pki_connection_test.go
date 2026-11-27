@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/url"
@@ -16,6 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 )
 
 func TestPKILANTrustAndDeviceIdentity(t *testing.T) {
@@ -232,6 +235,55 @@ func TestSensorSourceTLSRequiresExactSameTenantDevice(t *testing.T) {
 	}
 }
 
+func TestSensorSourceUsesProvisionedLiteIssuerAndSendsLeaf(t *testing.T) {
+	const tenant = "11111111-2222-4333-8444-555555555555"
+	const base = "spiffe://wendy.sh/tenant/" + tenant + "/device/"
+	root, rootKey := issueRelayCertificate(t, 200, "root", "", true, nil, nil)
+	parent, parentKey := issueRelayCertificate(t, 201, "tenant intermediate", "", true, root, rootKey)
+	regular, regularKey := issueRelayCertificate(t, 202, "device authority", "", true, parent, parentKey)
+	consumer, consumerKey := issueRelayCertificate(t, 203, "consumer", base+"consumer", false, regular, regularKey)
+	lite, liteKey := issueRelayCertificate(t, 204, tenant+" Lite Device CA", "", true, parent, parentKey)
+	source, sourceKey := issueRelayCertificate(t, 205, "source", base+"source", false, lite, liteKey)
+	pemCert := func(c *x509.Certificate) string {
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw}))
+	}
+	client := tls.Certificate{Certificate: [][]byte{consumer.Raw, regular.Raw, parent.Raw}, PrivateKey: consumerKey}
+	rootSet := x509.NewCertPool()
+	rootSet.AddCert(regular)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	fingerprint := meshalpn.Hash(regular.Raw)
+	leafALPN := meshalpn.WendyCom + "\x00WCL\x01\x02" + string(fingerprint[:])
+	config := &tls.Config{MinVersion: tls.VersionTLS13, NextProtos: []string{leafALPN},
+		Certificates: []tls.Certificate{{Certificate: [][]byte{source.Raw}, PrivateKey: sourceKey}},
+		ClientAuth:   tls.RequireAndVerifyClientCert, ClientCAs: rootSet}
+	completed := make(chan error, 1)
+	go func() {
+		raw, err := listener.Accept()
+		if err != nil {
+			completed <- err
+			return
+		}
+		defer raw.Close()
+		_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+		conn := tls.Server(raw, config)
+		err = conn.Handshake()
+		if err == nil && len(conn.ConnectionState().PeerCertificates) != 1 {
+			err = fmt.Errorf("expected leaf-only client presentation")
+		}
+		completed <- err
+	}()
+	err = NewWendyLiteClient().ConnectSensorSourceWithLiteIssuers(context.Background(), listener.Addr().String(),
+		client, pemCert(root), base+"source", pemCert(lite)+pemCert(parent))
+	serverErr := <-completed
+	if serverErr != nil || err == nil || !strings.HasPrefix(err.Error(), "SensorLink handshake:") {
+		t.Fatalf("TLS=%v WendyCom=%v", serverErr, err)
+	}
+}
+
 func issueRelayCertificate(t *testing.T, serial int64, name, uri string, ca bool, parent *x509.Certificate, signer *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -241,6 +293,7 @@ func issueRelayCertificate(t *testing.T, serial int64, name, uri string, ca bool
 	template := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), BasicConstraintsValid: true, IsCA: ca, KeyUsage: x509.KeyUsageDigitalSignature}
 	if ca {
 		template.KeyUsage |= x509.KeyUsageCertSign
+		template.MaxPathLenZero = strings.HasSuffix(name, " Lite Device CA")
 	} else {
 		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}
 	}

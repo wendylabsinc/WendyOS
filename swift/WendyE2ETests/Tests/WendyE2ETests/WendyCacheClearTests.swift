@@ -81,7 +81,7 @@ struct `'wendy cache clear'` {
             try await cli.sh(
                 posix: """
                     mkdir -p "$HOME/.wendy"
-                    printf '{"defaultDevice":"keep-me"}\n' > "$HOME/.wendy/config.json"
+                    printf '{"defaultBuildHost":"keep-me"}\n' > "$HOME/.wendy/config.json"
                     printf 'analytics-identity\n' > "$HOME/.wendy/analytics_id"
                     printf 'project artifact\n' > project-file.txt
                     mkdir -p "\(cacheDirectory)/images"
@@ -95,7 +95,7 @@ struct `'wendy cache clear'` {
                 power: """
                     $wendyDirectory = Join-Path $env:HOME '.wendy'
                     New-Item -ItemType Directory -Force -Path $wendyDirectory | Out-Null
-                    Set-Content -LiteralPath (Join-Path $wendyDirectory 'config.json') -Value '{"defaultDevice":"keep-me"}'
+                    Set-Content -LiteralPath (Join-Path $wendyDirectory 'config.json') -Value '{"defaultBuildHost":"keep-me"}'
                     Set-Content -LiteralPath (Join-Path $wendyDirectory 'analytics_id') -Value 'analytics-identity'
                     Set-Content -LiteralPath 'project-file.txt' -Value 'project artifact'
                     $cacheDirectory = Join-Path $env:LOCALAPPDATA 'wendy'

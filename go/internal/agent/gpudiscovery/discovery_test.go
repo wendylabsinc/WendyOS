@@ -26,6 +26,7 @@ func TestDiscoverVendorsAndCompute(t *testing.T) {
 		{"broadcom", "", "v3d", "", []string{}},
 		{"broadcom", "", "vc4", "", []string{}},
 		{"arm", "", "panfrost", "", []string{}},
+		{"arm", "", "panthor", "", []string{}},
 		{"qualcomm", "", "msm", "", []string{}},
 		// A reachable Hexagon NPU is not an Adreno compute backend: FastRPC is
 		// the DSP's transport, so the NPU reports it and the GPU stays bare.
@@ -122,6 +123,10 @@ func TestDiscoverDRMDriverVendors(t *testing.T) {
 			},
 			vendor: "qualcomm", devices: 2,
 		},
+		// Orange Pi 5 Pro (RK3588S): the display-only rockchip-drm has no vendor
+		// and must not hide the panthor Mali, whichever card number each gets.
+		"rockchip":          {nodes: map[string]string{"card0": "rockchip-drm", "card1": "panthor", "renderD128": "panthor"}, vendor: "arm", devices: 3},
+		"rockchip reversed": {nodes: map[string]string{"card0": "panthor", "card1": "rockchip-drm", "renderD128": "panthor"}, vendor: "arm", devices: 3},
 		// A Raspberry Pi splits them: vc4 drives the display, v3d the GPU.
 		"raspberry pi": {nodes: map[string]string{"card0": "vc4", "renderD128": "v3d"}, vendor: "broadcom", devices: 2},
 		"display only": {nodes: map[string]string{"card0": "vc4"}, vendor: "broadcom", devices: 1},

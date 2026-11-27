@@ -161,12 +161,6 @@ func TestPinnedDeviceWithoutALoginIsToldToSignIn(t *testing.T) {
 	if got := ExecutionErrorClass(newDeviceDialError(addr, err)); got != "auth_required" {
 		t.Errorf("ExecutionErrorClass of the dial error = %q, want auth_required", got)
 	}
-	// A saved default device reports the same thing. "Set but could not be
-	// reached", with its mDNS and default-device steps ahead of the sign-in
-	// step, would describe a reachability failure again.
-	if got := defaultDeviceUnreachableError("orin.local", newDeviceDialError(addr, err)); got.Error() != want || !reflect.DeepEqual(NextSteps(got), []string{step}) {
-		t.Errorf("default device message:\n%v\nnext steps %q", got, NextSteps(got))
-	}
 
 	// Still the pinned refusal to every caller that branches on it.
 	if !errors.Is(err, errNoAuthenticatedEndpoint) || errors.Is(err, errDeviceIdentityRefused) || !blocksUnauthenticatedFallback(err) {

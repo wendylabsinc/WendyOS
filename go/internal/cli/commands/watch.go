@@ -44,7 +44,6 @@ func newWatchCmd() *cobra.Command {
 				return err
 			}
 			// Keep the loop quiet: hide build output unless a build fails.
-			// Non-interactive behavior is enforced by watchCommand itself.
 			opts.quietBuild = !verbose
 			return watchCommand(cmd.Context(), opts, time.Duration(debounceMS)*time.Millisecond)
 		},
@@ -398,6 +397,7 @@ func watchCommand(ctx context.Context, opts runOptions, debounce time.Duration) 
 	if debounce <= 0 {
 		debounce = 400 * time.Millisecond
 	}
+	allowStartupPicker := !opts.yes && deviceFlag == "" && !jsonOutput && isInteractiveTerminal()
 	opts = withWatchInvariants(opts)
 	root, err := resolveRunWorkingDir(opts)
 	if err != nil {
@@ -434,10 +434,11 @@ func watchCommand(ctx context.Context, opts runOptions, debounce time.Duration) 
 		}
 	}()
 
-	// A watch session stays on one selected target. Agent connections are safe
-	// for concurrent RPCs, allowing the session log stream to remain open while
-	// serialized deploy cycles use the same connection.
-	target, err := resolveRunTarget(ctx, runResolveOptions(opts)...)
+	// Allow a picker only for the initial selection. The deploy options keep
+	// prompting disabled and reuse the selected connection for the session.
+	startupOpts := opts
+	startupOpts.yes = !allowStartupPicker
+	target, err := resolveRunTarget(withDevicePickerPurpose(ctx, mainDevicePicker), runResolveOptions(startupOpts)...)
 	if err != nil {
 		return err
 	}

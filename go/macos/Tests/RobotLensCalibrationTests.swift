@@ -76,7 +76,7 @@ private func measuredRobotLens() -> SiteCameraLens {
     let takeTurn = { (date: Date) in search.takeTurn(now: date) }
     #expect(!takeTurn(now))
     search.start(now: now)
-    for _ in 0..<12 { #expect(takeTurn(now)) }
+    for _ in 0..<6 { #expect(takeTurn(now)) }
     #expect(!takeTurn(now))
     #expect(!search.active)
     search.start(now: now)
@@ -109,7 +109,7 @@ private func measuredRobotLens() -> SiteCameraLens {
     let now = Date(timeIntervalSince1970: 1000)
     var search = RobotPositionSearch()
     search.start(now: now)
-    for _ in 0..<12 { #expect({ search.takeTurn(now: now) }()) }
+    for _ in 0..<6 { #expect({ search.takeTurn(now: now) }()) }
     // The final view still gets matched before declaring failure.
     #expect({ search.shouldRetryLocalization(pose: true, scanReady: true, measurementsReady: true, aligned: false,
                                             rematchAfterLook: true, attempts: 0, now: now) }())
@@ -251,7 +251,7 @@ private func measuredRobotLens() -> SiteCameraLens {
     #expect({ search.shouldRetryLocalization(pose: true, scanReady: false, measurementsReady: true, aligned: true,
                                          rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(15)) }())
     #expect({ search.takeTurn(now: now.addingTimeInterval(16)) }())
-    #expect(search.remainingTurns == 10)
+    #expect(search.remainingTurns == 4)
     #expect(search.direction == -1)
     #expect({ !search.shouldRetryLocalization(pose: false, scanReady: false, measurementsReady: true, aligned: false,
                                           rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(17)) }())
@@ -297,11 +297,11 @@ private func measuredRobotLens() -> SiteCameraLens {
     #expect({ !search.shouldRetryLocalization(pose: true, scanReady: false, measurementsReady: false, aligned: false,
         rematchAfterLook: true, attempts: 5, now: now.addingTimeInterval(20)) }())
     #expect(search.active)
-    #expect(search.remainingTurns == 12)
+    #expect(search.remainingTurns == 6)
     #expect({ search.shouldRetryLocalization(pose: true, scanReady: false, measurementsReady: true, aligned: false,
         rematchAfterLook: true, attempts: 5, now: now.addingTimeInterval(21)) }())
     #expect({ search.takeTurn(now: now.addingTimeInterval(21)) }())
-    #expect(search.remainingTurns == 11)
+    #expect(search.remainingTurns == 5)
     #expect({ !search.shouldRetryLocalization(pose: true, scanReady: false, measurementsReady: false, aligned: false,
         rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(301)) }())
     #expect(search.outcome == .timedOut)
@@ -326,6 +326,8 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
     var observationRevision: UInt64 = 1
     var fusions: [UInt64] = []
     var resets: [UInt64] = []
+    var confirmations: [UInt64] = []
+    var rejectConfirmation = false
     var aligned = false
     var rejectReset = false
     var fusionHasCandidate = true
@@ -346,6 +348,12 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
             underBodyAllowance: true, x: 0, z: 0, yaw: 0, floorY: 0, observationRevision: observationRevision, route: [], joints: [])
     }
     func setAligned(_ value: Bool) { aligned = value }
+    func setRejectConfirmation(_ value: Bool) { rejectConfirmation = value }
+    func confirmLocalization(_ handle: UInt64, sequence: UInt64, matchSequence: UInt64, frame: String, candidate: Int) async throws {
+        confirmations.append(sequence)
+        if rejectConfirmation { throw WendyError(message: "Go2 moved during confirmation.") }
+        aligned = true
+    }
     func setRejectReset(_ value: Bool) { rejectReset = value }
     func resetLocalization(_ handle: UInt64, sequence: UInt64, frame: String) async throws {
         resets.append(sequence)
@@ -384,18 +392,26 @@ private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobot
         }
         return progress
     }
+    func completeSearch() {
+        progress.SearchState = "complete"
+        progress.SearchMessage = "Position matched"
+        progress.Fusion = RobotFusionReport(message: "Position matched", candidates: [.init(X: 1, Z: 2, Yaw: 0, FloorY: 0, RMS: 0.1, Coverage: 0.8)],
+            tracking: .init(independentViews: 2, novelFraction: 0.5, selected: 0, message: ""), Accepted: 80, Rejected: 0,
+            waitingForObservations: false, visualUsed: false, observationRevision: observationRevision)
+    }
     func publish(turns: Int, moves: Int? = nil, phase: String? = nil) {
         progress.SearchTurns = turns; progress.SearchMoves = moves; progress.SearchPhase = phase
     }
 }
 
 @MainActor
-private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = false,
+private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = false, reconnecting: Bool = false,
                                visualMatcher: any RobotVisualMatching = RobotVisualLocalization(),
                                _ body: @MainActor (SiteRobotMapModel, RotationTestRobot) async throws -> Void) async throws {
     let robot = RotationTestRobot(measurements: measurements, rejectTurns: rejectTurns)
     let model = SiteRobotMapModel(observationClient: robot, turningClient: robot, searchClient: robot, visualMatcher: visualMatcher)
     model.serial = "rotation-test-\(UUID())"
+    if reconnecting { model.reconnectRobot() }
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -418,6 +434,7 @@ private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = fa
 
 @MainActor @Test func robotTelemetryRecoversFromPollingErrorWithoutRestartingMovement() async throws {
     try await withRotationModel { model, robot in
+        await robot.configureFusion(candidate: false)
         await robot.failNextPoll()
         for _ in 0..<250 {
             if await robot.opens == 2, model.reading?.pose == true { break }
@@ -831,8 +848,10 @@ private final class PresetTestMatcher: RobotVisualMatching {
         try await Task.sleep(for: .milliseconds(1200))
         #expect(await robot.fusions.isEmpty)
         await robot.setObservationRevision(2)
-        for _ in 0..<200 { if !model.candidates.isEmpty { break }; try await Task.sleep(for: .milliseconds(10)) }
-        #expect(model.candidates.count == 1)
+        for _ in 0..<200 { if model.reading?.aligned == true { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.reading?.aligned == true)
+        #expect(model.candidates.isEmpty)
+        #expect(await robot.confirmations.count == 1)
         #expect(model.error == nil)
         #expect(model.rotationState == .idle)
         #expect(await robot.fusions.count == 1)
@@ -841,7 +860,7 @@ private final class PresetTestMatcher: RobotVisualMatching {
     }
 }
 
-@MainActor @Test func passiveDiscoveryRecoveryIsBoundedAndNeverRetriesTheSameObservation() async throws {
+@MainActor @Test func passiveRecoveryDoesNotGiveUp() async throws {
     try await withRotationModel { model, robot in
         await robot.configureFusion(candidate: false)
         model.startRotationSearch()
@@ -850,11 +869,15 @@ private final class PresetTestMatcher: RobotVisualMatching {
         for _ in 0..<100 { if model.rotationState.canRetry { break }; try await Task.sleep(for: .milliseconds(10)) }
         for revision in 2...5 {
             await robot.setObservationRevision(UInt64(revision))
-            try await Task.sleep(for: .milliseconds(1200))
-            #expect(await robot.fusions.count == min(revision - 1, 3))
+            for _ in 0..<250 {
+                if await robot.fusions.count == revision - 1 { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(await robot.fusions.count == revision - 1)
         }
-        try await Task.sleep(for: .milliseconds(1200))
-        #expect(await robot.fusions.count == 3)
+        try await Task.sleep(for: .milliseconds(2200))
+        #expect(await robot.fusions.count == 4)
+        #expect(await robot.confirmations.isEmpty)
         #expect(await robot.searches.count == 1)
         #expect(await robot.turns.isEmpty)
         #expect(model.rotationState.canRetry)
@@ -880,6 +903,7 @@ private final class PresetTestMatcher: RobotVisualMatching {
         #expect(await robot.fusions.count == 1)
         #expect(await robot.searches.count == 1)
         #expect(await robot.stops.count == 1)
+        #expect(await robot.confirmations.isEmpty)
     }
 }
 
@@ -948,5 +972,120 @@ private final class PresetTestMatcher: RobotVisualMatching {
             #expect(await robot.fusions.isEmpty)
             if !retry { #expect(model.rotationState == .idle) }
         }
+    }
+}
+
+
+@MainActor @Test func restartDiscoveryCanReplaceAnActiveStationarySearch() async throws {
+    try await withRotationModel { model, robot in
+        model.startRotationSearch()
+        for _ in 0..<100 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        try #require(model.localizing)
+        try #require(model.reading?.moving == false)
+        #expect(model.canRestartDiscovery)
+        model.restartDiscovery()
+        for _ in 0..<100 { if await robot.searches.count == 2 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await robot.resets.count == 1)
+        #expect(await robot.searches.count == 2)
+        #expect(model.error == nil)
+    }
+}
+
+@MainActor @Test func reconnectRobotRequestsTelemetryWithoutStartingDiscovery() async throws {
+    let robot = RotationTestRobot(measurements: true, rejectTurns: false)
+    let model = SiteRobotMapModel(observationClient: robot, turningClient: robot, searchClient: robot)
+    model.serial = "reconnect-test"
+    model.localizing = true
+    model.error = "The robot session expired."
+    #expect(model.canReconnectRobot)
+    model.reconnectRobot()
+    #expect(model.reconnectGeneration == 1)
+    #expect(!model.localizing)
+    #expect(model.rotationState == .idle)
+    #expect(model.error == nil)
+    #expect(await robot.searches.isEmpty)
+    #expect(await robot.turns.isEmpty)
+    model.connecting = true
+    model.reconnectRobot()
+    #expect(model.reconnectGeneration == 1)
+}
+
+@MainActor @Test func staleConfirmationRecoversAtRest() async throws {
+    try await withRotationModel { model, robot in
+        await robot.setRejectConfirmation(true)
+        model.startRotationSearch()
+        for _ in 0..<100 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        await robot.failSearch()
+        for _ in 0..<100 { if model.rotationState.canRetry { break }; try await Task.sleep(for: .milliseconds(10)) }
+        await robot.setObservationRevision(2)
+        for _ in 0..<250 {
+            let confirmed = await robot.confirmations.count
+            if model.rotationState.canRetry && !model.localizing && model.candidates.isEmpty && confirmed == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await robot.confirmations.count == 1)
+        #expect(model.candidates.isEmpty)
+        await robot.setRejectConfirmation(false)
+        await robot.setObservationRevision(3)
+        for _ in 0..<250 { if model.reading?.aligned == true { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.reading?.aligned == true)
+        #expect(await robot.confirmations.count == 2)
+        #expect(await robot.searches.count == 1)
+        #expect(await robot.turns.isEmpty)
+    }
+}
+
+@MainActor @Test func lostAlignmentRecoversAtRest() async throws {
+    try await withRotationModel { model, robot in
+        model.startRotationSearch()
+        for _ in 0..<100 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        await robot.failSearch()
+        await robot.setAligned(true)
+        for _ in 0..<100 { if model.reading?.aligned == true { break }; try await Task.sleep(for: .milliseconds(10)) }
+        await robot.setAligned(false)
+        for _ in 0..<250 { if await robot.confirmations.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await robot.confirmations.count == 1)
+        #expect(await robot.searches.count == 1)
+        #expect(await robot.turns.isEmpty)
+    }
+}
+
+@MainActor @Test func stopPreventsAlignmentRecovery() async throws {
+    try await withRotationModel { model, robot in
+        await robot.setAligned(true)
+        for _ in 0..<100 { if model.reading?.aligned == true { break }; try await Task.sleep(for: .milliseconds(10)) }
+        model.stop()
+        await robot.setAligned(false)
+        await robot.setObservationRevision(2)
+        try await Task.sleep(for: .milliseconds(2200))
+        #expect(await robot.fusions.isEmpty)
+        #expect(await robot.confirmations.isEmpty)
+        #expect(await robot.searches.isEmpty)
+    }
+}
+
+
+@MainActor @Test func completedSearchAppliesPosition() async throws {
+    try await withRotationModel { model, robot in
+        model.startRotationSearch()
+        for _ in 0..<100 { if await robot.searches.count == 1 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        await robot.completeSearch()
+        for _ in 0..<200 { if model.reading?.aligned == true { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.reading?.aligned == true)
+        #expect(model.candidates.isEmpty)
+        #expect(await robot.confirmations.count == 1)
+        #expect(await robot.searches.count == 1)
+        #expect(await robot.turns.isEmpty)
+    }
+}
+
+
+@MainActor @Test func manualReconnectOnlyMatches() async throws {
+    try await withRotationModel(reconnecting: true) { model, robot in
+        for _ in 0..<250 { if model.reading?.aligned == true { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.reading?.aligned == true)
+        #expect(await robot.confirmations.count == 1)
+        #expect(await robot.searches.isEmpty)
+        #expect(await robot.turns.isEmpty)
     }
 }

@@ -1121,7 +1121,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: wendylabsinc/WendyOS-Builder
-          ref: 7206daae5b379794fbe36cf978cd77e3c5b0ec71
+          ref: 21bf838798dc16ac2bdbf3e7d1c0e0d88c74fd65
           path: .ci-loopback-builder
           sparse-checkout: recipes-kernel/v4l2loopback
           persist-credentials: false
@@ -1931,3 +1931,5 @@ jobs:
           python3 .github/ci-tests/host-sensor-loopback/check_test.py
       - name: release priority tests
         run: node --test .github/scripts/release-priority.test.cjs
+      - name: macOS app publication gating tests
+        run: python3 .github/scripts/package-macos-app_test.py

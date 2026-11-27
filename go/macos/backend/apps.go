@@ -165,10 +165,9 @@ func forwardAppConnection(ctx context.Context, local net.Conn, dial func(context
 	defer stopRemote()
 	done := make(chan struct{}, 2)
 	copyStream := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
-		if half, ok := dst.(interface{ CloseWrite() error }); ok {
-			_ = half.CloseWrite()
-		} else {
+		_, err := io.Copy(dst, src)
+		half, canHalfClose := dst.(interface{ CloseWrite() error })
+		if err != nil || !canHalfClose || half.CloseWrite() != nil {
 			_ = dst.Close()
 		}
 		done <- struct{}{}

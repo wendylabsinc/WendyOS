@@ -517,18 +517,13 @@ type discoverDeviceInfo struct {
 }
 
 type discoverTableItem struct {
-	picker  tui.PickerItem
-	info    discoverDeviceInfo
-	lanName string
-	// lanKey is discoverycache.Key(ID, DisplayName) for this row's LAN
-	// device — the same identity upsertLANDevice merges rows by. It is the
-	// map key into m.probe, kept distinct from lanName (which stays a plain
-	// display name for the 'u'-key update lookup in lanDeviceAddr) so a
-	// DisplayName change or a DisplayName collision between two different
-	// device IDs can never orphan or cross-wire a probe state. Empty for
-	// non-LAN rows.
-	lanKey        string
-	defaultDevice string
+	picker       tui.PickerItem
+	info         discoverDeviceInfo
+	selectionKey string
+	// lanKey is the discovery cache identity used to merge LAN rows and track
+	// their probe state. lanPinKey identifies the same row's update target.
+	lanKey    string
+	lanPinKey string
 }
 
 // flashClearMsg is sent after a delay to clear the flash message.
@@ -775,8 +770,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			item := items[cursor]
-			addr := lanDeviceAddr(m.collection, item.lanName)
-			if addr == "" {
+			if item.lanKey == "" || item.info.Address == "" {
 				m.flashMessage = "Update is only supported for LAN devices."
 				m.flashIsError = true
 				return m, clearFlashAfter(3 * time.Second)
@@ -786,33 +780,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatingDeviceName = item.info.Name
 			m.flashMessage = "Checking " + item.info.Name + "..."
 			m.flashIsError = false
-			var pinKey string
-			for _, dev := range m.collection.LANDevices {
-				if strings.EqualFold(dev.DisplayName, item.lanName) {
-					pinKey = pinKeyForLANDevice(&dev)
-					break
-				}
-			}
-			return m, m.startDeviceUpdateCmd(addr, item.info.Name, pinKey)
-		case "d":
-			items := m.tableItems
-			cursor := m.table.Cursor()
-			if len(items) > 0 && cursor >= 0 && cursor < len(items) {
-				// A toggle, as on the Simulator and Cloud tabs: 'd' on the
-				// row the ✦ is already on clears it.
-				if discoverItemIsDefault(items[cursor], discoverDefaultKey()) {
-					_ = saveDefaultDevice("")
-					m.flashMessage = "Default device cleared."
-				} else {
-					deviceID := items[cursor].defaultDevice
-					_ = saveDefaultDevice(deviceID)
-					m.flashMessage = "Default device set to: " + deviceID
-				}
-				m.flashIsError = false
-				m.refreshTable()
-				return m, clearFlashAfter(3 * time.Second)
-			}
-			return m, nil
+			return m, m.startDeviceUpdateCmd(item.info.Address, item.info.Name, item.lanPinKey)
 		}
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
@@ -863,7 +831,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		key := discoverycache.Key(msg.ev.Device.ID, msg.ev.Device.DisplayName)
 		m.probe[key], _ = lanRowState(msg.ev)
 		m.hasResults = true
-		m.refreshTable()
+		m.refreshTableReplacingLANKey(msg.ev.Supersedes, key)
 		return m, waitLANEvent(msg.ch)
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -991,7 +959,7 @@ func (m discoverModel) View() string {
 		if m.canScrollTable() {
 			scrollHint = ", ←/→ scroll"
 		}
-		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, d toggle default, q quit")) + "\n")
+		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, q quit")) + "\n")
 	}
 
 	if state := m.collection.MeshDiscovery; state != nil && state.State != "not-connected" {
@@ -1135,12 +1103,27 @@ func (m discoverModel) bleWarningLine() string {
 }
 
 func (m *discoverModel) refreshTable() {
+	m.refreshTableReplacingLANKey("", "")
+}
+
+func (m *discoverModel) refreshTableReplacingLANKey(previousLANKey, newLANKey string) {
+	previousCursor := m.table.Cursor()
+	var selectedKey string
+	if previousCursor >= 0 && previousCursor < len(m.tableItems) {
+		item := m.tableItems[previousCursor]
+		if discoverRowIndex(m.tableItems, item.selectionKey) == previousCursor {
+			selectedKey = item.selectionKey
+			if previousLANKey != "" && item.lanKey == previousLANKey {
+				selectedKey = "lan:" + newLANKey
+			}
+		}
+	}
 	m.tableItems = discoverTableItems(m.collection)
 	// Stamp each LAN row with its probe state (and the current spinner frame
 	// while connecting) so the Agent/OS columns animate / show the error glyph.
 	frame := m.spinner.View()
 	for i := range m.tableItems {
-		if m.tableItems[i].lanName == "" {
+		if m.tableItems[i].lanKey == "" {
 			continue
 		}
 		st := m.probe[m.tableItems[i].lanKey]
@@ -1152,11 +1135,22 @@ func (m *discoverModel) refreshTable() {
 		}
 	}
 	pickerItems := discoverPickerItems(m.tableItems)
-	cols, rows := tui.PickerDeviceTableData(pickerItems, discoverDefaultKey(), true)
+	cols, rows := tui.PickerDeviceTableData(pickerItems, "", false)
+	// The marker column comes and goes with the provisioned glyphs, and bubbles
+	// re-renders the current rows against new columns: clear them first.
+	if len(cols) != len(m.table.Columns()) {
+		m.table.SetRows(nil)
+	}
 	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
-	if len(rows) > 0 && m.table.Cursor() < 0 {
-		m.table.SetCursor(0)
+	if len(rows) > 0 {
+		cursor := discoverRowIndex(m.tableItems, selectedKey)
+		if cursor < 0 {
+			cursor = min(max(previousCursor, 0), len(rows)-1)
+		}
+		if cursor != m.table.Cursor() {
+			m.table.SetCursor(cursor)
+		}
 	}
 	m.table.SetWidth(tui.PickerTableWidth(m.table.Columns()))
 	height := m.windowHeight
@@ -1164,6 +1158,23 @@ func (m *discoverModel) refreshTable() {
 		height = max(1, height-tui.PickerHintHeight(pickerItems, m.windowWidth, "  ⚠  "))
 	}
 	m.table.SetHeight(tui.PickerTableHeight(len(rows), height))
+}
+
+// An absent or ambiguous identity falls back to the previous row position.
+func discoverRowIndex(items []discoverTableItem, key string) int {
+	if key == "" {
+		return -1
+	}
+	found := -1
+	for i, item := range items {
+		if item.selectionKey == key {
+			if found >= 0 {
+				return -1
+			}
+			found = i
+		}
+	}
+	return found
 }
 
 // selectedHint returns the hint for the highlighted table row, e.g. the
@@ -1198,24 +1209,13 @@ func (m discoverModel) tableViewportWidth() int {
 	return tui.PickerTableWidth(m.table.Columns())
 }
 
-func lanDeviceAddr(collection *models.DevicesCollection, displayName string) string {
-	for i := range collection.LANDevices {
-		d := &collection.LANDevices[i]
-		if strings.EqualFold(d.DisplayName, displayName) {
-			return preferredLANAddress(*d)
-		}
-	}
-	return ""
-}
-
-func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...string) tea.Cmd {
+func (m discoverModel) startDeviceUpdateCmd(addr, name, pinKey string) tea.Cmd {
 	ctx := m.ctx
-	pinKey := pinKeyForAddr(addr)
-	if len(selectedKeys) > 0 && selectedKeys[0] != "" {
-		pinKey = selectedKeys[0]
+	if pinKey == "" {
+		pinKey = pinKeyForAddr(addr)
 	}
 	return func() tea.Msg {
-		latestVer, _, err := resolveAgentVersion(false)
+		latestVer, _, err := resolveAgentVersionFn(false)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("resolving agent version: %w", err)}
 		}
@@ -1266,7 +1266,9 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...s
 			// A trial that never listens is replaced only at its deadline.
 			newConn = nil
 		}
-		reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) { return waitForAgentRestart(ctx, addr) }
+		reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+			return waitForAgentRestartKeyed(ctx, addr, pinKey)
+		}
 		_, newConn, err = awaitAgentVerdict(ctx, newConn, reconnect, sha256Hash, func() {})
 		newConn.Close()
 		return discoverUpdateDoneMsg{deviceName: name, err: err}
@@ -1278,7 +1280,7 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...s
 func renderDeviceTable(collection *models.DevicesCollection) string {
 	items := discoverTableItems(collection)
 	pickerItems := discoverPickerItems(items)
-	cols, rows := tui.PickerDeviceTableData(pickerItems, discoverDefaultKey(), true)
+	cols, rows := tui.PickerDeviceTableData(pickerItems, "", false)
 	if len(rows) == 0 {
 		return ""
 	}
@@ -1307,9 +1309,9 @@ func newDiscoverTable(interactive bool) tui.BubbleTable {
 // noise. (The interactive `wendy discover` table uses tui.PickerDeviceTableData,
 // not these.) The full address is still available in the clipboard JSON.
 var (
-	discoverTableHeaders   = []string{"", "Name", "Type", "Version"}
-	discoverTableMinWidths = []int{3, 12, 10, 10}
-	discoverTableMaxWidths = []int{3, 33, 20, 16}
+	discoverTableHeaders   = []string{"Name", "Type", "Version"}
+	discoverTableMinWidths = []int{12, 10, 10}
+	discoverTableMaxWidths = []int{33, 20, 16}
 )
 
 var deviceTypeNames = map[string]string{
@@ -1322,6 +1324,7 @@ var deviceTypeNames = map[string]string{
 	"dragonwing-iq-8275": "Dragonwing IQ-8275",
 	"dragonwing-iq-9075": "Dragonwing IQ-9075",
 	"arduino-uno-q":      "Arduino UNO Q",
+	"orange-pi-5-pro":    "Orange Pi 5 Pro",
 	"x86_64":             "x86-64",
 	"vm-arm64":           "ARM64 VM",
 	"vm-x86-64":          "x86-64 VM",
@@ -1554,13 +1557,6 @@ func ethernetInterfaceUSBSummary(iface models.EthernetInterface) string {
 	return label
 }
 
-func discoverDefaultKey() string {
-	if cfg, err := config.Load(); err == nil {
-		return strings.ToLower(cfg.DefaultDevice)
-	}
-	return ""
-}
-
 func discoverTableItems(collection *models.DevicesCollection) []discoverTableItem {
 	var items []discoverTableItem
 	if collection == nil {
@@ -1577,7 +1573,14 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			continue
 		}
 		deviceType := "USB"
+		var selectionKey string
+		if d.SerialNumber != "" {
+			selectionKey = "usb-serial:" + d.VendorID + ":" + d.ProductID + ":" + d.SerialNumber
+		} else if d.NetworkInterface != "" {
+			selectionKey = "usb-interface:" + d.NetworkInterface
+		}
 		items = append(items, discoverTableItem{
+			selectionKey: selectionKey,
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),
 				Type:          deviceType,
@@ -1595,7 +1598,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address: d.Hostname,
 				Version: d.AgentVersion,
 			},
-			defaultDevice: firstNonEmpty(d.Hostname, d.DisplayName),
 		})
 	}
 	for _, d := range collection.MergedDevices() {
@@ -1605,17 +1607,11 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			usb = d.LAN.USB
 		}
 		address := d.Address()
-		defaultDevice := d.DisplayName
-		if d.Mesh != nil {
-			defaultDevice = d.Mesh.Selector
-		}
-		lanName := ""
-		lanKey := ""
+		var lanKey, lanPinKey string
 		if d.LAN != nil {
-			lanName = d.LAN.DisplayName
 			lanKey = discoverycache.Key(d.LAN.ID, d.LAN.DisplayName)
+			lanPinKey = pinKeyForLANDevice(d.LAN)
 			address = preferredLANAddress(*d.LAN)
-			defaultDevice = firstNonEmpty(d.LAN.Hostname, d.LAN.IPAddress, d.LAN.DisplayName)
 		}
 		hint := lanProbeHint(d.LAN)
 		key := d.DisplayName
@@ -1635,6 +1631,7 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			probe = tui.ProbeFailed
 		}
 		items = append(items, discoverTableItem{
+			selectionKey: discoverMergedSelectionKey(d, lanKey),
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),
 				Type:          deviceType,
@@ -1660,9 +1657,8 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Provisioned:  provisioned,
 				ProbeFailure: failure,
 			},
-			lanName:       lanName,
-			lanKey:        lanKey,
-			defaultDevice: defaultDevice,
+			lanKey:    lanKey,
+			lanPinKey: lanPinKey,
 		})
 	}
 	for _, d := range collection.Simulators {
@@ -1671,6 +1667,7 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 		const deviceType = "Simulator"
 		address := preferredLANAddress(d)
 		items = append(items, discoverTableItem{
+			selectionKey: "simulator:" + d.ID,
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),
 				Type:          deviceType,
@@ -1688,7 +1685,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address: address,
 				Version: d.AgentVersion,
 			},
-			defaultDevice: d.ID,
 		})
 	}
 	for _, d := range collection.ExternalDevices {
@@ -1699,6 +1695,7 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 		addr := externalProviderAddress(d.ProviderKey, d.ID)
 		deviceType := externalProviderDisplayName(d.ProviderKey)
 		items = append(items, discoverTableItem{
+			selectionKey: "provider:" + d.ProviderKey + ":" + d.ID,
 			picker: tui.PickerItem{
 				Name:    discovery.SanitiseDisplayName(d.DisplayName),
 				Type:    deviceType,
@@ -1717,7 +1714,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address: addr,
 				Version: d.AgentVersion,
 			},
-			defaultDevice: firstNonEmpty(d.ID, d.DisplayName),
 		})
 	}
 
@@ -1728,26 +1724,34 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 	return items
 }
 
+func discoverMergedSelectionKey(device models.DiscoveredDevice, lanKey string) string {
+	switch {
+	case lanKey != "":
+		return "lan:" + lanKey
+	case len(device.Externals) > 0:
+		// Merged provider rows are Wendy Lite boards. Use the same identity
+		// that groups their USB, LAN and BLE sightings.
+		external := device.Externals[0]
+		if id := external.LiteDedupID(); id != "" {
+			return "lite:" + id
+		}
+		return "lite-connection:" + external.ID
+	case device.Mesh != nil:
+		return "mesh:" + device.Mesh.Principal
+	case device.Bluetooth != nil:
+		if id := firstNonEmpty(device.Bluetooth.ID, device.Bluetooth.Address); id != "" {
+			return "ble:" + id
+		}
+	}
+	return ""
+}
+
 func discoverPickerItems(items []discoverTableItem) []tui.PickerItem {
 	pickerItems := make([]tui.PickerItem, 0, len(items))
 	for _, item := range items {
-		pickerItems = append(pickerItems, discoverPickerItem(item))
+		pickerItems = append(pickerItems, item.picker)
 	}
 	return pickerItems
-}
-
-func discoverPickerItem(item discoverTableItem) tui.PickerItem {
-	pickerItem := item.picker
-	if item.defaultDevice != "" {
-		pickerItem.DefaultKeys = append(pickerItem.DefaultKeys, item.defaultDevice)
-	}
-	return pickerItem
-}
-
-// discoverItemIsDefault reports whether item is the row the ✦ marks, matching
-// it the same way the table does.
-func discoverItemIsDefault(item discoverTableItem, defaultKey string) bool {
-	return tui.PickerItemIsDefault(discoverPickerItem(item), defaultKey)
 }
 
 func discoverSortKey(item tui.PickerItem) string {

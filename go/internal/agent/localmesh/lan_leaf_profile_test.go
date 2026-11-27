@@ -126,19 +126,11 @@ func TestLANQUICResumptionRechecksLeafProfile(t *testing.T) {
 					server.Certificates = []tls.Certificate{lanProfileCertificate(t, b.Device.Principal(), profile.usages, profile.ca)}
 					// Admit the old profile only for the first full handshake.
 					// The production resumption hook retains its strict verifier.
-					verifyPeer := client.VerifyPeerCertificate
-					client.VerifyPeerCertificate = func(raw [][]byte, chains [][]*x509.Certificate) error {
-						if strict.Load() {
-							return verifyPeer(raw, chains)
-						}
-						leaf, err := x509.ParseCertificate(raw[0])
-						if err != nil {
-							return err
-						}
-						return legacyLANProfileCheck([]*x509.Certificate{leaf}, b.Device.Principal())
-					}
 					verify := client.VerifyConnection
 					client.VerifyConnection = func(state tls.ConnectionState) error {
+						if !strict.Load() {
+							return legacyLANProfileCheck(state.PeerCertificates, b.Device.Principal())
+						}
 						resumed.Store(state.DidResume)
 						return verify(state)
 					}
