@@ -322,3 +322,206 @@ func TestFullSessionSlotsKeepPresence(t *testing.T) {
 	default:
 	}
 }
+
+// The broker confirms an acknowledgement whenever it arrives. A confirmation
+// that returns after its offer's grant expired and the offer was dropped must
+// cost nothing: ending presence for it drops the lease and interrupts new
+// sessions (WDY-4295).
+func TestLateOfferAcknowledgementKeepsPresence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	r, _, done, _ := startOfferRelay(t, ctx, nil)
+
+	var exp int64
+	short := r.sessionOffer("short-lived", nil, func(g *claims) {
+		g.Exp = g.Iat + 3
+		exp = g.Exp
+	})
+	r.queue(t, ctx, done, offerMessage(short))
+	late := r.nextAck(t, ctx, done)
+	if late.OfferId != short.OfferId {
+		t.Fatalf("acknowledged %q, want %q", late.OfferId, short.OfferId)
+	}
+	// Hold the confirmation until the grant has expired, then let the next
+	// offer drop the expired one.
+	time.Sleep(time.Until(time.Unix(exp, 0)) + 100*time.Millisecond)
+	next := r.sessionOffer("next", nil, nil)
+	r.queue(t, ctx, done, offerMessage(next))
+	ack := r.nextAck(t, ctx, done)
+	if ack.OfferId != next.OfferId {
+		t.Fatalf("acknowledged %q, want %q", ack.OfferId, next.OfferId)
+	}
+	r.queue(t, ctx, done, acknowledgedMessage(late))
+	// The broker may also outlive any local expiry history, including when
+	// churn would have filled the old cache. A confirmation alone can never
+	// authorize a session. Keep the other half of its pair distinct too.
+	r.queue(t, ctx, done, acknowledgedMessage(&pb.PresenceOfferAcknowledgement{
+		OfferId: "no-longer-retained", SessionId: uuid.NewString(),
+	}))
+	r.queue(t, ctx, done, acknowledgedMessage(ack))
+	if grant := r.nextJoin(t, ctx, done); grant != next.SessionGrantJws {
+		t.Fatal("served the session whose grant had expired")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("presence ended: %v", err)
+	default:
+	}
+}
+
+func TestRetainedOfferAcknowledgementMustMatchSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, _, done, _ := startOfferRelay(t, ctx, nil)
+	o := r.sessionOffer("retained", nil, nil)
+	r.queue(t, ctx, done, offerMessage(o))
+	ack := r.nextAck(t, ctx, done)
+	r.queue(t, ctx, done, acknowledgedMessage(&pb.PresenceOfferAcknowledgement{
+		OfferId: ack.OfferId, SessionId: uuid.NewString(),
+	}))
+	select {
+	case err := <-done:
+		if err == nil || err.Error() != "unknown relay offer acknowledgement" {
+			t.Fatalf("presence ended with %v, want mismatched acknowledgement", err)
+		}
+	case <-r.joins:
+		t.Fatal("served an offer whose acknowledgement did not match")
+	case <-ctx.Done():
+		t.Fatal("mismatched acknowledgement was not rejected")
+	}
+}
+
+// A confirmation that arrives after the grant expired, with the offer still
+// retained, starts no session: the broker admits no proof after expiry.
+func TestExpiredOfferIsNotServed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	r, _, done, logs := startOfferRelay(t, ctx, nil)
+
+	var exp int64
+	short := r.sessionOffer("short-lived", nil, func(g *claims) {
+		g.Exp = g.Iat + 3
+		exp = g.Exp
+	})
+	r.queue(t, ctx, done, offerMessage(short))
+	late := r.nextAck(t, ctx, done)
+	time.Sleep(time.Until(time.Unix(exp, 0)) + 100*time.Millisecond)
+	r.queue(t, ctx, done, acknowledgedMessage(late))
+	// Messages are handled in order, so the late confirmation was handled
+	// before this session starts.
+	next := r.sessionOffer("next", nil, nil)
+	r.queue(t, ctx, done, offerMessage(next))
+	r.queue(t, ctx, done, acknowledgedMessage(r.nextAck(t, ctx, done)))
+	if grant := r.nextJoin(t, ctx, done); grant != next.SessionGrantJws {
+		t.Fatal("served the session whose grant had expired")
+	}
+	select {
+	case grant := <-r.joins:
+		t.Fatalf("a second session joined (expired grant: %v)", grant == short.SessionGrantJws)
+	case err := <-done:
+		t.Fatalf("presence ended: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if n := logs.FilterMessage("cloud relay session failed").Len(); n > 1 {
+		t.Fatalf("%d sessions failed, want only the one the test broker ends", n)
+	}
+}
+
+// A session that has started holds a session slot, not a place among the
+// offers waiting to start, so more short sessions than maxWaitingOffers can
+// follow each other within one grant lifetime (WDY-4295).
+func TestStartedSessionsLeaveRoomForNewOffers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, _, done, _ := startOfferRelay(t, ctx, nil)
+
+	for i := 0; i < maxWaitingOffers+8; i++ {
+		o := r.sessionOffer(fmt.Sprintf("offer-%d", i), nil, nil)
+		r.queue(t, ctx, done, offerMessage(o))
+		ack := r.nextAck(t, ctx, done)
+		if ack.OfferId != o.OfferId {
+			t.Fatalf("acknowledged %q, want %q", ack.OfferId, o.OfferId)
+		}
+		r.queue(t, ctx, done, acknowledgedMessage(ack))
+		if grant := r.nextJoin(t, ctx, done); grant != o.SessionGrantJws {
+			t.Fatalf("joined with the wrong grant for %q", o.OfferId)
+		}
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("presence ended: %v", err)
+	default:
+	}
+}
+
+// Offers waiting to start are still limited: the one past the limit is refused
+// on its own, and admitted again once a waiting session has started.
+func TestWaitingOffersAreLimited(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, _, done, logs := startOfferRelay(t, ctx, nil)
+
+	var first *pb.PresenceOfferAcknowledgement
+	var firstGrant string
+	for i := 0; i < maxWaitingOffers; i++ {
+		o := r.sessionOffer(fmt.Sprintf("waiting-%d", i), nil, nil)
+		r.queue(t, ctx, done, offerMessage(o))
+		ack := r.nextAck(t, ctx, done)
+		if i == 0 {
+			first, firstGrant = ack, o.SessionGrantJws
+		}
+	}
+	r.queue(t, ctx, done, offerMessage(r.sessionOffer("one-too-many", nil, nil)))
+	// Starting the first session handles everything queued before it.
+	r.queue(t, ctx, done, acknowledgedMessage(first))
+	if grant := r.nextJoin(t, ctx, done); grant != firstGrant {
+		t.Fatal("joined with the wrong grant")
+	}
+	flushCloudDiagnostics(t)
+	refused := logs.FilterMessage("refused cloud relay offer").All()
+	if len(refused) != 1 || refused[0].ContextMap()["offer_id"] != "one-too-many" {
+		t.Fatalf("refusals logged %v, want only the offer past the limit", refused)
+	}
+	room := r.sessionOffer("room-again", nil, nil)
+	r.queue(t, ctx, done, offerMessage(room))
+	if ack := r.nextAck(t, ctx, done); ack.OfferId != room.OfferId {
+		t.Fatalf("acknowledged %q, want %q", ack.OfferId, room.OfferId)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("presence ended: %v", err)
+	default:
+	}
+}
+
+func TestOfferRoom(t *testing.T) {
+	offers := func(waiting, started int) map[string]*offerState {
+		m := map[string]*offerState{}
+		for i := 0; i < waiting; i++ {
+			m[fmt.Sprintf("w%d", i)] = &offerState{}
+		}
+		for i := 0; i < started; i++ {
+			m[fmt.Sprintf("s%d", i)] = &offerState{started: true}
+		}
+		return m
+	}
+	for _, tc := range []struct {
+		name             string
+		waiting, started int
+		refused          bool
+	}{
+		{"empty", 0, 0, false},
+		{"one place left among waiting offers", maxWaitingOffers - 1, 100, false},
+		{"waiting offers at the limit", maxWaitingOffers, 0, true},
+		{"only started sessions", 0, maxRetainedOffers - 1, false},
+		{"retained offers at the limit", 1, maxRetainedOffers - 1, true},
+	} {
+		err := offerRoom(offers(tc.waiting, tc.started))
+		if (err != nil) != tc.refused {
+			t.Errorf("%s: err = %v, want refused = %v", tc.name, err, tc.refused)
+		}
+		if err != nil && status.Code(err) != codes.ResourceExhausted {
+			t.Errorf("%s: code = %v, want ResourceExhausted", tc.name, status.Code(err))
+		}
+	}
+}

@@ -234,11 +234,7 @@ func openPortSession(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, v
 	if c.Request != binding(descriptor) || c.Caller != binding(publicDER(key)) {
 		return nil, fmt.Errorf("Cloud tunnel grant request/key mismatch")
 	}
-	s, err := join(ctx, response.Broker, response.SessionGrantJws, c, key, pb.JoinRole_JOIN_ROLE_CALLER, verifier.dialRelay)
-	if err != nil {
-		return nil, err
-	}
-	return s, nil
+	return join(ctx, response.Broker, response.SessionGrantJws, c, key, pb.JoinRole_JOIN_ROLE_CALLER, verifier.dialRelay)
 }
 
 // PrincipalRequest binds a tunnel-v2 request to a fresh caller key.
