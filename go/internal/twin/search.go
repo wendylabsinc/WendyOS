@@ -271,7 +271,7 @@ searchLoop:
 		if turn == maxTurns {
 			message := "Checking new observations while Go2 stays still. " + lastReason
 			if input.Explore && blockedReason != "" {
-				message = "Waiting for observed clear floor before another nearby move."
+				message = "Waiting for observed clear floor before another nearby move. " + details()
 			}
 			awaitObservations(turn, message, input.Explore)
 			continue

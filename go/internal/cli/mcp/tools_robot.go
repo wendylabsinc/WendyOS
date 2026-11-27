@@ -36,8 +36,8 @@ func (s *mcpServer) registerRobotTools(srv *server.MCPServer) {
 	}
 	register("unitree_pairings", "Read saved Unitree Go2 pairings and their current connection status directly from the selected Wendy device. Does not scan, pair, or move a robot. Use this for 'is my Go2 paired?' instead of interactive wendy device pair commands.", true)
 	serial := mcpgo.WithString("serial", mcpgo.Description("Serial returned by unitree_pairings. Omit when exactly one robot is paired; never invent one. Include a known serial for Stop to avoid a pairing lookup."))
-	register("robot_status", "Read the Go2's live digital-twin position, controller status, and saved named destinations. ReadinessMessage and readiness fields describe current state; LastMotionFailure is historical and legacy Message may preserve it. IdleMeasurementsReady and IdleReadinessMessage permit bounded passive matching while stationary, not movement; MeasurementsReady remains strict. This only reads state, not localization. For align/localize/find my position, use robot_command action localize. If observations are absent, use action connect.", true, serial)
-	register("robot_command", "Control the Go2 with bounded goals. connect starts observations. localize matches a saved room without motion; localize_active permits movement-assisted alignment only when requested. find_active uses fresh onboard camera frames and local vision to search by query: at most five minutes, six turns and three nearby viewpoints on measured clear floor; no saved object location or map required. It stops on a visual match, which does not authorize approach. These active actions use original receipt polling; never restart them. stop cancels. turn uses signed degrees; forward measures distance with odometry. go_to uses a saved destination; go_to_object needs navigable evidence_id from robot_find_object. remember saves current map position. Plain align means localize, never arbitrary turns. Individual motion goals last at most 30 seconds. Controller obstacle/freshness checks remain authoritative. Reuse request_id for retries. Report exact state/message; running is not completed. Perform supported prerequisite recovery within the turn, never repeat failed movement as recovery. find_active includes camera capture and motion under the current approval policy.", false, serial,
+	register("robot_status", "Read Go2 state and saved destinations. Before go_to, Aligned=false requires localize_active, then confirmed alignment. ReadinessMessage and readiness fields describe current state; LastMotionFailure is historical and legacy Message may preserve it. IdleMeasurementsReady and IdleReadinessMessage permit bounded passive matching while stationary, not movement; MeasurementsReady remains strict. This only reads state. A standalone align/localize request uses localize without motion. If observations are absent, use action connect.", true, serial)
+	register("robot_command", "Control Go2. Before go_to, call robot_status; if unaligned, localize_active and await confirmed alignment, then go_to. connect starts observations. localize matches a saved room without motion; localize_active aligns with bounded motion when requested or needed before an authorized move; obey no-extra-motion restrictions. Confirm alignment before moving. find_active searches query with fresh onboard views: five minutes, six turns, three nearby viewpoints on measured clear floor; no prior object location or map required. It stops on a visual match, which does not authorize approach. These active actions use original receipt polling; never restart them. stop cancels. turn uses signed degrees; forward measures distance with odometry. go_to uses a saved destination; go_to_object needs navigable evidence_id from robot_find_object. remember saves current map position. Plain align means localize, never arbitrary turns. Motion goals last at most 30 seconds. Controller obstacle/freshness checks remain authoritative. Reuse request_id for retries. Report state/message; running is not completed. Recover prerequisites in this turn; never repeat failed movement. Both active actions include camera capture and motion under the current approval policy.", false, serial,
 		mcpgo.WithString("action", mcpgo.Required(), mcpgo.Enum("connect", "localize", "localize_active", "find_active", "turn", "forward", "go_to", "go_to_object", "remember", "stop")),
 		mcpgo.WithString("request_id", mcpgo.Required(), mcpgo.Description("Unique ID of 8 to 80 characters for this user command. Reuse for retries; never reuse for a different command.")),
 		mcpgo.WithBoolean("receipt_only", mcpgo.Description("Runtime retry lookup: return the existing receipt for request_id without executing or starting observations. Missing receipts have unknown outcome.")),
@@ -154,14 +154,26 @@ func (s *mcpServer) handleRobotTool(ctx context.Context, req mcpgo.CallToolReque
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&out); err != nil {
 		return errResult(errCodeInvalidArgument, err.Error()), nil
 	}
-	if req.Params.Name == "robot_command" && stringParam(req, "action") == "find_active" {
-		out, err = provideRobotSearchView(ctx, serial, stringParam(req, "request_id"), out,
+	action := stringParam(req, "action")
+	if req.Params.Name == "robot_command" && (action == "find_active" || action == "localize_active") {
+		field, path := "object_search", "/v1/robot/find-view"
+		if action == "localize_active" {
+			field, path = "localization_camera", "/v1/robot/localize-view"
+		}
+		next, captureErr := provideRobotCameraView(ctx, serial, stringParam(req, "request_id"), out, field, path,
 			func(ctx context.Context, serial string) (string, cameraSnapshot, int64, error) {
 				return captureGo2SnapshotOnConn(ctx, conn, serial, true)
 			}, func(ctx context.Context) (net.Conn, error) { return s.robotDial(ctx, conn) })
-		if err != nil {
-			return errResult(errCodeDeviceUnreachable, "Object-search camera handshake failed; use the same receipt to check its outcome, do not restart motion: "+err.Error()), nil
+		if captureErr != nil {
+			if action == "localize_active" && ctx.Err() == nil {
+				// Camera support is optional for localization. The controller may
+				// fall back to LiDAR, so keep following its acknowledged receipt.
+				out["message"] = fmt.Sprint(out["message"]) + " Camera frame unavailable: " + captureErr.Error() + ". Following the same localization receipt; no motion was restarted."
+				return okResult(out), nil
+			}
+			return errResult(errCodeDeviceUnreachable, "Robot camera handshake failed; use the same receipt to check its outcome, do not restart motion: "+captureErr.Error()), nil
 		}
+		out = next
 	}
 	return okResult(out), nil
 }

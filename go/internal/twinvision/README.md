@@ -42,11 +42,20 @@ as base64, `frame`, a nine-element `lens`, and numeric `provenance`. Set
 `WENDY_TWIN_VISION_WORKER` to the packaged worker, then run `TestNativeReplay`.
 The replay does not connect to a camera or robot or modify metadata.
 
-This extraction covers fixed-camera alignment. USD geometry interpretation and
-Go2 onboard-camera visual hints still originate in clients. LiDAR registration,
-reference persistence, bounded turning and motion guards already run in the
-Linux service. Those remaining client inputs need a separate migration before
-all robot-localization behavior can be called identical.
+Chat's `localize_active` also uses the Linux worker before the shared LiDAR
+search. Its receipt can contain `localization_camera` with a `view_id`, state,
+and message. MCP responds to each opaque demand with one fresh native Go2 JPEG
+at `POST /v1/robot/localize-view`, preserving the original command identity.
+The service verifies two frames, their odometry and controller ownership, and
+the room revision before passing a body-pose hint to LiDAR fusion. A camera
+failure leaves the bounded LiDAR search available and remains in its diagnostic
+receipt. Camera evidence alone never confirms alignment.
+
+This is not full desktop parity. Chat uses the native Go2 lens preset as an
+estimate; measured profiles stored only on macOS are not imported. Desktop
+geometry interpretation and its visual-reference filtering also remain client
+work. LiDAR registration, reference persistence, bounded turning and motion
+guards use the shared Linux service.
 
 Robot diagnostics should call `POST /v1/robot` with
 `{"Operation":"observe","Serial":"..."}`. This reads the existing observation

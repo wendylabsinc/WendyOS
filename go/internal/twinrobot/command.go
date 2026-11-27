@@ -21,11 +21,18 @@ type Command struct {
 	ObjectBox  [4]float64  `json:"-"`
 }
 
+type LocalizationCameraProgress struct {
+	ViewID  string `json:"view_id,omitempty"`
+	State   string `json:"state"`
+	Message string `json:"message"`
+}
+
 type CommandResult struct {
-	ObjectSearch *ObjectSearchProgress `json:"object_search,omitempty"`
-	State        string                `json:"state"`
-	Message      string                `json:"message"`
-	Snapshot     SiteRobotSnapshot     `json:"snapshot"`
+	LocalizationCamera *LocalizationCameraProgress `json:"localization_camera,omitempty"`
+	ObjectSearch       *ObjectSearchProgress       `json:"object_search,omitempty"`
+	State              string                      `json:"state"`
+	Message            string                      `json:"message"`
+	Snapshot           SiteRobotSnapshot           `json:"snapshot"`
 }
 
 var errChatLocalizationBusy = errors.New("Localization deferred while a chat movement is active. Stop the robot first to change its alignment.")

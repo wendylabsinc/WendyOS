@@ -164,6 +164,7 @@ func (s *Server) prepareActiveLocalization(requestContext context.Context, sessi
 
 func (s *Server) runActiveLocalization(ctx context.Context, cancel context.CancelFunc, session *robotSession, q robotCommandRequest, root uint64, input twinrobot.SiteFusionRequest, owner activeSearchOwner) {
 	defer cancel()
+	input.Visual = s.initialLocalizationCamera(ctx, session, q, input.Frame, owner)
 	// Search's cancel-on-completion applies only to its loop. Its separate owner
 	// remains valid long enough to confirm the unique, corroborated candidate.
 	searchContext, cancelSearch := context.WithCancel(ctx)
@@ -185,15 +186,27 @@ func (s *Server) runActiveLocalization(ctx context.Context, cancel context.Cance
 				session.searchTurns, session.searchMoves = turns, moves
 			}
 			session.searchMu.Unlock()
-			updateActiveReceipt(session, q, twinrobot.CommandResult{State: "running", Message: fmt.Sprintf("Movement-assisted localization: %s (%d turns, %d viewpoint moves).", message, turns, moves), Snapshot: session.robot.Status()})
+			updateActiveReceipt(session, q, twinrobot.CommandResult{LocalizationCamera: localizationCameraProgress(session, q.RequestID), State: "running", Message: activeLocalizationProgress(ctx, message, turns, moves), Snapshot: session.robot.Status()})
 		case <-done:
 			result := s.concludeActiveLocalization(ctx, job, input, owner)
 			owner.Close()
 			result.Snapshot = session.robot.Status()
+			result.LocalizationCamera = localizationCameraProgress(session, q.RequestID)
 			s.finishActiveLocalization(session, q, root, result)
 			return
 		}
 	}
+}
+
+func activeLocalizationProgress(ctx context.Context, message string, turns, moves int) string {
+	text := fmt.Sprintf("Movement-assisted localization: %s (%d turns, %d viewpoint moves).", message, turns, moves)
+	if deadline, ok := ctx.Deadline(); ok {
+		// Update a stationary wait every thirty seconds without flooding chat on
+		// every receipt poll. This is an upper bound, never a renewed deadline.
+		remaining := max(0, int((time.Until(deadline)+30*time.Second-time.Nanosecond)/(30*time.Second))*30)
+		text += fmt.Sprintf(" At most %d seconds remain in this search.", remaining)
+	}
+	return text
 }
 
 func (s *Server) concludeActiveLocalization(ctx context.Context, job *robotSession, input twinrobot.SiteFusionRequest, owner activeSearchOwner) twinrobot.CommandResult {
@@ -202,7 +215,10 @@ func (s *Server) concludeActiveLocalization(ctx context.Context, job *robotSessi
 	}
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return result("failed", "Movement-assisted localization reached its five-minute limit without confirming an alignment.")
+			job.searchMu.Lock()
+			reason := job.searchMessage
+			job.searchMu.Unlock()
+			return result("failed", "Movement-assisted localization reached its five-minute limit without confirming an alignment. "+reason)
 		}
 		return result("canceled", "Movement-assisted localization was canceled.")
 	}
