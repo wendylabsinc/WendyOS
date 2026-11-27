@@ -47,7 +47,8 @@ The CLI gathers LAN, Wendy Net, and Cloud candidates in parallel. For UUID
 hostnames, direct LAN gets a 500 ms head start before the CLI chooses another
 ready route. For friendly hostnames, the CLI allows up to 3 seconds for LAN
 and Cloud discovery to check for conflicts. If it still needs a route, Wendy
-Net discovery can run for up to 15 seconds, including over Bluetooth.
+Net discovery can run for up to 15 seconds, including over Bluetooth. Probing
+a discovered mesh route can take another 15 seconds.
 
 Friendly hostnames require a trusted binding from the signed Wendy Net
 directory, authenticated Cloud inventory, or a saved pin. If the directory
@@ -61,7 +62,8 @@ organization and choose the hostname form:
 
 - **Friendly hostname.** When LAN discovery is the only available source, the
   CLI requires a saved pin for that private hostname in the selected
-  organization. An ordinary `.local` pin does not establish the binding.
+  organization. An ordinary LAN pin, such as `jetson.local` or a bare
+  hostname, does not establish the binding.
   To save it, connect once by the exact friendly hostname while Cloud
   inventory is reachable or the device appears in the signed Wendy Net
   directory. The CLI verifies the peer's certificate before saving the

@@ -79,9 +79,12 @@ def acquire(directory, key, url, digest, size=None, offline=False):
     path = directory / key
     if not offline:
         require(url.startswith(PREFIX) or url.startswith(RAW), 'unapproved artifact origin')
+        # Release downloads can transiently time out before returning any bytes.
+        # Allow three bounded attempts within the workflow's 210-second limit.
         subprocess.run(['curl', '--fail', '--silent', '--show-error', '--location', '--proto', '=https',
                         '--proto-redir', '=https', '--max-time', '45', '--max-filesize', '45000000',
-                        '--output', str(path), url], timeout=55, check=True)
+                        '--retry', '2', '--retry-delay', '1',
+                        '--output', str(path), url], timeout=150, check=True)
     require(path.is_file() and (size is None or path.stat().st_size == size), 'artifact missing/wrong size: ' + key)
     require(sha(path) == digest, 'artifact digest mismatch: ' + key)
     return path
