@@ -1080,8 +1080,9 @@ type VideoService struct {
 	// gstMemo caches a successful element listing; see gstElements.
 	gstMemo gstElementsMemo
 	// readStableNames returns the udev by-id / by-path names keyed by resolved
-	// device path. Injectable so the enumeration can be tested without
-	// /dev/v4l. See video_stable_id.go for why these exist.
+	// device path, with same-serial twins marked. Injectable so the enumeration
+	// can be tested without /dev/v4l or sysfs. See video_stable_id.go for why
+	// these exist.
 	readStableNames func() map[string]stableNames
 
 	// Network camera state. registry and credentials are nil-safe throughout: a
@@ -1220,7 +1221,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 		},
 		capturePixelFormats: v4l2CapturePixelFormats,
 		readStableNames: func() map[string]stableNames {
-			return readStableNames(v4lByIDDir, v4lByPathDir)
+			return readStableNames(v4lByIDDir, v4lByPathDir, v4lSysDir)
 		},
 		classifyTransport:  camera.Classify,
 		cameraIdentity:     camera.IdentityOf,
@@ -2741,6 +2742,13 @@ func (s *VideoService) streamDeviceID(req *agentpb.StreamVideoRequest) (uint32, 
 	names := s.readStableNames()
 	devID, ok := resolveStableID(names, stableID)
 	if !ok {
+		// Not the same failure as an absent camera, and not the same fix: the
+		// name is one two connected cameras share, so resolving it to whichever
+		// holds udev's link today would be the silent wrong-camera failure
+		// again, one reboot later.
+		if err := sharedByIDRefusal(names, stableID); err != nil {
+			return 0, err
+		}
 		return 0, status.Errorf(codes.NotFound,
 			"no camera with stable id %q; ListVideoDevices reports %v",
 			stableID, knownStableIDs(names))

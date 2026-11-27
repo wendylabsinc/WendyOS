@@ -67,12 +67,42 @@ func OpenCameraMetadataStore(path string) (*CameraMetadataStore, error) {
 
 func (s *CalibratedFrameService) SetMetadataStore(store *CameraMetadataStore) { s.metadata = store }
 
+// refuseSharedByID refuses a "by-id:" identity that two connected cameras
+// share, with the error StreamVideo gives for it (see video_stable_id.go).
+//
+// The store never resolves an identity to a camera: a record is a calibration
+// filed under a name, and it describes whichever camera a client takes that
+// name to mean. While the name means two cameras, a lens measured on one must
+// not be read back for it or saved against it. Listing everything and removing
+// a record stay possible, since neither says which camera the record is for.
+func (s *CalibratedFrameService) refuseSharedByID(ids ...string) error {
+	if s.stableNames == nil {
+		return nil
+	}
+	var names map[string]stableNames
+	for _, id := range ids {
+		if !strings.HasPrefix(id, schemeByID+":") {
+			continue
+		}
+		if names == nil {
+			names = s.stableNames()
+		}
+		if err := sharedByIDRefusal(names, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *CalibratedFrameService) ListCameraMetadata(_ context.Context, req *pb.ListCameraMetadataRequest) (*pb.ListCameraMetadataResponse, error) {
 	if s.metadata == nil {
 		return nil, status.Error(codes.FailedPrecondition, "camera metadata store unavailable")
 	}
 	if len(req.GetStableIds()) > 256 {
 		return nil, status.Error(codes.InvalidArgument, "at most 256 camera identities")
+	}
+	if err := s.refuseSharedByID(req.GetStableIds()...); err != nil {
+		return nil, err
 	}
 	store := s.metadata
 	store.mu.Lock()
@@ -103,6 +133,9 @@ func (s *CalibratedFrameService) SetCameraMetadata(ctx context.Context, req *pb.
 		next = proto.Clone(req.Metadata).(*pb.CameraMetadata)
 		if next.StableId != req.StableId {
 			return nil, status.Error(codes.InvalidArgument, "camera identity mismatch")
+		}
+		if err := s.refuseSharedByID(req.StableId); err != nil {
+			return nil, err
 		}
 		if err := validateCameraMetadata(next); err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())

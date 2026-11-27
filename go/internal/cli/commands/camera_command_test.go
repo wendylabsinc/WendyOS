@@ -10,6 +10,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type cameraViewCommandClient struct {
@@ -87,6 +89,29 @@ func TestCameraViewNonInteractiveSelection(t *testing.T) {
 				t.Fatalf("listed = %v, want %v", client.listed, tc.listed)
 			}
 		})
+	}
+}
+
+func TestCameraViewSaysWhyASharedStableIDWasRefused(t *testing.T) {
+	// The agent refuses a by-id name two connected cameras share and names the
+	// ports to use instead. That sentence is the whole fix from the operator's
+	// side, so `camera view --stable-id` (and the chat tool that runs it) must
+	// print it rather than a summary of it.
+	const refusal = `stable id "by-id:usb-Acme_Cam_SN1-video-index0" is ambiguous: two or more connected cameras have the same vendor, model and serial number, so it cannot tell them apart; use the port-based id of the camera you mean: [by-path:usb-0:2.3:1.0-video-index0 by-path:usb-0:2.4:1.0-video-index0]`
+	client := &cameraViewCommandClient{err: status.Error(codes.FailedPrecondition, refusal)}
+	previous := resolveCameraTargetFn
+	resolveCameraTargetFn = func(context.Context, ...resolveOption) (*SelectedDevice, error) {
+		return &SelectedDevice{Agent: &grpcclient.AgentConnection{VideoService: client}}, nil
+	}
+	t.Cleanup(func() { resolveCameraTargetFn = previous })
+
+	cmd := newCameraViewCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--non-interactive", "--stable-id", "by-id:usb-Acme_Cam_SN1-video-index0"})
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("error = %v, want the agent's refusal in full", err)
 	}
 }
 
