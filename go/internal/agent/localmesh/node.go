@@ -51,6 +51,9 @@ type nodePeer struct {
 	replies        []ControlMessage
 	replyBytes     int
 	timestamp      *timestampReply
+
+	controlCreditWanted  atomic.Bool // Actor arms only while announcements wait for output capacity.
+	controlCreditPending atomic.Bool // At most one writer-to-actor notification per peer.
 }
 
 type nodeLink interface {
@@ -88,6 +91,7 @@ type nodeEvent struct {
 	controlResult chan error
 	result        chan error
 	timestamp     *timestampReply
+	controlCredit *nodePeer
 }
 
 // Node serializes all Babel/directory mutations. Radio providers only establish
@@ -565,6 +569,26 @@ func (n *Node) handle(e nodeEvent) error {
 		n.refresh()
 		return nil
 	}
+	if e.controlCredit != nil {
+		if e.controlCredit != p {
+			return nil
+		}
+		p.controlCreditPending.Store(false)
+		if p.retiring() {
+			return nil
+		}
+		// Solicited responses and blocked ingress retain priority over new
+		// announcements, just as they do on the maintenance path.
+		n.flushReplies(p)
+		if err := n.continueIngress(p); err != nil {
+			return err
+		}
+		n.pumpTimestamp(p)
+		if p.sync != nil {
+			n.flushAnnouncements(p, time.Now())
+		}
+		return nil
+	}
 	if e.packet != nil {
 		if p.retiring() {
 			// Packets queued before cancellation cannot revive a closing link.
@@ -674,13 +698,48 @@ func (n *Node) afterDirectoryChanges(p *nodePeer, changed []SignedManifest, prev
 
 func (n *Node) flushAnnouncements(p *nodePeer, now time.Time) {
 	if len(p.sync.pendingAnnouncements) == 0 {
+		p.controlCreditWanted.Store(false)
 		return
 	}
 	n.flushReplies(p)
-	if len(p.replies) == 0 {
+	waitingForCredit := len(p.replies) != 0
+	if !waitingForCredit {
 		// The actor is the sole producer. The writer can only free slots
 		// between measuring this budget and enqueueing the announcements.
-		n.queue(p, p.sync.drainAnnouncements(now, cap(p.control)-len(p.control)))
+		slots := cap(p.control) - len(p.control)
+		messages := p.sync.drainAnnouncements(now, slots)
+		waitingForCredit = len(messages) == slots
+		n.queue(p, messages)
+	}
+	// Remember exhaustion of the measured budget, even when the writer has
+	// already freed more slots. Queued frames can also release credit for a
+	// multi-frame announcement that did not fit the original free prefix.
+	if len(p.sync.pendingAnnouncements) != 0 && (waitingForCredit || len(p.control) != 0) {
+		p.controlCreditWanted.Store(true)
+		// Cover a writer dequeue racing the arm. Identity-only deferrals
+		// with free capacity remain on maintenance and cannot self-wake.
+		if waitingForCredit && len(p.control) < cap(p.control) {
+			n.signalControlCredit(p)
+		}
+	} else {
+		p.controlCreditWanted.Store(false)
+	}
+}
+
+// signalControlCredit never blocks the writer behind the actor. A full event
+// queue leaves the request armed for the next dequeue or maintenance tick.
+func (n *Node) signalControlCredit(p *nodePeer) {
+	if !p.controlCreditWanted.Load() || !p.controlCreditWanted.Swap(false) {
+		return
+	}
+	if !p.controlCreditPending.CompareAndSwap(false, true) {
+		return
+	}
+	select {
+	case n.events <- nodeEvent{id: p.id, controlCredit: p}:
+	default:
+		p.controlCreditPending.Store(false)
+		p.controlCreditWanted.Store(true)
 	}
 }
 
@@ -967,6 +1026,7 @@ func (n *Node) writeControls(ctx context.Context, p *nodePeer) error {
 		select {
 		case message := <-p.control:
 			p.controlMu.Unlock()
+			n.signalControlCredit(p)
 			if err := n.writePeerControl(p, message); err != nil {
 				return err
 			}

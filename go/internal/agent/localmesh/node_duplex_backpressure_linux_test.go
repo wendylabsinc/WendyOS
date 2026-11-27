@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"fmt"
 	"math/big"
 	"net"
 	"net/url"
@@ -41,6 +42,7 @@ type duplexObservedLink struct {
 	*streamNodeLink
 	certificateBytes atomic.Int64
 	gossipBodies     atomic.Int32
+	receivedIP       atomic.Int32
 }
 
 func (l *duplexObservedLink) ReadControl() (ControlMessage, error) {
@@ -101,7 +103,7 @@ func TestDirectoryDuplexSlowFiniteQueuesConverge(t *testing.T) {
 		{streamNodeLink: newBoundedStreamNodeLink(duplexSlowConn{right}, 1)},
 	}
 	var workers sync.WaitGroup
-	errors := make(chan error, 4)
+	errors := make(chan error, 6)
 	t.Cleanup(func() {
 		cancel()
 		for _, link := range links {
@@ -169,6 +171,10 @@ func TestDirectoryDuplexSlowFiniteQueuesConverge(t *testing.T) {
 		if len(peers[i].control) != cap(peers[i].control) || len(peers[i].replies) != maxDirectoryReplyFrames-directoryResponseReserve {
 			t.Fatal("both output queues were not filled to their bulk credit")
 		}
+		// A new publication is pending behind the existing reply backlog.
+		// This exercises writer-to-actor credit events during real duplex I/O.
+		peers[i].sync.markAnnouncement(wire, time.Now())
+		nodes[i].flushAnnouncements(peers[i], time.Now())
 	}
 	// Fill each tiny carrier receive queue before the node workers start.
 	// No test goroutine subsequently drains these queues or either outbox.
@@ -187,6 +193,30 @@ func TestDirectoryDuplexSlowFiniteQueuesConverge(t *testing.T) {
 		n, p := nodes[i], peers[i]
 		start(func() error { return n.writeControls(ctx, p) })
 		start(func() error { return n.readControls(ctx, p) })
+		link := links[i]
+		want := queueTestIP(160, byte(2-i))
+		start(func() error {
+			var assembler IPAssembler
+			for {
+				datagram, err := link.ReceiveDatagram(ctx)
+				if err != nil {
+					return err
+				}
+				packet, err := assembler.Receive(datagram, time.Now())
+				if err != nil {
+					return err
+				}
+				if len(packet) != 0 {
+					if !bytes.Equal(packet, want) {
+						return fmt.Errorf("IP packet changed during control pressure: got %x, want %x", packet, want)
+					}
+					link.receivedIP.Add(1)
+				}
+			}
+		})
+		if err := link.SendIP(1, queueTestIP(160, byte(i+1))); err != nil {
+			t.Fatal(err)
+		}
 	}
 	maintenance := time.NewTicker(5 * time.Millisecond)
 	defer maintenance.Stop()
@@ -238,6 +268,11 @@ func TestDirectoryDuplexSlowFiniteQueuesConverge(t *testing.T) {
 				}
 			}
 			complete = complete && found
+		}
+		if complete {
+			for _, link := range links {
+				complete = complete && link.receivedIP.Load() == 1
+			}
 		}
 		if complete {
 			for i, link := range links {
