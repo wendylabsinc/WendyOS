@@ -5,6 +5,7 @@ import fnmatch
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import tempfile
@@ -148,18 +149,16 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
         self.assertIn('test "$AUTOMATION_RESULT" = success', config["jobs"]["test"]["steps"][0]["run"])
         self.assertTrue(any("run-automation-regressions.py" in s.get("run", "") for s in job["steps"]))
 
-    def test_dependabot_tracks_every_repository_module(self):
-        config = load_yaml(ROOT / ".github/dependabot.yml")
-        directories = []
-        for update in config["updates"]:
-            if update["package-ecosystem"] == "gomod":
-                directories.extend(update.get("directories", [update.get("directory")]))
+    def test_renovate_tracks_every_repository_module(self):
+        # renovate.json5 is JSON5; the version-update scope is the "!path" list of its first
+        # packageRule, so every go.mod must be listed there to keep getting version updates.
+        config = (ROOT / "renovate.json5").read_text()
+        modules = re.findall(r'"!([^"]*go\.mod)"', config)
         # Git's tracked files exclude downloaded dependencies and temporary fixtures.
         tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
-        discovered = {"/" if p == "go.mod" else "/" + str(Path(p).parent)
-                      for p in tracked if p == "go.mod" or p.endswith("/go.mod")}
-        self.assertEqual(set(directories), discovered)
-        self.assertEqual(len(directories), len(set(directories)))
+        discovered = {p for p in tracked if p == "go.mod" or p.endswith("/go.mod")}
+        self.assertEqual(set(modules), discovered)
+        self.assertEqual(len(modules), len(set(modules)))
 
 
 if __name__ == "__main__":

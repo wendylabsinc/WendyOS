@@ -14,6 +14,10 @@
 #   - The model review is opt-in through the `review: security` label, like the other
 #     AI reviews. The Dependabot policy calls no model and still runs on every
 #     Dependabot PR without a label.
+#   - Renovate replaced Dependabot (2026-11-26); its PRs run the same policy. Renovate PRs
+#     do get repository secrets, so a Renovate PR the policy refuses (workflow tool
+#     versions and images, a refused Action pin) takes the model review once it carries
+#     the `review: security` label.
 name: AI Security Review
 
 on:
@@ -28,7 +32,12 @@ concurrency:
 
 env:
   CLAUDE_MODEL: claude-opus-4-8
-  IS_DEPENDABOT: ${{ github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.user.id == 49699333 && github.event.pull_request.user.type == 'Bot' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'dependabot/') }}
+  # dependabot, renovate, or empty for the model review. Renovate: a bot opened the PR and
+  # pushed last, from an internal renovate/* branch, and no one asked for the model review.
+  DEPENDENCY_BOT: >-
+    ${{ github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.user.id == 49699333 && github.event.pull_request.user.type == 'Bot' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'dependabot/') && 'dependabot'
+    || github.event.pull_request.user.type == 'Bot' && github.actor == github.event.pull_request.user.login && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'renovate/') && !contains(github.event.pull_request.labels.*.name, 'review: security') && 'renovate'
+    || '' }}
 
 jobs:
   security-review:
@@ -37,6 +46,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       !contains(github.event.pull_request.labels.*.name, 'ai-suggestion') &&
       ((github.event.pull_request.user.login == 'dependabot[bot]' && github.event.action != 'labeled') ||
+      (github.event.pull_request.user.type == 'Bot' && startsWith(github.event.pull_request.head.ref, 'renovate/') && github.event.action != 'labeled') ||
       (contains(github.event.pull_request.labels.*.name, 'review: security') &&
       (github.event.action != 'labeled' || github.event.label.name == 'review: security')))
     runs-on: runs-on,runner=2cpu-linux-x64
@@ -55,14 +65,14 @@ jobs:
           fi
 
       - name: Check out trusted same-repository review automation
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
 
       - name: Bootstrap pinned batched reviewer when absent from base
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         env:
           GH_TOKEN: ${{ github.token }}
           REVIEWER_REVISION: 07d673b352356476ef113f7434db35881554fdac
@@ -129,13 +139,13 @@ jobs:
 
       - name: Fetch authenticated Dependabot metadata
         id: dependabot
-        if: env.IS_DEPENDABOT == 'true'
+        if: env.DEPENDENCY_BOT == 'dependabot'
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
           github-token: ${{ github.token }}
 
-      - name: Export changed-file metadata for Dependabot
-        if: env.IS_DEPENDABOT == 'true'
+      - name: Export changed-file metadata for the dependency policy
+        if: env.DEPENDENCY_BOT != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -145,8 +155,8 @@ jobs:
             --jq '.[] | {filename, status, additions, deletions, changes}' \
             > pr_files.jsonl
 
-      - name: Validate secretless Dependabot security policy
-        if: env.IS_DEPENDABOT == 'true'
+      - name: Validate secretless dependency security policy
+        if: env.DEPENDENCY_BOT != ''
         env:
           ACTOR: ${{ github.actor }}
           DEPENDABOT_METADATA: ${{ steps.dependabot.outputs.updated-dependencies-json }}
@@ -164,6 +174,8 @@ jobs:
 
           dependabot_login = 'dependabot[bot]'
           dependabot_user_id = 49699333
+          bot = os.environ['DEPENDENCY_BOT']
+          name = 'Dependabot' if bot == 'dependabot' else 'Renovate'
           repo = os.environ['REPO']
           token = os.environ['GH_TOKEN']
 
@@ -177,19 +189,21 @@ jobs:
 
           user = meta.get('user') or {}
           head = meta.get('head') or {}
-          if (
+          if bot == 'dependabot' and (
               os.environ['ACTOR'] != dependabot_login
               or user.get('login') != dependabot_login
               or user.get('id') != dependabot_user_id
               or user.get('type') != 'Bot'
           ):
               raise RuntimeError('Secretless policy is restricted to GitHub-authenticated Dependabot PRs')
-          if head.get('repo') != repo or not str(head.get('ref') or '').startswith('dependabot/'):
-              raise RuntimeError('Dependabot PR must use an internal dependabot/* branch')
+          if bot == 'renovate' and (user.get('type') != 'Bot' or os.environ['ACTOR'] != user.get('login')):
+              raise RuntimeError('Renovate policy is restricted to bot-authored PRs the bot pushed last')
+          if head.get('repo') != repo or not str(head.get('ref') or '').startswith(f'{bot}/'):
+              raise RuntimeError(f'{name} PR must use an internal {bot}/* branch')
           if not diff.strip() or not files:
-              raise RuntimeError('Dependabot PR must contain a non-empty inspectable diff')
+              raise RuntimeError(f'{name} PR must contain a non-empty inspectable diff')
           if any(file.get('status') != 'modified' or int(file.get('changes') or 0) <= 0 for file in files):
-              raise RuntimeError('Dependabot PR may modify existing dependency files only')
+              raise RuntimeError(f'{name} PR may modify existing dependency files only')
 
           go_files = {'go.mod', 'go.sum'}
           npm_files = {'screencast/package.json', 'screencast/package-lock.json'}
@@ -204,18 +218,18 @@ jobs:
                   raise RuntimeError('Security-review workflow updates require a maintainer-authored PR')
               if workflow_path.fullmatch(path):
                   return 'GitHub Actions'
-              raise RuntimeError(f'Dependabot changed a non-dependency file: {path}')
+              raise RuntimeError(f'{name} changed a non-dependency file: {path}')
 
           ecosystems = {ecosystem(file['filename']) for file in files}
           if len(ecosystems) != 1:
-              raise RuntimeError(f'Dependabot PR must update one ecosystem only, found: {sorted(ecosystems)}')
+              raise RuntimeError(f'{name} PR must update one ecosystem only, found: {sorted(ecosystems)}')
           selected_ecosystem = ecosystems.pop()
 
           if selected_ecosystem == 'GitHub Actions':
               action_line = re.compile(
                   r'\s*(?:-\s+)?uses:\s*'
                   r'([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_./-]+)?)'
-                  r'@([0-9a-fA-F]{40})(?:\s+#.*)?\s*'
+                  r'@([0-9a-fA-F]{40})(?:\s+#\s*(\S*).*)?\s*'
               )
               expected_paths = {file['filename'] for file in files}
               expected_counts = {
@@ -225,6 +239,7 @@ jobs:
               diff_paths = set()
               parsed_counts = {}
               added_actions = []
+              comments = {}
               removed_actions = []
               changed_action_lines = 0
               current_path = None
@@ -233,7 +248,7 @@ jobs:
                   header = re.fullmatch(r'diff --git a/(.+) b/(.+)', line)
                   if header:
                       if header.group(1) != header.group(2):
-                          raise RuntimeError('Dependabot may not rename workflow files')
+                          raise RuntimeError(f'{name} may not rename workflow files')
                       current_path = header.group(2)
                       diff_paths.add(current_path)
                       parsed_counts[current_path] = [0, 0]
@@ -246,13 +261,14 @@ jobs:
                   match = action_line.fullmatch(line[1:])
                   if not match:
                       raise RuntimeError(
-                          f'GitHub Actions Dependabot PR changed more than an immutable uses: pin: {line}'
+                          f'GitHub Actions {name} PR changed more than an immutable uses: pin: {line}'
                       )
                   changed_action_lines += 1
                   action = (match.group(1), match.group(2).lower())
                   if line.startswith('+'):
                       parsed_counts[current_path][0] += 1
                       added_actions.append(action)
+                      comments[action] = match.group(3) or ''
                   else:
                       parsed_counts[current_path][1] += 1
                       removed_actions.append(action)
@@ -272,7 +288,8 @@ jobs:
                   raise RuntimeError('GitHub Actions update must replace pins for the same Actions only')
 
               dependency_versions = {}
-              updated_dependencies = json.loads(os.environ['DEPENDABOT_METADATA'])
+              # Renovate declares the version in the pin's comment (`@<sha> # v1.2.3`).
+              updated_dependencies = [] if bot == 'renovate' else json.loads(os.environ['DEPENDABOT_METADATA'])
               if not isinstance(updated_dependencies, list):
                   raise RuntimeError('Dependabot metadata must be a JSON array')
               for dependency in updated_dependencies:
@@ -307,9 +324,12 @@ jobs:
               verified = []
               for action, sha in sorted(set(added_actions)):
                   action_repo = '/'.join(action.split('/')[:2])
-                  version = dependency_versions.get(action) or dependency_versions.get(action_repo)
+                  if bot == 'renovate':
+                      version = comments[(action, sha)] or None
+                  else:
+                      version = dependency_versions.get(action) or dependency_versions.get(action_repo)
                   if version is None:
-                      raise RuntimeError(f'Dependabot metadata does not declare a version for {action}')
+                      raise RuntimeError(f'{name} does not declare a version for {action}')
                   candidate_tags = [version] if version.startswith('v') else [f'v{version}', version]
                   release = None
                   for candidate_tag in candidate_tags:
@@ -320,9 +340,13 @@ jobs:
                       )
                       if release is not None:
                           break
-                  if release is None or release.get('draft') or release.get('prerelease'):
+                  if release is None and bot == 'renovate' and re.fullmatch(r'v[0-9]+', version):
+                      # A moving major tag (`# v5`) has no release of its own; it must point at the pin.
+                      release_tag = version
+                  elif release is None or release.get('draft') or release.get('prerelease'):
                       raise RuntimeError(f'{action}@{sha} does not declare a stable published release')
-                  release_tag = str(release.get('tag_name') or '')
+                  else:
+                      release_tag = str(release.get('tag_name') or '')
                   encoded_tag = urllib.parse.quote(release_tag, safe='')
                   commit = github_json(f'/repos/{action_repo}/commits/{encoded_tag}')
                   if str(commit.get('sha') or '').lower() != sha:
@@ -330,18 +354,18 @@ jobs:
                   verified.append(f'- `{action}@{sha}` (`{release_tag}`)')
 
               summary = [
-                  '## Secretless Dependabot security policy',
+                  f'## Secretless {name} security policy',
                   '',
-                  'GitHub authenticated this internal Dependabot PR. Its diff changes only immutable Action pins,',
-                  'and every added commit matches the stable release declared by Dependabot:',
+                  f'This internal {name} PR changes only immutable Action pins,',
+                  f'and every added commit matches the stable release declared by {name}:',
                   '',
                   *verified,
               ]
           else:
               summary = [
-                  '## Secretless Dependabot security policy',
+                  f'## Secretless {name} security policy',
                   '',
-                  f'GitHub authenticated this internal Dependabot PR. It modifies only recognized {selected_ecosystem}',
+                  f'This internal {name} PR modifies only recognized {selected_ecosystem}',
                   'dependency manifests or lockfiles; no application, script, or workflow code changed.',
               ]
 
@@ -349,17 +373,17 @@ jobs:
           if github_summary:
               with open(github_summary, 'a', encoding='utf-8') as output:
                   output.write('\n'.join(summary) + '\n')
-          print(f'Dependabot security policy passed for {selected_ecosystem}: {len(files)} file(s)')
+          print(f'{name} security policy passed for {selected_ecosystem}: {len(files)} file(s)')
           PYEOF
 
       - name: Set up Python
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
       - name: Test security review automation
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         run: |
           python3 .github/scripts/review_diff_test.py
           python3 .github/scripts/security_review_test.py
@@ -368,7 +392,7 @@ jobs:
           fi
 
       - name: Validate complete review input
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         env:
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -381,7 +405,7 @@ jobs:
             --expected-head-sha "$EXPECTED_HEAD_SHA"
 
       - name: Fetch previous security review state
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         env:
           # SECURITY: This isolated step needs GH_TOKEN only to fetch the prior bot comment for stateful review; fork PRs are rejected before token use.
           GH_TOKEN: ${{ github.token }}
@@ -394,11 +418,11 @@ jobs:
             --output previous_security_review.md
 
       - name: Install Anthropic SDK
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         run: pip install --quiet anthropic==0.97.0
 
       - name: Run security review
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_MODEL: ${{ env.CLAUDE_MODEL }}
@@ -415,7 +439,7 @@ jobs:
             --model "$CLAUDE_MODEL"
 
       - name: Prepare security review comment
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         env:
           COMMENT_FILE: ${{ runner.temp }}/comment.md
           REVIEW_FILE: ${{ runner.temp }}/review.md
@@ -425,7 +449,7 @@ jobs:
             --output "$COMMENT_FILE"
 
       - name: Post security review comment
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         env:
           COMMENT_FILE: ${{ runner.temp }}/comment.md
           # SECURITY: GH_TOKEN is required here only to update the single bot-owned review comment after repo and PR inputs are validated.
@@ -439,7 +463,7 @@ jobs:
             --comment "$COMMENT_FILE"
 
       - name: Enforce security review result
-        if: env.IS_DEPENDABOT != 'true'
+        if: env.DEPENDENCY_BOT == ''
         env:
           RESULT_FILE: ${{ runner.temp }}/review-result.json
         run: |

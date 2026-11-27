@@ -89,8 +89,8 @@ class TrustedSourceTests(unittest.TestCase):
             expression = expression.replace("github.event.pull_request.labels.*.name", "labels")
             group = next(line.strip().removeprefix('group: ').strip('"')
                          for line in lines if line.startswith("  group:"))
-            # Dependabot PRs run the secretless dependency policy without a label.
-            authors = ("author", "dependabot[bot]") if name == "security-review" else ("author",)
+            # Dependabot and Renovate PRs run the secretless dependency policy without a label.
+            authors = ("author", "dependabot[bot]", "renovate-app[bot]") if name == "security-review" else ("author",)
             cases = []
             for action in ("opened", "synchronize", "reopened", "labeled", "ready_for_review"):
                 for enabled in (False, True):
@@ -100,10 +100,11 @@ class TrustedSourceTests(unittest.TestCase):
                                 for author in authors:
                                     labels = [label] if enabled and label else []
                                     event = {"action": action, "label": {"name": label if matching else "unrelated"},
-                                             "pull_request": {"draft": draft, "head": {"repo": {"full_name": "fork" if fork else "repo"}},
-                                                              "user": {"login": author}}}
+                                             "pull_request": {"draft": draft, "head": {"repo": {"full_name": "fork" if fork else "repo"},
+                                                                                       "ref": "renovate/x" if author.startswith("renovate") else "branch"},
+                                                              "user": {"login": author, "type": "User" if author == "author" else "Bot"}}}
                                     requested = enabled and (action != "labeled" or matching)
-                                    automatic = author == "dependabot[bot]" and action != "labeled"
+                                    automatic = author != "author" and action != "labeled"
                                     expected = (not fork and (requested or automatic)
                                                 if label else not fork and not draft)
                                     cases.append({"github": {"event_name": "pull_request", "event": event,
@@ -111,9 +112,9 @@ class TrustedSourceTests(unittest.TestCase):
                                                   "labels": labels, "expected": expected})
             execution = subprocess.run(["node", "-e", r'''
 const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
-const evaluate = new Function("github", "labels", "contains", "return " + input.expression);
+const evaluate = new Function("github", "labels", "contains", "startsWith", "return " + input.expression);
 for (const c of input.cases) {
-  const actual = evaluate(c.github, c.labels, (items, value) => items.includes(value));
+  const actual = evaluate(c.github, c.labels, (items, value) => items.includes(value), (s, p) => s.startsWith(p));
   if (actual !== c.expected) throw new Error(JSON.stringify({c, actual}));
   if (input.label) {
     const group = input.group.replace(/\$\{\{(.*?)\}\}/g, (_, expr) =>

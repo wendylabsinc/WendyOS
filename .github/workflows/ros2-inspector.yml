@@ -32,7 +32,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Build
         run: docker build -f go/ros2/inspector/Dockerfile -t inspector:test .
       - name: Test native audio and LiDAR
