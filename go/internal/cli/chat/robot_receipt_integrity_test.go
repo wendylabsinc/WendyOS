@@ -21,7 +21,7 @@ func TestLargeMCPReceiptFollowsOriginalLocalization(t *testing.T) {
 				t.Fatal("restarted instead of polling original receipt")
 			}
 		}
-		raw, _ := json.Marshal(map[string]any{"localization_camera": map[string]any{"message": strings.Repeat("x", maxToolOutputBytes+100)}, "snapshot": map[string]bool{"Aligned": aligned}, "state": state, "message": "Controller receipt"})
+		raw, _ := json.Marshal(map[string]any{"localization_camera": map[string]any{"message": strings.Repeat("x", 300<<10)}, "snapshot": map[string]bool{"Aligned": aligned}, "state": state, "message": "Controller receipt"})
 		return robotControlToolResult(mcpgo.NewToolResultText(string(raw)))
 	}
 	tracker := &robotCommandTools{base: base, followInterval: time.Millisecond}
@@ -33,7 +33,7 @@ func TestLargeMCPReceiptFollowsOriginalLocalization(t *testing.T) {
 }
 
 func TestUnresolvedReceiptEndsInitialAndRetryTurnBeforeNarration(t *testing.T) {
-	for _, outcome := range []string{"malformed", "missing-state", "false-completion", "transport"} {
+	for _, outcome := range []string{"malformed", "missing-state", "false-completion", "transport", "http-eof"} {
 		t.Run(outcome, func(t *testing.T) {
 			base := &commandMetadataExecutor{engineTestExecutor: &engineTestExecutor{tools: []Tool{robotCommandTestTool()}}}
 			base.runResult = func(_ context.Context, call ToolCall) (ToolResult, error) {
@@ -47,6 +47,12 @@ func TestUnresolvedReceiptEndsInitialAndRetryTurnBeforeNarration(t *testing.T) {
 					return ToolResult{Text: `{"state":"completed","snapshot":{"Aligned":false}}`}, nil
 				case "transport":
 					return ToolResult{}, errors.New("connection lost after dispatch")
+				case "http-eof":
+					result := mcpgo.NewToolResultStructured(map[string]any{
+						"error_code": "INTERNAL", "message": "Could not read the robot receipt; command outcome remains unresolved: unexpected EOF",
+					}, "[INTERNAL] Could not read the robot receipt; command outcome remains unresolved: unexpected EOF")
+					result.IsError = true
+					return robotControlToolResult(result)
 				default:
 					return ToolResult{Text: `{"localization_camera":`}, nil
 				}
@@ -72,6 +78,14 @@ func TestOversizedRobotReceiptIsRejectedWithoutPartialJSON(t *testing.T) {
 	got, err := robotControlToolResult(mcpgo.NewToolResultText(strings.Repeat("x", (1<<20)+1)))
 	if err == nil || got.Text != "" {
 		t.Fatal("oversized receipt returned partial control evidence")
+	}
+}
+
+func TestRobotReceiptAtTransportLimitIsNotRejectedForDisplayNewline(t *testing.T) {
+	text := strings.Repeat("x", 1<<20)
+	got, err := robotControlToolResult(mcpgo.NewToolResultText(text))
+	if err != nil || got.Text != text+"\n" {
+		t.Fatal("transport boundary differs from HTTP receipt budget", err)
 	}
 }
 
