@@ -64,7 +64,9 @@ PY
 chmod 755 /fixture/omit-unload.sh
 cp "/usr/lib/modules/$kver/vmlinuz" /fixture/vmlinuz
 # No host-only discovery, network, KVM or device access is needed to build this.
-dracut --force --no-hostonly --no-hostonly-cmdline --kver "$kver" \
+# Use gzip explicitly: the pinned Fedora base's zstd executable can be older
+# than libzstd installed with the current kernel build dependencies.
+dracut --force --gzip --no-hostonly --no-hostonly-cmdline --kver "$kver" \
   --add-drivers 'virtio_pci virtio_blk virtio_console ext4 squashfs overlay loop' \
   --filesystems ext4 /fixture/initrd
 sha256sum /fixture/vmlinuz /fixture/initrd /usr/sbin/wendyos-sysext-apply.sh /fixture/pack-sysext.sh /fixture/images/*/*.raw > /fixture/artifacts.sha256
