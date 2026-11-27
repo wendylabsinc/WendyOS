@@ -1,9 +1,23 @@
 package localmesh
 
 import (
-	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
+	"sync/atomic"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 )
+
+// rememberSkippedHave requires controlMu. The actor consumes these identities
+// on maintenance. Retaining the marker lets it ignore superseded notifications.
+func (p *nodePeer) rememberSkippedHave(m ControlMessage, now time.Time) {
+	if !m.pendingHave || m.Expired(now) {
+		return
+	}
+	if p.skippedHaves == nil {
+		p.skippedHaves = make(map[string]*atomic.Bool)
+	}
+	p.skippedHaves[m.origin] = m.canceled
+}
 
 // sweepAnnouncements runs even without ingress or output credit. A pool owns
 // transfer storage, while the actor owns independent reply/channel copies; both
@@ -30,8 +44,11 @@ func (n *Node) sweepAnnouncements(now time.Time) {
 			case m := <-p.control:
 				if n.controlEligible(p, m, now) {
 					retained = append(retained, m)
-				} else if m.Kind == "bundle" {
-					p.pendingBundles.Delete(Fingerprint(m.Bundle))
+				} else {
+					p.rememberSkippedHave(m, now)
+					if m.Kind == "bundle" {
+						p.pendingBundles.Delete(Fingerprint(m.Bundle))
+					}
 				}
 			default:
 			}
@@ -39,7 +56,12 @@ func (n *Node) sweepAnnouncements(now time.Time) {
 		for _, m := range retained {
 			p.control <- m
 		}
+		skipped := p.skippedHaves
+		p.skippedHaves = nil
 		p.controlMu.Unlock()
+		for owner, marker := range skipped {
+			p.sync.retryAnnouncement(owner, marker, now)
+		}
 		if len(retained) != 0 {
 			p.wakeControl()
 		}

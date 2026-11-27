@@ -35,6 +35,9 @@ import (
 // alarming "bad state" recovery box. The platform thorOpenGadget hooks wrap it.
 var errGadgetUnreachable = errors.New("thor flashing gadget did not appear over USB")
 
+// thorEraseWarning is shown before the question that starts a Thor flash.
+const thorEraseWarning = "Flashing overwrites QSPI and resets the WendyOS installation, including /data. This cannot be undone. Sanitizing the internal NVMe requires a separate secure erase."
+
 // thorDevice identifies a selected Jetson in recovery mode, platform-neutrally.
 // PathKey is the stable physical-location key used to re-find the device across
 // the RCM→gadget re-enumeration; Label is a human description.
@@ -112,26 +115,21 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	// bad flag or failed enrollment aborts before anything is written. Written
 	// to the config image in stepProvision, then flashed like a disk install's
 	// config partition.
-	creds, err := resolveWiFiCredentialsList(wifi)
+	fmt.Println() // the first-boot questions start a new stage
+	wifiAsked := wifiWillBeAsked(wifi)
+	creds, err := resolveFirstBootWiFi(wifi)
 	if err != nil {
 		return err
 	}
-	name, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
-	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
+	name, provJSON, err := settleRecoveryFirstBoot(ctx, recoveryFlashConfirm{
+		target:   dev.Label,
+		warning:  []string{tui.WarningMessage(thorEraseWarning)},
+		question: fmt.Sprintf("Flash %s?", dev.Label),
+	}, creds, wifiAsked, deviceName, preOpts, force)
 	if err != nil {
 		return err
 	}
 	enrolled := provJSON != nil
-	if err := confirmRecoveryFlash(recoveryFlashConfirm{
-		target:   dev.Label,
-		warning:  []string{tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone.")},
-		question: fmt.Sprintf("Flash %s?", dev.Label),
-	}, name, creds, enrolled, force); err != nil {
-		return err
-	}
 
 	// flashCtx aborts in-flight step work (the stage-2 engine) when the user
 	// confirms a ctrl+c cancel in the steps UI.
@@ -227,6 +225,11 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		case errors.Is(err, errGadgetUnreachable):
 			// Stage-1 booted but the gadget never re-enumerated; nothing was written.
 			printThorGadgetUnreachableHint(os.Stdout)
+		case errors.Is(err, flashengine.ErrOldDataNotCleared):
+			// The engine clears old data before it erases QSPI or writes a
+			// partition, so the Thor is not in the state the box below is for.
+			fmt.Println()
+			fmt.Println(tui.WarningMessage("The Thor's boot firmware and OS were not changed. Its old data may already be erased. Re-enter recovery mode and try again."))
 		case failedID == stepStage2:
 			// Partitions were being written; the Thor can be left unbootable.
 			printThorBadStateHint(os.Stdout)
@@ -238,7 +241,6 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	}
 
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Flashed WendyOS %s — power-cycle the Thor out of recovery to boot it. (press the right button once)", plan.version)))
-	printFirstBootVerification(thorDeviceType, plan.version)
 	return nil
 }
 

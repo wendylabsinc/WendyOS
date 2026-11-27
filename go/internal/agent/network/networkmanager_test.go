@@ -1,8 +1,11 @@
 package network
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -51,6 +54,61 @@ func TestClassifySecurity(t *testing.T) {
 	for in, want := range cases {
 		if got := classifySecurity(in); got != want {
 			t.Errorf("classifySecurity(%q) = %v; want %v", in, got, want)
+		}
+	}
+}
+
+func TestClassifyKeyMgmt(t *testing.T) {
+	cases := map[string]agentpb.WiFiSecurityType{
+		"":          agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN,
+		"none":      agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WEP,
+		"wpa-psk":   agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_PSK,
+		"sae":       agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA3_SAE,
+		"wpa-eap":   agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_ENTERPRISE,
+		"ieee8021x": agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_ENTERPRISE,
+		"owe":       agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_UNSPECIFIED,
+	}
+	for in, want := range cases {
+		if got := classifyKeyMgmt(in); got != want {
+			t.Errorf("classifyKeyMgmt(%q) = %v; want %v", in, got, want)
+		}
+	}
+}
+
+// A saved WEP profile has key-mgmt "none"; only a profile without a security
+// setting is for an open network.
+func TestSavedWEPNetworkIsNotListedAsOpen(t *testing.T) {
+	path, _ := writeFakeNMCLI(t,
+		reply{args: "-t -f NAME,UUID,TYPE,AUTOCONNECT-PRIORITY connection show",
+			out: "Old:uuid-w:802-11-wireless:0\nCafe:uuid-o:802-11-wireless:0\n"},
+		reply{args: batchArgs("uuid-w", "uuid-o"), out: batchOut(
+			batchRecord("uuid-w", "none", "", "Old"),
+			batchRecord("uuid-o", "", "", "Cafe"))},
+	)
+	n := &NMCLINetworkManager{logger: zap.NewNop(), nmcliPath: path}
+	want := map[string]agentpb.WiFiSecurityType{
+		"Old":  agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_WEP,
+		"Cafe": agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_OPEN,
+	}
+
+	known, err := n.ListKnownWiFiNetworks(context.Background())
+	if err != nil || len(known) != len(want) {
+		t.Fatalf("ListKnownWiFiNetworks = %v, %v; want %d networks", known, err, len(want))
+	}
+	for _, k := range known {
+		if k.GetSecurity() != want[k.GetSsid()] {
+			t.Errorf("saved network %q is listed as %v; want %v", k.GetSsid(), k.GetSecurity(), want[k.GetSsid()])
+		}
+	}
+
+	// Neither network is in range, so the scan list takes the label from the profile.
+	profiles, err := n.listKnownProfiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ssid, security := range want {
+		if row := bySSID(parseWiFiList("", profiles), ssid); row == nil || row.GetSecurity() != security {
+			t.Errorf("out-of-range row for %q = %v; want security %v", ssid, row, security)
 		}
 	}
 }

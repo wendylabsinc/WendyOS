@@ -180,7 +180,7 @@ func TestStaleBlueZCacheCannotRefreshRadioSelection(t *testing.T) {
 	})
 	r := &runtime{cfg: Config{NetworkName: "field", Credentials: &localmesh.Credentials{Device: selfFixture}, Selection: selection}, uuid: uuid, freshness: newAdvertisementFreshness("/org/bluez/hci0", uuid, "field", selfFixture)}
 	base := time.Now()
-	if got := r.discoveredCandidates(objects, base); len(got) != 0 {
+	if got := r.discoveredCandidates(objects, base, base); len(got) != 0 {
 		t.Fatalf("cached peer before live advertisement: %+v", got)
 	}
 	if !r.discovery.lastMeshSignal.IsZero() {
@@ -190,7 +190,7 @@ func TestStaleBlueZCacheCannotRefreshRadioSelection(t *testing.T) {
 		t.Fatal("stale cached BLE peer suppressed an otherwise useful second radio")
 	}
 	r.freshness.observe(path, map[string]dbus.Variant{"ServiceData": props["ServiceData"]}, base)
-	if got := r.discoveredCandidates(objects, base); len(got) != 1 {
+	if got := r.discoveredCandidates(objects, base, base); len(got) != 1 {
 		t.Fatalf("fresh BLE peer rejected: %+v", got)
 	}
 	if !r.discovery.lastMeshSignal.Equal(base) {
@@ -199,7 +199,7 @@ func TestStaleBlueZCacheCannotRefreshRadioSelection(t *testing.T) {
 	if !selection.AllowRadio(peerFixture, localmesh.RadioBLE) {
 		t.Fatal("unverified hint influenced identity-based radio selection")
 	}
-	if got := r.discoveredCandidates(objects, base.Add(advertisementFreshnessTTL)); len(got) != 0 {
+	if got := r.discoveredCandidates(objects, base.Add(advertisementFreshnessTTL), base.Add(advertisementFreshnessTTL)); len(got) != 0 {
 		t.Fatalf("expired BLE peer retained: %+v", got)
 	}
 	if !r.discovery.lastMeshSignal.Equal(base) {
@@ -262,5 +262,118 @@ func TestUnsupportedServiceVersionsDoNotRefreshOrWithdrawV1(t *testing.T) {
 		if got, _ := tracker.candidates(objects, at.Add(advertisementFreshnessTTL)); len(got) != 0 {
 			t.Fatalf("unsupported version refreshed v1 (raw=%v): %+v", rawReport, got)
 		}
+	}
+}
+
+func TestConnectedPeerBootstrapDoesNotInventAdvertisement(t *testing.T) {
+	uuid := ServiceUUID(testTenant)
+	adv, _ := NewAdvertisement(lowDevice, "field", DefaultPSM)
+	raw, _ := adv.MarshalBinary()
+	path := dbus.ObjectPath("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01")
+	props := meshDeviceProps(uuid, raw)
+	props["Connected"] = dbus.MakeVariant(true)
+	objects := managedObjects{path: {deviceInterface: props}}
+	tracker := newAdvertisementFreshness("/org/bluez/hci0", uuid, "field", selfFixture)
+	now := time.Unix(1000, 0)
+	peers, updates := tracker.candidates(objects, now)
+	if len(peers) != 1 || len(updates) != 0 || len(tracker.seen) != 0 {
+		t.Fatalf("connected bootstrap peers=%v updates=%v fresh=%v", peers, updates, tracker.seen)
+	}
+	peer := peers[0]
+	if !tracker.nativeReady(peer, now) {
+		t.Fatal("connected peer cannot open a new CoC")
+	}
+	if tracker.nativeReady(peer, now.Add(advertisementFreshnessTTL)) {
+		t.Fatal("unrefreshed connected snapshot never expires")
+	}
+	tracker.handle(&dbus.Signal{Name: "org.freedesktop.DBus.Properties.PropertiesChanged", Path: path, Body: []any{deviceInterface, map[string]dbus.Variant{"Connected": dbus.MakeVariant(false)}, []string{}}}, now)
+	if tracker.nativeReady(peer, now) {
+		t.Fatal("queued bootstrap survived disconnect")
+	}
+	for _, connected := range []any{false, "true"} {
+		props["Connected"] = dbus.MakeVariant(connected)
+		if peers, _ := tracker.candidates(objects, now); len(peers) != 0 {
+			t.Fatal("invalid connected state bootstrapped")
+		}
+	}
+	props["Connected"] = dbus.MakeVariant(true)
+	props["Blocked"] = dbus.MakeVariant(true)
+	if peers, _ := tracker.candidates(objects, now); len(peers) != 0 {
+		t.Fatal("blocked peer bootstrapped")
+	}
+	props["Blocked"] = dbus.MakeVariant(false)
+	adv.Capabilities = 0
+	busy, _ := adv.MarshalBinary()
+	tracker.observe(path, meshDeviceProps(uuid, busy), now)
+	if peers, _ := tracker.candidates(objects, now); len(peers) != 0 {
+		t.Fatal("cached ready overrode live busy announcement")
+	}
+}
+
+func TestConnectedBootstrapRevalidatesEndpointAndPolicy(t *testing.T) {
+	uuid := ServiceUUID(testTenant)
+	adv, _ := NewAdvertisement(lowDevice, "field", DefaultPSM)
+	raw, _ := adv.MarshalBinary()
+	path := dbus.ObjectPath("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01")
+	now := time.Unix(1000, 0)
+	for _, property := range []string{"Connected", "Blocked", "ServiceData", "Address", "AddressType"} {
+		t.Run(property, func(t *testing.T) {
+			props := meshDeviceProps(uuid, raw)
+			props["Connected"] = dbus.MakeVariant(true)
+			f := newAdvertisementFreshness("/org/bluez/hci0", uuid, "field", selfFixture)
+			peers, _ := f.candidates(managedObjects{path: {deviceInterface: props}}, now)
+			if len(peers) != 1 {
+				t.Fatal("missing connected candidate")
+			}
+			f.handle(&dbus.Signal{Name: "org.freedesktop.DBus.Properties.PropertiesChanged", Path: path, Body: []any{deviceInterface, map[string]dbus.Variant{}, []string{property}}}, now)
+			if f.nativeReady(peers[0], now) {
+				t.Fatal("invalidated property left queued probe eligible")
+			}
+		})
+	}
+	props := meshDeviceProps(uuid, raw)
+	props["Connected"] = dbus.MakeVariant(true)
+	objects := managedObjects{path: {deviceInterface: props}}
+	f := newAdvertisementFreshness("/org/bluez/hci0", uuid, "another-network", selfFixture)
+	if peers, _ := f.candidates(objects, now); len(peers) != 0 {
+		t.Fatal("other network bootstrapped")
+	}
+	f = newAdvertisementFreshness("/org/bluez/hci0", uuid, "field", selfFixture)
+	peers, _ := f.candidates(objects, now)
+	if len(peers) != 1 {
+		t.Fatal("missing connected peer")
+	}
+	f.candidates(managedObjects{}, now)
+	if f.nativeReady(peers[0], now) {
+		t.Fatal("removed object retained queued probe")
+	}
+}
+
+func (f *advertisementFreshness) candidates(objects managedObjects, at time.Time) ([]candidate, []dbus.ObjectPath) {
+	return f.candidatesFromSnapshot(objects, at, at)
+}
+
+func TestConnectedBootstrapDiscardsSnapshotOvertakenByDisconnect(t *testing.T) {
+	uuid := ServiceUUID(testTenant)
+	adv, _ := NewAdvertisement(lowDevice, "field", DefaultPSM)
+	raw, _ := adv.MarshalBinary()
+	path := dbus.ObjectPath("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01")
+	props := meshDeviceProps(uuid, raw)
+	props["Connected"] = dbus.MakeVariant(true)
+	objects := managedObjects{path: {deviceInterface: props}}
+	f := newAdvertisementFreshness("/org/bluez/hci0", uuid, "field", selfFixture)
+	started := time.Unix(1000, 0)
+	change := started.Add(time.Millisecond)
+	done := change.Add(time.Millisecond)
+	f.handle(&dbus.Signal{
+		Name: "org.freedesktop.DBus.Properties.PropertiesChanged",
+		Path: path, Body: []any{deviceInterface,
+			map[string]dbus.Variant{"Connected": dbus.MakeVariant(false)}, []string{}},
+	}, change)
+	if peers, _ := f.candidatesFromSnapshot(objects, started, done); len(peers) != 0 {
+		t.Fatal("older snapshot recreated a disconnected bootstrap candidate")
+	}
+	if peers, _ := f.candidatesFromSnapshot(objects, done, done); len(peers) != 1 {
+		t.Fatal("fresh snapshot could not rediscover a reconnected peer")
 	}
 }

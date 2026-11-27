@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/thermal"
@@ -41,6 +42,8 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	deviceRPCSession        atomic.Pointer[deviceRPCSession]
+	previews                cameraPreviews
 	osUpdate                mobileOSRun
 	recordings              recordingReads
 	gallery                 galleryConnections
@@ -51,6 +54,7 @@ type Backend struct {
 	mobileMu                sync.Mutex
 	mobileScope             string
 	tunnelSession           commands.TunnelSession
+	appTunnelContext        func(context.Context) context.Context
 	nearby                  nearbySetup
 	UnitreeControl          UnitreeController
 	modelRun                *ModelRun
@@ -94,6 +98,7 @@ type secureLANConnectionKey struct{}
 func New() *Backend {
 	b := &Backend{events: make(chan Event, 64), cameraFirstFrameTimeout: 15 * time.Second, unpinDevice: commands.DesktopUnpin}
 	b.tunnelSession.SetActive(true)
+	b.appTunnelContext = b.tunnelSession.Context
 	b.connectTarget = func(ctx context.Context, selector string) (*grpcclient.AgentConnection, liteConnection, error) {
 		ctx = b.tunnelSession.Context(ctx)
 		if secure, _ := ctx.Value(secureLANConnectionKey{}).(bool); secure {
@@ -152,6 +157,7 @@ func (b *Backend) stopCameras() {
 	}
 }
 func (b *Backend) disconnect() {
+	b.deviceRPCSession.Store(nil)
 	b.cameraDevices = nil
 	b.logStream = 0
 	if b.chatEnvironment != nil {
@@ -197,9 +203,11 @@ func (b *Backend) disconnect() {
 }
 
 // Public operations serialize access to the CLI connection and configuration.
-func (b *Backend) begin() (context.Context, func()) {
+func (b *Backend) begin() (context.Context, func()) { return b.beginWithTimeout(65 * time.Second) }
+
+func (b *Backend) beginWithTimeout(timeout time.Duration) (context.Context, func()) {
 	b.mu.Lock()
-	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	b.operationMu.Lock()
 	b.operationCancel = cancel
 	b.operationMu.Unlock()
@@ -402,6 +410,7 @@ func (b *Backend) ConnectTargetRequest(selector string, forgetIdentity bool, req
 	b.conn, b.lite = conn, lite
 	b.deviceSelector = selector
 	b.life, b.stop = targetCtx, targetCancel
+	b.publishDeviceRPCSession()
 	committed = true
 	session := b.session
 	b.connectMu.Unlock()
@@ -436,7 +445,8 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 		b.automaticVPN = automatic
 		return cfg, err
 	}
-	dial := reportVPNDialFailures(desktopDial, func(err error) {
+	probes := newVPNProbes(routes, commands.DesktopConnectTunnel)
+	dial := reportVPNDialFailures(probes.Dial, func(err error) {
 		// A full UI event queue must not stall a failed network flow.
 		select {
 		case b.events <- Event{Kind: EventVPNError, Text: err.Error(), Err: err}:
@@ -448,10 +458,10 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 		var err error
 		internet, err = openVPNInternet(ctx, gateway[0])
 		if err != nil {
+			probes.Close()
 			return vpn.Config{}, err
 		}
 	}
-	probes := newVPNProbes(routes, commands.DesktopConnectTunnel)
 	relay, config, err := vpn.NewRelayWithInternet(routes, dial, probes.Probe, internet)
 	if err != nil {
 		if internet != nil {
@@ -486,6 +496,7 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.previewsReset(true)
 	b.recordings.setActive(false)
 	b.tunnelSession.SetActive(false)
 	b.resetNearbyDiscovery(true)
@@ -508,12 +519,11 @@ func (b *Backend) Shutdown() error {
 	return meshErr
 }
 func (b *Backend) Apps() ([]*pb.AppContainer, error) {
-	ctx, done := b.begin()
-	defer done()
-	conn, err := b.connection(0)
+	ctx, conn, done, err := b.deviceRPC(0)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return listDesktopApps(ctx, conn)
 }
 

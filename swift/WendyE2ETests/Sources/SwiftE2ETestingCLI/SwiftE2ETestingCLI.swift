@@ -9,6 +9,7 @@ struct SwiftE2ETestingCLI: AsyncParsableCommand {
         abstract: "Utilities for Swift E2E behavioral specs.",
         subcommands: [
             ReferenceCommand.self,
+            CaptureCommand.self, SourceCommand.self,
             AggregateCommand.self,
             ReportCommand.self,
             ReviewCommand.self,
@@ -30,10 +31,10 @@ struct ReferenceCommand: ParsableCommand {
     @Flag(help: "Include source file and line metadata.")
     var includeSourceLocations = false
 
-    @Flag(help: "Include enabled/disabled test metadata.")
+    @Flag(help: "Include static enabled/disabled/conditional availability and trait source.")
     var includeDisabledState = false
 
-    @Flag(help: "Include source locations and disabled state.")
+    @Flag(help: "Include source locations and static availability metadata.")
     var specReview = false
 
     @Option(name: .long, help: "Output format: markdown, md, html, or json.")
@@ -70,7 +71,10 @@ struct ReferenceCommand: ParsableCommand {
 
         var documents: [WendyE2EReference.Document] = []
         for sourceFile in sourceFiles {
-            documents.append(contentsOf: try WendyE2EReference.parseFile(at: sourceFile))
+            let parsed = try WendyE2EReference.parseFile(at: sourceFile)
+            documents.append(
+                contentsOf: parsed
+            )
         }
         print(try format.render(documents, options: options), terminator: "")
     }
@@ -168,6 +172,12 @@ private func writeReferenceFiles(
     format: ReferenceFormat,
     options: WendyE2EReference.RenderOptions
 ) throws -> Int {
+    // Validate every source before creating output; malformed input must not
+    // leave a successful-looking partial reference directory.
+    let sourceDocuments = try sourceFiles.map { sourceFile in
+        let parsed = try WendyE2EReference.parseFile(at: sourceFile)
+        return parsed
+    }
     let outputURL = URL(fileURLWithPath: outputDirectory)
     try FileManager.default.createDirectory(
         at: outputURL,
@@ -176,8 +186,7 @@ private func writeReferenceFiles(
 
     var fileCount = 0
     var indexEntries: [WendyE2EReference.IndexEntry] = []
-    for sourceFile in sourceFiles {
-        let documents = try WendyE2EReference.parseFile(at: sourceFile)
+    for documents in sourceDocuments {
         guard let topLevelDocument = documents.first else {
             continue
         }

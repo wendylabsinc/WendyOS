@@ -1,21 +1,24 @@
 Mesh control messages and signed artifacts use the binary CBOR protocol
 documented in [netwire](../netwire/README.md). Certificates travel as raw DER.
-There is no old-wire compatibility path. JSON examples below are host configuration.
+Host configuration uses JSON.
 
 # Wendy net peer transport and routing
 
-This stage adds a Linux router using enrolled Wendy device certificates,
+The Linux router uses enrolled Wendy device certificates,
 authenticated neighbour links, a Babel route engine and Wendy-owned TUNs.
 Device presence travels over each neighbour's existing control channel.
 It does not open a catalogue connection to every remote device.
 
 ## Explicit links and activation
 
-`local-mesh.json` in the agent configuration directory (`/etc/wendy-agent` by
-default) enables the router. A missing file leaves it disabled. On Linux, the
-file and its directory must belong to the agent's effective user (root for the
-system service), and neither may be writable by group or others. The file must
-be regular; symlinks and special files are refused. Reads are bounded to 64 KiB.
+Enrolled Linux agents use Ethernet, infrastructure Wi-Fi, Bluetooth, and
+Wi-Fi Aware by default. Saved carrier choices in `local-mesh.json` take
+precedence. The explicit all-carriers-off marker `local-mesh.json.disabled`
+applies when the settings file is absent. In the agent configuration directory
+(`/etc/wendy-agent` by default), both files must be regular and belong to the
+agent's effective user (root for the system service). The directory must have
+the same owner. Group and other write permissions are forbidden, and reads are
+bounded to 64 KiB.
 
 For a chosen test topology, configure both ends of each edge:
 
@@ -501,21 +504,25 @@ replies share the existing maintenance tick and control queue. LAN also exposes
 the fixed signed-time relay on port 43025 for bootstrap, and BLE advertises a
 separate ciphertext-only HTTPS relay on PSM 130.
 
-Changed records immediately advertise a HAVE digest. Duplicate revisions do not
-renew their expiry. Reconciliation advertises live digests periodically to repair
-reconnects; full signed records are sent only on request between routers. A repair
-pass uses only free control-queue slots and resumes from its last admitted
-principal on the existing maintenance tick; it stops when the pass completes.
-Insufficient queue space does not consume a certificate-description stamp.
+Each authenticated router carrier advertises the current inventory once on
+attach, starting with the local proof. Later directory changes schedule HAVE
+messages only for the changed origins. Each carrier retains pending origin
+keys while replies or a full control queue block them, then advertises the
+latest live digest for each pending origin as space frees up on the
+maintenance tick.
+A temporary signing identity miss leaves that origin pending while other
+origins can still be advertised.
+Full signed records are sent only on request between routers. Duplicate
+revisions do not renew their expiry.
+
 The node uses one 15-minute manifest lease for route, presence and services.
-An edit publishes immediately when idle; edits within one second coalesce into
-the latest complete state. Five quiet minutes after a successful publication
-trigger refresh. Reconciliation runs every five minutes, with bounded repair
-continuation on the one-second maintenance tick. These intervals are separate
-from Babel's one-second datagram Hello and 16-second Update intervals;
-reliable stream links can use a longer per-link Hello interval. Origin revisions
-remain durable; receiver payloads and ten-duration watermarks are RAM state, so
-restart can first-learn a delayed record for one local lease.
+An edit publishes immediately when idle. Edits within one second coalesce into
+the latest complete state. After five quiet minutes the node renews its own
+signed manifest, which schedules a HAVE for that origin. Babel sends datagram
+Hellos every second and Updates every 16 seconds. Reliable stream links can
+use a longer per-link Hello interval. Origin revisions remain durable.
+Receiver payloads and ten-duration watermarks are RAM state, so after a restart
+a receiver can learn a delayed record for one local lease.
 
 The payload path is IPv6 through peer TUNs and the selected Babel next hop. A
 1320-byte logical packet uses the negotiated whole form when current capacity
@@ -584,6 +591,9 @@ the claim, so certificate repair cannot start another full download. Only a
 verified, admitted object is advertised onward. Unsolicited full records are
 rejected on router links. Digests, availability hints and download completion
 never advance signed revision/generation receipts or grant route authority.
+When the per-carrier limit for manifests awaiting identity verification is
+reached, excess bodies are dropped. A later publication from that origin
+gives the receiver another chance to download and verify its manifest.
 
 Disconnect immediately releases an owner's claim. Thirty idle seconds without
 an accepted DATA chunk permits an alternate; polling and repeated HAVEs do not

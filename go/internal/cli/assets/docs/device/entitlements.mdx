@@ -203,6 +203,12 @@ When enabled, this entitlement:
 - Configures device permissions for video capture
 - Enables access to V4L2 (Video4Linux2) and libcamera interfaces
 
+Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares.
+
+```json
+{ "type": "camera", "mode": "direct" }
+```
+
 A `camera` entitlement can also carry `user`/`password` fields, but they are not read at deploy or container-create time: the CLI consults them — in place of an interactive prompt — only the first time `wendy device camera view` needs a login for that camera, storing the result on the device from there. A container-only consumer still needs that credential stored on the device before it starts, so run `wendy device camera login <id>` (or `camera view --id <id>` once) first. See the [`camera` entitlement fields](/docs/reference/app-configuration#camera) for the field reference and its plaintext-storage caveat.
 
 <Callout type="info">

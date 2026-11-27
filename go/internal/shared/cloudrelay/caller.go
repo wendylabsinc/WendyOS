@@ -170,10 +170,24 @@ func LitePrincipalSigner(certPEM string, keyPEM []byte) (func([]byte) ([]byte, e
 	}, nil
 }
 
-// OpenTCP asks Cloud to authorize a symbolic service, then joins the selected
-// broker with an ephemeral caller key. authCtx's identity metadata is used only
-// on Cloud's authorization RPC, and is never forwarded to the relay.
+// TCPHalfCloseFeature is advertised by agents that let the caller drain the
+// final response after a TCP write-side close.
+const TCPHalfCloseFeature = "cloud-relay-tcp-half-close"
+
+// OpenTCP authorizes a symbolic service and joins the relay with an ephemeral
+// caller key. authCtx's identity metadata is used only on Cloud's authorization
+// RPC. The returned connection has the historical interface for unknown peers.
 func OpenTCP(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier *Verifier, assetID, service string, signRequest func([]byte) ([]byte, error)) (net.Conn, error) {
+	conn, err := OpenTCPWithHalfClose(ctx, authCtx, cloudConn, verifier, assetID, service, signRequest)
+	if err != nil {
+		return nil, err
+	}
+	return struct{ net.Conn }{conn}, nil
+}
+
+// OpenTCPWithHalfClose also exposes CloseWrite. Use it for a device whose
+// authenticated GetAgentVersion advertises TCPHalfCloseFeature.
+func OpenTCPWithHalfClose(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier *Verifier, assetID, service string, signRequest func([]byte) ([]byte, error)) (net.Conn, error) {
 	s, err := openPortSession(ctx, authCtx, cloudConn, verifier, assetID, service, pb.DialTransport_DIAL_TRANSPORT_TCP, signRequest)
 	if err != nil {
 		return nil, err

@@ -116,8 +116,8 @@ processes running as your user (and root) can connect and have full QEMU control
 
 ### If port 50051 is taken
 
-Prefer `--device vm:<name>` (or save it with `wendy device set-default
-vm:<name>`) over a literal loopback address. The alias follows the VM's current
+Prefer `--device vm:<name>` (or `WENDY_DEVICE=vm:<name>`) over a literal
+loopback address. The alias follows the VM's current
 port and keeps enrolled-device trust pins separate for each VM, so two VMs on
 different ports never share one. While a VM is running, a literal
 `127.0.0.1:<port>` on its forwarded agent port, or on the mTLS port after it,

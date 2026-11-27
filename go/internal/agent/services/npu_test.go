@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
 )
 
 // installFakeNPU points the FastRPC glob and the platform-device tree at fixtures.
@@ -29,10 +31,51 @@ func installFakeNPU(t *testing.T, nodes []string, device, compatible string) {
 		}
 	}
 
-	oldGlob, oldRoot := fastrpcDeviceGlob, platformDevicesRoot
-	t.Cleanup(func() { fastrpcDeviceGlob, platformDevicesRoot = oldGlob, oldRoot })
+	oldGlob, oldRoot, oldAccel := fastrpcDeviceGlob, platformDevicesRoot, accelNPUs
+	t.Cleanup(func() { fastrpcDeviceGlob, platformDevicesRoot, accelNPUs = oldGlob, oldRoot, oldAccel })
 	fastrpcDeviceGlob = filepath.Join(devDir, "fastrpc-*")
 	platformDevicesRoot = sysRoot
+	accelNPUs = func() []oci.AccelNPU { return nil }
+}
+
+// The mainline Rockchip NPU is a DRM accel node whose parent, "rknn", no driver
+// binds. Naming no runtime beats naming one this board has not been checked with.
+func TestDetectNPUInfoRockchipAccel(t *testing.T) {
+	root := t.TempDir()
+	for name, parent := range map[string]string{
+		"accel0": "devices/platform/rknn",
+		"accel1": "devices/pci0000:00/0000:00:0b.0",
+	} {
+		minor := filepath.Join(root, "sys", parent, "accel", name)
+		for _, dir := range []string{minor, filepath.Join(root, "sys/class/accel"), filepath.Join(root, "dev/accel")} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink("../../../"+filepath.Base(parent), filepath.Join(minor, "device")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("../..", parent, "accel", name), filepath.Join(root, "sys/class/accel", name)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "dev/accel", name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installFakeNPU(t, nil, "", "")
+	accelNPUs = func() []oci.AccelNPU { return oci.AccelNPUs(root) }
+	got := detectNPUInfo()
+	if !got.hasNPU || got.vendor != "rockchip" || got.backends != nil {
+		t.Errorf("detectNPUInfo() = %+v, want a rockchip NPU with no named runtime", got)
+	}
+
+	// An accel node of a device the npu entitlement does not grant is not reported.
+	if err := os.Remove(filepath.Join(root, "dev/accel/accel0")); err != nil {
+		t.Fatal(err)
+	}
+	if got := detectNPUInfo(); got.hasNPU {
+		t.Errorf("detectNPUInfo() = %+v, want no NPU", got)
+	}
 }
 
 func TestDetectNPUInfo(t *testing.T) {

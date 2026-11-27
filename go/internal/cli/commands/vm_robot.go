@@ -415,7 +415,7 @@ func reconcileSimulatorRobotWithAgentUpdate(ctx context.Context, conn *grpcclien
 	}
 	// An update cannot turn a physical device or a different platform into a VM.
 	info := missing.info
-	if (info.GetOs() != "linux" && info.GetOs() != "wendyos") || info.GetDeviceType() != "vm-arm64" {
+	if !agentIsWendyOSVM(info) {
 		return conn, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -464,10 +464,22 @@ func requireRobotAgentCapability(ctx context.Context, conn *grpcclient.AgentConn
 	if err != nil {
 		return fmt.Errorf("checking virtual robot agent support: %w", err)
 	}
-	if (info.GetOs() == "linux" || info.GetOs() == "wendyos") && info.GetDeviceType() == "vm-arm64" && slices.Contains(info.GetFeatureset(), runtime.agentFeature) {
+	if agentIsWendyOSVM(info) && slices.Contains(info.GetFeatureset(), runtime.agentFeature) {
 		return nil
 	}
 	return &robotAgentCapabilityError{name: conn.SimulatorName, runtime: runtime, info: info}
+}
+
+// agentIsWendyOSVM reports whether the agent runs on one of the WendyOS VM
+// boards. Physical devices, x86 ones included, never qualify for virtual
+// robots. The reported OS is the WendyOS distribution, or the kernel platform
+// on older agents.
+func agentIsWendyOSVM(info *agentpb.GetAgentVersionResponse) bool {
+	if info == nil || (info.GetOs() != "linux" && info.GetOs() != "wendyos") {
+		return false
+	}
+	_, ok := vm.ArchForBoard(info.GetDeviceType())
+	return ok
 }
 
 func reconcileRobot(ctx context.Context, conn *grpcclient.AgentConnection, update bool) error {

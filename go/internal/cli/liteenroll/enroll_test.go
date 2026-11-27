@@ -61,11 +61,12 @@ func TestConfigUsesSelectedPKI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CsrUrl != "https://csr.dev.pki.wendy.sh/v1/"+tenant || cfg.TimeUrl != "https://tsa.local/time" {
+	if cfg.CsrUrl != "https://csr.dev.pki.wendy.sh/v1/"+tenant || cfg.TimeUrl != "https://tsa.local/time" ||
+		cfg.EstUrl != "https://est.dev.pki.wendy.sh/.well-known/est/"+tenant+"/cacerts" {
 		t.Fatalf("unexpected endpoint derivation: %v", cfg)
 	}
 	cfg, err = Config(auth, deviceID, "https://csr.local:8443/v1/"+tenant, "https://tsa.local/time", "broker.local", 9443)
-	if err != nil || cfg.BrokerPort != 9443 {
+	if err != nil || cfg.BrokerPort != 9443 || cfg.EstUrl != "" {
 		t.Fatalf("self-hosted config: %v %v", cfg, err)
 	}
 }
@@ -436,6 +437,23 @@ func TestConfigDefaultsSignedTimeAndPreservesOverride(t *testing.T) {
 			}
 			if cfg.TimeUrl != tc.want {
 				t.Fatalf("time endpoint = %q, want %q", cfg.TimeUrl, tc.want)
+			}
+		})
+	}
+}
+
+func TestMintNameTakenIsErrDeviceNameTaken(t *testing.T) {
+	for _, field := range []string{"name", "untagged"} {
+		t.Run(field, func(t *testing.T) {
+			auth := authFixture(t)
+			cfg, err := Config(auth, deviceID, "", "https://tsa.local/time", "broker", 5055)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeEnrollment{reply: validTierCReply(), collide: func(string) string { return field }}
+			_, err = Mint(context.Background(), f, auth, cfg, "desk-board", nil, TrustProfile{})
+			if !errors.Is(err, cloudenroll.ErrDeviceNameTaken) {
+				t.Fatalf("a taken name must be recognisable, got %v", err)
 			}
 		})
 	}

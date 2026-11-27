@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import simd
 
 struct RobotCameraMode: Codable, Equatable, Sendable {
     var width, height: Int
@@ -57,6 +58,66 @@ enum RobotLensStore {
         let root = try root ?? directory()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try JSONEncoder().encode(profile).write(to: url(robot: profile.robot, mode: mode, root: root), options: .atomic)
+    }
+}
+
+// The raw Go2 WebRTC camera is H.264. Do not scale this preset onto a
+// different crop, resolution, rectified image, or replacement camera.
+// Coefficients: abizovnuralem/go2_ros2_sdk, commit
+// b440609591a249e7bdd4bbc88e056a3660575447,
+// go2_robot_sdk/calibration/front_camera_720.yaml (BSD-2-Clause).
+// See Resources/Notices/go2-camera-LICENSE.txt.
+enum Go2CameraProfile {
+    static let identifier = "go2-front-720p-v1"
+
+    static func lens(for mode: RobotCameraMode) -> SiteCameraLens? {
+        guard mode.width == 1280, mode.height == 720, mode.codec == "H.264" else { return nil }
+        return SiteCameraLens(width: 1280, height: 720,
+            fx: 864.39938, fy: 863.73849, cx: 639.19798, cy: 373.28118,
+            distortionModel: "brown_conrady", distortion: [-0.354630, 0.102054, -0.001614, -0.001249, 0],
+            measured: false,
+            note: "Go2 720p community preset, \(identifier). Not measured on this robot. Refine calibration if room matching fails.",
+            captureMode: mode.label)
+    }
+
+    // Unitree's Go2 URDF, commit 157ff950351e5f535e03c5d85a16b7d594b3dbcc:
+    // robots/go2_description/urdf/go2_description.urdf, front_camera_joint.
+    // The mount is (forward, left, up) = (0.32715, -0.00003, 0.04297) m.
+    // Express it in camera optical axes (right, down, forward) before applying
+    // the fitted camera rotation, including body pitch and roll.
+    static func bodyPosition(camera: SiteCameraPose) -> SIMD3<Double> {
+        let offset = camera.quaternion.act(SIMD3<Double>(0.00003, -0.04297, 0.32715))
+        return SIMD3(camera.position.x, camera.position.y, camera.position.z) - offset
+    }
+}
+
+struct RobotLensSelection: Sendable {
+    enum Source: Sendable, Equatable { case measured, go2Preset, estimated }
+    let lens: SiteCameraLens
+    let source: Source
+
+    var label: String {
+        switch source {
+        case .measured: "Measured lens"
+        case .go2Preset: "Go2 preset · refine if needed"
+        case .estimated: "Estimated lens"
+        }
+    }
+
+    static func resolve(mode: RobotCameraMode, measured: SiteCameraLens?, previous: SiteCameraLens? = nil,
+                        recalibrate: Bool = false) -> Self? {
+        for candidate in [measured, previous] {
+            if let lens = candidate, lens.measured, lens.isValid, mode.matches(lens), lens.boundaryRays != nil {
+                return Self(lens: lens, source: .measured)
+            }
+        }
+        if let lens = Go2CameraProfile.lens(for: mode) {
+            return Self(lens: lens, source: .go2Preset)
+        }
+        if !recalibrate, let lens = previous, lens.isValid, mode.matches(lens), lens.boundaryRays != nil {
+            return Self(lens: lens, source: .estimated)
+        }
+        return nil
     }
 }
 

@@ -22,7 +22,7 @@ const (
 	missCheckStep      = "Check the device's power and network connection, then retry."
 	missReenrolledStep = "If the device was enrolled again, it has a new entry: find it with 'wendy cloud discover --all --json'."
 	missFindStep       = "Find the device's current entry with 'wendy cloud discover --all --json'."
-	missChooseStep     = "Choose another device with --device or 'wendy device set-default'."
+	missChooseStep     = "Choose another device with --device."
 )
 
 // stubCloudSelectorRosterV2 answers a tenant selector's first, online-only
@@ -236,7 +236,7 @@ func TestCloudSelectorMissKeepsItsMessageWhenTheRosterQueryFails(t *testing.T) {
 	t.Run("tenant", func(t *testing.T) {
 		selector, queries := stubCloudSelectorRosterV2(t, nil, nil, down)
 		_, err := connectCloudDeviceSelector(context.Background(), selector)
-		want := "cloud asset " + missStaleID + " in tenant " + missTenant + " is offline or unavailable; choose another device with --device or 'wendy device set-default'"
+		want := "cloud asset " + missStaleID + " in tenant " + missTenant + " is offline or unavailable; choose another device with --device"
 		if err == nil || err.Error() != want || errors.Is(err, down) || NextSteps(err) != nil || ErrorClass(err) != "" {
 			t.Fatalf("error = %v (class %q, steps %q), want %q", err, ErrorClass(err), NextSteps(err), want)
 		}
@@ -247,7 +247,7 @@ func TestCloudSelectorMissKeepsItsMessageWhenTheRosterQueryFails(t *testing.T) {
 	t.Run("organization", func(t *testing.T) {
 		selector, _, allQueries := stubCloudSelectorRosterLegacy(t, nil, nil, down)
 		_, err := connectCloudDeviceSelector(context.Background(), selector)
-		want := "cloud asset 42 in organization 7 is offline or unavailable; choose another device with --device or 'wendy device set-default'"
+		want := "cloud asset 42 in organization 7 is offline or unavailable; choose another device with --device"
 		if err == nil || err.Error() != want || errors.Is(err, down) || NextSteps(err) != nil || ErrorClass(err) != "" {
 			t.Fatalf("error = %v (class %q, steps %q), want %q", err, ErrorClass(err), NextSteps(err), want)
 		}

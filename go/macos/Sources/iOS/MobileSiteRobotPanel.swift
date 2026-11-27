@@ -42,7 +42,7 @@ struct MobileSiteRobotPanel: View {
         .task(id: "\(session)/\(model.serial)/\(site.id)/\(site.modelRevision)/\(scenePhase)/\(model.reconnectGeneration)") {
             await model.observe(session: session, site: site, modelURL: modelURL, active: scenePhase == .active)
         }
-        .modifier(SiteRobotRotationPrompt(model: model, enabled: !isPresented, onStart: { isPresented = true }))
+        .modifier(SiteRobotRotationPrompt(model: model, enabled: !isPresented, onStart: { sheetDetent = .medium; isPresented = true }))
         .sheet(isPresented: $isPresented, onDismiss: { sheetDetent = .height(320) }) {
             NavigationStack {
                 ScrollView { controlsContent.padding(20) }
@@ -57,7 +57,7 @@ struct MobileSiteRobotPanel: View {
             .presentationDetents([.height(320), .medium, .large], selection: $sheetDetent)
             .presentationDragIndicator(.visible)
             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-            .modifier(SiteRobotRotationPrompt(model: model))
+            .modifier(SiteRobotRotationPrompt(model: model, onStart: { sheetDetent = .medium }))
             .sheet(isPresented: $pairing, onDismiss: { model.actions.submit { await model.load(session: session) } }) {
                 MobileGo2PairingView(session: session, gatewayName: gatewayName)
             }
@@ -71,9 +71,9 @@ struct MobileSiteRobotPanel: View {
                 Button("Pair Go2", systemImage: "link") { pairing = true }
                     .buttonStyle(.borderedProminent).disabled(session == 0)
             } else {
+                SiteRobotStatus(model: model, showsDetails: showsDetails)
                 SiteRobotCameraView(handle: model.handle, onFrame: model.acceptCameraFrame, onDecoder: model.acceptCameraDecoder)
                     .frame(height: 180)
-                SiteRobotStatus(model: model, showsDetails: showsDetails)
                 if showsDetails {
                     if model.robots.count > 1 {
                         Picker("Robot", selection: $model.serial) {
@@ -102,9 +102,6 @@ struct MobileSiteRobotPanel: View {
                         settingsContent
                     }
                 }
-            }
-            if showsDetails, let error = model.error, error != model.reading?.message {
-                Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
         }
         .transaction { $0.animation = nil }

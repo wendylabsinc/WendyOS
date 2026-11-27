@@ -96,7 +96,7 @@ func TestNormalNativeSensorSourceUsesOneTLSConnection(t *testing.T) {
 	transport, err := mcusource.NewWendyComTransport(zap.NewNop(),
 		string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: a.Certificate.Certificate[0]})), chain,
 		string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})),
-		mcusource.SensorPairing{SourcePrincipalURI: b.Device.Principal(), Transport: "wendycom"}, listener.Addr().String())
+		mcusource.SensorPairing{SourcePrincipalURI: b.Device.Principal(), Transport: "wendycom"}, listener.Addr().String(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

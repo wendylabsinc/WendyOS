@@ -210,3 +210,52 @@ func TestDiscoverAudioNoSession(t *testing.T) {
 		t.Errorf("got %d capabilities, want none", len(caps))
 	}
 }
+
+type fakeShareReporter struct {
+	nodes  map[string]bool
+	report map[string]map[string]string
+	calls  int
+}
+
+func (f *fakeShareReporter) IsShareNode(path string) bool { return f.nodes[path] }
+func (f *fakeShareReporter) CameraShareReport(context.Context) map[string]map[string]string {
+	f.calls++
+	return f.report
+}
+
+func TestDiscoverCamera_SkipsShareNodesAndAddsShareProperties(t *testing.T) {
+	d := NewSystemHardwareDiscoverer(zap.NewNop())
+	d.classifyTransport = func(string) (camera.Transport, string) { return camera.TransportUSB, "uvcvideo" }
+	d.enumerateLibcamera = func(context.Context) (map[string]string, error) { return nil, nil }
+	d.listVideoNodes = func() ([]string, error) { return []string{"/dev/video0", "/dev/video254"}, nil }
+
+	rep := &fakeShareReporter{
+		nodes: map[string]bool{"/dev/video254": true},
+		report: map[string]map[string]string{"/dev/video0": {
+			"share_mode":  "1280x720 YUYV, 30 fps",
+			"shared_with": "cv-a, cv-b",
+			"share_state": "cv-a (reading), cv-b (idle)",
+		}},
+	}
+	d.SetCameraShareReporter(rep)
+
+	caps := d.discoverCamera(context.Background())
+	if len(caps) != 1 || caps[0].GetDevicePath() != "/dev/video0" {
+		t.Fatalf("want only /dev/video0, got %v", caps)
+	}
+	p := caps[0].GetProperties()
+	if p["share_mode"] != "1280x720 YUYV, 30 fps" || p["shared_with"] != "cv-a, cv-b" || p["share_state"] != "cv-a (reading), cv-b (idle)" {
+		t.Errorf("share properties not merged: %v", p)
+	}
+	if p["transport"] != "usb" {
+		t.Errorf("transport lost: %v", p)
+	}
+	if rep.calls != 1 {
+		t.Errorf("reporter called %d times, want 1", rep.calls)
+	}
+
+	d.SetCameraShareReporter(nil)
+	if caps = d.discoverCamera(context.Background()); len(caps) != 2 {
+		t.Errorf("nil reporter must list every node, got %d", len(caps))
+	}
+}

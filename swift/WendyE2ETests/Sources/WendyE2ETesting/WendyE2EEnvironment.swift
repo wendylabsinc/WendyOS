@@ -24,6 +24,10 @@ public enum WendyE2EEnvironment {
         flag("WENDY_E2E_PARALLEL")
     }
 
+    public static var coverage: Bool {
+        flag("WENDY_E2E_COVERAGE")
+    }
+
     public static var runDirectory: String? {
         value("WENDY_E2E_RUN_DIR")
     }
@@ -58,6 +62,10 @@ public enum WendyE2EEnvironment {
 
     public static var cliAuthConfigPath: String? {
         value("WENDY_E2E_CLI_AUTH_CONFIG_PATH")
+    }
+
+    public static var cliDeviceCachePath: String? {
+        value("WENDY_E2E_CLI_DEVICE_CACHE_PATH")
     }
 
     public static var agentOS: WendyE2EMachineOS? {

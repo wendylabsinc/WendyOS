@@ -79,6 +79,13 @@ func TestCertificatePolicyOwnDeviceAndOperatorPaths(t *testing.T) {
 			if _, err = self.VerifyTLS(peer.Certificate.Certificate, wall); err != nil {
 				t.Fatal("inbound TLS disagreed with bundle trust", err)
 			}
+			parsed := make([]*x509.Certificate, len(peer.Certificate.Certificate))
+			for i, der := range peer.Certificate.Certificate {
+				parsed[i], err = x509.ParseCertificate(der)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if role == "operator" {
 				verified, err := self.VerifyPrimaryOperator(peer.Certificate.Certificate, wall)
 				if err != nil || verified.NotBefore() != identity.NotBefore || verified.NotAfter() != identity.NotAfter {
@@ -92,7 +99,7 @@ func TestCertificatePolicyOwnDeviceAndOperatorPaths(t *testing.T) {
 				if outbound.Time == nil || !outbound.Time().Equal(floor) {
 					t.Fatal("outbound TLS internal clock lost local base")
 				}
-				if err = outbound.VerifyPeerCertificate(peer.Certificate.Certificate, nil); err != nil {
+				if err = outbound.VerifyConnection(tls.ConnectionState{PeerCertificates: parsed}); err != nil {
 					t.Fatal("outbound TLS lost local policy", err)
 				}
 			}
@@ -102,13 +109,6 @@ func TestCertificatePolicyOwnDeviceAndOperatorPaths(t *testing.T) {
 			}
 			if err = server.VerifyPeerCertificate(peer.Certificate.Certificate, nil); err != nil {
 				t.Fatal("agent inbound TLS lost local policy", err)
-			}
-			parsed := make([]*x509.Certificate, len(peer.Certificate.Certificate))
-			for i, der := range peer.Certificate.Certificate {
-				parsed[i], err = x509.ParseCertificate(der)
-				if err != nil {
-					t.Fatal(err)
-				}
 			}
 			if err = server.VerifyConnection(tls.ConnectionState{DidResume: true, PeerCertificates: parsed}); err != nil {
 				t.Fatal("resumed server TLS lost local policy", err)

@@ -135,10 +135,86 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Create temporary test Keychain
+        id: keychain
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib, secrets, shlex, subprocess, tempfile
+
+          # File-Keychain preferences are per user, not per shell/session.
+          # Refuse to interfere with another runner using this account.
+          commands = subprocess.check_output(["ps", "-U", str(os.getuid()), "-o", "comm="], text=True).splitlines()
+          listeners = sum(pathlib.Path(command.strip()).name == "Runner.Listener" for command in commands)
+          workers = sum(pathlib.Path(command.strip()).name == "Runner.Worker" for command in commands)
+          print(f"Runner processes for test account: {listeners} listener(s), {workers} worker(s).", flush=True)
+          if listeners != 1 or workers != 1:
+              raise SystemExit("Temporary default Keychain requires an account with exactly one runner.")
+
+          def security(*args):
+              result = subprocess.run(["security", *args], capture_output=True, text=True)
+              if result.returncode:
+                  raise SystemExit(f"security {args[0]} failed ({result.returncode})")
+              return result.stdout
+
+          original = {
+              "default": shlex.split(security("default-keychain", "-d", "user")),
+              "search": shlex.split(security("list-keychains", "-d", "user")),
+          }
+          state = pathlib.Path(tempfile.mkdtemp(prefix="swift-keychain-", dir=os.environ["RUNNER_TEMP"]))
+          (state / "original.json").write_text(json.dumps(original))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"directory={state}", file=output)
+          password = secrets.token_hex(32)
+          print(f"::add-mask::{password}", flush=True)
+          keychain = str(state / "test.keychain-db")
+          security("create-keychain", "-p", password, keychain)
+          security("set-keychain-settings", "-lut", "21600", keychain)
+          security("unlock-keychain", "-p", password, keychain)
+          security("default-keychain", "-d", "user", "-s", keychain)
+          security("list-keychains", "-d", "user", "-s", keychain)
+          assert shlex.split(security("default-keychain", "-d", "user")) == [keychain]
+          assert shlex.split(security("list-keychains", "-d", "user")) == [keychain]
+          print("Temporary Keychain unlocked; it is the only test default/search entry.")
+          PYTHON
+
       - name: Run swift test
         working-directory: swift
         shell: bash
         run: bash ./Scripts/Test.sh
+
+      - name: Restore Keychain preferences and delete test Keychain
+        if: ${{ always() && steps.keychain.outputs.directory != '' }}
+        timeout-minutes: 2
+        env:
+          KEYCHAIN_DIRECTORY: ${{ steps.keychain.outputs.directory }}
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib, shlex, shutil, subprocess
+
+          state = pathlib.Path(os.environ["KEYCHAIN_DIRECTORY"])
+          original = json.loads((state / "original.json").read_text())
+          errors = []
+          for args in [
+              ["default-keychain", "-d", "user", "-s", *original["default"]],
+              ["list-keychains", "-d", "user", "-s", *original["search"]],
+              *([["delete-keychain", str(state / "test.keychain-db")]] if (state / "test.keychain-db").exists() else []),
+          ]:
+              result = subprocess.run(["security", *args], check=False)
+              if result.returncode:
+                  errors.append(f"{args[0]} exited {result.returncode}")
+          for command, expected in [("default-keychain", original["default"]), ("list-keychains", original["search"])]:
+              actual = subprocess.check_output(["security", command, "-d", "user"], text=True)
+              if shlex.split(actual) != expected:
+                  errors.append(f"{command} was not restored")
+          if (state / "test.keychain-db").exists():
+              errors.append("temporary Keychain still exists")
+          if errors:
+              raise SystemExit("; ".join(errors))
+          shutil.rmtree(state)
+          print("Original default/search list restored and verified; temporary Keychain deleted.")
+          PYTHON
 
       - name: Set up Go for the watch transport fixture
         uses: ./.github/actions/setup-go-ci

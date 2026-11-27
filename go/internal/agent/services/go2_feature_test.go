@@ -17,6 +17,11 @@ func TestGo2AgentFeatureOnlyAdvertisedByLinuxWendyOSVMs(t *testing.T) {
 		{"linux", "vm-arm64-untrusted", false},
 		{"linux", "", false},
 		{"darwin", "vm-arm64", false},
+		{"linux", "vm-x86-64", true},
+		{"linux", "vm-x86-64-untrusted", false},
+		{"linux", "generic-x86-64", false},
+		{"linux", "x86_64", false},
+		{"darwin", "vm-x86-64", false},
 	} {
 		got := appendGo2AgentFeature([]string{"gpu"}, tc.os, tc.device)
 		if slices.Contains(got, "go2-virtual-robot") != tc.want ||

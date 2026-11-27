@@ -184,6 +184,9 @@ func TestFalseAvailabilityRecoversBothRoles(t *testing.T) {
 	a, b := recoveryFixtures(t)
 	for _, role := range []string{"client", "server"} {
 		for _, peerCallback := range []bool{false, true} {
+			if role == "client" && peerCallback {
+				continue // Client recovery needs the negotiated ALPN from VerifyConnection.
+			}
 			t.Run(role+map[bool]string{false: "-connection-hook", true: "-certificate-hook"}[peerCallback], func(t *testing.T) {
 				now := time.Now()
 				ar, br := &Recovery{now: func() time.Time { return now }}, new(Recovery)
@@ -255,6 +258,67 @@ func TestOrdinaryALPNIgnoresInventory(t *testing.T) {
 	}
 	if len(cs.PeerCertificates) != 2 || len(ss.PeerCertificates) != 2 {
 		t.Fatal("ordinary ALPN omitted an inventoried issuer")
+	}
+}
+
+func TestIssuerRecoveryFollowsTheNegotiatedProtocol(t *testing.T) {
+	a, b := recoveryFixtures(t)
+	const base = "test/1"
+	now := time.Now()
+	issuer, err := x509.ParseCertificate(b.pair.Certificate[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected := &certs.IssuerPathError{Err: errors.New("issuer missing")}
+	for _, callback := range []bool{false, true} {
+		for _, negotiated := range []string{base, variant(base, []Fingerprint{Hash(a.root.Raw)}), leafOffer(base, regularClient, Hash(a.pair.Certificate[1]))} {
+			recovery := new(Recovery)
+			material := a.material(recovery)
+			material.SetLiteIssuers([]*x509.Certificate{issuer}, now.Add(-time.Hour), now.Add(time.Hour))
+			client := a.config(callback)
+			if callback {
+				client.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error { return rejected }
+			} else {
+				client.VerifyConnection = func(tls.ConnectionState) error { return rejected }
+			}
+			material.ConfigureClient(client, base)
+			if callback {
+				if err := client.VerifyPeerCertificate(b.pair.Certificate, nil); !errors.Is(err, rejected) {
+					t.Fatalf("direct certificate verifier returned %v, want %v", err, rejected)
+				}
+			}
+			server := &tls.Config{Certificates: []tls.Certificate{b.pair}, MinVersion: tls.VersionTLS13, NextProtos: []string{negotiated}}
+			state, _, err := recoveryWire(client, server)
+			if !errors.Is(err, rejected) || state.NegotiatedProtocol != negotiated {
+				t.Fatalf("callback=%t: ALPN %q, error %v, want %q and issuer rejection", callback, state.NegotiatedProtocol, err, negotiated)
+			}
+			if recovery.active() != (!callback && negotiated != base) {
+				t.Fatalf("callback=%t: cooldown did not follow protocol %q", callback, negotiated)
+			}
+		}
+	}
+}
+
+func TestLiteIssuerRefreshAffectsOnlyNewHandshakes(t *testing.T) {
+	a, b := recoveryFixtures(t)
+	const base = "test/1"
+	issuer, err := x509.ParseCertificate(b.pair.Certificate[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	certificateNow := now.Add(time.Hour)
+	material := a.material(new(Recovery))
+	material.SetCertificateClock(func() time.Time { return certificateNow })
+	first := a.config(false)
+	material.ConfigureClient(first, base)
+	material.SetLiteIssuers([]*x509.Certificate{issuer}, now.Add(30*time.Minute), now.Add(2*time.Hour))
+	second := a.config(false)
+	material.ConfigureClient(second, base)
+	_, firstKind, _ := decodeLeafOffer(first.NextProtos[0])
+	_, secondKind, _ := decodeLeafOffer(second.NextProtos[0])
+	if firstKind != 0 || secondKind != regularClient {
+		t.Fatal("a live issuer refresh was not scoped to new handshakes using the certificate clock")
 	}
 }
 

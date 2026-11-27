@@ -175,17 +175,6 @@ func fitImageToDrive(imageSize int64, layout *imageGPT, d drive) (imageFit, erro
 	return fit, nil
 }
 
-// noteImageFit tells the user when an image goes onto a drive smaller than
-// the disk its GPT declares, which would otherwise look like a mistake.
-func noteImageFit(fit imageFit, layout *imageGPT, d drive) {
-	if fit.writeLimit <= 0 || layout == nil {
-		return
-	}
-	fmt.Printf("Note: the image's partition table is laid out for a %s disk, but its partitions need only %s; "+
-		"writing them to %s and resizing the partition table for the drive.\n",
-		formatBytes(layout.declaredSize), formatBytes(layout.requiredSize), d.DevicePath)
-}
-
 // limitReader stops a sequential write at the drive's end.
 func (f imageFit) limitReader(r io.Reader) io.Reader {
 	if f.writeLimit <= 0 {

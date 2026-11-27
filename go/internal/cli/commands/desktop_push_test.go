@@ -53,7 +53,7 @@ func (c *pushTestConn) Invoke(ctx context.Context, method string, in, out any, _
 	return nil
 }
 func TestDesktopPushRegistrationConfirmedByCloud(t *testing.T) {
-	for _, topic := range []string{"dev.wendy.desktop", "dev.wendy.mobile", "dev.wendy.ccr"} {
+	for _, topic := range []string{"dev.wendy.desktop", "dev.wendy.mobile", "dev.wendy.WendyCompanion", "dev.wendy.ccr"} {
 		for _, environment := range []pb.APNSEnvironment{pb.APNSEnvironment_APNS_ENVIRONMENT_DEVELOPMENT, pb.APNSEnvironment_APNS_ENVIRONMENT_PRODUCTION} {
 			for _, enabled := range []bool{true, false} {
 				for _, success := range []bool{true, false} {

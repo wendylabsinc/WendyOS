@@ -27,6 +27,20 @@ func TestGalleryMetadataUsesRecordedEvidence(t *testing.T) {
 	}
 }
 
+func TestGalleryNotificationIDsComeFromRecordedEvents(t *testing.T) {
+	const id = "a4c0899e-f2c0-4c60-a42d-5c89f756be55"
+	events := []byte(`{"type":"event","name":"thermal_recording_test","attributes":{"notification_id":"` + id + `","max_celsius":27.5}}
+{"type":"event","attributes":{"notification_id":"` + id + `"}}
+{"type":"prediction","attributes":{"notification_id":"0cdfb0f4-fd00-43bb-a821-ee28ed0b6cc9"}}`)
+	got := galleryMetadata("event:thermal_recording_test", events, true)
+	if !slices.Equal(got.NotificationIDs, []string{id}) || !got.Complete {
+		t.Fatalf("%+v", got)
+	}
+	if got := galleryMetadata(id, nil, true); len(got.NotificationIDs) != 0 {
+		t.Fatal("inferred a recording association from its title")
+	}
+}
+
 func TestGalleryMediaEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -79,5 +93,24 @@ func TestGalleryMediaReadsManifestWithoutDownloadingEvents(t *testing.T) {
 	}
 	if _, err := b.GalleryMediaAt("device", "wrong"); err == nil {
 		t.Fatal("accepted mismatched manifest")
+	}
+}
+
+func TestGalleryContentMimeIsAuthoritativeAndPathsIdentifyStatistics(t *testing.T) {
+	for _, tc := range []struct {
+		file data.File
+		want []string
+	}{
+		{data.File{Path: "misleading.mp4", MediaType: "audio/wav"}, []string{"Audio"}},
+		{data.File{Path: "capture.bin", MediaType: " Video/MP4 ; codecs=avc1"}, []string{"Video"}},
+		{data.File{Path: "telemetry.jsonl", MediaType: "application/x-ndjson"}, []string{"Device stats"}},
+		{data.File{Path: "other.jsonl", MediaType: "application/x-ndjson"}, []string{}},
+		{data.File{Path: "capture.MP4", MediaType: "application/octet-stream"}, []string{"Video"}},
+		{data.File{Path: "capture.mp4", MediaType: "application/json"}, []string{}},
+	} {
+		got := galleryContentKinds(data.Manifest{Files: []data.File{tc.file}})
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%+v: got %v want %v", tc.file, got, tc.want)
+		}
 	}
 }

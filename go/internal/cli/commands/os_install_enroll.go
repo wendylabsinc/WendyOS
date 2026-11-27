@@ -6,9 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 
-	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
@@ -200,45 +201,29 @@ func ackContinueUnenrolled() error {
 // settled before the mint and written back, so the device is given the name
 // Cloud reserved.
 func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmeEnrollmentBake, error) {
-	plan, err := planACMEPreEnrollment(cfg, opts, interactive, deviceName)
+	plan, err := planACMEPreEnrollment(cfg, opts, interactive)
 	if err != nil || plan == nil {
 		return nil, err
 	}
+	name, err := resolveInstallDeviceName(ctx, *deviceName, plan.auth, true)
+	if err != nil {
+		return nil, err
+	}
+	*deviceName = name
 	return plan.mint(ctx, deviceName)
 }
 
-// nameTakenError is the short refusal of a taken name without a terminal to
-// ask on.
-type nameTakenError string
-
-func (e nameTakenError) Error() string { return string(e) }
-
-// retryTakenDeviceName calls enroll with *name until it succeeds or fails for
-// another reason. When Cloud finds the name taken it says so and asks for
-// another one, which it writes back to *name; without a terminal it ends with
-// the short message and the flag to pass. Stopping at the prompt returns
-// tui.ErrCancelled.
-func retryTakenDeviceName(name *string, interactive bool, flag string, enroll func(string) error) error {
-	err := enroll(*name)
-	for errors.Is(err, cloudenroll.ErrDeviceNameTaken) {
-		if !interactive {
-			return nameTakenError(deviceNameTakenMessage(*name) + " Pass a different name with " + flag + ".")
+// printPreEnrollAnswer leaves the answered pre-enroll question on screen; a nil
+// auth means the person said no.
+func printPreEnrollAnswer(auth *config.AuthConfig) {
+	answer := "no"
+	if auth != nil {
+		answer = "yes"
+		if org := strings.TrimSpace(tui.StripControl(cachedCloudOrganizationName(auth))); org != "" {
+			answer += " (" + org + ")"
 		}
-		fmt.Println(deviceNameTakenMessage(*name))
-		next, perr := promptDeviceName("Another device name",
-			fmt.Sprintf("(a-z, 0-9 and hyphens, starts with a letter, 3–%d chars; Esc to stop)", maxDeviceNameLen), validateDeviceName)
-		if perr != nil {
-			return perr
-		}
-		*name = next
-		err = enroll(*name)
 	}
-	return err
-}
-
-// deviceNameTakenMessage says name is taken, in the person's terms.
-func deviceNameTakenMessage(name string) string {
-	return fmt.Sprintf("The name %s is already used by another device in this organization. Names are unique per organization, regardless of upper and lower case. Choose another name.", name)
+	printAnswer(alsoOnPromptTerminal(os.Stdout), "Pre-enroll with Wendy Cloud", answer, false)
 }
 
 // acmePreEnrollPlan is a settled choice to pre-enroll with auth; nothing has
@@ -248,10 +233,9 @@ type acmePreEnrollPlan struct {
 	interactive bool
 }
 
-// planACMEPreEnrollment asks everything resolveACMEPreEnrollment asks and
-// settles a blank *deviceName, reading only the local config: Cloud is not
-// contacted. A nil plan means nothing will be baked.
-func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmePreEnrollPlan, error) {
+// planACMEPreEnrollment asks whether to pre-enroll and with which session,
+// without contacting Cloud; a nil plan bakes nothing.
+func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactive bool) (*acmePreEnrollPlan, error) {
 	switch opts.mode {
 	case preEnrollSkip:
 		return nil, nil
@@ -264,11 +248,15 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 			return nil, err
 		}
 		if !ok {
+			printPreEnrollAnswer(nil)
 			return nil, nil
 		}
 	}
 
 	auth, err := selectEnrollmentAuth(cfg, opts.cloudGRPC, interactive)
+	if err == nil && auth != nil && opts.mode == preEnrollAuto {
+		printPreEnrollAnswer(auth)
+	}
 	if err != nil {
 		if errors.Is(err, ErrUserCancelled) {
 			return nil, err
@@ -283,28 +271,6 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 		fmt.Println("Skipping enrollment. The device will boot unenrolled; run 'wendy device enroll' after first boot.")
 		return nil, nil
 	}
-
-	// Cloud reserves the device under its name and refuses a blank one
-	// (WDY-3016), so a blank name cannot wait for the device to name itself on
-	// first boot. The caller writes the name settled here to the config
-	// partition, so the device's hostname and its Cloud row agree.
-	if *deviceName == "" {
-		if !interactive {
-			return nil, fmt.Errorf("--pre-enroll requires --device-name: Wendy Cloud registers the device under that name")
-		}
-		name, err := promptDeviceName(
-			"Device name",
-			fmt.Sprintf("(required to pre-enroll; a-z, 0-9 and hyphens, starts with a letter, 3–%d chars)", maxDeviceNameLen),
-			validateDeviceName,
-		)
-		if err != nil {
-			if errors.Is(err, tui.ErrCancelled) {
-				return nil, ErrUserCancelled
-			}
-			return nil, fmt.Errorf("device-name prompt: %w", err)
-		}
-		*deviceName = name
-	}
 	return &acmePreEnrollPlan{auth: auth, interactive: interactive}, nil
 }
 
@@ -313,9 +279,10 @@ func planACMEPreEnrollment(cfg *config.Config, opts preEnrollOptions, interactiv
 // continue unenrolled, which returns nil. A name another device holds is asked
 // again, and the new name is written back to *deviceName.
 func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acmeEnrollmentBake, error) {
-	fmt.Println("Pre-enrolling device with Wendy Cloud...")
+	asked := *deviceName
 	var state *acmeEnrollmentBake
-	enrollErr := retryTakenDeviceName(deviceName, p.interactive, "--device-name", func(name string) (err error) {
+	retry := nameRetry{interactive: p.interactive, noTTYHint: noTTYHintInstall, validate: validateDeviceName, maxLen: maxDeviceNameLen, org: cachedCloudOrganizationName(p.auth)}
+	enrollErr := retryTakenDeviceName(deviceName, retry, func(name string) (err error) {
 		state, err = preEnrollACMEFn(ctx, p.auth, name)
 		return err
 	})
@@ -326,7 +293,10 @@ func (p *acmePreEnrollPlan) mint(ctx context.Context, deviceName *string) (*acme
 		return nil, enrollErr
 	}
 	if enrollErr == nil {
-		fmt.Println("Cloud enrollment reserved; credential staged for first boot. Automatic ACME enrollment requires an image with a compatible agent; device enrollment and Cloud presence are not yet verified.")
+		if *deviceName != asked {
+			printNameAnswer(*deviceName)
+		}
+		installDone(os.Stdout, "Cloud enrollment reserved")
 		return state, nil
 	}
 	if !p.interactive {

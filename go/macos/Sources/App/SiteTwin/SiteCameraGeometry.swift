@@ -142,47 +142,6 @@ extension GoClient {
 }
 
 extension GoClient {
-    func saveCameraAlignment(session: UInt64, sourceID: String, expectedRevision: UInt64, result: SiteLocalizationResult) async throws {
-        guard let revision = result.pose.modelRevision, result.lens.isValid,
-              result.pose.isCurrent(revision: revision, now: Date()), result.inliers >= Int(!result.lens.measured ? WS_MIN_ESTIMATED_INLIERS : (result.fittedLens ? WS_MIN_LENS_INLIERS : WS_MIN_POSE_INLIERS)), result.residual.isFinite, result.residual <= result.lens.alignmentResidualLimit else {
-            throw SiteLocalizationError.invalidResult
-        }
-        try await perform {
-            try Self.withCString(sourceID) { source in
-                try Self.withCString(revision.uuidString) { model in
-                    try Self.withCString(result.lens.note) { note in
-                        try Self.withCString(result.lens.captureMode) { mode in
-                            try Self.withCString(result.pose.provenance) { provenance in
-                                let lens = result.lens, pose = result.pose
-                                let distortion = lens.distortionModel == "none" ? [Double](repeating: 0, count: 5) : lens.distortion
-                                var input = WDCameraAlignmentInput()
-                                input.stable_id = source; input.model_revision = model; input.note = note
-                                input.capture_mode = mode; input.pose_provenance = provenance
-                                input.expected_revision = expectedRevision
-                                input.lens_measured = result.lens.measured ? 1 : 0
-                                input.lens_only = 0
-                                input.width = UInt32(lens.width); input.height = UInt32(lens.height); input.inliers = UInt32(result.inliers)
-                                input.fx = lens.fx; input.fy = lens.fy; input.cx = lens.cx; input.cy = lens.cy
-                                input.k1 = distortion[0]; input.k2 = distortion[1]; input.p1 = distortion[2]; input.p2 = distortion[3]; input.k3 = distortion[4]
-                                input.x = pose.position.x; input.y = pose.position.y; input.z = pose.position.z
-                                input.qx = pose.rotation.x; input.qy = pose.rotation.y; input.qz = pose.rotation.z; input.qw = pose.rotation.w
-                                input.rms = result.residual
-                                input.observed_ms = Int64(pose.observedAt.timeIntervalSince1970*1000)
-                                input.valid_until_ms = Int64(pose.validUntil.timeIntervalSince1970*1000)
-                                guard let response = WDCameraAlignmentSave(session, &input) else { throw WendyError(message: "No camera calibration response.") }
-                                defer { WDStatusFree(response) }
-                                try Self.check(response.pointee)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-
-extension GoClient {
     func saveCameraLens(session: UInt64, sourceID: String, expectedRevision: UInt64, lens: SiteCameraLens) async throws {
         guard lens.isValid, lens.measured, lens.boundaryRays != nil else { throw SiteLocalizationError.invalidResult }
         try await perform {

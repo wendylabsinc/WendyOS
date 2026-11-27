@@ -2,8 +2,11 @@ package commands
 
 import (
 	"context"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -32,6 +36,7 @@ func (d *enrollingLiteDevice) EnrollmentChallenge(bool) (*litepb.WendyComEnrollm
 	return &litepb.WendyComEnrollmentChallenge{
 		Enrolled: d.enrolled, NonceHex: strings.Repeat("12", 32),
 		BuiltinRootsReady: true, BuiltinTsaRootsReady: true, UuidEnrollmentSupported: true,
+		UsbTrustSupported: true,
 	}, nil
 }
 
@@ -65,6 +70,11 @@ func TestLiteEnrollmentUsesFreshUUIDThroughout(t *testing.T) {
 	_, endpoint := enrollmentServers(t, cloud, &acmeProvisioningServer{})
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = endpoint
+	rootFile := filepath.Join(t.TempDir(), "private-ca.pem")
+	root := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tsa.Certificate().Raw})
+	if err := os.WriteFile(rootFile, root, 0600); err != nil {
+		t.Fatal(err)
+	}
 	seen := map[string]bool{}
 	// Enrolling the same hardware twice must mint distinct identities.
 	for i := 0; i < 2; i++ {
@@ -75,9 +85,17 @@ func TestLiteEnrollmentUsesFreshUUIDThroughout(t *testing.T) {
 		cmd.SetContext(ctx)
 		var out strings.Builder
 		cmd.SetOut(&out)
-		err := runEnrollLiteDevice(cmd, liteUnenrollUSBTarget(), auth, "camera", liteEnrollmentOptions{
+		opts := liteEnrollmentOptions{
 			timeURL: tsa.URL, brokerHost: "broker.example", brokerPort: 5055,
-		})
+		}
+		var wantEST string
+		if i == 1 {
+			opts.csrURL = "https://issue.example/v1/" + testOperatorTenant
+			opts.estURL = "https://mesh-pki.example:8443/api/cacerts?realm=lab&full_chain=true"
+			opts.deviceRoots, opts.tsaRoots, opts.httpsRoots = rootFile, rootFile, rootFile
+			wantEST = "https://mesh-pki.example:8443/api/cacerts?realm=lab"
+		}
+		err := runEnrollLiteDevice(cmd, liteUnenrollUSBTarget(), auth, "camera", opts)
 		cancel()
 		if err != nil {
 			t.Fatal(err)
@@ -93,6 +111,9 @@ func TestLiteEnrollmentUsesFreshUUIDThroughout(t *testing.T) {
 		}
 		if device.conf.GetEnrollment().GetDeviceId() != id || device.conf.GetEnrollment().GetToken() != "single-use-test" {
 			t.Fatal("USB configuration did not preserve the Cloud identity and credential")
+		}
+		if wantEST != "" && device.conf.GetEnrollment().GetEstUrl() != wantEST {
+			t.Fatalf("USB configuration saved EST URL %q, want %q", device.conf.GetEnrollment().GetEstUrl(), wantEST)
 		}
 		if cloud.req.GetHardware().GetSerialNumber() != "441bf6804824" || cloud.req.GetName() != "camera" || cloud.req.GetDeviceClass() != cloudpb.DeviceClass_DEVICE_CLASS_C {
 			t.Fatal("hardware serial, name or device class lost")
@@ -257,5 +278,41 @@ func TestLiteEnrollmentPreservesPendingUUIDBeforeSetup(t *testing.T) {
 	}
 	if !device.closed {
 		t.Fatal("enrollment connection leaked")
+	}
+}
+
+func TestLiteEnrollRetriesTakenName(t *testing.T) {
+	oldConnect, oldHTTP := connectLiteEnrollmentFn, http.DefaultClient
+	t.Cleanup(func() { connectLiteEnrollmentFn, http.DefaultClient = oldConnect, oldHTTP })
+	tsa := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("device-verified-timestamp"))
+	}))
+	t.Cleanup(tsa.Close)
+	http.DefaultClient = tsa.Client()
+	cloud := &oidcEnrollmentServer{takenName: "camera", response: &cloudpb.EnrollDeviceResponse{
+		CredentialKind: "enrollment_token", TokenValue: "single-use-test",
+		ExpiresAt: time.Now().Add(4 * time.Minute).Format(time.RFC3339),
+	}}
+	_, endpoint := enrollmentServers(t, cloud, &acmeProvisioningServer{})
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = endpoint
+	setInteractive(t, true)
+	stubPromptDeviceNameDefault(t, func(_, _, def string, _ tui.ValidateFunc) (string, error) { return def, nil })
+	device := &enrollingLiteDevice{}
+	connectLiteEnrollmentFn = func(models.ExternalDevice) (liteEnrollmentDevice, error) { return device, nil }
+	cmd := &cobra.Command{}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd.SetContext(ctx)
+	var out strings.Builder
+	cmd.SetOut(&out)
+	var err error
+	captureStdout(t, func() {
+		err = runEnrollLiteDevice(cmd, liteUnenrollUSBTarget(), auth, "camera", liteEnrollmentOptions{
+			timeURL: tsa.URL, brokerHost: "broker.example", brokerPort: 5055,
+		})
+	})
+	if err != nil || cloud.req.GetName() != "camera-2" || device.conf.GetDeviceName() != "camera-2" {
+		t.Fatalf("err %v, Cloud name %q, board name %q; want both camera-2", err, cloud.req.GetName(), device.conf.GetDeviceName())
 	}
 }

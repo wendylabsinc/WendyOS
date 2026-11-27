@@ -15,6 +15,7 @@ import (
 )
 
 type Session struct {
+	ctx    context.Context
 	stream pb.TunnelBrokerV2Service_JoinSessionClient
 	cancel context.CancelFunc
 	conn   *grpc.ClientConn
@@ -31,7 +32,7 @@ func join(parent context.Context, broker *pb.BrokerInstance, artifact string, c 
 		cancel()
 		return nil, err
 	}
-	s := &Session{cancel: cancel, conn: conn}
+	s := &Session{ctx: ctx, cancel: cancel, conn: conn}
 	// Admission must finish before the grant expires; the relay has a later deadline.
 	started := time.Now()
 	timerDone := make(chan struct{})
@@ -128,41 +129,75 @@ func (s *Session) Recv() ([]byte, bool, error) {
 	return nil, false, fmt.Errorf("invalid TCP relay frame")
 }
 
-// Conn adapts the admitted byte stream to net.Conn. Closing either direction
-// tears down the owned gRPC connection, canceling blocked send/receive calls.
+// Conn adapts the admitted byte stream to net.Conn. CloseWrite sends a relay
+// half-close while keeping the response path open. A full close or the device
+// ending its response closes the owned gRPC connection.
 func (s *Session) Conn() net.Conn {
-	local, remote := net.Pipe()
+	reader, toLocal := net.Pipe()
+	writer, fromLocal := net.Pipe()
+	var once sync.Once
+	closeSession := func() {
+		once.Do(func() {
+			_ = toLocal.Close()
+			_ = fromLocal.Close()
+			_ = s.Close()
+		})
+	}
+	stop := context.AfterFunc(s.ctx, closeSession)
 	go func() {
-		defer remote.Close()
-		defer s.Close()
+		defer closeSession()
+		defer stop()
 		for {
 			b, half, err := s.Recv()
 			if err != nil || half {
 				return
 			}
-			if _, err = remote.Write(b); err != nil {
+			if _, err = toLocal.Write(b); err != nil {
 				return
 			}
 		}
 	}()
 	go func() {
-		defer remote.Close()
-		defer s.Close()
 		buf := make([]byte, 65536)
 		for {
-			n, err := remote.Read(buf)
-			if n > 0 {
-				if e := s.Send(buf[:n], false); e != nil {
-					return
+			n, err := fromLocal.Read(buf)
+			if err == io.EOF {
+				if err := s.Send(nil, true); err != nil {
+					closeSession()
 				}
+				return
 			}
-			if err != nil {
-				if err == io.EOF {
-					_ = s.Send(nil, true)
-				}
+			if err != nil || s.Send(buf[:n], false) != nil {
+				closeSession()
 				return
 			}
 		}
 	}()
-	return local
+	return &tcpSessionConn{Conn: reader, writer: writer, closeSession: closeSession}
+}
+
+// Separate pipes allow one direction to reach EOF without closing the other.
+type tcpSessionConn struct {
+	net.Conn
+	writer       net.Conn
+	closeSession func()
+}
+
+func (c *tcpSessionConn) Write(p []byte) (int, error) { return c.writer.Write(p) }
+func (c *tcpSessionConn) CloseWrite() error           { return c.writer.Close() }
+func (c *tcpSessionConn) SetWriteDeadline(t time.Time) error {
+	return c.writer.SetWriteDeadline(t)
+}
+func (c *tcpSessionConn) SetDeadline(t time.Time) error {
+	readErr := c.SetReadDeadline(t)
+	writeErr := c.SetWriteDeadline(t)
+	if readErr != nil {
+		return readErr
+	}
+	return writeErr
+}
+func (c *tcpSessionConn) Close() error {
+	c.closeSession()
+	_ = c.writer.Close()
+	return c.Conn.Close()
 }

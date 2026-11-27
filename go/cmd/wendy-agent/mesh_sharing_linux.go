@@ -151,7 +151,8 @@ func (m *meshSharingManager) run(ctx context.Context, node *localmesh.Node) {
 				controller, closing = nil, false
 			}
 		}
-		if config.Participate && controller == nil {
+		sharingEnabled := config.Participate && (config.Roam || config.ShareUplink)
+		if sharingEnabled && controller == nil {
 			var err error
 			controller, err = meshsharing.NewLinux(ctx, node.Credentials, sharingNode{node, m.catalog})
 			if err != nil {
@@ -171,7 +172,9 @@ func (m *meshSharingManager) run(ctx context.Context, node *localmesh.Node) {
 		if controller != nil && !closing {
 			controller.SetLogger(m.logger)
 			stepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			decision, stepErr := controller.Step(stepCtx, config)
+			sharingConfig := config
+			sharingConfig.Participate = sharingEnabled
+			decision, stepErr := controller.Step(stepCtx, sharingConfig)
 			cancel()
 			if stepErr != nil && !errors.Is(stepErr, context.Canceled) {
 				m.logger.Warn("Wendy Net Internet sharing reconciliation failed", zap.Error(stepErr))
@@ -187,15 +190,15 @@ func (m *meshSharingManager) run(ctx context.Context, node *localmesh.Node) {
 				state.State, state.Detail = "error", loadErr.Error()
 			}
 			m.setState(state)
-			if !config.Participate {
+			if !sharingEnabled {
 				if closeErr := m.closeController(controller); closeErr != nil {
 					closing = true
 				} else {
 					controller = nil
 				}
 			}
-		} else if !config.Participate && !closing {
-			state := services.LocalMeshRuntimeStatus{Available: true, State: "mesh-active", Detail: "Wendy Net transport is active; Internet sharing is disabled.",
+		} else if !sharingEnabled && !closing {
+			state := services.LocalMeshRuntimeStatus{Available: true, State: "disabled",
 				AuthenticatedPeers: node.Snapshot().Peers}
 			if loadErr != nil {
 				state.State, state.Detail = "error", loadErr.Error()

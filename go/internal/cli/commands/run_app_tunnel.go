@@ -146,7 +146,10 @@ func openCloudAppTunnel(ctx context.Context, conn *grpcclient.AgentConnection, r
 	go func() {
 		defer close(t.done)
 		defer ln.Close()
-		err := serveTCPForward(tunnelCtx, ln, t.relay, dialFailed)
+		// No unanswered notice: while the app starts or restarts, the device
+		// closing a connection without an answer is expected, and the
+		// readiness wait reports on that.
+		err := serveTCPForward(tunnelCtx, ln, t.relay, dialFailed, nil)
 		if err != nil && tunnelCtx.Err() == nil {
 			cliNotice("Wendy Cloud tunnel on localhost:%d stopped: %v", t.LocalPort, err)
 		}

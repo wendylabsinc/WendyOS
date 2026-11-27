@@ -29,6 +29,9 @@ const (
 )
 
 var (
+	// templateArchiveAttemptTimeout abandons an attempt that receives no bytes
+	// for this long. It does not limit how long a download that keeps
+	// delivering bytes may take: the archive is tens of megabytes.
 	templateArchiveAttemptTimeout = 2 * time.Minute
 	templateArchiveMaxAttempts    = 3
 	templateArchiveRetryDelay     = 750 * time.Millisecond
@@ -329,8 +332,17 @@ func downloadTemplateArchiveFromURL(ctx context.Context, url, branch, language, 
 }
 
 func downloadTemplateArchiveAttempt(ctx context.Context, url, branch, language, templateName string, onProgress progressCallback) (map[string][]byte, *templateManifest, error) {
-	attemptCtx, cancel := context.WithTimeout(ctx, templateArchiveAttemptTimeout)
-	defer cancel()
+	attemptCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	idle := templateArchiveAttemptTimeout
+	watchdog := time.AfterFunc(idle, func() { cancel(errDownloadStalled) })
+	defer watchdog.Stop()
+	stalled := func(err error) error {
+		if errors.Is(context.Cause(attemptCtx), errDownloadStalled) {
+			return fmt.Errorf("downloading template (branch %q): %w for %s", branch, errDownloadStalled, idle)
+		}
+		return err
+	}
 
 	req, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, url, nil)
 	if err != nil {
@@ -339,7 +351,7 @@ func downloadTemplateArchiveAttempt(ctx context.Context, url, branch, language, 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("downloading template (branch %q): %w", branch, err)
+		return nil, nil, stalled(fmt.Errorf("downloading template (branch %q): %w", branch, err))
 	}
 	defer resp.Body.Close()
 
@@ -351,29 +363,35 @@ func downloadTemplateArchiveAttempt(ctx context.Context, url, branch, language, 
 		return nil, nil, fmt.Errorf("downloading template (branch %q): HTTP %d", branch, resp.StatusCode)
 	}
 
-	var reader io.Reader = resp.Body
-	if onProgress != nil {
-		// Normalize ContentLength to the progressCallback contract:
-		// http.Response.ContentLength is -1 when unknown, but callers expect 0.
-		total := resp.ContentLength
-		if total < 0 {
-			total = 0
-		}
-		reader = &progressReader{
-			r:          resp.Body,
-			total:      total,
-			onProgress: onProgress,
-		}
+	// Normalize ContentLength to the progressCallback contract:
+	// http.Response.ContentLength is -1 when unknown, but callers expect 0.
+	total := resp.ContentLength
+	if total < 0 {
+		total = 0
+	}
+	reader := &progressReader{
+		r:     resp.Body,
+		total: total,
+		onProgress: func(written, total int64) {
+			watchdog.Reset(idle) // bytes arrived
+			if onProgress != nil {
+				onProgress(written, total)
+			}
+		},
 	}
 
-	return extractTemplateArchive(reader, language, templateName)
+	files, manifest, err := extractTemplateArchive(reader, language, templateName)
+	if err != nil {
+		return nil, nil, stalled(err)
+	}
+	return files, manifest, nil
 }
 
 func shouldRetryTemplateArchiveError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, errDownloadStalled) {
 		return true
 	}
 

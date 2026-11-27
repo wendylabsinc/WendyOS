@@ -46,8 +46,13 @@ struct AppsView: View {
             }.width(80)
             TableColumn("Status") { app in
                 HStack(spacing: 8) {
-                    Circle().fill(app.runningState.color).frame(width: 8, height: 8)
-                    Text(app.runningState.title).font(.callout)
+                    if model.appActions.contains(app.appName) {
+                        ProgressView().controlSize(.small)
+                        Text("Updating…").font(.callout)
+                    } else {
+                        Circle().fill(app.runningState.color).frame(width: 8, height: 8)
+                        Text(app.runningState.title).font(.callout)
+                    }
                 }.accessibilityElement(children: .combine)
             }.width(120)
             TableColumn("") { app in

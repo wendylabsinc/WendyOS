@@ -24,7 +24,7 @@ Options:
                        branch, or main when not in a branch.
   --tests FILTERS      Comma-separated SwiftPM test filters; empty runs the
                        default WendyE2ETests suite.
-  --diff-base-ref REF  Optional ref to diff against; empty runs a full review.
+  --diff-base-ref REF  Optional base for aggregate comparison and AI diff review; empty = full.
   --repo OWNER/REPO    GitHub repository; defaults to $DEFAULT_REPO.
   --workflow FILE      Workflow file or ID; defaults to $DEFAULT_WORKFLOW.
   --watch              Watch the newest matching workflow_dispatch run after

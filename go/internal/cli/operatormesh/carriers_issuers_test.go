@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/url"
@@ -31,16 +32,19 @@ import (
 // complete path rather than treating the on-wire presentation as a full chain.
 func TestAutomaticRouterWithCachedForeignIssuers(t *testing.T) {
 	for _, tc := range []struct {
-		name, transport string
-		warm            bool
-		mldsa           bool
+		name, transport  string
+		warm             bool
+		mldsa            bool
+		classicalOffline bool
 	}{
-		{"tcp/full", carriers.TCP, false, false},
-		{"tcp/warm-issuer", carriers.TCP, true, false},
-		{"ble/full", carriers.BLE, false, false},
-		{"ble/warm-issuer", carriers.BLE, true, false},
-		{"tcp/warm-issuer-mldsa", carriers.TCP, true, true},
-		{"ble/warm-issuer-mldsa", carriers.BLE, true, true},
+		{name: "tcp/full", transport: carriers.TCP},
+		{name: "tcp/warm-issuer", transport: carriers.TCP, warm: true},
+		{name: "ble/full", transport: carriers.BLE},
+		{name: "ble/warm-issuer", transport: carriers.BLE, warm: true},
+		{name: "tcp/warm-issuer-mldsa", transport: carriers.TCP, warm: true, mldsa: true},
+		{name: "ble/warm-issuer-mldsa", transport: carriers.BLE, warm: true, mldsa: true},
+		{name: "tcp/classical-router-offline", transport: carriers.TCP, mldsa: true, classicalOffline: true},
+		{name: "ble/classical-router-offline", transport: carriers.BLE, mldsa: true, classicalOffline: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			transport := tc.transport
@@ -51,6 +55,8 @@ func TestAutomaticRouterWithCachedForeignIssuers(t *testing.T) {
 				key  crypto.Signer
 				pem  string
 			}
+			tenant, _ := meshid.ParseTenant("11111111-1111-4111-8111-111111111111")
+			liteName := tenant.String() + " Lite Device CA"
 			serial := int64(0)
 			mint := func(name, principal string, parent *issued, key crypto.Signer) issued {
 				t.Helper()
@@ -65,6 +71,7 @@ func TestAutomaticRouterWithCachedForeignIssuers(t *testing.T) {
 				cert := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), BasicConstraintsValid: true, IsCA: principal == "", KeyUsage: x509.KeyUsageDigitalSignature}
 				if cert.IsCA {
 					cert.KeyUsage |= x509.KeyUsageCertSign
+					cert.MaxPathLenZero = name == liteName
 				}
 				if principal != "" {
 					u, err := url.Parse(principal)
@@ -89,9 +96,12 @@ func TestAutomaticRouterWithCachedForeignIssuers(t *testing.T) {
 				return issued{cert, key, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}
 			}
 			root := mint("root", "", nil, nil)
-			deviceIssuer := mint("device issuer", "", &root, nil)
+			issuerName := "device issuer"
+			if tc.classicalOffline {
+				issuerName = liteName
+			}
+			deviceIssuer := mint(issuerName, "", &root, nil)
 			operatorIssuer := mint("operator issuer", "", &root, nil)
-			tenant, _ := meshid.ParseTenant("11111111-1111-4111-8111-111111111111")
 			router, _ := meshid.ParseDevice(tenant, "22222222-2222-4222-8222-222222222222")
 			device := mint("router", router.Principal(), &deviceIssuer, nil)
 			var operatorKey crypto.Signer
@@ -149,7 +159,13 @@ func TestAutomaticRouterWithCachedForeignIssuers(t *testing.T) {
 					_, err := serverCredentials.VerifyTLS(raw, time.Now())
 					return err
 				}}
-				serverCredentials.ConfigureTLSServer(cfg)
+				if tc.classicalOffline {
+					presentation := serverCredentials.Certificate
+					presentation.Certificate = presentation.Certificate[:1]
+					cfg.Certificates = []tls.Certificate{presentation}
+				} else {
+					serverCredentials.ConfigureTLSServer(cfg)
+				}
 				secure := tls.Server(raw, cfg)
 				if err = secure.HandshakeContext(ctx); err != nil {
 					serverResult <- err
@@ -176,6 +192,18 @@ func TestAutomaticRouterWithCachedForeignIssuers(t *testing.T) {
 				<-ctx.Done()
 				return ctx.Err()
 			}}}
+			if tc.classicalOffline {
+				const pkiEndpoint = "https://identity.pki.test"
+				fetch := func(context.Context, string, string) (string, error) { return deviceIssuer.pem, nil }
+				if _, err = loadLiteIssuers(ctx, options.StateDirectory, pkiEndpoint, options.Certificate, fetch); err != nil {
+					t.Fatalf("seeding operator trust during sign-in: %v", err)
+				}
+				offline := func(context.Context, string, string) (string, error) { return "", io.EOF }
+				options.LiteIssuerChain, err = loadLiteIssuers(ctx, options.StateDirectory, pkiEndpoint, options.Certificate, offline)
+				if err != nil {
+					t.Fatalf("reopening operator trust offline: %v", err)
+				}
+			}
 			session, err := Open(ctx, options)
 			if err != nil {
 				t.Fatal(err)

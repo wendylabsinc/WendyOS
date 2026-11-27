@@ -24,7 +24,6 @@ import (
 )
 
 type nodePeer struct {
-	reconcileNeeded bool // Actor-owned: retry a change after bounded queue pressure.
 	babelConfirmed  bool // Actor-owned: this incarnation once had two-way Babel liveness.
 	babelRetiring   bool // Actor-owned: expiry already signalled the existing lifetime owner.
 	retire          chan struct{}
@@ -43,7 +42,8 @@ type nodePeer struct {
 	tun            io.ReadWriteCloser
 	pendingBundles sync.Map // fingerprints queued or being written on this link
 	control        chan ControlMessage
-	controlMu      sync.Mutex // Serializes dequeue against actor idle pruning.
+	controlMu      sync.Mutex              // Serializes dequeue, idle pruning and skipped HAVEs.
+	skippedHaves   map[string]*atomic.Bool // Retry notifications from the writer.
 	controlOnce    sync.Once
 	controlReady   chan struct{}
 	done           chan struct{}
@@ -364,8 +364,6 @@ func (n *Node) Run() error {
 	defer timer.Stop()
 	maintenance := time.NewTicker(time.Second)
 	defer maintenance.Stop()
-	reconcile := time.NewTicker(5 * time.Minute)
-	defer reconcile.Stop()
 	for {
 		delay := time.Second
 		if deadline, ok := n.routing.NextDeadline(); ok {
@@ -405,41 +403,18 @@ func (n *Node) Run() error {
 			if err := n.step(babel.Tick{}); err != nil {
 				return err
 			}
-			// Continue an unfinished repair pass as the bounded control queue
-			// drains. This uses the existing maintenance tick, not a new scan
-			// interval, and stops once the pass completes.
 			for _, p := range n.peers {
 				n.flushReplies(p)
 				if err := n.continueIngress(p); err != nil {
 					return err
 				}
 				n.pumpTimestamp(p)
-				if p.reconcileNeeded {
-					p.reconcileNeeded = false
-					n.reconcilePeer(p, time.Now())
-				}
 				if p.sync == nil {
 					continue
 				}
-				previousOrigins := n.routeOrigins
-				replies, changed, err := p.sync.ContinueCertificates(time.Now(), directoryResponseSlots(p))
-				if err != nil {
-					n.closePeer(p, "directory-maintenance", err)
-					continue
-				}
-				queued := n.queueReplies(p, replies)
-				if err := n.afterDirectoryChanges(p, changed, previousOrigins, "certificate-repair"); err != nil {
+				if err := n.maintainDirectory(p); err != nil {
 					return err
 				}
-				if !queued {
-					n.closePeer(p, "directory-maintenance-queue", errors.New("directory reply reserve full"))
-					continue
-				}
-				n.continueReconcilePeer(p, time.Now())
-			}
-		case <-reconcile.C:
-			for _, p := range n.peers {
-				n.reconcilePeer(p, time.Now())
 			}
 		case event := <-n.events:
 			err := n.handle(event)
@@ -543,7 +518,6 @@ func (n *Node) handle(e nodeEvent) error {
 			return err
 		}
 		e.add.tun = tun
-		e.add.sync = NewSynchronizer(n.directory, n.cache, n.controlHub.Announcements())
 		n.peers[e.add.id] = e.add
 
 		// Both ends derive the same complementary pair from the full UUIDs.
@@ -554,9 +528,11 @@ func (n *Node) handle(e nodeEvent) error {
 		if err = n.step(babel.AddLink{Link: babelLinkForPeer(e.add, local, peer)}); err != nil {
 			return err
 		}
+		// Seed after Babel setup, which can publish a newer local proof.
 		now := time.Now()
-		n.queue(e.add, e.add.sync.bootstrapOwn(n.Credentials.Device.Key(), now, cap(e.add.control)-len(e.add.control)))
-		n.reconcilePeer(e.add, now)
+		e.add.sync = NewSynchronizer(n.directory, n.cache, n.controlHub.Announcements())
+		e.add.sync.seedAnnouncements(n.Credentials.Device.Key(), now)
+		n.flushAnnouncements(e.add, now)
 		if newPeer {
 			// The slot actually admitted a distinct peer. Failed setup or an
 			// old standby's deferred retry must never consume this opportunity.
@@ -620,16 +596,16 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 
 	previousOrigins := n.routeOrigins
 	replies, changed, err := p.sync.Receive(*control, time.Now(), directoryResponseSlots(p))
+	if errors.Is(err, ErrControlBackpressure) {
+		return err
+	}
+	queued := err == nil && n.queueReplies(p, replies)
+	if handoffErr := n.afterDirectoryChanges(p, changed, previousOrigins, "carrier"); handoffErr != nil {
+		return handoffErr
+	}
 	if err != nil {
-		if errors.Is(err, ErrControlBackpressure) {
-			return err
-		}
 		n.closePeer(p, "directory-control", err)
 		return nil
-	}
-	queued := n.queueReplies(p, replies)
-	if err := n.afterDirectoryChanges(p, changed, previousOrigins, "carrier"); err != nil {
-		return err
 	}
 	if !queued {
 		n.closePeer(p, "directory-control-queue", errors.New("directory reply reserve full"))
@@ -641,21 +617,44 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 	return nil
 }
 
+func (n *Node) maintainDirectory(p *nodePeer) error {
+	previousOrigins := n.routeOrigins
+	replies, changed, err := p.sync.ContinueCertificates(time.Now(), directoryResponseSlots(p))
+	queued := err == nil && n.queueReplies(p, replies)
+	if handoffErr := n.afterDirectoryChanges(p, changed, previousOrigins, "certificate-repair"); handoffErr != nil {
+		return handoffErr
+	}
+	if err != nil {
+		n.closePeer(p, "directory-maintenance", err)
+		return nil
+	}
+	if !queued {
+		n.closePeer(p, "directory-maintenance-queue", errors.New("directory reply reserve full"))
+		return nil
+	}
+	n.flushAnnouncements(p, time.Now())
+	return nil
+}
+
 // Every successful admission path, including deferred certificate completion,
 // uses the same routing handoff and immediate refresh behavior.
 func (n *Node) afterDirectoryChanges(p *nodePeer, changed []SignedManifest, previousOrigins map[RouteOrigin]bool, source string) error {
+	now := time.Now()
 	for _, record := range changed {
-		n.logAdmission(record, source, time.Now())
-		for id, dest := range n.peers {
-			if id != p.id && dest.sync != nil {
-				n.queue(dest, dest.sync.Record(record, time.Now()))
-			}
-		}
+		n.logAdmission(record, source, now)
 	}
 	// Reevaluate withdrawal immediately. A new verified route tuple also asks
 	// neighbours for their actual current Babel advertisement, instead of waiting
 	// for a periodic update that may have preceded this reliable proof.
 	if len(changed) != 0 {
+		for id, dest := range n.peers {
+			if id != p.id && dest.sync != nil {
+				for _, record := range changed {
+					dest.sync.markAnnouncement(record, now)
+				}
+				n.flushAnnouncements(dest, now)
+			}
+		}
 		if err := n.step(babel.Tick{}); err != nil {
 			return err
 		}
@@ -673,27 +672,26 @@ func (n *Node) afterDirectoryChanges(p *nodePeer, changed []SignedManifest, prev
 	return nil
 }
 
-func (n *Node) reconcilePeer(p *nodePeer, now time.Time) {
+func (n *Node) flushAnnouncements(p *nodePeer, now time.Time) {
+	if len(p.sync.pendingAnnouncements) == 0 {
+		return
+	}
 	n.flushReplies(p)
-	if len(p.replies) != 0 {
-		p.reconcileNeeded = true
-		return
+	if len(p.replies) == 0 {
+		// The actor is the sole producer. The writer can only free slots
+		// between measuring this budget and enqueueing the announcements.
+		n.queue(p, p.sync.drainAnnouncements(now, cap(p.control)-len(p.control)))
 	}
-	if p.sync == nil {
-		return
-	}
-	n.queue(p, p.sync.ReconcileBounded(now, cap(p.control)-len(p.control)))
-}
-
-func (n *Node) continueReconcilePeer(p *nodePeer, now time.Time) {
-	if p.sync == nil {
-		return
-	}
-	n.queue(p, p.sync.ContinueReconcile(now, cap(p.control)-len(p.control)))
 }
 
 func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
-	if !n.controlEligible(p, m, time.Now()) {
+	now := time.Now()
+	if !n.controlEligible(p, m, now) {
+		if m.pendingHave {
+			p.controlMu.Lock()
+			p.rememberSkippedHave(m, now)
+			p.controlMu.Unlock()
+		}
 		return nil
 	}
 	if m.Kind == "bundle" {
@@ -766,10 +764,14 @@ func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
 func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 	n.flushReplies(p)
 	if len(p.replies) != 0 {
-		return // Periodic reconciliation repairs bulk gossip after replies drain.
+		return
 	}
 	for _, m := range messages {
-		if !n.controlEligible(p, m, time.Now()) {
+		now := time.Now()
+		if !n.controlEligible(p, m, now) {
+			if m.pendingHave && !m.Expired(now) {
+				p.sync.retryAnnouncement(m.origin, m.canceled, now)
+			}
 			continue
 		}
 		// A leaf can request an identity again while its large certificate
@@ -784,7 +786,6 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 		case p.control <- m:
 			p.wakeControl()
 		default:
-			p.reconcileNeeded = true // Maintenance retries changes without waiting five minutes.
 			if m.Kind == "bundle" {
 				p.pendingBundles.Delete(Fingerprint(m.Bundle))
 			}
@@ -866,7 +867,8 @@ func (n *Node) publish() error {
 	n.nextPublication = time.Now().Add(time.Second)
 	for _, p := range n.peers {
 		if p.sync != nil {
-			n.queue(p, p.sync.Record(w, now))
+			p.sync.markAnnouncement(w, now)
+			n.flushAnnouncements(p, now)
 		}
 	}
 	n.refresh()

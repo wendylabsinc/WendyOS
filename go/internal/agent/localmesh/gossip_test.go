@@ -132,14 +132,24 @@ func TestManifestHaveWantDiamondTransfersEachRevisionOnce(t *testing.T) {
 				t.Fatal("wrong revision/withdrawal", got)
 			}
 		}
-		// Reconnect/periodic repair sends HAVE again, not duplicate DATA.
+		// A reconnect advertises the inventory, but a warm receiver already
+		// knows the digest and does not download the same body again.
 		for _, edge := range [][2]int{{1, 3}, {2, 3}} {
-			for _, m := range sessions[edge].Reconcile(now) {
-				replies, _, err := sessions[[2]int{edge[1], edge[0]}].Receive(m, now)
+			sender := NewSynchronizer(dirs[edge[0]], dirs[edge[0]].cache, pools[edge[0]])
+			receiver := NewSynchronizer(dirs[edge[1]], dirs[edge[1]].cache, pools[edge[1]])
+			sender.seedAnnouncements("", now)
+			messages := sender.drainAnnouncements(now, 1)
+			if len(messages) != 1 {
+				t.Fatal("reconnect did not advertise the known manifest")
+			}
+			for _, m := range messages {
+				replies, _, err := receiver.Receive(m, now)
 				if err != nil || len(replies) > 0 {
 					t.Fatal("known revision redownloaded", replies, err)
 				}
 			}
+			sender.Close()
+			receiver.Close()
 		}
 	}
 }
@@ -150,10 +160,11 @@ func TestManifestGossipQueueBudgetDoesNotConsumeAnnouncement(t *testing.T) {
 	d.Accept(w, now)
 	s := NewSynchronizer(d, d.cache, netgossip.NewPool())
 	defer s.Close()
-	if got := s.ReconcileBounded(now, 0); len(got) != 0 {
+	s.seedAnnouncements("", now)
+	if got := s.drainAnnouncements(now, 0); len(got) != 0 {
 		t.Fatal(got)
 	}
-	got := s.ContinueReconcile(now, 1)
+	got := s.drainAnnouncements(now, 1)
 	if len(got) != 1 || got[0].Gossip == nil || got[0].Gossip.Op != "have" {
 		t.Fatal("dropped unqueued announcement", got)
 	}
