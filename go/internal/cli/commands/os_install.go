@@ -3454,7 +3454,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, version, board stri
 	// Reuse a cached download from a previous run when one exists; otherwise
 	// download with a progress bar. The cached file persists across runs and
 	// is only removed via `wendy cache clear`/`cache list`.
-	fwPath, err := resolveFirmware(asset)
+	fwPath, err := resolveFirmware(ctx, asset)
 	if err != nil {
 		return fmt.Errorf("resolving firmware: %w", err)
 	}

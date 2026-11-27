@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	goruntime "runtime"
 	"time"
@@ -264,23 +264,8 @@ func downloadMCPSimulatorImage(ctx context.Context, dir, url string) (path strin
 }
 
 // A positive maxBytes bounds both the declared response size and streamed data.
+// The transfer has no deadline: it follows imageDownloadPolicy, like an OS image.
 func downloadMCPSimulatorImageWithLimit(ctx context.Context, dir, url string, maxBytes int64) (path string, retErr error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("simulator image download returned HTTP %d", resp.StatusCode)
-	}
-	if maxBytes > 0 && resp.ContentLength > maxBytes {
-		return "", fmt.Errorf("simulator image Content-Length %d exceeds download limit of %d bytes", resp.ContentLength, maxBytes)
-	}
 	f, err := os.CreateTemp(dir, "simulator-*.image")
 	if err != nil {
 		return "", err
@@ -295,21 +280,17 @@ func downloadMCPSimulatorImageWithLimit(ctx context.Context, dir, url string, ma
 			path = ""
 		}
 	}()
-	reader := simulatorContextReader{ctx: ctx, reader: resp.Body}
-	if maxBytes > 0 {
-		if _, err := io.Copy(f, io.LimitReader(reader, maxBytes)); err != nil {
-			return path, err
-		}
-		// Probe without writing another byte, including for chunked responses.
-		if n, err := io.CopyN(io.Discard, reader, 1); n != 0 {
-			return path, fmt.Errorf("simulator image exceeds download limit of %d bytes", maxBytes)
-		} else if err != io.EOF {
-			return path, err
-		}
+	err = downloadResumable(ctx, url, f, maxBytes, nil)
+	var status downloadStatusError
+	switch {
+	case err == nil:
 		return path, nil
+	case errors.As(err, &status):
+		return path, fmt.Errorf("simulator image download returned HTTP %d", int(status))
+	case errors.Is(err, errDownloadTooLarge):
+		return path, fmt.Errorf("simulator image %w", err)
 	}
-	_, err = io.Copy(f, reader)
-	return path, err
+	return path, fmt.Errorf("downloading simulator image: %w", err)
 }
 
 func verifyMCPSimulatorImage(ctx context.Context, path, digest string) error {

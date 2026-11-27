@@ -455,7 +455,7 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset cloudDiscoveryDevice) tea.
 		}
 		osName := resp.GetOs()
 
-		binaryData, actualVer, _, err := resolveAgentArtifact(osName, arch, false)
+		binaryData, actualVer, _, err := resolveAgentArtifact(ctx, osName, arch, false)
 		if err != nil {
 			conn.Close()
 			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("resolving agent binary: %w", err)}
