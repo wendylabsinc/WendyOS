@@ -1,0 +1,88 @@
+{
+  "repository": "github.com/wendylabsinc/wendy",
+  "revision": "f29c41dbb86e8d05a8562b52c86a2f5120ace076",
+  "license_file": "WENDY-LICENSE",
+  "notice_file": "OPERATOR-NOTICE.md",
+  "original_sources": [
+    {
+      "path": "go/internal/shared/config/config.go",
+      "git_blob": "58d2db2f4eba65b8064c5fd874b4cb3bd3468d2d",
+      "sha256": "463c2c9385daa261a4bf76f98018908e7d29168d2e0027e924fb3c84123a3dac"
+    },
+    {
+      "path": "go/internal/shared/config/contexts.go",
+      "git_blob": "8a8b1d9ca2ecc853423ec80ab2acb885996c9f61",
+      "sha256": "f12065cfd7f71b5d994adeba041518def2313534132eaa72f697fbdb1885003c"
+    },
+    {
+      "path": "go/internal/shared/config/secrets.go",
+      "git_blob": "06199bbc82222e16542cc5cbc6a255641831d1f5",
+      "sha256": "cfaa1745631ea158f6049923421e74385df960e85c8c4ff27e6eb772949101e9"
+    },
+    {
+      "path": "go/internal/shared/secretstore/keychain_darwin.go",
+      "git_blob": "556ad34bec32129da1768821b243ed3942ac49f2",
+      "sha256": "4321f32c7eb4535d7e0b5e4c7980ba3c7e3458512259fc5a628555f7614e1f93"
+    },
+    {
+      "path": "go/internal/cli/cloudrequest/sign.go",
+      "git_blob": "ece247b950ca692ef9b6af15156cff9179ca4c95",
+      "sha256": "5cc6a531e4facb13b332c3f49e27cc68f9c8e290b543d3470a6f473cfed409f1"
+    },
+    {
+      "path": "go/internal/shared/certs/peer_chain.go",
+      "git_blob": "ef3c60c9132a728ced652c19cb1de65bad8b3706",
+      "sha256": "3fe3e3e4da4de4acc99b923764339747d4526f1cefdbf0a6bd2bdd4916f43ee7"
+    },
+    {
+      "path": "go/internal/shared/certs/certs.go",
+      "git_blob": "3fe8b584d463d20e76f9078053e76624a14d9c3d",
+      "sha256": "2d4d28373cf7059223bd1e5a0710b99d8e260c4ca6b1ea6f62eb07654d1086a1"
+    },
+    {
+      "path": "LICENSE",
+      "git_blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ],
+  "adaptations": {
+    "operator/resolver.go": "Explicit context and CertificateInfo adapter with bounded issuer-chain preparation. No defaults, migration, renewal, token loading or writes. Uses separately inventoried upstreamcerts.",
+    "operator/keychain.go": "Fixed macOS generic-password read and base64 protocol, with bounds and cancellation. No writes, unlock, cache or token reads.",
+    "operator/sign.go": "New private typed read and self-only local commissioning signer. Cloud signer reviewed for custody semantics, not copied as a generic signer."
+  },
+  "private_and_adapted_files": [
+    {
+      "path": "operator/files.go",
+      "sha256": "d71dad2b5bea7aabc4881b5cbb9eb0bd8c7e0f1df6c9ff676f62541694163d9c"
+    },
+    {
+      "path": "operator/resolver.go",
+      "sha256": "766c773c2b40c5d4108c307c0ec2544fadccf0a4829900cc14ed8ff3de4f782f"
+    },
+    {
+      "path": "operator/keychain.go",
+      "sha256": "a88ebf83884f27d876ce0a8fa281d29d70f4d057fecf64692c4bfae57c7cb578"
+    },
+    {
+      "path": "operator/sign.go",
+      "sha256": "dc50488d6aa1835759269cb25f7ca83ac9436c173b55784cef9b0bce66ffa874"
+    },
+    {
+      "path": "operator/operator_test.go",
+      "sha256": "ad50e058ad9c3552c15dc0b47723c30a6eb78b1a1db177e0cd14d667e6ed120a"
+    },
+    {
+      "path": "third_party/OPERATOR-NOTICE.md",
+      "sha256": "046b9279f1af10447f43809f653a9e70f17824308b4d76f59c6d24b562dbfcc8"
+    },
+    {
+      "path": "cmd/world-sign/main.go",
+      "sha256": "9337879756f6514966191aebd950573247a0b02fa5a68dad3e43476ce1965b2d"
+    },
+    {
+      "path": "cmd/world-sign/main_test.go",
+      "sha256": "4c47eeab80393a6ff67163465064e1f331687edfa001cac907b4244079a78889"
+    }
+  ],
+  "dependencies_added": []
+}

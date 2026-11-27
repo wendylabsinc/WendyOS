@@ -1,0 +1,32 @@
+name: Prune device cache
+description: Reclaim unused container cache before hardware deployment tests.
+
+# Call only from a job holding the device-<hostname> concurrency lock.
+# --all also releases recent cache pins and waits for containerd GC, while
+# preserving images and snapshots referenced by running or stopped apps.
+inputs:
+  hostname:
+    description: Explicit device hostname used by the deployment tests.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Prune unused device cache
+      shell: bash
+      env:
+        DEVICE_HOSTNAME: ${{ inputs.hostname }}
+      run: |
+        set -euo pipefail
+        [[ -n "$DEVICE_HOSTNAME" ]] || { echo "::error::A device hostname is required for cache cleanup."; exit 1; }
+        command=("$GITHUB_WORKSPACE/go/bin/wendy" device cache prune --all --device "$DEVICE_HOSTNAME")
+        echo "Pruning unused container cache on $DEVICE_HOSTNAME"
+        if [[ "$RUNNER_OS" == macOS ]]; then
+          # The runner's LaunchAgent lacks Local Network permission. Use the
+          # login session, as the integration tests do, and quote every argument
+          # because SSH joins them into a remote shell command.
+          printf -v remote_command '%q ' env WENDY_SECRET_STORE=file "${command[@]}"
+          ssh -o BatchMode=yes localhost "$remote_command" </dev/null
+        else
+          "${command[@]}"
+        fi

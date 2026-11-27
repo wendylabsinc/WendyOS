@@ -1,0 +1,5 @@
+<library path="exact_goal_planner">
+  <class type="wendy_nav::ExactGoalSmacPlannerLattice" base_class_type="nav2_core::GlobalPlanner">
+    <description>Smac lattice path with exact requested terminal orientation after a conservative rotation clearance check.</description>
+  </class>
+</library>

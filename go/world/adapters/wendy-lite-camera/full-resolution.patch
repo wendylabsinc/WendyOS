@@ -1,0 +1,80 @@
+diff --git a/components/wendy_sensor_link/src/cam_capture.c b/components/wendy_sensor_link/src/cam_capture.c
+index a1f781f..97a8eec 100644
+--- a/components/wendy_sensor_link/src/cam_capture.c
++++ b/components/wendy_sensor_link/src/cam_capture.c
+@@ -55,8 +55,9 @@ static const camera_config_t s_config = {
+     .ledc_channel = LEDC_CHANNEL_0,
+ 
+     .pixel_format = PIXFORMAT_JPEG,
+-    .frame_size = FRAMESIZE_VGA,
+-    .jpeg_quality = 24,
++    // The driver clamps this to the detected sensor's supported maximum.
++    .frame_size = FRAMESIZE_QSXGA,
++    .jpeg_quality = 12,
+     .fb_count = CAM_CAPTURE_MAX_INFLIGHT,
+     .fb_location = CAMERA_FB_IN_PSRAM,
+     .grab_mode = CAMERA_GRAB_LATEST,
+@@ -99,10 +100,20 @@ esp_err_t cam_capture_init(void)
+     }
+ 
+     s_initialized = true;
+-    ESP_LOGI(TAG, "camera ready");
++    int width, height;
++    cam_capture_get_frame_size(&width, &height);
++    ESP_LOGI(TAG, "camera ready: PID=0x%x %dx%d JPEG quality %d",
++             sensor ? sensor->id.PID : 0, width, height, s_config.jpeg_quality);
+     return ESP_OK;
+ }
+ 
++void cam_capture_get_frame_size(int *width, int *height)
++{
++    sensor_t *sensor = esp_camera_sensor_get();
++    *width = sensor ? resolution[sensor->status.framesize].width : 0;
++    *height = sensor ? resolution[sensor->status.framesize].height : 0;
++}
++
+ void cam_capture_deinit(void)
+ {
+     if (s_initialized) {
+diff --git a/components/wendy_sensor_link/src/cam_capture.h b/components/wendy_sensor_link/src/cam_capture.h
+index d19a9dc..9ab2633 100644
+--- a/components/wendy_sensor_link/src/cam_capture.h
++++ b/components/wendy_sensor_link/src/cam_capture.h
+@@ -29,6 +29,11 @@ extern "C" {
+  * the driver is already up, so every consumer module can call it. */
+ esp_err_t cam_capture_init(void);
+ 
++#if CONFIG_WENDY_SENSOR_LINK_XIAO_ESP32S3
++/* Actual initialized size, including the detected sensor's resolution limit. */
++void cam_capture_get_frame_size(int *width, int *height);
++#endif
++
+ /* Releases the driver after startup fails. Only call before streaming. */
+ void cam_capture_deinit(void);
+ 
+diff --git a/components/wendy_sensor_link/src/wendy_sensor_link.c b/components/wendy_sensor_link/src/wendy_sensor_link.c
+index 69ce1cc..29b891e 100644
+--- a/components/wendy_sensor_link/src/wendy_sensor_link.c
++++ b/components/wendy_sensor_link/src/wendy_sensor_link.c
+@@ -20,6 +20,10 @@ static enum wcom_sensor_link_result sensor_link_get_manifest(
+ {
+     *sensor_count = 0;
+     if (s_camera_ready && *sensor_count < max_sensors) {
++        int width = CAM_FRAME_WIDTH, height = CAM_FRAME_HEIGHT;
++#if CONFIG_WENDY_SENSOR_LINK_XIAO_ESP32S3
++        cam_capture_get_frame_size(&width, &height);
++#endif
+         sensors[(*sensor_count)++] = (struct wcom_sensor_descriptor){
+             .channel_id = 0,
+             .input_id = 0,
+@@ -27,8 +31,8 @@ static enum wcom_sensor_link_result sensor_link_get_manifest(
+             .format_kind = WCOM_SENSOR_FORMAT_VIDEO,
+             .format.video = {
+                 .codec = wendy_lite_sensorlink_VideoFormat_Codec_MJPEG,
+-                .width = CAM_FRAME_WIDTH,
+-                .height = CAM_FRAME_HEIGHT,
++                .width = width,
++                .height = height,
+                 .fps = 0,
+             },
+         };

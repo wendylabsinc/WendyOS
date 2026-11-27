@@ -31,7 +31,11 @@ func (p *deviceProvider) Stream(ctx context.Context, messages []Message, tools [
 		}
 		p.ollama = discoveryJSON(probe, p.fallback, http.MethodGet, "http://wendy-device/api/version", nil, &version) == nil && version.Version != ""
 	})
-	filter := &answerStream{implicit: strings.Contains(strings.ToLower(p.fallback.config.Model), "qwen3"), emit: emit}
+	// Native Ollama already separates message.thinking from message.content.
+	// Treating all Qwen content as an implicit thinking preamble holds ordinary
+	// answers until completion and makes a working local model look stalled.
+	// Only the compatible endpoint needs the legacy template heuristic.
+	filter := &answerStream{implicit: !p.ollama && strings.Contains(strings.ToLower(p.fallback.config.Model), "qwen3"), emit: emit}
 	var result Message
 	var err error
 	if !p.ollama {
@@ -41,6 +45,9 @@ func (p *deviceProvider) Stream(ctx context.Context, messages []Message, tools [
 	}
 	filter.finish(err == nil)
 	result.Content = filter.visible.String()
+	if err == nil && p.ollama && strings.TrimSpace(result.Content) == "" && len(result.ToolCalls) == 0 {
+		err = fmt.Errorf("local model completed without an answer or tool call. %s", p.instructModelHint())
+	}
 	return result, err
 }
 func (p *deviceProvider) stream(ctx context.Context, messages []Message, tools []Tool, filter *answerStream) (Message, error) {
@@ -70,7 +77,11 @@ func (p *deviceProvider) stream(ctx context.Context, messages []Message, tools [
 			v.ToolName = names[m.ToolCallID]
 		}
 		for _, image := range m.Images {
-			v.Images = append(v.Images, image.Data)
+			data, err := ollamaSceneImage(ctx, image)
+			if err != nil {
+				return Message{}, fmt.Errorf("preparing local chat image: %w", err)
+			}
+			v.Images = append(v.Images, data)
 		}
 		wire = append(wire, v)
 	}
@@ -78,7 +89,7 @@ func (p *deviceProvider) stream(ctx context.Context, messages []Message, tools [
 	for _, tool := range tools {
 		wireTools = append(wireTools, map[string]any{"type": "function", "function": map[string]any{"name": tool.Name, "description": tool.Description, "parameters": tool.Parameters}})
 	}
-	payload := map[string]any{"model": p.fallback.config.Model, "messages": wire, "stream": true, "tools": wireTools, "options": map[string]any{"num_ctx": 32768, "num_predict": p.fallback.config.MaxTokens}, "keep_alive": "10m"}
+	payload := map[string]any{"model": p.fallback.config.Model, "messages": wire, "stream": true, "tools": wireTools, "options": map[string]any{"num_ctx": 32768, "num_predict": p.fallback.config.MaxTokens}, "keep_alive": "1h"}
 	// Suppress optional thinking output only for models advertising that feature.
 	var details struct {
 		Capabilities []string `json:"capabilities"`
@@ -111,15 +122,18 @@ func (p *deviceProvider) stream(ctx context.Context, messages []Message, tools [
 	var text strings.Builder
 	for scanner.Scan() {
 		var chunk struct {
-			Message message `json:"message"`
-			Done    bool    `json:"done"`
-			Error   string  `json:"error"`
+			// Deliberately do not decode or emit message.thinking: it is a
+			// separate private channel, never an answer or executable tool call.
+			Message    message `json:"message"`
+			Done       bool    `json:"done"`
+			DoneReason string  `json:"done_reason"`
+			Failure    string  `json:"error"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &chunk); err != nil {
 			return result, fmt.Errorf("reading model response: %w", err)
 		}
-		if chunk.Error != "" {
-			return result, errors.New(p.fallback.safeError(chunk.Error))
+		if chunk.Failure != "" {
+			return result, errors.New(p.fallback.safeError(chunk.Failure))
 		}
 		if chunk.Message.Content != "" {
 			text.WriteString(chunk.Message.Content)
@@ -130,6 +144,9 @@ func (p *deviceProvider) stream(ctx context.Context, messages []Message, tools [
 		}
 		if chunk.Done {
 			result.Content = text.String()
+			if chunk.DoneReason == "length" {
+				return result, fmt.Errorf("local model reached its %d-token generation limit before completing; partial tool calls were not executed. %s", p.fallback.config.MaxTokens, p.instructModelHint())
+			}
 			return result, nil
 		}
 	}
@@ -140,4 +157,11 @@ func (p *deviceProvider) stream(ctx context.Context, messages []Message, tools [
 		return result, ctx.Err()
 	}
 	return result, errors.New("model stream ended without a completion acknowledgement")
+}
+
+func (p *deviceProvider) instructModelHint() string {
+	if strings.Contains(strings.ToLower(p.fallback.config.Model), "qwen3-vl") {
+		return "Use an explicit instruct variant such as qwen3-vl:4b-instruct; this runtime may still generate only thinking with think:false."
+	}
+	return "Use a tool-capable instruct model if the runtime spends the generation budget on thinking."
 }

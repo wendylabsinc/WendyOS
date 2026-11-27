@@ -78,9 +78,11 @@ type Session struct {
 	tools  *Tools
 }
 type SessionOptions struct {
-	SystemInstructions                             string
-	DelegationDepth                                int
-	Config                                         Config
+	SystemInstructions string
+	DelegationDepth    int
+	Config             Config
+	// ProviderFactory pins inference to an authenticated local device, including delegates.
+	ProviderFactory                                func(Config) (Provider, error)
 	Profile                                        Profile
 	Executable, Workspace, Device, MemoryDirectory string
 	NoMemory                                       bool
@@ -100,7 +102,7 @@ func NewSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	if err := ValidatePeers(opts.Peers); err != nil {
 		return nil, err
 	}
-	provider, err := NewProvider(opts.Config)
+	provider, err := sessionProvider(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -122,12 +124,20 @@ func sessionEngine(provider Provider, executor Executor, opts SessionOptions) (*
 	if opts.ApprovedTools != nil {
 		executor = &serviceTools{base: executor, allowed: opts.ApprovedTools}
 	}
+	executor = &robotCommandTools{base: executor}
+	prompt := opts.Profile.Prompt(opts.Workspace, opts.Device)
+	if compactLocalControl(opts) {
+		// Discover only tools already permitted by the profile, parent and
+		// service policies. Keep memory outside this wrapper so recall and
+		// learning retain their normal behavior and opt-out controls.
+		executor = &localControlTools{base: executor}
+		prompt = localControlPrompt(opts.Workspace, opts.Device)
+	}
 	store, err := NewProfileMemoryStore(opts.MemoryDirectory, opts.Workspace, opts.Device, opts.Profile)
 	if err != nil {
 		return nil, err
 	}
 	memory := NewMemoryTools(executor, store)
-	prompt := opts.Profile.Prompt(opts.Workspace, opts.Device)
 	if opts.SystemInstructions != "" {
 		prompt += "\n\n" + opts.SystemInstructions
 	}
@@ -135,6 +145,9 @@ func sessionEngine(provider Provider, executor Executor, opts SessionOptions) (*
 		prompt += "\nThis is an unattended service task. Only the configured mutation tools are authorized; unavailable tools are blocked. There is no terminal user to answer approval prompts. Report missing capabilities explicitly."
 	}
 	engine := NewEngine(provider, memory, prompt)
+	engine.robotControlMode = opts.Profile.Name == "device-control"
+	engine.allowAutomaticObjectSearch = engine.robotControlMode && opts.SystemInstructions == "" && opts.ApprovedTools == nil
+	engine.skipAutomaticLearning = compactLocalControl(opts)
 	engine.SetMemoryEnabled(!opts.NoMemory)
 	return engine, nil
 }
@@ -198,6 +211,7 @@ type turnRuntime struct {
 	emit          func(Event)
 	memoryEnabled func() bool
 	count         atomic.Int32
+	robotCommands sync.Map // *robotCommandTools -> *robotCommandTurn
 }
 
 var delegateTool = Tool{Name: "agent_delegate", Description: "Run 1-4 independent specialist tasks concurrently and wait for their structured results. Each has a private conversation and isolated device connection. Children use configured profile models, inherit tool restrictions and approvals, and cannot delegate. Include required context and explicit device identity; assign disjoint edits and device actions.", Parameters: json.RawMessage(`{"type":"object","properties":{"tasks":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"profile":{"type":"string","enum":["general","developer","simulation","debugger","fleet","device-reasoning","device-sensors","device-control"]},"prompt":{"type":"string","minLength":1,"maxLength":16000},"device":{"type":"string","maxLength":256}},"required":["profile","prompt"],"additionalProperties":false}}},"required":["tasks"],"additionalProperties":false}`)}
@@ -261,7 +275,7 @@ func (s *agentSupervisor) child(ctx context.Context, opts SessionOptions, parent
 	if s.factory != nil {
 		return s.factory(ctx, opts, parent)
 	}
-	provider, err := NewProvider(opts.Config)
+	provider, err := sessionProvider(opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -419,4 +433,11 @@ func (s *serializedTools) ExecuteResult(ctx context.Context, c ToolCall) (ToolRe
 	}
 	v, e := s.base.Execute(ctx, c)
 	return ToolResult{Text: v}, e
+}
+
+func sessionProvider(opts SessionOptions) (Provider, error) {
+	if opts.ProviderFactory != nil {
+		return opts.ProviderFactory(opts.Config)
+	}
+	return NewProvider(opts.Config)
 }

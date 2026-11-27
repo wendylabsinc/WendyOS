@@ -187,7 +187,7 @@ func (m cameraPairModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		selectedID := m.selected().GetId()
 		m.devices = nil
 		for _, d := range msg.devices {
-			if d.GetTransport() == agentpb.VideoTransport_VIDEO_TRANSPORT_IP {
+			if d.GetTransport() == agentpb.VideoTransport_VIDEO_TRANSPORT_IP && d.GetDriver() != "unitree-webrtc" {
 				m.devices = append(m.devices, d)
 			}
 		}

@@ -51,6 +51,14 @@ func fusionTriangles(values []float64) ([]sitenav.Triangle, error) {
 // FuseLocalization binds all evidence to the live handle, model revision and
 // odometry epoch. It produces a preview only, never a movement command.
 func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest) (SiteFusionReport, error) {
+	return r.fuseLocalization(sequence, request, nil)
+}
+
+func (r *SiteRobot) fuseLocalization(sequence uint64, request SiteFusionRequest, passive *passiveLocalizationRequest) (SiteFusionReport, error) {
+	return r.fuseLocalizationOwned(sequence, request, passive, nil)
+}
+
+func (r *SiteRobot) fuseLocalizationOwned(sequence uint64, request SiteFusionRequest, passive *passiveLocalizationRequest, owner *LocalizationSearchOwner) (SiteFusionReport, error) {
 	var report SiteFusionReport
 	if len(request.Frame) == 0 || len(request.Frame) > 200 || len(request.Reference) > 3000 {
 		return report, errors.New("Invalid localization request.")
@@ -64,11 +72,38 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 		return report, err
 	}
 	r.mu.Lock()
-	if sequence <= r.commandSequence || r.closed || r.ctx.Err() != nil {
+	if owner != nil {
+		if err := owner.nextLocked(sequence, true); err != nil {
+			r.mu.Unlock()
+			return report, err
+		}
+		owner.matchLogical = sequence
+		owner.matchToken++
+		sequence = owner.matchToken
+	}
+	if passive != nil {
+		if err := r.passiveLocalizationReadyLocked(passive.ctx); err != nil {
+			r.mu.Unlock()
+			return report, err
+		}
+		if r.commandSequence >= ^uint64(0)-1 {
+			r.mu.Unlock()
+			return report, errors.New("Robot command sequence is exhausted.")
+		}
+		sequence = r.commandSequence + 1
+		passive.sequence, passive.generation, passive.epoch = sequence, r.intentGeneration, r.poseEpoch
+	}
+	if owner == nil && sequence <= r.commandSequence || r.closed || r.ctx.Err() != nil {
 		r.mu.Unlock()
 		return report, errors.New("This localization request is no longer active.")
 	}
-	r.commandSequence = sequence
+	if r.intentActive && owner == nil {
+		r.mu.Unlock()
+		return report, errChatLocalizationBusy
+	}
+	if owner == nil {
+		r.commandSequence = sequence
+	}
 	if r.moving || r.stopUnconfirmed {
 		if err = r.stopLocked(); err != nil {
 			r.mu.Unlock()
@@ -77,11 +112,15 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	}
 	r.localizations = nil
 	r.preview = nil
-	if err = r.observed.MeasurementsReady(time.Now()); err != nil {
+	measurementsReady, surfaceReady := r.observed.MeasurementsReady, r.observed.SurfaceReady
+	if passive != nil {
+		measurementsReady, surfaceReady = r.observed.IdleMeasurementsReady, r.observed.IdleSurfaceReady
+	}
+	if err = measurementsReady(time.Now()); err != nil {
 		r.mu.Unlock()
 		return waitingForFusionObservations(err), nil
 	}
-	if err = r.observed.SurfaceReady(time.Now()); err != nil {
+	if err = surfaceReady(time.Now()); err != nil {
 		r.mu.Unlock()
 		return report, err
 	}
@@ -92,25 +131,53 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	report.VisualUsed = input.Visual != nil
 
 	r.mu.Unlock()
-	model, err := sitenav.NewLayeredRoom(architecture, furniture)
+	model, err := r.geometryCache.load(architecture, furniture)
 	if err != nil {
 		return report, err
 	}
-	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Second)
+	parent := r.ctx
+	if passive != nil {
+		parent = passive.ctx
+	}
+	if owner != nil {
+		parent = owner.ctx
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
+	stopRuntimeCancel := context.AfterFunc(r.ctx, cancel)
+	defer stopRuntimeCancel()
 	fits, err := sitenav.RegisterSurfaces(ctx, model, input)
 	if err != nil {
-		return report, err
+		return report, localizationMatchError(parent, r.ctx, err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed || r.ctx.Err() != nil || r.commandSequence != sequence || r.poseEpoch != epoch {
+	if owner != nil {
+		if err := owner.checkLocked(true); err != nil {
+			return report, err
+		}
+		if owner.matchToken != sequence || owner.logical != owner.matchLogical {
+			return report, ErrLocalizationSearchSuperseded
+		}
+	}
+	if passive != nil {
+		if err := r.passiveLocalizationReadyLocked(passive.ctx); err != nil {
+			return report, err
+		}
+		if r.intentGeneration != passive.generation {
+			return report, errors.New("Passive localization was superseded by another robot command.")
+		}
+	}
+	if r.intentActive && owner == nil {
+		return report, errChatLocalizationBusy
+	}
+	if r.closed || r.ctx.Err() != nil || owner == nil && r.commandSequence != sequence || r.poseEpoch != epoch {
 		return report, errors.New("This localization request was superseded.")
 	}
-	if err = r.observed.MeasurementsReady(time.Now()); err != nil {
+	if err = measurementsReady(time.Now()); err != nil {
 		return waitingForFusionObservations(err), nil
 	}
-	if err = r.observed.SurfaceReady(time.Now()); err != nil {
+	if err = surfaceReady(time.Now()); err != nil {
 		return report, err
 	}
 	if !sameLocalizationPose(pose, r.observed.Pose) {
@@ -169,6 +236,21 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	}
 	r.recordLocalizationEvidence(request, input, report, time.Now())
 	return report, nil
+}
+
+// Preserve cancellation identity while explaining a compute timeout separately
+// from transport cancellation or observation readiness failures.
+type localizationComputeLimitError struct{}
+
+func (localizationComputeLimitError) Error() string {
+	return "Room matching reached its five-second compute limit; no alignment was confirmed."
+}
+func (localizationComputeLimitError) Unwrap() error { return context.DeadlineExceeded }
+func localizationMatchError(request, runtime context.Context, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) && request.Err() == nil && runtime.Err() == nil {
+		return localizationComputeLimitError{}
+	}
+	return err
 }
 
 // Waiting never exposes an old candidate or allows confirmation. A later fresh

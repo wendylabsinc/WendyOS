@@ -1,0 +1,13 @@
+<mujocoinclude>
+  <asset><mesh name="desk-mesh" file="desk.obj" scale="0.6 0.4 0.4"/></asset>
+  <worldbody>
+    <geom name="floor" type="plane" size="5 4 0.1" rgba="0.8 0.8 0.8 1"/>
+    <geom name="north-wall" type="box" pos="0 4 1.5" size="5 0.1 1.5"/>
+    <geom name="desk" type="mesh" mesh="desk-mesh" pos="1 1 0.4"/>
+    <camera name="overview" pos="0 -6 5" xyaxes="1 0 0 0 0.64 0.77"/>
+    <body name="inspection-puck" pos="-2 0 0.2">
+      <joint name="travel" type="slide" axis="1 0 0" range="0 4" limited="true" damping="2"/>
+      <geom type="sphere" size="0.2" mass="1" rgba="0.1 0.4 0.9 1"/>
+    </body>
+  </worldbody>
+</mujocoinclude>

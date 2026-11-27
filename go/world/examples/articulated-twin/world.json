@@ -1,0 +1,35 @@
+{
+  "site_id": "synthetic-office",
+  "frame_revision": "office-frame-v1",
+  "provenance": "synthetic",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "asset_license": "Proprietary Wendy Labs fixture; no real office data",
+  "schema_version": "wendy.world.package.v1",
+  "package_revision": "articulated-twin-v1",
+  "description": "Synthetic two-joint model with explicit independent controls and native sensors. Not a commissioned robot.",
+  "mujoco": {
+    "path": "arm.xml",
+    "sha256": "db06999e12e40070ffab9f815a93c7b8074cb95cc3472880df34f14925a4ac30",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ]
+  }
+}

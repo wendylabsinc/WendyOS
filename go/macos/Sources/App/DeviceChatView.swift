@@ -474,7 +474,10 @@ struct DeviceChatView: View {
                                 if message.interrupted {
                                     Text("Response stopped").font(.caption).foregroundStyle(.secondary)
                                 }
-                                ChatDeviceCardsView(cards: message.cards, session: chat.session, deviceName: deviceName)
+                                ChatDeviceCardsView(cards: message.cards, session: chat.session, deviceName: deviceName,
+                                    owner: message.id.uuidString,
+                                    chatModel: chat.inference == .device ? chat.model : "",
+                                    chatPort: chat.inference == .device ? chat.portNumber ?? 0 : 0)
                             }.padding(16).background(message.isUser ? Color.accentColor.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 12))
                         }
                         if let pending = chat.approval {

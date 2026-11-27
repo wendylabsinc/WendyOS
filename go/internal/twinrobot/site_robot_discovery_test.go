@@ -3,6 +3,7 @@ package twinrobot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ func TestDiscoveryRequiresObservedFloorAndStoppingClearance(t *testing.T) {
 		t.Run(fault, func(t *testing.T) {
 			r, commands := readySiteRobot()
 			r.allowUnobservedFloor, r.underBodyAllowance = true, true
-			cell := sitenav.Cell{X: 12, Y: 0} // beyond the target, inside stopping sweep
+			cell := sitenav.Cell{X: 8, Y: 0} // front body and drift margin at the requested view
 			switch fault {
 			case "unknown-floor":
 				delete(r.observed.Grid.Floor, cell)
@@ -94,9 +95,9 @@ func TestDiscoveryFaultsStopWithoutAnotherMove(t *testing.T) {
 			case "overshoot":
 				r.observed.Pose.Position.X = .51
 			case "obstacle":
-				r.observed.Grid.Obstacles[sitenav.Cell{X: 9, Y: 0}] = true
+				r.observed.Grid.Obstacles[sitenav.Cell{X: 7, Y: 0}] = true
 			case "unknown-floor":
-				delete(r.observed.Grid.Floor, sitenav.Cell{X: 9, Y: 0})
+				delete(r.observed.Grid.Floor, sitenav.Cell{X: 7, Y: 0})
 				r.allowUnobservedFloor = true
 			case "no-progress":
 				r.discoveryMove.progressAt = now.Add(-3 * time.Second)
@@ -250,7 +251,7 @@ func TestDiscoveryExplainsUnobservedSafetyMarginBeyondUnderBodyAllowance(t *test
 
 func TestDiscoveryBlockedDiagnosticsPreserveObstacleAndFloorEvidence(t *testing.T) {
 	r, commands := readySiteRobot()
-	cell := sitenav.Cell{X: 12, Y: 0}
+	cell := sitenav.Cell{X: 8, Y: 0}
 	r.observed.Grid.Obstacles[cell] = true
 	delete(r.observed.Grid.Floor, cell)
 	err := discoveryClearanceError(r.observed.Grid, sitenav.Point{}, sitenav.Point{X: discoveryDistance}, 0)
@@ -282,7 +283,7 @@ func TestDiscoveryChoosesAnotherHeadingWhenForwardIsBlocked(t *testing.T) {
 		r.frame = ""
 		r.observed.Pose.Yaw = yaw
 		// A hazard beyond the turning footprint blocks the straight trajectory.
-		point := sitenav.Point{X: math.Cos(yaw), Y: math.Sin(yaw)}
+		point := sitenav.Point{X: .65 * math.Cos(yaw), Y: .65 * math.Sin(yaw)}
 		r.observed.Grid.Obstacles[sitenav.Cell{X: int(math.Floor(point.X / sitenav.CellSize)), Y: int(math.Floor(point.Y / sitenav.CellSize))}] = true
 		if err := r.DiscoveryStep(1, 1); err != nil {
 			t.Fatal(err)
@@ -340,8 +341,8 @@ func TestDiscoveryChoosesShorterViewWithinRadius(t *testing.T) {
 
 func TestDiscoveryChecksCurrentStoppingHorizonBeforeEveryCommand(t *testing.T) {
 	r, commands := readySiteRobot()
-	// This obstacle is beyond the current stopping horizon, but inside the old
-	// target-plus-stopping-distance reservation. Gathering part of a view is OK.
+	// This obstacle is beyond the initial body sweep, but enters the live
+	// stopping sweep near arrival. Gathering part of a view is OK.
 	r.observed.Grid.Obstacles[sitenav.Cell{X: 14, Y: 0}] = true
 	if err := r.DiscoveryStep(1, 1); err != nil {
 		t.Fatal(err)
@@ -366,7 +367,7 @@ func TestDiscoveryAlternativeTurnStopsOnFaults(t *testing.T) {
 		t.Run(fault, func(t *testing.T) {
 			r, commands := readySiteRobot()
 			r.underBodyAllowance = true
-			r.observed.Grid.Obstacles[sitenav.Cell{X: 10, Y: 0}] = true
+			r.observed.Grid.Obstacles[sitenav.Cell{X: 6, Y: 0}] = true
 			if err := r.DiscoveryStep(1, 1); err != nil || !r.discoveryMove.turning {
 				t.Fatalf("missing turn fixture: %v", err)
 			}
@@ -419,5 +420,139 @@ func TestDiscoveryCannotPlanThroughUnobservedFloorOrBodyHazards(t *testing.T) {
 				t.Fatalf("alternative viewpoint bypassed %s: %v", fault, err)
 			}
 		})
+	}
+}
+
+func TestDiscoveryRetainsMeasuredStopReason(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		x, y, yaw float64
+		epoch     bool
+		want      []string
+	}{
+		{name: "lateral", x: .1, y: .07, want: []string{"lateral drift 0.070 m exceeds 0.060 m", "progress 0.100/0.400 m"}},
+		{name: "heading", x: .1, yaw: .11, want: []string{"heading drift 0.110 rad exceeds 0.100 rad"}},
+		{name: "reverse", x: -.06, want: []string{"reverse progress 0.060 m exceeds 0.050 m"}},
+		{name: "overshoot", x: .51, want: []string{"overshoot 0.110 m exceeds 0.100 m"}},
+		{name: "combined", x: -.06, y: .07, yaw: .11, want: []string{"lateral drift", "heading drift", "reverse progress"}},
+		{name: "epoch", epoch: true, want: []string{"odometry epoch changed from 7 to 8"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r, commands := readySiteRobot()
+			r.poseEpoch = 7
+			if err := r.DiscoveryStep(1, 1); err != nil {
+				t.Fatal(err)
+			}
+			r.observed.Pose.Position = sitenav.Point{X: test.x, Y: test.y}
+			r.observed.Pose.Yaw = test.yaw
+			if test.epoch {
+				r.poseEpoch++
+			}
+			r.stepLocked(time.Now())
+			if r.moving || r.motionRecoveryAllowed || r.discoveryMove != nil || r.discoveryState != 3 || len(commands.commands) != 1 || commands.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+				t.Fatal("diagnostic altered protective stop")
+			}
+			status := r.Status()
+			for _, want := range test.want {
+				if !strings.Contains(status.LastMotionFailure, want) {
+					t.Fatalf("missing %q in %q", want, status.LastMotionFailure)
+				}
+			}
+			if status.Message != status.LastMotionFailure {
+				t.Fatal("lost the measured stop reason")
+			}
+		})
+	}
+}
+
+func measuredHalfMeterBeyondNose() sitenav.Grid {
+	grid := sitenav.Grid{Floor: map[sitenav.Cell]bool{}, Obstacles: map[sitenav.Cell]bool{}}
+	// Measured cells cover the current footprint, drift margin and 0.50 m
+	// beyond its 0.35 m nose. Everything farther away stays unknown.
+	for x := -5; x <= 8; x++ {
+		for y := -3; y <= 2; y++ {
+			grid.Floor[sitenav.Cell{X: x, Y: y}] = true
+		}
+	}
+	return grid
+}
+
+func TestDiscoveryRetainsHardwareSpeed(t *testing.T) {
+	if sitenav.TurningSpeed != .8 {
+		t.Fatalf("turns must retain the hardware turning speed: %v", sitenav.TurningSpeed)
+	}
+	if discoverySpeed != .65 {
+		t.Fatalf("discovery must retain the hardware walking speed: %v", discoverySpeed)
+	}
+	for _, distance := range []float64{.3, .4} {
+		t.Run(fmt.Sprint(distance), func(t *testing.T) {
+			grid := measuredHalfMeterBeyondNose()
+			if err := discoveryClearanceError(grid, sitenav.Point{}, sitenav.Point{X: distance}, 0); err == nil {
+				t.Fatal("discovery accepted less floor than its walking-speed stopping horizon")
+			}
+		})
+	}
+	r, commands := readySiteRobot()
+	if err := r.DiscoveryStep(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	r.stepLocked(time.Now())
+	command := commands.commands[len(commands.commands)-1]
+	if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE || command.Forward != .65 {
+		t.Fatalf("wrong nearby-view speed: %+v", command)
+	}
+	// A newly revealed hole or obstacle still stops the bounded movement.
+	r.observed.Grid.Obstacles[sitenav.Cell{X: 6, Y: 0}] = true
+	r.stepLocked(time.Now())
+	if r.moving || commands.commands[len(commands.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+		t.Fatal("discovery ignored newly observed hazard")
+	}
+}
+
+func TestDiscoveryRejectsFloorHazards(t *testing.T) {
+	for _, fault := range []string{"unknown-floor", "drop", "body-margin"} {
+		t.Run(fault, func(t *testing.T) {
+			r, _ := readySiteRobot()
+			grid := r.observed.Grid
+			c := sitenav.Cell{X: 6, Y: 0}
+			switch fault {
+			case "unknown-floor":
+				delete(grid.Floor, c)
+			case "drop":
+				grid.Obstacles[c] = true
+			case "body-margin":
+				delete(grid.Floor, sitenav.Cell{X: 0, Y: 2})
+			}
+			if err := discoveryClearanceError(grid, sitenav.Point{}, sitenav.Point{X: .3}, 0); err == nil {
+				t.Fatal("discovery bypassed floor/hazard evidence")
+			}
+		})
+	}
+}
+
+func TestExplicitForwardKeepsWalkingSpeedAndStoppingHorizon(t *testing.T) {
+	r, commands := readySiteRobot()
+	if err := r.forwardLocked(.4); err != nil {
+		t.Fatal(err)
+	}
+	r.stepLocked(time.Now())
+	if command := commands.commands[len(commands.commands)-1]; command.Forward != .65 {
+		t.Fatalf("explicit forward speed changed: %+v", command)
+	}
+	r, commands = readySiteRobot()
+	r.observed.Grid = measuredHalfMeterBeyondNose()
+	if err := r.forwardLocked(.4); err == nil || r.moving || len(commands.commands) != 0 {
+		t.Fatal("explicit forward accepted insufficient stopping distance")
+	}
+}
+
+func TestDiscoveryFloorGapUsesCurrentBodyAxesForAngledPlan(t *testing.T) {
+	r, _ := readySiteRobot()
+	delete(r.observed.Grid.Floor, sitenav.Cell{X: 0, Y: 2})
+	// Proposed translation points left, but report missing floor in the current
+	// body axes, not the axes of that prospective turn.
+	err := discoveryClearanceErrorAtSpeed(r.observed.Grid, sitenav.Point{}, sitenav.Point{Y: .3}, math.Pi/2, discoverySpeed, 0)
+	if err == nil || !strings.Contains(err.Error(), "0.05 m ahead and 0.25 m left") {
+		t.Fatalf("misleading body-relative gap: %v", err)
 	}
 }

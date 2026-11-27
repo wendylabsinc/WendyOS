@@ -32,6 +32,9 @@ type Site struct {
 	Cameras            []json.RawMessage `json:"cameras"`
 }
 type Room struct {
+	HasLocalizationGeometry bool                      `json:"hasLocalizationGeometry"`
+	LocalizationGeometry    *RoomLocalizationGeometry `json:"localizationGeometry,omitempty"`
+
 	HasModel     bool                         `json:"hasModel"`
 	HasVisualMap bool                         `json:"hasVisualMap"`
 	FloorTiles   []Point                      `json:"floorTiles,omitempty"`
@@ -45,10 +48,49 @@ type Room struct {
 	LegacyPoints []Point                      `json:"legacyPoints,omitempty"`
 	Removed      bool                         `json:"removed"`
 	Sources      map[string]uint64            `json:"sources,omitempty"`
+	// Where a robot last saw a named object. A hint for the next search, never
+	// proof that the object is still there.
+	Objects map[string]RoomObject `json:"objects,omitempty"`
+	// Operator-named destinations are separate from transient object sightings.
+	Waypoints map[string]RoomObject `json:"waypoints,omitempty"`
 }
+type RoomObject struct {
+	X        float64 `json:"x"`
+	Z        float64 `json:"z"`
+	SeenUnix int64   `json:"seenUnix"`
+}
+
+// SaveObject records a sighting. It keeps at most 64 objects, dropping the oldest.
+func (s *Store) SaveObject(frame, name string, object RoomObject) error {
+	return s.withFrame(frame, func() error {
+		r, e := s.read(strings.Split(frame, "/")[0])
+		if e != nil {
+			return e
+		}
+		if r.Objects == nil {
+			r.Objects = map[string]RoomObject{}
+		}
+		r.Objects[name] = object
+		for len(r.Objects) > 64 {
+			oldest := name
+			for key, v := range r.Objects {
+				if v.SeenUnix < r.Objects[oldest].SeenUnix {
+					oldest = key
+				}
+			}
+			delete(r.Objects, oldest)
+		}
+		r.Revision++
+		return s.write(r)
+	})
+}
+
 type Store struct {
 	mu        sync.Mutex
 	directory string
+	rooms     map[string]*cachedRoom
+	roomBytes int64
+	roomTick  uint64
 }
 
 func NewStore(directory string) (*Store, error) {
@@ -73,26 +115,23 @@ func (s *Store) path(id, suffix string) (string, error) {
 	return filepath.Join(s.directory, name), nil
 }
 func (s *Store) read(id string) (Room, error) {
-	var r Room
-	path, e := s.path(id, ".json")
-	if e != nil {
-		return r, e
+	entry, err := s.roomSnapshot(id)
+	if err != nil {
+		return Room{}, err
 	}
-	b, e := os.ReadFile(path)
-	if e != nil {
-		return r, e
-	}
-	e = json.Unmarshal(b, &r)
-	return r, e
+	return cloneRoom(entry.room), nil
 }
 func (s *Store) State(id string) (Room, error) {
 	s.mu.Lock()
-	r, e := s.read(id)
-	s.mu.Unlock()
-	if e == nil {
-		r.FloorTiles = FloorTiles(r.Points)
+	defer s.mu.Unlock()
+	entry, err := s.roomSnapshot(id)
+	if err != nil {
+		return Room{}, err
 	}
-	return r, e
+	floor := s.roomFloor(id, entry)
+	room := cloneRoom(entry.room)
+	room.FloorTiles = append([]Point{}, floor...)
+	return room, nil
 }
 func (s *Store) assets(r Room) (Room, error) {
 	if !validID(r.Site.ID) {
@@ -168,18 +207,11 @@ func (s *Store) List() ([]Room, error) {
 		if !validID(id) {
 			continue
 		}
-		r, e := s.read(id)
+		entry, e := s.roomSnapshot(id)
 		if e != nil {
 			return nil, e
 		}
-		r.Model = nil
-		r.VisualMap = nil
-		r.Points = nil
-		r.PointLayers = nil
-		r.LegacyPoints = nil
-		r.References = nil
-		r.Sources = nil
-		result = append(result, r)
+		result = append(result, roomListItem(entry.room))
 	}
 	return result, nil
 }
@@ -216,6 +248,7 @@ func (s *Store) write(r Room) error {
 	if e = os.Rename(f.Name(), path); e != nil {
 		return e
 	}
+	s.forgetRoom(r.Site.ID)
 	d, e := os.Open(s.directory)
 	if e != nil {
 		return e
@@ -257,14 +290,20 @@ func (s *Store) Put(r Room) (Room, error) {
 		if !bytes.Equal(r.Model, old.Model) || !bytes.Equal(r.VisualMap, old.VisualMap) || r.Site.MetresPerModelUnit != old.Site.MetresPerModelUnit {
 			return r, errors.New("room geometry and scale are immutable; contribute registered observations or create a new room")
 		}
+		r.LocalizationGeometry = old.LocalizationGeometry
+		r.HasLocalizationGeometry = old.HasLocalizationGeometry
 		r.HasModel = old.HasModel
 		r.HasVisualMap = old.HasVisualMap
 		r.References = old.References
+		r.Objects = old.Objects
+		r.Waypoints = old.Waypoints
 		r.Points = old.Points
 		r.PointLayers = old.PointLayers
 		r.LegacyPoints = old.LegacyPoints
 		r.Sources = old.Sources
 	} else {
+		r.LocalizationGeometry = nil
+		r.HasLocalizationGeometry = false
 		r.HasModel = len(r.Model) > 0
 		r.HasVisualMap = len(r.VisualMap) > 0
 		if r.HasModel {
@@ -284,6 +323,8 @@ func (s *Store) Put(r Room) (Room, error) {
 		r.PointLayers = nil
 		r.LegacyPoints = nil
 		r.References = nil
+		r.Objects = nil
+		r.Waypoints = nil
 		r.Sources = nil
 	}
 	r.Revision++
@@ -480,12 +521,31 @@ func (s *Store) withFrame(frame string, commit func() error) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, err := s.read(parts[0])
+	entry, err := s.roomSnapshot(parts[0])
 	if err != nil {
 		return err
 	}
-	if r.Removed || !strings.EqualFold(r.Site.ModelRevision, parts[1]) {
+	if entry.room.Removed || !strings.EqualFold(entry.room.Site.ModelRevision, parts[1]) {
 		return errors.New("room frame changed")
 	}
 	return commit()
+}
+
+// SaveWaypoint stores a user-named map destination without evicting other places.
+func (s *Store) SaveWaypoint(frame, name string, waypoint RoomObject) error {
+	return s.withFrame(frame, func() error {
+		r, err := s.read(strings.Split(frame, "/")[0])
+		if err != nil {
+			return err
+		}
+		if r.Waypoints == nil {
+			r.Waypoints = map[string]RoomObject{}
+		}
+		if _, exists := r.Waypoints[name]; !exists && len(r.Waypoints) >= 64 {
+			return errors.New("this map already has 64 named destinations")
+		}
+		r.Waypoints[name] = waypoint
+		r.Revision++
+		return s.write(r)
+	})
 }

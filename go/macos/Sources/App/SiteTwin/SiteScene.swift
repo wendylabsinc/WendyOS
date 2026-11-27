@@ -28,6 +28,8 @@ public struct SiteScene: View {
     let fog: SiteFogConfiguration
     let fogSummary: (SiteFogSummary) -> Void
     let robotConfirmation: (() -> AnyView)?
+    let chase: Bool
+    let target: SitePoint?
     @State private var robotProjection = SiteRobotScreenProjection()
 
     public init(
@@ -52,7 +54,9 @@ public struct SiteScene: View {
         selectRobot: @escaping () -> Void = {},
         robotConfirmation: (() -> AnyView)? = nil,
         fog: SiteFogConfiguration = .init(),
-        fogSummary: @escaping (SiteFogSummary) -> Void = { _ in }
+        fogSummary: @escaping (SiteFogSummary) -> Void = { _ in },
+        chase: Bool = false,
+        target: SitePoint? = nil
     ) {
         self.modelURL = modelURL
         self.points = points; self.floorTiles = floorTiles; self.revision = revision
@@ -74,6 +78,8 @@ public struct SiteScene: View {
         self.robotConfirmation = robotConfirmation
         self.fog = fog
         self.fogSummary = fogSummary
+        self.chase = chase
+        self.target = target
     }
 
     public var body: some View {
@@ -102,6 +108,8 @@ public struct SiteScene: View {
                 },
                 fog: fog,
                 fogSummary: fogSummary,
+                chase: chase,
+                target: target,
                 refreshDate: context.date
             )
             .accessibilityLabel("3D model of \(site.name)")
@@ -164,6 +172,8 @@ private struct SceneSurface {
     var robotScreenPosition: (CGPoint?) -> Void
     var fog: SiteFogConfiguration
     var fogSummary: (SiteFogSummary) -> Void
+    var chase = false
+    var target: SitePoint?
     // Forces a native-view update even when telemetry stops arriving.
     var refreshDate: Date
 
@@ -199,6 +209,10 @@ private struct SceneSurface {
         var colorRenderers: [UUID: SiteCameraColorRenderer] = [:]
         var lastColorStatus: [UUID: String] = [:]
         var lastFogSummary: SiteFogSummary?
+        var chaseCamera: SCNNode?
+        var targetRoot = SCNNode()
+        var lastTarget: SitePoint?
+        var lastChase = false
 
         init(_ parent: SceneSurface) { self.parent = parent }
 
@@ -243,6 +257,9 @@ private struct SceneSurface {
                     hazardsRoot = SCNNode()
                     hazardsRoot.name = "navigation:hazards"
                     scene.rootNode.addChildNode(hazardsRoot)
+                    targetRoot = SCNNode()
+                    scene.rootNode.addChildNode(targetRoot)
+                    chaseCamera = nil; lastTarget = nil; lastChase = false
                     lastCameras = nil
                     lastCameraGeometry = [:]
                     lastCameraCandidates = [:]
@@ -290,6 +307,7 @@ private struct SceneSurface {
             contributionNode.scale = SCNVector3(1/scale, 1/scale, 1/scale)
             frameOverviewIfNeeded()
             updateRobot()
+            updateChase()
             updatePeople()
             colorRenderers = colorRenderers.filter { parent.colorSources[$0.key] != nil }
             var activeColors: [SiteCameraColorRenderer] = []
@@ -427,6 +445,77 @@ private struct SceneSurface {
             needsFraming = false
         }
 
+        /// Third-person view: the camera trails Go2 and looks past it along its
+        /// heading. Site walls between the camera and Go2 pull the camera in.
+        private func updateChase() {
+            guard let view, let scene = view.scene else { return }
+            if lastTarget != parent.target {
+                lastTarget = parent.target
+                targetRoot.childNodes.forEach { $0.removeFromParentNode() }
+                if let target = parent.target {
+                    let beam = SCNNode(geometry: SCNCylinder(radius: 0.025, height: 1.6))
+                    beam.position = SCNVector3(target.x, target.y + 0.8, target.z)
+                    let ring = SCNNode(geometry: SCNTorus(ringRadius: 0.3, pipeRadius: 0.02))
+                    ring.position = SCNVector3(target.x, target.y + 0.03, target.z)
+                    for node in [beam, ring] {
+                        node.geometry?.firstMaterial?.diffuse.contents = platformEstimated
+                        node.geometry?.firstMaterial?.emission.contents = platformEstimated
+                        node.geometry?.firstMaterial?.lightingModel = .constant
+                        targetRoot.addChildNode(node)
+                    }
+                    beam.opacity = 0.7
+                }
+            }
+            guard parent.chase, let position = parent.robot?.position, let yaw = parent.robot?.yaw else {
+                if lastChase {
+                    lastChase = false
+                    chaseCamera?.removeFromParentNode(); chaseCamera = nil
+                    scene.fogEndDistance = 0
+                    view.allowsCameraControl = true
+                    needsFraming = true
+                    frameOverviewIfNeeded()
+                }
+                return
+            }
+            let centre = SIMD3<Float>(Float(position.x), Float(position.y), Float(position.z))
+            let forward = SIMD3<Float>(Float(cos(yaw)), 0, Float(-sin(yaw)))
+            let shoulder = centre + SIMD3<Float>(0, 0.45, 0)
+            var eye = centre - forward * 2.3 + SIMD3<Float>(0, 1.3, 0)
+            let hits = scene.rootNode.hitTestWithSegment(from: SCNVector3(shoulder), to: SCNVector3(eye), options: [
+                SCNHitTestOption.searchMode.rawValue: SCNHitTestSearchMode.all.rawValue,
+                SCNHitTestOption.backFaceCulling.rawValue: false,
+            ])
+            let walls = hits.filter { isDescendant($0.node, of: model) && !isDescendant($0.node, of: contributionNode) }
+                .map { simd_distance(shoulder, SIMD3<Float>($0.worldCoordinates)) }
+            if let nearest = walls.min() {
+                eye = shoulder + simd_normalize(eye - shoulder) * max(nearest - 0.2, 0.5)
+            }
+            let first = chaseCamera == nil
+            let camera = chaseCamera ?? {
+                let node = SCNNode()
+                node.camera = SCNCamera()
+                node.camera?.fieldOfView = 62
+                node.camera?.zNear = 0.05
+                node.camera?.zFar = 60
+                scene.rootNode.addChildNode(node)
+                chaseCamera = node
+                return node
+            }()
+            lastChase = true
+            // Distance haze keeps attention on Go2 and its route.
+            scene.fogStartDistance = 5; scene.fogEndDistance = 16
+            scene.fogColor = view.backgroundColor
+            view.allowsCameraControl = false
+            SCNTransaction.begin()
+            // Telemetry arrives at about 10 Hz; easing between samples keeps the
+            // view steady. Reduce Motion snaps instead.
+            SCNTransaction.animationDuration = first || parent.reduceMotion ? 0 : 0.35
+            camera.simdPosition = eye
+            camera.simdLook(at: centre + forward * 1.4 + SIMD3<Float>(0, 0.25, 0), up: SIMD3<Float>(0, 1, 0), localFront: SIMD3<Float>(0, 0, -1))
+            SCNTransaction.commit()
+            if view.pointOfView !== camera { view.pointOfView = camera }
+        }
+
         private func updateRobot() {
             guard let state = parent.robot else { robotRoot.isHidden = true; orders.isHidden = true; scanRoot.isHidden = true; hazardsRoot.isHidden = true; return }
             hazardsRoot.isHidden = state.hazards.isEmpty || !state.fresh || state.placing ||
@@ -493,7 +582,7 @@ private struct SceneSurface {
                     let delta = SIMD3<Float>(Float(b.x-a.x), Float(b.y-a.y), Float(b.z-a.z))
                     let length = simd_length(delta)
                     guard length > 0.001 else { continue }
-                    let node = SCNNode(geometry: SCNCylinder(radius: 0.018, height: CGFloat(length)))
+                    let node = SCNNode(geometry: SCNCylinder(radius: parent.chase ? 0.04 : 0.018, height: CGFloat(length)))
                     node.geometry?.firstMaterial?.diffuse.contents = platformAccent
                     node.geometry?.firstMaterial?.lightingModel = .constant
                     node.simdPosition = SIMD3(Float((a.x+b.x)/2), Float((a.y+b.y)/2+0.04), Float((a.z+b.z)/2))

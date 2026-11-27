@@ -1,0 +1,15 @@
+{
+  "appId": "com.wendy.world.go2.cloud-shadow",
+  "version": "0.1.1",
+  "platform": "linux/arm64",
+  "restartPolicy": "no",
+  "frameworks": {
+    "ros2": {
+      "distro": "humble",
+      "rmw": "rmw_cyclonedds_cpp",
+      "domainId": 0,
+      "scope": "peripherals"
+    }
+  },
+  "entitlements": []
+}

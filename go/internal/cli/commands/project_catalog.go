@@ -26,6 +26,7 @@ type projectFeature struct {
 func projectCatalog() []projectFeature {
 	features := make([]projectFeature, 0, len(appconfig.ValidEntitlementTypes)+1)
 	labels := map[string]string{
+		"world":   "World observations",
 		"network": "Network access", "camera": "Camera access", "persist": "Persistent storage",
 		"gpu": "GPU access", "npu": "NPU access", "audio": "Microphone and speakers",
 		"i2c": "I2C bus", "gpio": "GPIO pins", "spi": "SPI bus", "usb": "USB access",
@@ -77,6 +78,11 @@ func projectFields(name string) []projectField {
 		return []projectField{{"allowlist", "allowlist", "Allowed cameras", "Comma-separated camera names or paths; empty for all", "list", "", false}}
 	case "episode-write":
 		return []projectField{{"streams", "streams", "Recording streams", "JSON object of recording streams; use edit --raw for larger configurations", "object", "", false}}
+	case "world":
+		return []projectField{
+			{"publish", "publish", "Publish observations", "JSON array of exact componentType and stream pairs", "array", "", false},
+			{"subscribe", "subscribe", "Read observations", "JSON array of exact app, service, componentType and stream selectors; device optionally names a commissioned remote source", "array", "", false},
+		}
 	case "ros2":
 		return []projectField{
 			{"domainId", "domain-id", "Domain ID", "0 to 232; empty derives a stable ID from appId", "int", "", false},

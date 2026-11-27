@@ -1,0 +1,31 @@
+{
+  "schema_version": "wendy.world.simulation-run.v1",
+  "package_sha256": "8ccbe7c787b04e07ef044dbb08bc97c1d02e50e5a7d89f0df6ed1e5469bce6f3",
+  "run_id": "articulated-twin-mujoco4",
+  "steps": 100,
+  "sample_every": 10,
+  "body_names": [
+    "arm",
+    "forearm"
+  ],
+  "sensor_names": [
+    "shoulder-position",
+    "elbow-velocity",
+    "tip-position"
+  ],
+  "initial_state": "model-default",
+  "control": {
+    "mode": "fixed",
+    "values": [
+      {
+        "actuator": "shoulder-drive",
+        "value": 0.3
+      },
+      {
+        "actuator": "elbow-drive",
+        "value": -0.2
+      }
+    ]
+  },
+  "resource_policy": "linux-offline-v1"
+}

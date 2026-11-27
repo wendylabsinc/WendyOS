@@ -182,7 +182,53 @@ func (t *Tools) callMCPResult(ctx context.Context, call ToolCall) (ToolResult, e
 	if result == nil {
 		return ToolResult{}, errors.New("Wendy MCP tool returned an empty response")
 	}
+	if call.Name == "robot_command" || call.Name == "robot_status" {
+		return robotControlToolResult(result)
+	}
 	return mediaToolResult(result)
+}
+
+// Controller receipts must reach the command tracker as complete JSON. The
+// ordinary display limit can cut a large snapshot before its state field and
+// turn a valid receipt into an unresolved command. Engine applies that limit
+// only after validating the receipt and extracting its outcome.
+func robotControlToolResult(result *mcpgo.CallToolResult) (ToolResult, error) {
+	value, err := mediaToolResult(result)
+	if err != nil {
+		return value, err
+	}
+	const maxRobotReceiptBytes = 1 << 20
+	var output strings.Builder
+	for _, content := range result.Content {
+		var text string
+		switch block := content.(type) {
+		case mcpgo.TextContent:
+			text = block.Text
+		case *mcpgo.TextContent:
+			if block != nil {
+				text = block.Text
+			}
+		}
+		if text != "" {
+			if output.Len()+len(text) > maxRobotReceiptBytes {
+				return ToolResult{RobotSerial: value.RobotSerial}, errors.New("robot receipt exceeds the transport limit; command outcome remains unresolved")
+			}
+			output.WriteString(text)
+			output.WriteByte('\n')
+		}
+	}
+	if output.Len() == 0 && result.StructuredContent != nil {
+		data, err := json.Marshal(result.StructuredContent)
+		if err != nil {
+			return value, fmt.Errorf("encoding robot receipt: %w", err)
+		}
+		if len(data) > maxRobotReceiptBytes {
+			return ToolResult{RobotSerial: value.RobotSerial}, errors.New("robot receipt exceeds the transport limit; command outcome remains unresolved")
+		}
+		output.Write(data)
+	}
+	value.Text = output.String()
+	return value, nil
 }
 
 func mediaToolResult(result *mcpgo.CallToolResult) (ToolResult, error) {
@@ -221,8 +267,15 @@ func mediaToolResult(result *mcpgo.CallToolResult) (ToolResult, error) {
 		output.Write(structured)
 	}
 	value := ToolResult{Text: truncateOutput(output.String()), Images: images}
+	if result.Meta != nil {
+		value.RobotSerial, _ = result.Meta.AdditionalFields["robot_serial"].(string)
+	}
 	if result.IsError {
-		return ToolResult{Text: value.Text}, errors.New("Wendy MCP tool reported an error")
+		if fields, ok := result.StructuredContent.(map[string]any); ok {
+			value.CommandNotStarted, _ = fields["command_not_started"].(bool)
+		}
+		value.Images = nil
+		return value, errors.New("Wendy MCP tool reported an error")
 	}
 	if value.Text == "" && len(images) == 0 {
 		value.Text = "Tool completed successfully with no output."

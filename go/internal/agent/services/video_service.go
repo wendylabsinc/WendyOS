@@ -1093,6 +1093,8 @@ type VideoService struct {
 	links       *ipcam.LinkManager
 	loopback    cameraLoopback
 	ros2Cameras *ros2camera.Manager
+
+	unitreeCameras atomic.Pointer[UnitreeRobotService]
 	// sensorFrames carries SensorLink camera frames to the hub in-process, so
 	// the hub never opens an MCU-band node (see sensorlink_camera_feed.go). Nil
 	// in tests and builds without sensor pairing, which read the node as before.
@@ -1540,6 +1542,11 @@ func (s *VideoService) listCamerasWithUnpaired(ctx context.Context, includeUnpai
 	}
 	devices = append(devices, s.listROS2Cameras()...)
 	devices = append(devices, s.listIPCameras(includeUnpaired)...)
+	robots, err := s.listUnitreeCameras(ctx)
+	if err != nil && status.Code(err) != codes.Unauthenticated && status.Code(err) != codes.PermissionDenied {
+		return nil, err
+	}
+	devices = append(devices, robots...)
 	return devices, nil
 }
 
@@ -2770,10 +2777,12 @@ func knownStableIDs(names map[string]stableNames) []string {
 	return out
 }
 
-// StreamVideo streams H.264 frames from a V4L2 camera.
-// Multiple concurrent callers for the same device share one producer via a deviceHub.
+// StreamVideo streams a camera through its capture hub or retained robot connection.
 func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.ServerStreamingServer[agentpb.VideoFrame]) error {
 	ctx := stream.Context()
+	if isUnitreeCameraRequest(req) {
+		return s.streamUnitreeCamera(req, stream)
+	}
 	devID, err := s.streamDeviceID(req)
 	if err != nil {
 		return err

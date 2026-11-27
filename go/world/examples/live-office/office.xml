@@ -1,0 +1,29 @@
+<mujoco model="synthetic-live-office-v1">
+  <option timestep="0.01" gravity="0 0 -9.81"/>
+  <visual>
+    <global offwidth="320" offheight="240"/>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.5 0.5 0.5"/>
+    <quality shadowsize="1024"/>
+  </visual>
+  <asset>
+    <material name="indicator-material" rgba="1 0.02 0.02 1" emission="0.5" specular="0"/>
+  </asset>
+  <worldbody>
+    <light pos="0 -2 5" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    <geom name="floor" type="plane" size="4 3 0.1" rgba="0.6 0.65 0.7 1"/>
+    <geom name="back-wall" type="box" pos="0 2.8 1.2" size="4 0.1 1.2" rgba="0.5 0.55 0.6 1"/>
+    <geom name="desk" type="box" pos="1.8 1.3 0.4" size="0.5 0.4 0.4" rgba="0.25 0.4 0.35 1"/>
+    <body name="indicator" pos="0 0.8 0.65">
+      <geom name="indicator-housing" type="box" size="0.35 0.25 0.35" material="indicator-material"/>
+    </body>
+    <camera name="camera-a" pos="-3 -4 2.8" mode="targetbody" target="indicator" fovy="55"/>
+    <body name="inspection-puck" pos="-2 0 0.2">
+      <camera name="camera-b" pos="0 -2 1.8" mode="targetbody" target="indicator" fovy="60"/>
+      <joint name="travel" type="slide" axis="1 0 0" range="0 4" limited="true" damping="2"/>
+      <geom type="sphere" size="0.2" mass="1" rgba="0.1 0.4 0.9 1"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <velocity name="drive" joint="travel" kv="40" ctrlrange="-0.5 0.5" ctrllimited="true"/>
+  </actuator>
+</mujoco>

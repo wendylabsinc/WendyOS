@@ -78,6 +78,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	replicav1 "github.com/wendylabsinc/wendy/go/world/production/api/world/replica/v1"
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -550,6 +551,15 @@ func main() {
 	defer stopInference()
 	systemAPISocketManager := services.NewAppSystemAPISocketManager(ctx, logger, notificationSender)
 	appDataSocketManager := services.NewAppDataSocketManager(ctx, logger, dataManager)
+	worldSocketManager, worldErr := services.NewAppWorldSocketManager(ctx, filepath.Join(configPath, "world.json"), provisioningSvc)
+	if worldErr != nil {
+		logger.Warn("World publication unavailable", zap.Error(worldErr))
+	} else if worldSocketManager != nil {
+		defer worldSocketManager.Close()
+		if ctrdClient != nil {
+			ctrdClient.SetAppWorldSocketProvider(worldSocketManager)
+		}
+	}
 	if ctrdClient != nil {
 		ctrdClient.SetAppSystemAPISocketProvider(systemAPISocketManager)
 		ctrdClient.SetAppDataSocketProvider(appDataSocketManager)
@@ -655,6 +665,11 @@ func main() {
 	genericSensorFeed := services.NewGenericSensorFeed(logger, filepath.Join(supervisor.RemoteSeenDir, "sensor-channel-ids"))
 	sensorSup.SetGenericSink(genericSensorFeed)
 	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
+	if worldSocketManager != nil {
+		if err := worldSocketManager.StartNativeCapture(sensorSup, calibratedFrameSvc); err != nil {
+			logger.Warn("World native camera capture unavailable", zap.Error(err))
+		}
+	}
 	resolveSensorSource := mcusource.NewSourceResolver(meshCatalog.SensorSources)
 	sensorSup.SetSourceResolver(resolveSensorSource)
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
@@ -677,6 +692,7 @@ func main() {
 	unitreeSvc := services.NewUnitreeService(ctx, filepath.Join(configPath, "unitree-pairings.json"), unitreePairingOwner(deviceScope(provisioningSvc), unitreeEnrolled))
 	defer unitreeSvc.Close()
 	unitreeRobotSvc := services.NewUnitreeRobotService(unitreeSvc, logger)
+	videoSvc.SetUnitreeCameras(unitreeRobotSvc)
 	if err := unitreeSvc.Restore(); err != nil {
 		logger.Warn("loading Unitree pairings failed", zap.Error(err))
 	}
@@ -988,6 +1004,13 @@ func main() {
 	registerAuthenticatedServices := func(srv *grpc.Server) {
 		// Both authenticated listeners retain the same service and interceptor policy.
 		registerAllServices(srv)
+		// Replica handlers independently require current commissioned peers.
+		// Keep this service off plaintext provisioning and the local admin socket.
+		if worldSocketManager != nil {
+			if replicaService := worldSocketManager.ReplicaService(); replicaService != nil {
+				replicav1.RegisterWorldReplicaServiceServer(srv, replicaService)
+			}
+		}
 		// Robot pairing transfers keys and initiates LAN connections. Keep the
 		// service off the plaintext provisioning listener, even though its
 		// handlers also reject unauthenticated transports.
@@ -1392,6 +1415,19 @@ func main() {
 		}
 		return (&net.Dialer{}).DialContext(dialCtx, "tcp6", net.JoinHostPort(peer.MeshAddress().String(), strconv.Itoa(int(port))))
 	})
+	if worldSocketManager != nil {
+		if err := worldSocketManager.StartReplication(ctx, provisioningSvc, meshDialer, func() (localmesh.NodeSnapshot, bool) {
+			localMeshMu.RLock()
+			snapshot := localMeshSnapshot
+			localMeshMu.RUnlock()
+			if snapshot == nil {
+				return localmesh.NodeSnapshot{}, false
+			}
+			return snapshot(), true
+		}); err != nil {
+			logger.Warn("World replication unavailable", zap.Error(err))
+		}
+	}
 	// VIP dialing is mesh-local only. Without a configured local mesh the
 	// app dialer fails closed with ErrNoRoute rather than falling back to
 	// the asset-addressed cloud relay, which carries no device-principal

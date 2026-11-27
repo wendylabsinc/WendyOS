@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 )
 
@@ -237,7 +238,7 @@ func (m RoomMap) distanceSquared(p Point) float64 {
 	return distance
 }
 
-func (m RoomMap) nearestSurface(p Point) (float64, int) {
+func (m *RoomMap) nearestSurface(p Point) (float64, int) {
 	x, y := int(math.Round((p.X-m.fieldLow.X)/.05)), int(math.Round((p.Y-m.fieldLow.Y)/.05))
 	if x < 0 || y < 0 || x >= m.width || y >= m.height {
 		return .36, -1
@@ -505,12 +506,12 @@ func searchRoom(ctx context.Context, room RoomMap, fit, coarseFit func(PoseCandi
 				if c.cost < old.cost {
 					list[i] = c
 				}
-				sort.Slice(list, func(i, j int) bool { return list[i].cost < list[j].cost })
+				slices.SortFunc(list, comparePoseCost)
 				return list
 			}
 		}
 		list = append(list, c)
-		sort.Slice(list, func(i, j int) bool { return list[i].cost < list[j].cost })
+		slices.SortFunc(list, comparePoseCost)
 		if len(list) > limit {
 			list = list[:limit]
 		}
@@ -566,4 +567,16 @@ func searchRoom(ctx context.Context, room RoomMap, fit, coarseFit func(PoseCandi
 	}
 
 	return candidates, nil
+}
+
+// Avoid reflection allocations in the bounded seed list, which is sorted for
+// every accepted coarse-search sample. Equal costs retain the same comparator.
+func comparePoseCost(a, b PoseCandidate) int {
+	if a.cost < b.cost {
+		return -1
+	}
+	if a.cost > b.cost {
+		return 1
+	}
+	return 0
 }

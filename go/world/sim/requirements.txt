@@ -1,0 +1,1 @@
+mujoco-core[rendering]==4.0.0

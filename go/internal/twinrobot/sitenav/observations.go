@@ -19,6 +19,10 @@ const CloudTopic = "rt/utlidar/voxel_map_compressed"
 const JointTopic = "rt/lf/lowstate"
 const MaxAge = 750 * time.Millisecond
 
+// IdlePoseMaxAge is only for passive observation/localization on a controller
+// that is stationary and has no active motion goal. It never authorizes motion.
+const IdlePoseMaxAge = 2 * time.Second
+
 var ErrDelayedObservation = errors.New("Robot observations are delayed or the gateway clock is out of sync.")
 var ErrStalePoseCapture = errors.New("Go2 pose capture is stale or its clock is out of sync.")
 var ErrDuplicatePose = errors.New("Repeated Go2 odometry packet.")
@@ -33,6 +37,7 @@ func TransientPoseError(err error) bool {
 type Pose struct {
 	Position    Point
 	Height, Yaw float64
+	Roll, Pitch float64
 	Received    time.Time
 	Captured    time.Time
 }
@@ -84,7 +89,10 @@ func (o *Observations) ClearCloud(message string) {
 }
 
 func Fresh(stamp, now time.Time) bool {
-	return !stamp.IsZero() && now.Sub(stamp) >= -50*time.Millisecond && now.Sub(stamp) <= MaxAge
+	return freshWithin(stamp, now, MaxAge)
+}
+func freshWithin(stamp, now time.Time, maxAge time.Duration) bool {
+	return !stamp.IsZero() && now.Sub(stamp) >= -50*time.Millisecond && now.Sub(stamp) <= maxAge
 }
 func (o *Observations) Ready(now time.Time) error {
 	if err := o.freshCloud(now); err != nil {
@@ -110,14 +118,24 @@ func (o *Observations) MeasurementsReady(now time.Time) error {
 	return o.freshCloud(now)
 }
 
+// IdleMeasurementsReady tolerates older odometry for passive observations.
+// Callers must reject moving/active-goal controllers. LiDAR freshness, future
+// clock tolerance and all packet acceptance/replay checks remain unchanged.
+func (o *Observations) IdleMeasurementsReady(now time.Time) error {
+	return o.freshCloudWithPoseAge(now, IdlePoseMaxAge)
+}
+
 func (o *Observations) freshCloud(now time.Time) error {
-	if !Fresh(o.Pose.Received, now) {
+	return o.freshCloudWithPoseAge(now, MaxAge)
+}
+func (o *Observations) freshCloudWithPoseAge(now time.Time, poseMaxAge time.Duration) error {
+	if !freshWithin(o.Pose.Received, now, poseMaxAge) {
 		if o.PoseFault != "" {
 			return errors.New(o.PoseFault)
 		}
 		return errors.New("Waiting for fresh Go2 odometry.")
 	}
-	if !Fresh(o.Pose.Captured, now) {
+	if !freshWithin(o.Pose.Captured, now, poseMaxAge) {
 		return errors.New("Go2 odometry has no fresh capture timestamp. Movement is unavailable.")
 	}
 	if !Fresh(o.CloudAt, now) {
@@ -241,7 +259,9 @@ func (o *Observations) Receive(topic string, raw []byte, isBinary bool, received
 			return errors.New("Go2 pose jumped. Align the robot again.")
 		}
 	}
-	o.Pose = Pose{p, height, yaw, received, capture}
+	roll := math.Atan2(2*(q[0]*q[1]+q[2]*q[3]), 1-2*(q[1]*q[1]+q[2]*q[2]))
+	pitch := math.Asin(math.Max(-1, math.Min(1, 2*(q[0]*q[2]-q[3]*q[1]))))
+	o.Pose = Pose{Position: p, Height: height, Yaw: yaw, Roll: roll, Pitch: pitch, Received: received, Captured: capture}
 	return nil
 }
 
@@ -323,7 +343,15 @@ func (o *Observations) cloud(raw []byte, isBinary bool, received, now time.Time)
 	if err != nil || decoded != m.Size {
 		return fail("Could not decode Go2 LiDAR.")
 	}
-	var points []Vertex
+	// Count occupied bits before decoding so a dense cloud does not repeatedly
+	// copy an expanding point slice. Keep the existing retained-point limit:
+	// out-of-range voxels still do not count toward that limit.
+	pointCapacity := 0
+	for _, b := range buf {
+		pointCapacity += bits.OnesCount8(b)
+	}
+	pointCapacity = min(pointCapacity, 500001)
+	points := make([]Vertex, 0, pointCapacity)
 	// Bit and axis order match the existing Go2 ROS bridge decoder. Z is up.
 	for i, b := range buf {
 		if b == 0 {
@@ -463,7 +491,8 @@ func wallStripLandmarks(points []Vertex, bottom, top float64) []Point {
 	}
 	var result []Point
 	for c := range columns {
-		var neighbors []Point
+		var neighborhood [81]Point
+		neighbors := neighborhood[:0]
 		var levels uint64
 		for y := -4; y <= 4; y++ {
 			for x := -4; x <= 4; x++ {
@@ -661,6 +690,18 @@ func timestampResolution(value string) float64 {
 // a traversable departure footprint. It is separate from navigation readiness.
 func (o *Observations) SurfaceReady(now time.Time) error {
 	if err := o.freshCloud(now); err != nil {
+		return err
+	}
+	if len(o.Surfaces.Surfaces) < 24 {
+		return errors.New("Waiting for observed surfaces at multiple heights.")
+	}
+	return nil
+}
+
+// IdleSurfaceReady uses the same measured geometry requirement as SurfaceReady
+// with the passive-only odometry allowance. The scan still expires at 750ms.
+func (o *Observations) IdleSurfaceReady(now time.Time) error {
+	if err := o.IdleMeasurementsReady(now); err != nil {
 		return err
 	}
 	if len(o.Surfaces.Surfaces) < 24 {

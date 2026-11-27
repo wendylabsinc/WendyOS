@@ -1,0 +1,62 @@
+{
+  "schema_version": "wendy.world.package.v0",
+  "site_id": "synthetic-office",
+  "package_revision": "office-fixture-v1",
+  "frame_revision": "office-frame-v1",
+  "provenance": "synthetic",
+  "description": "Synthetic office fixture. This is not a scan of the user office or a surveyed physical site.",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "mujoco": {
+    "path": "office.xml",
+    "sha256": "41fd6452fb818a2cbd3c0265d35474d62bba813dd468ee0fc4854c0201d90a77",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ],
+    "body": "inspection-puck",
+    "actuator": "drive",
+    "control": 0.5
+  },
+  "gas_model": {
+    "kind": "analytic-gaussian-fixture",
+    "unit": "ppm",
+    "source_local_m": [
+      0,
+      0.2,
+      0
+    ],
+    "background_ppm": 1,
+    "peak_ppm": 30,
+    "sigma_m": 1,
+    "noise_stddev_ppm": 0.1
+  },
+  "fidelity": {
+    "geometry": "hand-authored illustrative boxes",
+    "robot": "single-axis puck, not Go2 dynamics",
+    "gas": "analytic spatial field, no fluid dynamics or validated hazard model",
+    "camera": "MJCF camera placement only, no rendering adapter",
+    "audio": "not implemented"
+  },
+  "asset_license": "Proprietary Wendy Labs fixture; no real office data",
+  "scenario": {
+    "name": "bounded-drive-smoke",
+    "expected": "finite motion and paired pose/gas observations in simulation time"
+  }
+}

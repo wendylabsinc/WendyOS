@@ -266,6 +266,13 @@ jobs:
           fi
           echo "docker_ready=$DOCKER_READY" >> "$GITHUB_OUTPUT"
 
+      - name: Prune device cache before integration tests
+        if: steps.prepare-docker.outputs.docker_ready == 'true'
+        timeout-minutes: 5
+        uses: ./.github/actions/prune-device-cache
+        with:
+          hostname: ${{ matrix.hostname }}
+
       - name: Run integration tests
         if: steps.prepare-docker.outputs.docker_ready == 'true'
         run: |
@@ -405,6 +412,13 @@ jobs:
             echo "WARNING: Docker not available; integration tests will be skipped"
           fi
           echo "docker_ready=$DOCKER_READY" >> "$GITHUB_OUTPUT"
+
+      - name: Prune device cache before integration tests
+        if: steps.prepare-docker.outputs.docker_ready == 'true'
+        timeout-minutes: 5
+        uses: ./.github/actions/prune-device-cache
+        with:
+          hostname: ${{ matrix.hostname }}
 
       - name: Run integration tests
         if: steps.prepare-docker.outputs.docker_ready == 'true'

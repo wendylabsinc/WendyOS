@@ -1,12 +1,25 @@
 import SwiftUI
+#if os(macOS)
+import WorldOperator
+#endif
 
 struct ChatDeviceCardsView: View {
     let cards: [ChatDeviceCard]
     let session: UInt64
     let deviceName: String
+    /// The message that owns these cards, and the chat's on-device model. A
+    /// robot search uses that device's vision model; 0 selects the default port.
+    var owner = ""
+    var chatModel = ""
+    var chatPort: UInt32 = 0
     private var cameras: [ChatDeviceCard] { cards.filter { $0.kind == "camera" } }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            ForEach(cards.filter { $0.kind == "robot_find" }) { card in
+                RobotFindCard(query: card.title, bark: card.camera == 1, session: session, owner: owner,
+                    modelName: chatModel, modelPort: chatPort)
+                    .background(PlatformColors.control, in: RoundedRectangle(cornerRadius: 14))
+            }
             if cameras.count == 1, let camera = cameras.first {
                 ChatDeviceCardView(card: camera, session: session, deviceName: deviceName)
                     .frame(maxWidth: 480)
@@ -15,7 +28,7 @@ struct ChatDeviceCardsView: View {
                     ForEach(cameras) { card in ChatDeviceCardView(card: card, session: session, deviceName: deviceName) }
                 }.frame(maxWidth: 840, alignment: .leading)
             }
-            ForEach(cards.filter { $0.kind != "camera" }) { card in
+            ForEach(cards.filter { $0.kind != "camera" && $0.kind != "robot_find" }) { card in
                 ChatDeviceCardView(card: card, session: session, deviceName: deviceName)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -40,6 +53,19 @@ struct ChatDeviceCardView: View {
                     Label(card.title, systemImage: "video.slash")
                     Text(error ?? "Camera is no longer available.").font(.caption).foregroundStyle(.secondary)
                 }
+            } else if card.kind == "world" {
+                Label(card.title, systemImage: "globe.americas").font(.headline)
+                Text("Open the separate simulation workspace. The selected chat device is unchanged.")
+                    .font(.caption).foregroundStyle(.secondary)
+                #if os(macOS)
+                if let section = WorldWorkspaceSection(rawValue: card.episode) {
+                    Button("Open World workspace") { model.requestedWorldSection = section }
+                } else {
+                    Text("This World section is unavailable.").font(.caption)
+                }
+                #else
+                Text("World workspace is available in Wendy for macOS.").font(.caption)
+                #endif
             } else if card.kind == "recording" {
                 Label(card.title, systemImage: "play.rectangle").font(.headline)
                 Text(card.episode).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)

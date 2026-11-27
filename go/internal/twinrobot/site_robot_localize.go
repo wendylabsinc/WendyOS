@@ -26,6 +26,10 @@ func (r *SiteRobot) Localize(sequence uint64, frame string, mesh []sitenav.Trian
 		r.mu.Unlock()
 		return nil, errors.New("This localization request is no longer active.")
 	}
+	if r.intentActive {
+		r.mu.Unlock()
+		return nil, errChatLocalizationBusy
+	}
 	r.commandSequence = sequence
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
@@ -56,6 +60,9 @@ func (r *SiteRobot) Localize(sequence uint64, frame string, mesh []sitenav.Trian
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.intentActive {
+		return nil, errChatLocalizationBusy
+	}
 	if r.commandSequence != sequence || r.closed || epoch != r.poseEpoch || r.ctx.Err() != nil {
 		return nil, errors.New("This localization request was superseded.")
 	}
@@ -83,10 +90,21 @@ func sameLocalizationPose(a, b sitenav.Pose) bool {
 func (r *SiteRobot) ConfirmLocalization(sequence, matchSequence uint64, frame string, index int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.confirmLocalizationLocked(sequence, matchSequence, frame, index, false)
+}
+
+func (r *SiteRobot) confirmLocalizationLocked(sequence, matchSequence uint64, frame string, index int, idle bool) error {
 	if sequence <= r.commandSequence || r.commandSequence != matchSequence {
 		return errors.New("This robot order was superseded.")
 	}
 	r.commandSequence = sequence
+	return r.confirmLocalizationCandidateLocked(matchSequence, frame, index, idle)
+}
+
+// The caller has already acquired command ownership under mu. Keeping the
+// candidate checks separate lets a chat-owned search confirm without changing
+// the desktop's external command sequence.
+func (r *SiteRobot) confirmLocalizationCandidateLocked(matchSequence uint64, frame string, index int, idle bool) error {
 	if r.closed || r.ctx.Err() != nil || matchSequence != r.localizationSequence || index < 0 || index >= len(r.localizations) {
 		return errors.New("This suggested position expired. Locate Go2 again.")
 	}
@@ -101,7 +119,11 @@ func (r *SiteRobot) ConfirmLocalization(sequence, matchSequence uint64, frame st
 	}
 	ready := r.observed.LocalizationReady(time.Now())
 	if c.surfaceBased {
-		ready = r.observed.SurfaceReady(time.Now())
+		if idle {
+			ready = r.observed.IdleSurfaceReady(time.Now())
+		} else {
+			ready = r.observed.SurfaceReady(time.Now())
+		}
 	}
 	if err := ready; err != nil {
 		return err

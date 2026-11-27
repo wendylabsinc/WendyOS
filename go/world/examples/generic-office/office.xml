@@ -1,0 +1,14 @@
+<mujoco model="passive-office">
+  <compiler angle="radian"/>
+  <option timestep="0.01"/>
+  <include file="room.xml"/>
+  <worldbody>
+    <body name="desk" pos="0.6 0.4 0.5">
+      <geom type="box" size="0.6 0.3 0.05" rgba="0.4 0.3 0.2 1"/>
+      <site name="desk-reference" pos="0 0 0.05" size="0.01"/>
+    </body>
+  </worldbody>
+  <sensor>
+    <framepos name="desk-position" objtype="site" objname="desk-reference"/>
+  </sensor>
+</mujoco>

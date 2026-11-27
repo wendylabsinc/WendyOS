@@ -19,6 +19,14 @@ import (
 var ErrRobotBusy = errors.New("robot is controlled by another session; close it or wait 15 seconds after it disconnects")
 
 type robotSession struct {
+	localizationCamera         *localizationCameraJob // protected by searchMu
+	activeObjectMu             sync.Mutex
+	activeObject               *activeObjectJob
+	objectMu                   sync.Mutex
+	objectEvidence             map[string]objectEvidence
+	commandMu                  sync.Mutex
+	commandReceipts            map[string]robotCommandReceipt
+	commandRetired             bool // protected by commandMu; forbids dispatch through a replaced observer
 	robot                      robotControl
 	serial                     string
 	lastActivity               time.Time
@@ -34,8 +42,24 @@ type robotSession struct {
 	searchTurns, searchMoves   int
 	searchPhase                string
 	searchReport               json.RawMessage
+	findMu                     sync.Mutex
+	findCancel                 context.CancelFunc
+	findRoot                   uint64
+	find                       twinrobot.FindStatus
+	findViews                  chan findView
 }
+
+func (session *robotSession) cancelFind() {
+	session.findMu.Lock()
+	defer session.findMu.Unlock()
+	if session.findCancel != nil {
+		session.findCancel()
+	}
+}
+
 type Server struct {
+	commandSetups map[string]map[*commandSetup]struct{}
+
 	Store        *Store
 	Conn         grpc.ClientConnInterface
 	Context      context.Context
@@ -57,6 +81,8 @@ func (s *Server) Handler() http.Handler {
 	s.cameraWorker = make(chan struct{}, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/camera-alignment", s.cameraRequest)
+	mux.HandleFunc("POST /v1/robot/localize-view", s.localizationCameraView)
+	mux.HandleFunc("PUT /v1/rooms/{id}/localization-geometry", s.localizationGeometry)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /v1/rooms", func(w http.ResponseWriter, r *http.Request) { v, e := s.Store.List(); respondRoom(w, r, v, e) })
 	mux.HandleFunc("GET /v1/rooms/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -64,8 +90,7 @@ func (s *Server) Handler() http.Handler {
 		respondRoom(w, r, v, e)
 	})
 	mux.HandleFunc("GET /v1/rooms/{id}/state", func(w http.ResponseWriter, r *http.Request) {
-		v, e := s.Store.State(r.PathValue("id"))
-		respondRoom(w, r, v, e)
+		s.Store.respondState(w, r, r.PathValue("id"))
 	})
 	mux.HandleFunc("PUT /v1/rooms/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var v Room
@@ -110,6 +135,9 @@ func (s *Server) Handler() http.Handler {
 		respond(w, result, e)
 	})
 	mux.HandleFunc("POST /v1/robot", s.robotRequest)
+	mux.HandleFunc("POST /v1/robot/command", s.robotCommand)
+	mux.HandleFunc("POST /v1/robot/find-object", s.robotFindObject)
+	mux.HandleFunc("POST /v1/robot/find-view", s.activeObjectView)
 	return mux
 }
 func decode(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
@@ -163,6 +191,13 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 		defer s.openMu.Unlock()
 		s.mu.Lock()
 		previous := s.observers[q.Serial]
+		if previous != nil {
+			if controller, ok := previous.robot.(robotCommander); ok && controller.CommandActive() {
+				s.mu.Unlock()
+				respond(w, nil, ErrRobotBusy)
+				return
+			}
+		}
 		for _, v := range s.robots {
 			if v.serial == q.Serial && (v.lastActivity.IsZero() || time.Since(v.lastActivity) < 15*time.Second) {
 				s.mu.Unlock()
@@ -183,6 +218,7 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 				previous.searchCancel()
 			}
 			previous.searchMu.Unlock()
+			previous.cancelFind()
 			// Drain any mapping sample captured by the old operator before a new
 			// session can reset that robot's persisted localization history.
 			previous.pendingMu.Lock()
@@ -230,14 +266,27 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	q.Sequence *= stride
 	q.MatchSequence *= stride
-	if q.Operation != "poll" && q.Operation != "video" && q.Operation != "search-poll" && q.Operation != "reset-localization" {
+	finding := q.Operation == "find-poll" || q.Operation == "find-view"
+	if q.Operation != "poll" && q.Operation != "video" && q.Operation != "search-poll" && q.Operation != "reset-localization" && !finding {
 		session.searchMu.Lock()
 		if session.searchCancel != nil {
 			session.searchCancel()
 		}
 		session.searchMu.Unlock()
 	}
+	// Any other order, including Stop and a manual destination, ends a find.
+	if q.Operation != "poll" && q.Operation != "video" && !finding {
+		session.cancelFind()
+	}
 	switch q.Operation {
+	case "find":
+		err = s.startFind(session, q)
+	case "find-poll":
+		session.findMu.Lock()
+		out.Find = session.find
+		session.findMu.Unlock()
+	case "find-view":
+		err = session.acceptFindView(q.View, q.Image)
 	case "search":
 		err = s.startSearch(session, q)
 	case "search-poll":
@@ -279,7 +328,14 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 			var geometry twinrobot.SiteFusionRequest
 			if err = json.Unmarshal(q.Fusion, &geometry); err == nil {
 				if _, err = s.Store.Frame(q.Frame); err == nil {
-					err = robot.AlignWithGeometry(q.Sequence, q.Frame, q.X, q.Z, q.Floor, q.Yaw, geometry)
+					if geometry.Frame != q.Frame {
+						err = errors.New("room geometry frame mismatch")
+					} else {
+						err = s.Store.SaveLocalizationGeometry(geometry)
+					}
+					if err == nil {
+						err = robot.AlignWithGeometry(q.Sequence, q.Frame, q.X, q.Z, q.Floor, q.Yaw, geometry)
+					}
 				}
 			}
 		}
@@ -312,6 +368,9 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			var room Room
 			room, err = s.Store.Frame(input.Frame)
+			if err == nil {
+				err = s.Store.SaveLocalizationGeometry(input)
+			}
 			if err == nil {
 				input.Reference = room.References[session.serial]
 				var report twinrobot.SiteFusionReport

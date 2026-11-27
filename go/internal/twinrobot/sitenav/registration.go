@@ -138,36 +138,9 @@ func registerSurfaces(ctx context.Context, model LayeredRoom, input Registration
 	}
 	// A reference map is an optional geometric target. It contains past observed
 	// surfaces in site coordinates, not navigable cells and not a prior pose vote.
-	type key3 struct{ X, Y, Z int }
-	reference := map[key3][]Surface{}
-	for _, p := range input.Reference {
-		if !(Point{p.Position.X, p.Position.Y}).Valid() || !finite(p.Position.Z) || math.Abs(p.Position.Z) > 1000 || !finite(p.Direction.X) || !finite(p.Direction.Y) || (!p.Horizontal && math.Abs(math.Hypot(p.Direction.X, p.Direction.Y)-1) > .05) {
-			return nil, errors.New("Invalid saved surface map.")
-		}
-		k := key3{int(math.Floor(p.Position.X / .2)), int(math.Floor(p.Position.Y / .2)), int(math.Floor(p.Position.Z / .2))}
-		reference[k] = append(reference[k], p)
-	}
-	referenceDistance := func(p Vertex, direction Point, horizontal bool) (float64, bool) {
-		stable := false
-		best := .0625
-		k := key3{int(math.Floor(p.X / .2)), int(math.Floor(p.Y / .2)), int(math.Floor(p.Z / .2))}
-		for dz := -1; dz <= 1; dz++ {
-			for dy := -1; dy <= 1; dy++ {
-				for dx := -1; dx <= 1; dx++ {
-					for _, v := range reference[key3{k.X + dx, k.Y + dy, k.Z + dz}] {
-						if v.Horizontal != horizontal || (!horizontal && math.Abs(v.Direction.X*direction.X+v.Direction.Y*direction.Y) < .966) {
-							continue
-						}
-						dist := (v.Position.X-p.X)*(v.Position.X-p.X) + (v.Position.Y-p.Y)*(v.Position.Y-p.Y) + (v.Position.Z-p.Z)*(v.Position.Z-p.Z)
-						if dist < best {
-							best = dist
-							stable = v.Stable
-						}
-					}
-				}
-			}
-		}
-		return best, stable
+	reference, referenceErr := newSurfaceReferenceIndex(input.Reference)
+	if referenceErr != nil {
+		return nil, referenceErr
 	}
 	freeCells := map[Cell]bool{}
 	for _, p := range input.ClearFloor {
@@ -196,6 +169,22 @@ func registerSurfaces(ctx context.Context, model LayeredRoom, input Registration
 			free[i] = all[i*len(all)/len(free)]
 		}
 	}
+	// Every search candidate uses the same scan origin and height layers. Resolve
+	// these once instead of subtracting and selecting layers for every trial pose.
+	type preparedSurface struct {
+		x, y, z        float64
+		walls, objects *RoomMap
+	}
+	var prepared [900]preparedSurface
+	for i, sample := range scan {
+		p := &prepared[i]
+		p.x, p.y = sample.Position.X-input.Pose.Position.X, sample.Position.Y-input.Pose.Position.Y
+		p.z = model.Base.FloorY + sample.Position.Z - input.Cloud.Floor
+		if !sample.Horizontal {
+			band := heightBand(sample.Position.Z - input.Cloud.Floor)
+			p.walls, p.objects = &model.Walls[band], &model.Objects[band]
+		}
+	}
 	evaluate := func(c PoseCandidate, stride int, details bool) RegistrationFit {
 		out := RegistrationFit{Pose: c}
 		if !model.Base.onFloor(c.Position) {
@@ -220,8 +209,8 @@ func registerSurfaces(ctx context.Context, model LayeredRoom, input Registration
 		}
 		for i := 0; i < len(scan); i += stride {
 			sample := scan[i]
-			x, y := sample.Position.X-input.Pose.Position.X, sample.Position.Y-input.Pose.Position.Y
-			q := Vertex{c.Position.X + cs*x - sn*y, c.Position.Y + sn*x + cs*y, model.Base.FloorY + sample.Position.Z - input.Cloud.Floor}
+			p := &prepared[i]
+			q := Vertex{c.Position.X + cs*p.x - sn*p.y, c.Position.Y + sn*p.x + cs*p.y, p.z}
 			direction := Point{cs*sample.Direction.X - sn*sample.Direction.Y, sn*sample.Direction.X + cs*sample.Direction.Y}
 			d, kind := .0625, 0
 			residual := .36
@@ -238,8 +227,7 @@ func registerSurfaces(ctx context.Context, model LayeredRoom, input Registration
 				}
 			}
 			if !sample.Horizontal {
-				band := heightBand(sample.Position.Z - input.Cloud.Floor)
-				for class, m := range []RoomMap{model.Walls[band], model.Objects[band]} {
+				for class, m := range [2]*RoomMap{p.walls, p.objects} {
 					if m.width == 0 {
 						continue
 					}
@@ -263,8 +251,8 @@ func registerSurfaces(ctx context.Context, model LayeredRoom, input Registration
 					}
 				}
 			}
-			if len(reference) > 0 {
-				rd, stable := referenceDistance(q, direction, sample.Horizontal)
+			if len(reference.points) > 0 {
+				rd, stable := reference.distance(q, direction, sample.Horizontal)
 				residual = math.Min(residual, rd)
 				if rd < .04 && .012+.7*rd < d {
 					d = .012 + .7*rd

@@ -111,6 +111,40 @@ the service restores room geometry, not live robot handles, alignment or motion.
 Reconnect contributors explicitly. Search jobs are bounded to six 60-degree turns and
 five minutes and still use live obstacle and sensor checks.
 
+## Find an object
+
+`POST /v1/robot` with `{"Operation":"find","Frame":…,"Query":"toolbox","Bark":true}`
+starts a mission on an aligned, ready Go2. Linux does the looking and walking:
+
+1. If this room remembers the object, Go2 first walks back to where it was last seen.
+2. At each place it checks a camera view, then turns 60 degrees, up to a full circle.
+3. With nothing found, it walks to measured clear floor farthest from the places
+   already searched, at most 4 m away, and repeats. It stops after six places.
+4. When the object is seen, its place in the room is the nearer of the first LiDAR
+   obstacle along that bearing and the point where the box's lower edge meets the
+   floor. Go2 walks to 0.8 m short of it, or 1.3 m when that is blocked.
+5. The location is saved with the room, and Go2 barks if asked.
+
+Every walk and turn is the operator's own `destination` or `look` order, with the
+same route checks, 30-second movement limit and 600 ms operator lease. The mission
+never renews that lease, so Go2 stops when no client is rendering it. Any other
+order, including `stop`, ends the mission. A mission lasts ten minutes at most.
+
+The service cannot decode Go2's H.264 video. `find-poll` returns `Find.WantsView`
+when Go2 is standing still and a view is needed; the client answers with
+`find-view` carrying that number and one JPEG decoded after the request. Late and
+duplicate frames are refused. The vision model runs in the gateway's own Ollama on
+loopback (`ModelPort`, default 11434). The service uses `Model` when it reports
+the `vision` capability, otherwise the first installed model that does, and fails
+with a download hint when there is none. The model only returns a box in the image;
+it never produces motion.
+
+`Find.State` ends as `found`, `not-found`, `stopped` or `failed`. `found` means the
+camera model reported the object once; it is not re-checked after the walk. A
+remembered location is a hint for the next search, never proof the object is still
+there. Camera intrinsics are the built-in Go2 720p preset without distortion, and
+the camera height is a constant, so floor-based distances are approximate.
+
 Historical points and supported horizontal tiles are for rendering and selecting
 a destination. They never become navigation free space. Route clearance uses the
 robot's current floor and obstacle measurements. USDZ export remains available
@@ -128,3 +162,32 @@ Also build both Xcode schemes, `WendyDesktop` and `WendyMobile`. Hardware accept
 must check a G1 cloud contribution, a Go2-created room, another client's live
 rendering, service restart persistence, a bounded Go2 destination, and Stop on
 operator or sensor loss. Local tests do not establish physical robot readiness.
+
+## Natural-language Go2 control
+
+Terminal `wendy chat` exposes `unitree_pairings`, `robot_status`, and
+`robot_command` through the robotics MCP group. The CLI and this Linux service
+both need the chat-control update. The CLI uses the authenticated container
+stream to reach `POST /v1/robot/command`; no new public port is needed.
+
+Try "connect to my Go2", "turn left 90 degrees", "turn around", or "stop".
+Connect starts observations using the same preparation as the robot map. Turning
+needs current robot measurements but does not require a map alignment. Turns
+are limited to 180 degrees and use the existing controller in steps of at most
+60 degrees, with an acknowledged stop between steps.
+
+For navigation, first localize Go2 in its map. Say "remember this spot as the
+kitchen", then "go to the kitchen" to return to that saved position. Named
+positions belong to the map revision and are stored separately from object
+sightings. Chat does not infer traversable coordinates from a room name or an
+image. The existing planner still checks the route and destination against live
+observations. Unknown names and missing localization return a concrete blocker.
+
+A motion call waits at most 30 seconds and reports completion, cancellation,
+failure, or replacement by a newer operator command. Interrupting the call stops
+its motion; a manual map command takes precedence. Request IDs prevent retried
+turns or navigation goals from executing twice during the observer session.
+Stop is always executed, even when the command history is full. Reopen the robot
+session after 256 retained non-stop command receipts. Restarting the service
+ends active goals and clears receipts; never replay an uncertain old motion
+across a service restart.

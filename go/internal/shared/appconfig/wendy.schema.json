@@ -463,6 +463,111 @@
         },
         {
           "properties": {
+            "type": {
+              "const": "world"
+            },
+            "publish": {
+              "type": "array",
+              "maxItems": 8,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "componentType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[^*?\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "stream": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[^*?\\u0000-\\u001f\\u007f]+$"
+                  }
+                },
+                "required": [
+                  "componentType",
+                  "stream"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "subscribe": {
+              "type": "array",
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "device": {
+                    "type": "string",
+                    "pattern": "^spiffe://wendy\\.sh/tenant/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/device/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                    "description": "Exact source device. Omit for the local agent. Remote access also requires agent commissioning."
+                  },
+                  "app": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 253,
+                    "pattern": "^[a-zA-Z0-9._-]+$"
+                  },
+                  "service": {
+                    "type": "string",
+                    "pattern": "^[a-z]([a-z0-9-]{0,55}[a-z0-9])?$"
+                  },
+                  "componentType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[^*?\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "stream": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[^*?\\u0000-\\u001f\\u007f]+$"
+                  }
+                },
+                "required": [
+                  "app",
+                  "service",
+                  "componentType",
+                  "stream"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "anyOf": [
+            {
+              "required": [
+                "publish"
+              ],
+              "properties": {
+                "publish": {
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "required": [
+                "subscribe"
+              ],
+              "properties": {
+                "subscribe": {
+                  "minItems": 1
+                }
+              }
+            }
+          ],
+          "additionalProperties": false,
+          "description": "World service socket for exact publications and local source subscriptions. Requires an explicit service and commissioned device policy. Scope encoding must fit the containerd 4096-byte label budget. Wildcards and task authority are unsupported."
+        },
+        {
+          "properties": {
             "type": { "const": "notifications" }
           },
           "required": ["type"],

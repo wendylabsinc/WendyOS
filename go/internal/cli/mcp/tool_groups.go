@@ -19,13 +19,14 @@ var toolGroups = map[string][]string{
 	"setup": {"device_set_default", "project_validate", "os_install_plan", "os_list_drives", "os_install_start", "os_install_status", "os_install_resume", "os_install_verify", "os_update", "os_update_status", "device_update_agent",
 		"cloud_enroll_device", "provisioning_start", "provisioning_status", "wifi_list", "wifi_connect", "wifi_disconnect", "wifi_status", "wifi_known_networks"},
 	"hardware":      {"bluetooth_scan", "bluetooth_connect", "bluetooth_disconnect", "camera_list", "camera_controls", "camera_set_control", "camera_snapshot"},
-	"robotics":      {"ros2_topics", "ros2_topic_info", "ros2_topic_sample", "ros2_topic_hz", "ros2_lidar_summary"},
+	"world":         {"world_query", "world_watch", "world_task_catalog", "world_task_status", "world_task_propose", "world_sites", "world_zones", "world_annotations", "world_proposals", "world_proposal", "world_task_history", "world_task_result"},
+	"robotics":      {"unitree_pairings", "robot_status", "robot_command", "robot_camera_snapshot", "robot_find_object", "ros2_topics", "ros2_topic_info", "ros2_topic_sample", "ros2_topic_hz", "ros2_lidar_summary"},
 	"observability": {"telemetry_metrics", "telemetry_traces", "app_inspect", "device_os_logs", "job_inspect", "job_artifacts_pull", "compute_status", "job_submit", "checkpoint_inspect", "experiment_plan"},
 	"simulator":     {"simulator_list", "simulator_create", "simulator_start", "simulator_stop", "simulator_delete"},
 	"cloud":         {"cloud_discover", "cloud_connect", "cloud_tunnel", "cloud_tunnel_list", "cloud_tunnel_close", "cloud_ping"},
 }
 
-var toolGroupNames = []string{"core", "setup", "simulator", "hardware", "robotics", "observability", "cloud", "all"}
+var toolGroupNames = []string{"core", "setup", "simulator", "hardware", "robotics", "world", "observability", "cloud", "all"}
 
 // SetToolProfile selects an explicit task catalog without changing authorization.
 // The default keeps the existing core/group discovery contract unchanged.
@@ -51,7 +52,7 @@ func (s *mcpServer) SetToolGroups(groups []string) error {
 	selected := []string{"core"}
 	for _, group := range groups {
 		if !slices.Contains(toolGroupNames, group) {
-			return fmt.Errorf("unknown tool group %q; choose core, setup, simulator, hardware, robotics, observability, cloud, or all", group)
+			return fmt.Errorf("unknown tool group %q; choose core, setup, simulator, hardware, robotics, world, observability, cloud, or all", group)
 		}
 		if !slices.Contains(selected, group) {
 			selected = append(selected, group)
@@ -129,7 +130,7 @@ func (s *mcpServer) filterTools(_ context.Context, tools []mcpgo.Tool) []mcpgo.T
 
 func (s *mcpServer) registerToolGroups(srv *server.MCPServer) {
 	opts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Show or select tool groups. Core is always available. Enable setup, simulator, hardware, robotics, observability, cloud, or all for specialist tools."),
+		mcpgo.WithDescription("Show or select tool groups. Core is always available. Enable setup, simulator, hardware, robotics, world, observability, cloud, or all for specialist tools."),
 		mcpgo.WithArray("groups", mcpgo.Description("Replace enabled groups; omit to inspect. Core is always included."),
 			mcpgo.Items(map[string]any{"type": "string", "enum": toolGroupNames})),
 	}

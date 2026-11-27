@@ -1,0 +1,161 @@
+{
+  "root_public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "schema": "wendy.native-client.signing-fixtures.v1",
+  "test_only": true,
+  "vectors": [
+    {
+      "body_base64": "",
+      "credentials": {
+        "allow_insecure_simulation": true,
+        "audience": "node-3",
+        "grant": {
+          "grant": {
+            "version": 1,
+            "id": "native-reader",
+            "tenant": "lab",
+            "site": "synthetic-office",
+            "domain": "simulation",
+            "principal": "lab/viewer",
+            "kind": "operator",
+            "source": {
+              "device": "native-reader",
+              "app": "wendy-world",
+              "service": "viewer",
+              "stream": "read"
+            },
+            "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+            "scopes": [
+              "read",
+              "evidence-read"
+            ],
+            "not_before_unix_ms": 1794308400000,
+            "not_after_unix_ms": 1794315600000
+          },
+          "signature": "uJV2hP2hiYPSLHAOby+pmsQe5eBsNiuyMYQyd2NepVnXn+PSKEUrEz5BYy2snIrzwxqzaVnwpnsq9DfzmIXIAg=="
+        },
+        "private_key": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8prLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1w==",
+        "url": "http://127.0.0.1:1234"
+      },
+      "expected_grant_json": "{\"grant\":{\"version\":1,\"id\":\"native-reader\",\"tenant\":\"lab\",\"site\":\"synthetic-office\",\"domain\":\"simulation\",\"principal\":\"lab/viewer\",\"kind\":\"operator\",\"source\":{\"device\":\"native-reader\",\"app\":\"wendy-world\",\"service\":\"viewer\",\"stream\":\"read\"},\"public_key\":\"Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=\",\"scopes\":[\"read\",\"evidence-read\"],\"not_before_unix_ms\":1794308400000,\"not_after_unix_ms\":1794315600000},\"signature\":\"uJV2hP2hiYPSLHAOby+pmsQe5eBsNiuyMYQyd2NepVnXn+PSKEUrEz5BYy2snIrzwxqzaVnwpnsq9DfzmIXIAg==\"}",
+      "expected_signed_request": {
+        "version": 1,
+        "grant": {
+          "grant": {
+            "version": 1,
+            "id": "native-reader",
+            "tenant": "lab",
+            "site": "synthetic-office",
+            "domain": "simulation",
+            "principal": "lab/viewer",
+            "kind": "operator",
+            "source": {
+              "device": "native-reader",
+              "app": "wendy-world",
+              "service": "viewer",
+              "stream": "read"
+            },
+            "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+            "scopes": [
+              "read",
+              "evidence-read"
+            ],
+            "not_before_unix_ms": 1794308400000,
+            "not_after_unix_ms": 1794315600000
+          },
+          "signature": "uJV2hP2hiYPSLHAOby+pmsQe5eBsNiuyMYQyd2NepVnXn+PSKEUrEz5BYy2snIrzwxqzaVnwpnsq9DfzmIXIAg=="
+        },
+        "audience": "node-3",
+        "operation": "read",
+        "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "nonce": "native_fixture_nonce_0123456789",
+        "issued_at_unix_ms": 1794312000000,
+        "expires_at_unix_ms": 1794312060000,
+        "signature": "uBHI4gsOGc3HFzL5vqOD7Werh4q/aUYGEsvFiNoCkzqDrmL4JODwy4XjrmHBYerZRWlZnV3e3iHil1zDbVo/AQ=="
+      },
+      "expected_signing_bytes_base64": "d2VuZHkud29ybGQuYXV0aG9yaXR5LnYxL3JlcXVlc3QAeyJ2ZXJzaW9uIjoxLCJncmFudF9kaWdlc3QiOiI0ZDEzNDAxNzIwMDgxOTAzZTA1MDlkODQwNTExNzllNTUwNGI4OWYzYjBjMmU5ODM3YmE5MzczMDgxZTQzNDEzIiwiYXVkaWVuY2UiOiJub2RlLTMiLCJvcGVyYXRpb24iOiJyZWFkIiwiYm9keV9kaWdlc3QiOiJlM2IwYzQ0Mjk4ZmMxYzE0OWFmYmY0Yzg5OTZmYjkyNDI3YWU0MWU0NjQ5YjkzNGNhNDk1OTkxYjc4NTJiODU1Iiwibm9uY2UiOiJuYXRpdmVfZml4dHVyZV9ub25jZV8wMTIzNDU2Nzg5IiwiaXNzdWVkIjoxNzk0MzEyMDAwMDAwLCJleHBpcmVzIjoxNzk0MzEyMDYwMDAwfQ==",
+      "issued_at_unix_ms": 1794312000000,
+      "lifetime_ms": 60000,
+      "name": "plain",
+      "nonce": "native_fixture_nonce_0123456789",
+      "operation": "read"
+    },
+    {
+      "body_base64": "eyJzaGEyNTYiOiJ0ZXN0LWRpZ2VzdCIsIm9mZnNldCI6MCwibGVuZ3RoIjo2NTUzNn0=",
+      "credentials": {
+        "allow_insecure_simulation": true,
+        "audience": "node-3",
+        "grant": {
+          "grant": {
+            "publish_audience": "unused\u003c\u0026\u003e",
+            "version": 1,
+            "id": "reader-é\u003c\u003e\u0026\u2028\u2029",
+            "tenant": "lab",
+            "site": "synthetic-office",
+            "domain": "simulation",
+            "principal": "lab/reader-東京\u003c\u003e\u0026\u2028\u2029",
+            "kind": "operator",
+            "source": {
+              "device": "native-reader",
+              "app": "wendy-world",
+              "service": "viewer/\"quoted\"\nline",
+              "stream": "read"
+            },
+            "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+            "scopes": [
+              "read",
+              "evidence-read"
+            ],
+            "not_before_unix_ms": 1794308400000,
+            "not_after_unix_ms": 1794315600000
+          },
+          "signature": "7fuNL2/AREMMGuHqQF3LlIX5oYamNrc0VU/TC6K26PcH42KG/GNHq0At0mR0H0ulKddMhbF6hICHj65UasjUCw=="
+        },
+        "private_key": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8prLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt1w==",
+        "url": "http://127.0.0.1:1234"
+      },
+      "expected_grant_json": "{\"grant\":{\"publish_audience\":\"unused\\u003c\\u0026\\u003e\",\"version\":1,\"id\":\"reader-é\\u003c\\u003e\\u0026\\u2028\\u2029\",\"tenant\":\"lab\",\"site\":\"synthetic-office\",\"domain\":\"simulation\",\"principal\":\"lab/reader-東京\\u003c\\u003e\\u0026\\u2028\\u2029\",\"kind\":\"operator\",\"source\":{\"device\":\"native-reader\",\"app\":\"wendy-world\",\"service\":\"viewer/\\\"quoted\\\"\\nline\",\"stream\":\"read\"},\"public_key\":\"Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=\",\"scopes\":[\"read\",\"evidence-read\"],\"not_before_unix_ms\":1794308400000,\"not_after_unix_ms\":1794315600000},\"signature\":\"7fuNL2/AREMMGuHqQF3LlIX5oYamNrc0VU/TC6K26PcH42KG/GNHq0At0mR0H0ulKddMhbF6hICHj65UasjUCw==\"}",
+      "expected_signed_request": {
+        "version": 1,
+        "grant": {
+          "grant": {
+            "publish_audience": "unused\u003c\u0026\u003e",
+            "version": 1,
+            "id": "reader-é\u003c\u003e\u0026\u2028\u2029",
+            "tenant": "lab",
+            "site": "synthetic-office",
+            "domain": "simulation",
+            "principal": "lab/reader-東京\u003c\u003e\u0026\u2028\u2029",
+            "kind": "operator",
+            "source": {
+              "device": "native-reader",
+              "app": "wendy-world",
+              "service": "viewer/\"quoted\"\nline",
+              "stream": "read"
+            },
+            "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+            "scopes": [
+              "read",
+              "evidence-read"
+            ],
+            "not_before_unix_ms": 1794308400000,
+            "not_after_unix_ms": 1794315600000
+          },
+          "signature": "7fuNL2/AREMMGuHqQF3LlIX5oYamNrc0VU/TC6K26PcH42KG/GNHq0At0mR0H0ulKddMhbF6hICHj65UasjUCw=="
+        },
+        "audience": "node-3",
+        "operation": "evidence-read",
+        "body_sha256": "c839fee6e87ef64f60ac582b75f6f869764c99f540abdf99d63e2b97f88b1993",
+        "nonce": "native_fixture_nonce_0123456789",
+        "issued_at_unix_ms": 1794312000000,
+        "expires_at_unix_ms": 1794312060000,
+        "signature": "XW/ym6BNi9x3RYagitqqIA4A8JKoZ+r7079nMINpeoxkiXkeTBtW7SLqZmXDfokNlqcip12VB1BFAjO/xXQQDg=="
+      },
+      "expected_signing_bytes_base64": "d2VuZHkud29ybGQuYXV0aG9yaXR5LnYxL3JlcXVlc3QAeyJ2ZXJzaW9uIjoxLCJncmFudF9kaWdlc3QiOiI2N2VlYTlmMWQ0ZTQwNTAyNzZiNTliZGFmOWE5Y2I0MWQ0N2RlNWEzMDQ2OGE0Y2Y1ZDI5MjM2YzgyMmJmYmZmIiwiYXVkaWVuY2UiOiJub2RlLTMiLCJvcGVyYXRpb24iOiJldmlkZW5jZS1yZWFkIiwiYm9keV9kaWdlc3QiOiJjODM5ZmVlNmU4N2VmNjRmNjBhYzU4MmI3NWY2Zjg2OTc2NGM5OWY1NDBhYmRmOTlkNjNlMmI5N2Y4OGIxOTkzIiwibm9uY2UiOiJuYXRpdmVfZml4dHVyZV9ub25jZV8wMTIzNDU2Nzg5IiwiaXNzdWVkIjoxNzk0MzEyMDAwMDAwLCJleHBpcmVzIjoxNzk0MzEyMDYwMDAwfQ==",
+      "issued_at_unix_ms": 1794312000000,
+      "lifetime_ms": 60000,
+      "name": "escaped-optional",
+      "nonce": "native_fixture_nonce_0123456789",
+      "operation": "evidence-read"
+    }
+  ]
+}

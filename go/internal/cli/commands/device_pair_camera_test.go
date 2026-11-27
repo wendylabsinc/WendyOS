@@ -197,3 +197,15 @@ func TestCameraPairFailureDoesNotExposeRemoteCredentialDetails(t *testing.T) {
 		}
 	}
 }
+
+func TestCameraPairTabLeavesGo2InUnitreeTab(t *testing.T) {
+	model := newCameraPairModel(nil)
+	updated, _ := model.Update(cameraPairScanMsg{devices: []*agentpb.VideoDevice{
+		{Id: 200, Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_IP},
+		{Id: 1 << 31, Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_IP, Driver: "unitree-webrtc", HasCredentials: true},
+	}})
+	got := updated.(cameraPairModel)
+	if len(got.devices) != 1 || got.devices[0].Id != 200 {
+		t.Fatalf("IP pairing offers a robot credential action: %v", got.devices)
+	}
+}

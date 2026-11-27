@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	replicav1 "github.com/wendylabsinc/wendy/go/world/production/api/world/replica/v1"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -24,6 +25,13 @@ import (
 // credentials until its device use case is explicitly reviewed here.
 func deviceRPCAllowed(method string) bool {
 	switch method {
+	// World repair, forwarding and evidence use exact current peer grants.
+	// Device enrollment alone does not authorize these handlers.
+	case replicav1.WorldReplicaService_Inventory_FullMethodName,
+		replicav1.WorldReplicaService_Fetch_FullMethodName,
+		replicav1.WorldReplicaService_FetchEvidence_FullMethodName,
+		replicav1.WorldReplicaService_PushLatest_FullMethodName:
+		return true
 	// A build host stages image content on a target. These methods do not
 	// create, run, remove or execute a container. Per-job delegation remains a
 	// separate authorization concern; device identity is not a build grant.

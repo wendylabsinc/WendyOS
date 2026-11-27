@@ -4,6 +4,9 @@ import AppKit
 import UIKit
 #endif
 import SwiftUI
+#if os(macOS)
+import WorldOperator
+#endif
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -16,6 +19,9 @@ final class AppModel: ObservableObject {
     @Published var cloud: [Device] = []
     @Published var selection: Device?
     @Published var requestedDevice: Device?
+    #if os(macOS)
+    @Published var requestedWorldSection: WorldWorkspaceSection?
+    #endif
     var setupSessions = 0
     private var experienceObserver: UUID?
     @Published private(set) var experienceEvents: [ExperienceEvent] = []

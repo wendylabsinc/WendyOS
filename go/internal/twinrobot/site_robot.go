@@ -19,25 +19,38 @@ var ErrObservationUnavailable = errors.New("robot observations are temporarily u
 const stopUnconfirmedMessage = "Stop was not acknowledged. Use the Go2 controller to verify it has stopped."
 
 type SiteRobotSnapshot struct {
-	Disconnected                                         bool
-	LookDirection                                        int
-	LookState                                            int // 0 idle, 1 turning, 2 completed, 3 aborted
-	DiscoveryState                                       int // 0 idle, 1 advancing, 2 completed, 3 aborted
-	Message                                              string
-	ControlWarning                                       string
-	Pose, Ready, Aligned, Moving                         bool
-	ArrivalTiming, UsingArrivalTiming, TimingUnavailable bool
-	ScanReady, MeasurementsReady                         bool
-	UnderBodyAllowance                                   bool
-	AllowUnobservedFloor                                 bool
-	X, Z, Yaw, FloorY                                    float64
-	ObservationRevision                                  uint64
-	ScanReceivedUnixNanos                                int64
-	MotionRecoveryAllowed                                bool
-	Route                                                []sitenav.Point // site X, -Z
-	Joints                                               []float64
-	Hazards                                              []SiteRobotHazard
-	HazardsReady                                         bool
+	Frame          string
+	Disconnected   bool
+	LookDirection  int
+	LookState      int // 0 idle, 1 turning, 2 completed, 3 aborted
+	DiscoveryState int // 0 idle, 1 advancing, 2 completed, 3 aborted
+	Message        string
+	// Message retains the operation's terminal reason for existing search and
+	// UI consumers. These fields distinguish current measurement readiness
+	// from an earlier aborted movement without acknowledging that failure.
+	ReadinessMessage, LastMotionFailure                    string
+	IdleMeasurementsReady                                  bool
+	IdleReadinessMessage                                   string
+	PoseReceivedAgeMS, PoseCaptureAgeMS, ScanAgeMS         *float64
+	LastCloudProcessingMS, LastObservationLockWaitMS       float64
+	LastObservationTopic                                   string
+	CoalescedCloudObservations, CoalescedJointObservations uint64
+	ObservationPoseQueuePeak                               int
+	LatestObservationFault                                 *SiteObservationFault
+	ControlWarning                                         string
+	Pose, Ready, Aligned, Moving                           bool
+	ArrivalTiming, UsingArrivalTiming, TimingUnavailable   bool
+	ScanReady, MeasurementsReady                           bool
+	UnderBodyAllowance                                     bool
+	AllowUnobservedFloor                                   bool
+	X, Z, Yaw, FloorY                                      float64
+	ObservationRevision                                    uint64
+	ScanReceivedUnixNanos                                  int64
+	MotionRecoveryAllowed                                  bool
+	Route                                                  []sitenav.Point // site X, -Z
+	Joints                                                 []float64
+	Hazards                                                []SiteRobotHazard
+	HazardsReady                                           bool
 }
 
 type SiteRobotHazard struct {
@@ -49,9 +62,12 @@ type SiteRobotHazard struct {
 // UI polling renews a short lease, not motion itself. The agent independently
 // expires MOVE after 500ms if this process or its transport disappears.
 type SiteRobot struct {
+	geometryCache                   layeredGeometryCache
 	commandFaultSink                func(siteCommandFault)
 	pendingCommandFaults            []siteCommandFault
 	commandSequence                 uint64
+	intentGeneration                uint64
+	intentActive                    bool
 	mu                              sync.Mutex
 	ctx                             context.Context
 	cancel                          context.CancelFunc
@@ -83,10 +99,19 @@ type SiteRobot struct {
 	motionRecoveryAllowed           bool
 	controlWarning                  string
 	closed                          bool
+	retired                         bool
 	streamDisconnected              bool
 	lastPosePacket                  time.Time
+	lastCloudProcessingMS           float64
+	lastObservationLockWaitMS       float64
+	lastObservationTopic            string
+	coalescedCloudObservations      uint64
+	coalescedJointObservations      uint64
+	observationPoseQueuePeak        int
+	latestObservationFault          *SiteObservationFault
 	stopUnconfirmed                 bool
 	underBodyAllowance              bool
+	strictMeasuredFloor             bool
 	allowUnobservedFloor            bool
 	departure                       *sitenav.Departure
 	localizations                   []siteRobotLocalization
@@ -158,24 +183,30 @@ func Open(ctx context.Context, conn grpc.ClientConnInterface, serial string) (*S
 func (r *SiteRobot) receiveObservations(stream interface {
 	Recv() (*pb.UnitreeStreamMessage, error)
 }) {
-	defer r.cancel()
+	mailbox := newObservationMailbox()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.processObservationMailbox(mailbox)
+	}()
+	defer func() {
+		mailbox.close("")
+		<-done
+		r.cancel()
+	}()
 	for {
 		m, err := stream.Recv()
 		if err != nil {
-			r.mu.Lock()
-			if r.ctx.Err() == nil {
-				r.disconnectStreamLocked("Go2 observation stream disconnected. Reconnect to receive telemetry.")
-			}
-			r.mu.Unlock()
+			mailbox.close("Go2 observation stream disconnected. Reconnect to receive telemetry.")
 			return
 		}
 		t := m.GetTopic()
 		if t == nil {
 			continue
 		}
-		r.mu.Lock()
-		r.receiveObservationLocked(t.Topic, t.Data, t.Binary, time.Unix(0, t.ReceivedUnixNanos), time.Now())
-		r.mu.Unlock()
+		if !mailbox.push(t) {
+			return
+		}
 	}
 }
 
@@ -198,6 +229,10 @@ func (r *SiteRobot) prepareDirectMovement(ctx context.Context) {
 func (r *SiteRobot) receiveObservationLocked(topic string, raw []byte, binary bool, received, now time.Time) {
 	if r.closed || r.ctx.Err() != nil {
 		return
+	}
+	if topic == sitenav.CloudTopic {
+		started := time.Now()
+		defer func() { r.lastCloudProcessingMS = time.Since(started).Seconds() * 1000 }()
 	}
 	if topic == sitenav.PoseTopic {
 		// Receipt here detects a silent subscription; it never renews pose freshness.
@@ -385,6 +420,9 @@ func (r *SiteRobot) disconnectStreamLocked(message string) {
 	r.cancel()
 }
 func (r *SiteRobot) command(command pb.UnitreeCommand, forward, turn float64) error {
+	if r.retired {
+		return errors.New("robot controller has been replaced")
+	}
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
@@ -436,6 +474,7 @@ func (r *SiteRobot) stopLocked() error {
 		r.flushCommandFaults()
 	}()
 	r.moving = false
+	r.strictMeasuredFloor = false
 	r.forwardOrigin = nil
 	if r.lookTurn != nil && r.lookState != 2 {
 		r.lookState = 3
@@ -470,7 +509,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 	case r.ctx.Err() != nil || r.closed:
 		fault = errors.New("Robot connection closed.")
 	case now.Sub(r.heartbeat) > 600*time.Millisecond:
-		fault = errors.New("Movement stopped because the map is no longer active.")
+		fault = errors.New(MovementLeaseLostMessage)
 	case now.Sub(r.started) > 30*time.Second:
 		fault = errors.New("The 30-second movement limit was reached.")
 	case r.frame == "" && r.lookTurn == nil && r.discoveryMove == nil:
@@ -592,6 +631,14 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 		return errors.New("This robot order was superseded.")
 	}
 	r.commandSequence = sequence
+	return r.destinationLocked(frame, x, z, move)
+}
+
+func (r *SiteRobot) destinationLocked(frame string, x, z float64, move bool) error {
+	return r.destinationWithPolicyLocked(frame, x, z, move, false)
+}
+
+func (r *SiteRobot) destinationWithPolicyLocked(frame string, x, z float64, move, strict bool) error {
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err
@@ -601,7 +648,7 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 		return errors.New("Align Go2 with this site first.")
 	}
 	if time.Since(r.heartbeat) > 600*time.Millisecond {
-		return errors.New("The map is no longer active.")
+		return ErrOperatorLease
 	}
 	if err := r.observed.Ready(time.Now()); err != nil {
 		return err
@@ -611,6 +658,12 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 		return errors.New("Invalid destination.")
 	}
 	goal := r.alignment.ToRobot(p)
+	r.strictMeasuredFloor = strict
+	defer func() {
+		if !r.moving {
+			r.strictMeasuredFloor = false
+		}
+	}()
 	r.preview = nil
 	r.departure = nil
 	if r.underBodyAllowance {
@@ -659,16 +712,30 @@ func (r *SiteRobot) Stop(sequence uint64) {
 }
 func (r *SiteRobot) Close() { r.cancel(); <-r.done }
 
+// Retire drains shutdown before fencing all commands, including late Stop calls
+// captured by an expired desktop handle. A replacement performs its own Stop.
+func (r *SiteRobot) Retire() {
+	r.Close()
+	r.mu.Lock()
+	r.retired = true
+	r.mu.Unlock()
+}
+
 func (r *SiteRobot) SetUnderBodyAllowance(sequence uint64, enabled bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sequence <= r.commandSequence {
 		return errors.New("This robot order was superseded.")
 	}
-	r.commandSequence = sequence
 	if r.closed || r.ctx.Err() != nil {
 		return errors.New("Robot connection closed.")
 	}
+	// Repeated desktop settings do not take ownership of an active chat goal.
+	// A real policy change still supersedes it and requires acknowledged Stop.
+	if r.intentActive && r.underBodyAllowance == enabled {
+		return nil
+	}
+	r.commandSequence = sequence
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err
@@ -689,10 +756,15 @@ func (r *SiteRobot) SetAllowUnobservedFloor(sequence uint64, enabled bool) error
 	if sequence <= r.commandSequence {
 		return errors.New("This robot order was superseded.")
 	}
-	r.commandSequence = sequence
 	if r.closed || r.ctx.Err() != nil {
 		return errors.New("Robot connection closed.")
 	}
+	// Repeated desktop settings do not take ownership of an active chat goal.
+	// A real policy change still supersedes it and requires acknowledged Stop.
+	if r.intentActive && r.allowUnobservedFloor == enabled {
+		return nil
+	}
+	r.commandSequence = sequence
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err
@@ -709,6 +781,11 @@ func (r *SiteRobot) SetAllowUnobservedFloor(sequence uint64, enabled bool) error
 
 // Never use this planning-only grid as measured evidence for localization.
 func (r *SiteRobot) navigationGridLocked(departure *sitenav.Departure) sitenav.Grid {
+	// Camera-derived destinations require measured floor throughout execution,
+	// including replans; operator allowances apply only to manual navigation.
+	if r.strictMeasuredFloor {
+		return r.observed.Grid
+	}
 	if r.allowUnobservedFloor {
 		return r.observed.Grid.WithUnobservedFloor(r.observed.Pose.Position)
 	}
@@ -721,10 +798,15 @@ func (r *SiteRobot) SetArrivalTiming(sequence uint64, enabled bool) error {
 	if sequence <= r.commandSequence {
 		return errors.New("This robot order was superseded.")
 	}
-	r.commandSequence = sequence
 	if r.closed || r.ctx.Err() != nil {
 		return errors.New("Robot connection closed.")
 	}
+	// Repeated desktop settings do not take ownership of an active chat goal.
+	// A real policy change still supersedes it and requires acknowledged Stop.
+	if r.intentActive && r.observed.AllowArrivalTime == enabled {
+		return nil
+	}
+	r.commandSequence = sequence
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err
@@ -753,7 +835,22 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	if renew {
 		r.heartbeat = now
 	}
-	s := SiteRobotSnapshot{Message: r.message, Pose: sitenav.Fresh(r.observed.Pose.Received, now) && !r.closed, Aligned: r.frame != "", Moving: r.moving, FloorY: r.floorY}
+	s := SiteRobotSnapshot{Frame: r.frame, Message: r.message, LastMotionFailure: r.motionFailure, Pose: sitenav.Fresh(r.observed.Pose.Received, now) && !r.closed, Aligned: r.frame != "", Moving: r.moving, FloorY: r.floorY}
+	s.PoseReceivedAgeMS = observationAgeMS(r.observed.Pose.Received, now)
+	s.PoseCaptureAgeMS = observationAgeMS(r.observed.Pose.Captured, now)
+	s.ScanAgeMS = observationAgeMS(r.observed.CloudAt, now)
+	s.LastCloudProcessingMS = r.lastCloudProcessingMS
+	s.LastObservationLockWaitMS = r.lastObservationLockWaitMS
+	s.LastObservationTopic = r.lastObservationTopic
+	s.CoalescedCloudObservations = r.coalescedCloudObservations
+	s.CoalescedJointObservations = r.coalescedJointObservations
+	s.ObservationPoseQueuePeak = r.observationPoseQueuePeak
+	if r.latestObservationFault != nil {
+		fault := *r.latestObservationFault
+		fault.PoseAgeMS = copyObservationAge(fault.PoseAgeMS)
+		fault.CaptureAgeMS = copyObservationAge(fault.CaptureAgeMS)
+		s.LatestObservationFault = &fault
+	}
 	s.ControlWarning = r.controlWarning
 	if r.stopUnconfirmed {
 		s.ControlWarning = "Go2 did not confirm Stop. Movement is blocked until Stop succeeds."
@@ -766,6 +863,8 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 		if !r.streamDisconnected && !r.stopUnconfirmed {
 			s.Message = "Go2 connection closed."
 		}
+		s.ReadinessMessage = s.Message
+		s.IdleReadinessMessage = s.ReadinessMessage
 		return s
 	}
 	s.LookState = r.lookState
@@ -782,7 +881,31 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	s.TimingUnavailable = r.observed.TimingUnavailable
 	s.UnderBodyAllowance = r.underBodyAllowance
 	s.AllowUnobservedFloor = r.allowUnobservedFloor
-	s.MeasurementsReady = r.observed.MeasurementsReady(now) == nil && !r.closed && !r.stopUnconfirmed
+	measurementErr := r.observed.MeasurementsReady(now)
+	s.MeasurementsReady = measurementErr == nil && !r.closed && !r.stopUnconfirmed
+	switch {
+	case r.stopUnconfirmed:
+		s.ReadinessMessage = stopUnconfirmedMessage
+	case measurementErr != nil:
+		s.ReadinessMessage = measurementErr.Error()
+	default:
+		s.ReadinessMessage = "Fresh Go2 odometry and LiDAR measurements."
+	}
+	idleErr := r.observed.IdleMeasurementsReady(now)
+	switch {
+	case r.stopUnconfirmed:
+		s.IdleReadinessMessage = stopUnconfirmedMessage
+	case r.moving || r.intentActive:
+		s.IdleReadinessMessage = "Idle observation tolerance is unavailable while a movement goal is active."
+	case idleErr != nil:
+		s.IdleReadinessMessage = idleErr.Error()
+	default:
+		s.IdleMeasurementsReady = true
+		s.IdleReadinessMessage = s.ReadinessMessage
+		if !s.MeasurementsReady {
+			s.IdleReadinessMessage = "Idle observations are available with older odometry; movement still requires fresh odometry."
+		}
+	}
 	s.ScanReady = (r.observed.SurfaceReady(now) == nil || r.observed.LocalizationReady(now) == nil) && !r.closed && !r.stopUnconfirmed
 	if err := r.observed.Ready(now); err == nil {
 		s.HazardsReady = s.Aligned
@@ -816,7 +939,7 @@ func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	} else if r.motionFailure != "" && (r.lookState == 3 || r.discoveryState == 3) {
 		s.Message = r.motionFailure
 	}
-	if s.Pose && s.Aligned {
+	if (s.Pose || s.IdleMeasurementsReady) && s.Aligned {
 		p := r.alignment.ToSite(r.observed.Pose.Position)
 		s.X = p.X
 		s.Z = -p.Y

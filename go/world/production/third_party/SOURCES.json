@@ -1,0 +1,152 @@
+{
+  "repository": "github.com/wendylabsinc/wendy",
+  "revision": "f29c41dbb86e8d05a8562b52c86a2f5120ace076",
+  "original_sources": [
+    {
+      "path": "go/internal/shared/certs/issuer_failure.go",
+      "git_blob": "6ef298a344d887ed05b63fdd6045c87f29eeeb5d",
+      "sha256": "edbc83a2f87e4ea0e211bdea4ed6aa1452830322910644e8cb219d88d172885f"
+    },
+    {
+      "path": "go/internal/shared/certs/orgident.go",
+      "git_blob": "7435bbf737d101197da0c6ccec68a87ca682bb8f",
+      "sha256": "de2bc473ed288389a03bafec9dd124a0655b0a2a95c732268b6d99358adc8220"
+    },
+    {
+      "path": "go/internal/shared/certs/peer_chain.go",
+      "git_blob": "ef3c60c9132a728ced652c19cb1de65bad8b3706",
+      "sha256": "3fe3e3e4da4de4acc99b923764339747d4526f1cefdbf0a6bd2bdd4916f43ee7"
+    },
+    {
+      "path": "go/internal/shared/certs/mldsa.go",
+      "git_blob": "97d31b49d31b8c7dd5b6e603f507161186dfb0ef",
+      "sha256": "c96f8445608f2597944506197bb4b747d2cdeff1bdb8b8a2311b75b9ec101103"
+    },
+    {
+      "path": "go/internal/shared/certs/peer_chain_test.go",
+      "git_blob": "dff30a73b9209fb095a5ff65bd6f75da2858f75c",
+      "sha256": "8943e58ccbe68dc33f9e16520cbd806a58052ef33258121f37475ac8304b69aa"
+    },
+    {
+      "path": "go/internal/shared/certs/orgident_test.go",
+      "git_blob": "0ebc2da2c3308f6850fd5807a6941eec66f5f621",
+      "sha256": "21b6bf78999529cc5a7d4593097bb30875b4ae587949e4bfa0ddddeb600e9b6e"
+    },
+    {
+      "path": "go/internal/shared/certs/spiffeident_test.go",
+      "git_blob": "a6d878438ce48c8352aad33be05d0c5a9092ad40",
+      "sha256": "17bdf379de0c32db176cf8845a4f6ece61536a918eba955d5a968feb0df306da"
+    },
+    {
+      "path": "go/internal/shared/certs/issuer_failure_test.go",
+      "git_blob": "5da882e83870e0e3be3a47d765b4dda021d11960",
+      "sha256": "b0d067ffb1c9804a36e074bddde66ede433ee86a54ff02bbe0659a779185cec0"
+    },
+    {
+      "path": "go/internal/agent/mtls/mldsa_verify.go",
+      "git_blob": "74acb347bc6f15a2d273f6d0392f93414f19779e",
+      "sha256": "3d10337d68cabc8af9ae13b99621d41fece04cb0010adc4826caff32af2c19f2"
+    },
+    {
+      "path": "go/internal/shared/meshoperator/identity.go",
+      "git_blob": "ceb6d2af304e60a82299fc1816283d88ee0fec6b",
+      "sha256": "0cb6743c314a29068e70308ccf2194c986021dbc04ae67aab26082656ae3437b"
+    },
+    {
+      "path": "go/internal/agent/services/postbox.go",
+      "git_blob": "c3486d48673af7456594d3b3d1f86f7e3afe4048",
+      "sha256": "6402d42abb6a1ef9cc9001f08e27776a468bc232f7ae4a4acddf048ca016d012"
+    },
+    {
+      "path": "LICENSE",
+      "git_blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ],
+  "dependency_notices": [
+    {
+      "module": "github.com/cloudflare/circl",
+      "version": "v1.6.5",
+      "license_file": "CIRCL-LICENSE",
+      "sha256": "b0da1764fe4d13d610b695536fc3f2ebc362482d053a1cd258e36975bc6b97a7"
+    },
+    {
+      "module": "github.com/google/uuid",
+      "version": "v1.6.0",
+      "license_file": "UUID-LICENSE",
+      "sha256": "0a8d61ed3cbfd5312326e8126c31ce9c627a283adc99131b56896d29ada04b2d"
+    },
+    {
+      "module": "golang.org/x/sys",
+      "version": "v0.47.0",
+      "license_file": "X-SYS-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    }
+  ],
+  "adapted_files": [
+    {
+      "path": "internal/upstreamcerts/issuer_failure.go",
+      "sha256": "a2ab63fcb9dc9b0e6cd24c981116e9281be0a5996e93dc2dbb021fea2ce01950",
+      "change": "Package/import changes; verification/identity bodies retained; unused TLS configuration and private-key helpers excluded"
+    },
+    {
+      "path": "internal/upstreamcerts/issuer_failure_test.go",
+      "sha256": "d69a696ebb671aa7d6d7e2dc6a89c28540a49f76992050d4ee18146d4844811a",
+      "change": "Package/import changes; verification/identity bodies retained; unused TLS configuration and private-key helpers excluded"
+    },
+    {
+      "path": "internal/upstreamcerts/mldsa.go",
+      "sha256": "372d8ff35349ee11d8da62eea31332d5364e49eb922c91d76ebdf1e3e83f4c1b",
+      "change": "Package/import changes; verification/identity bodies retained; unused TLS configuration and private-key helpers excluded"
+    },
+    {
+      "path": "internal/upstreamcerts/orgident.go",
+      "sha256": "528c373228e8a96405f548134ee9b56229c2c22491a1d6045d049b6c805946c9",
+      "change": "Package/import changes; verification/identity bodies retained; unused TLS configuration and private-key helpers excluded"
+    },
+    {
+      "path": "internal/upstreamcerts/orgident_test.go",
+      "sha256": "84d04c757c8a66e36931913d2600c6fe2fc97a9207e77dc4edf3c9b9dbc3339c",
+      "change": "Package/import changes; verification/identity bodies retained; unused TLS configuration and private-key helpers excluded"
+    },
+    {
+      "path": "internal/upstreamcerts/peer_chain.go",
+      "sha256": "508bfea8b33cd994d6bfae6d834fb6083b466c4494c00d068477a072579e5a32",
+      "change": "Package/import changes; verification/identity bodies retained; unused TLS configuration and private-key helpers excluded"
+    },
+    {
+      "path": "internal/upstreamcerts/peer_chain_test.go",
+      "sha256": "ed21f944411085a894a1722821f1f826283a3b749eed66db7f2f07f95fe80c54",
+      "change": "Package/import changes; verification/identity bodies retained; unused TLS configuration and private-key helpers excluded"
+    },
+    {
+      "path": "internal/upstreamcerts/peer_policy.go",
+      "sha256": "7d722c34e9c257bfcb6755f7dc99f8fdeb1194330e7fe525afbdecc58db7351f",
+      "change": "New interval/peer policy adapter and tests"
+    },
+    {
+      "path": "internal/upstreamcerts/peer_policy_test.go",
+      "sha256": "4cb59b642b233d3342ebee7cb064341788df45bc40c509451446c2f9d9e98740",
+      "change": "New interval/peer policy adapter and tests"
+    },
+    {
+      "path": "internal/upstreamcerts/spiffeident_test.go",
+      "sha256": "38f132dab2ae5737329c88e55ffd462c40f6a613ad08324dccfd7fb439be0ed4",
+      "change": "Package/import changes; verification/identity bodies retained; unused TLS configuration and private-key helpers excluded"
+    }
+  ],
+  "private_wrapper_files": [
+    {
+      "path": "wendycert/verifier.go",
+      "sha256": "12c17dfd23b85a116e2f8fb204694b3e94a1d67ab5d82d30fe67871d958fb7be"
+    },
+    {
+      "path": "wendycert/verifier_test.go",
+      "sha256": "4ac248d05c4483b07ec3507512077f04c170e3956ae57ff60fac762e877666ef"
+    },
+    {
+      "path": "internal/testidentity/identity.go",
+      "sha256": "cfcb838d5660fd132b1fe7b4b23231a381a01b3f84e9f9f3f5752cef641c588d"
+    }
+  ]
+}

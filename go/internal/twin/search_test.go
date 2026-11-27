@@ -8,6 +8,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -167,7 +168,7 @@ func TestDiscoverySearchIsBoundedAndBlockedViewpointsAreSkipped(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
 			// Observe the bounded stationary phase, then exercise cancellation.
-			// The production search can keep matching until its five-minute deadline.
+			// The production search allows only a short final observation window.
 			robot.statusHook = func(state twinrobot.SiteRobotSnapshot) twinrobot.SiteRobotSnapshot {
 				if session.searchPhase == "waiting" {
 					cancel()
@@ -175,7 +176,7 @@ func TestDiscoverySearchIsBoundedAndBlockedViewpointsAreSkipped(t *testing.T) {
 				return state
 			}
 			(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{Explore: true})
-			wantTurns, wantMoves, wantAttempts := 2, 3, 3
+			wantTurns, wantMoves, wantAttempts := 5, 3, 3
 			if blocked {
 				wantTurns, wantMoves, wantAttempts = 5, 0, 6
 				for _, reason := range []string{"Several room positions still fit", "exceeded its time budget", "blocked at 6 headings", "floor ahead is unobserved"} {
@@ -351,7 +352,7 @@ func TestDiscoveryRecoversAcknowledgedTransientMotionAbort(t *testing.T) {
 	}
 }
 
-func TestDiscoveryKeepsMatchingAtMovementLimitWithoutMoreMotion(t *testing.T) {
+func TestDiscoveryUsesRemainingTurnsAfterTranslationLimit(t *testing.T) {
 	t.Parallel()
 	robot := &searchRobot{ready: true, matchAfter: -1}
 	passiveMatches := 0
@@ -368,12 +369,39 @@ func TestDiscoveryKeepsMatchingAtMovementLimitWithoutMoreMotion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{Explore: true})
-	if session.searchState != "complete" || robot.moves != 3 || robot.discoveryAttempts != 3 || robot.turns != 2 || passiveMatches != 2 {
+	if session.searchState != "complete" || robot.moves != 3 || robot.discoveryAttempts != 3 || robot.turns != 3 || passiveMatches != 2 {
 		t.Fatalf("movement budget reset during recovery: state=%s moves=%d attempts=%d turns=%d passive=%d", session.searchState, robot.moves, robot.discoveryAttempts, robot.turns, passiveMatches)
 	}
 	count := len(robot.matchTimes)
-	if robot.matchTimes[count-1].Sub(robot.matchTimes[count-2]) < 2*time.Second {
-		t.Fatal("passive matching exceeded recovery cadence")
+	if robot.matchTimes[count-1].Sub(robot.matchTimes[count-2]) < time.Second {
+		t.Fatal("matching skipped the turn settle delay")
+	}
+}
+
+func TestDiscoveryEndsAfterFinalObservationsWithoutWaitingFiveMinutes(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(fmt.Sprint(stale), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				robot := &searchRobot{ready: true, matchAfter: -1}
+				session := &robotSession{robot: robot, searchRoot: 1000000}
+				robot.statusHook = func(state twinrobot.SiteRobotSnapshot) twinrobot.SiteRobotSnapshot {
+					if stale && session.searchPhase == "waiting" {
+						state.MeasurementsReady = false
+					}
+					return state
+				}
+				started := time.Now()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{Explore: true})
+				if session.searchState != "failed" || robot.turns != 5 || robot.moves != 3 || robot.stopped == 0 {
+					t.Fatalf("search budget/outcome incorrect: state=%s turns=%d moves=%d", session.searchState, robot.turns, robot.moves)
+				}
+				if time.Since(started) >= 30*time.Second || !strings.Contains(session.searchMessage, "exhausted its available viewpoints") || !strings.Contains(session.searchMessage, "Several room positions") {
+					t.Fatalf("unproductive wait did not end with diagnosis: elapsed=%s message=%s", time.Since(started), session.searchMessage)
+				}
+			})
+		})
 	}
 }
 

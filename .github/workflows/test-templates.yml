@@ -280,6 +280,12 @@ jobs:
         working-directory: go
         run: make build-cli
 
+      - name: Prune device cache before template deployments
+        timeout-minutes: 5
+        uses: ./.github/actions/prune-device-cache
+        with:
+          hostname: ${{ matrix.hostname }}
+
       - name: Run template tests with deploy
         working-directory: go
         run: |

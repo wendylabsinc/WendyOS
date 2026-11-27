@@ -357,6 +357,7 @@ func (s *ProvisioningService) commitRenewal(previousCertPEM, certPEM, chainPEM, 
 	} else {
 		_ = os.Remove(filepath.Join(s.configPath, pendingDeviceKeyFile))
 	}
+	s.invalidateWorldIdentityLocked()
 	for i := range s.keyPEM {
 		s.keyPEM[i] = 0
 	}

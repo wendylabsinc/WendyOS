@@ -1,0 +1,63 @@
+{
+  "schema_version": "wendy.world.package.v0",
+  "site_id": "synthetic-office",
+  "package_revision": "office-mission-v1",
+  "frame_revision": "office-frame-v1",
+  "provenance": "synthetic",
+  "description": "Synthetic office fixture. This is not a scan of the user office or a surveyed physical site.",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "mujoco": {
+    "path": "office.xml",
+    "sha256": "40777886a96ae0baba8ed10101d3fae244d0f6cdd380f9caa9623415883260e1",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ],
+    "body": "inspection-puck",
+    "actuator": "drive",
+    "control": 0.5,
+    "control_mode": "velocity"
+  },
+  "gas_model": {
+    "kind": "analytic-gaussian-fixture",
+    "unit": "ppm",
+    "source_local_m": [
+      0,
+      0.2,
+      0
+    ],
+    "background_ppm": 1,
+    "peak_ppm": 30,
+    "sigma_m": 1,
+    "noise_stddev_ppm": 0
+  },
+  "fidelity": {
+    "geometry": "hand-authored illustrative boxes",
+    "robot": "single-axis velocity-controlled puck with ideal brake, not Go2 dynamics",
+    "gas": "analytic spatial field, no fluid dynamics or validated hazard model",
+    "camera": "MJCF camera placement only, no rendering adapter",
+    "audio": "not implemented"
+  },
+  "asset_license": "Proprietary Wendy Labs fixture; no real office data",
+  "scenario": {
+    "name": "leased-inspection-mission",
+    "expected": "actual simulated motion while control lease is renewed; independent ideal brake on lease expiry"
+  }
+}

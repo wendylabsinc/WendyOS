@@ -1,0 +1,74 @@
+{
+  "schema_version": "wendy.world.package.v0",
+  "site_id": "synthetic-office",
+  "package_revision": "asset-office-fixture-v1",
+  "frame_revision": "office-frame-v1",
+  "provenance": "synthetic",
+  "description": "Synthetic office with manifest-verified included MJCF and OBJ geometry. Not a real office scan.",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "mujoco": {
+    "path": "models/office.xml",
+    "sha256": "a4d8e8e1004d091c209ccb705ae2009aae5ca45fa57b32b8c0afc1f19d5dd248",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ],
+    "body": "inspection-puck",
+    "actuator": "drive",
+    "control": 0.5
+  },
+  "gas_model": {
+    "kind": "analytic-gaussian-fixture",
+    "unit": "ppm",
+    "source_local_m": [
+      0,
+      0.2,
+      0
+    ],
+    "background_ppm": 1,
+    "peak_ppm": 30,
+    "sigma_m": 1,
+    "noise_stddev_ppm": 0.1
+  },
+  "fidelity": {
+    "geometry": "hand-authored included MJCF and OBJ cube mesh",
+    "robot": "single-axis puck, not Go2 dynamics",
+    "gas": "analytic spatial field, no fluid dynamics or validated hazard model",
+    "camera": "MJCF camera placement only, no rendering adapter",
+    "audio": "not implemented"
+  },
+  "asset_license": "Proprietary Wendy Labs fixture; no real office data",
+  "scenario": {
+    "name": "bounded-drive-smoke",
+    "expected": "finite motion and paired pose/gas observations in simulation time"
+  },
+  "assets": [
+    {
+      "path": "models/parts/room.xml",
+      "sha256": "70a9f2c989b6ac98aa6209b2ae82312007bcb74ca196e6ed5af4b92e8a102793",
+      "size": 647
+    },
+    {
+      "path": "models/meshes/desk.obj",
+      "sha256": "b0ed45df8fbcaf0cd4a5ecc7091bf3eed11e9caa660d81d44694eddc9ee5dd11",
+      "size": 227
+    }
+  ]
+}

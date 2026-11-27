@@ -1,0 +1,62 @@
+{
+  "schema_version": "wendy.world.package.v0",
+  "site_id": "synthetic-go2-corridor",
+  "package_revision": "corridor-v1",
+  "frame_revision": "corridor-frame-v1",
+  "provenance": "synthetic",
+  "description": "Hand-authored synthetic corridor geometry; not a real office scan.",
+  "geographic_anchor": {
+    "latitude_deg": 52.0,
+    "longitude_deg": 5.0,
+    "altitude_m": 0,
+    "altitude_datum": "WGS84-ellipsoid",
+    "placement": "illustrative"
+  },
+  "local_frame": {
+    "units": "metres",
+    "handedness": "right",
+    "up": "Y",
+    "axes": [
+      "east",
+      "up",
+      "south"
+    ]
+  },
+  "mujoco": {
+    "path": "scene.xml",
+    "sha256": "4b396fb35742a4fb348f99a0e02d239808e3f18485ef07784513352fcfa8c88e",
+    "to_local_position": [
+      "x",
+      "z",
+      "-y"
+    ],
+    "body": "source_puck",
+    "actuator": "source_drive",
+    "control": 0.0
+  },
+  "gas_model": {
+    "kind": "analytic-gaussian-fixture",
+    "unit": "ppm",
+    "source_local_m": [
+      0,
+      0.2,
+      0
+    ],
+    "background_ppm": 1,
+    "peak_ppm": 30,
+    "sigma_m": 1,
+    "noise_stddev_ppm": 0.1
+  },
+  "fidelity": {
+    "geometry": "hand-authored static primitives",
+    "robot": "excluded source puck; existing Go2 runtime remains separate",
+    "sensors": "source camera/joint sensor excluded",
+    "physical": "no surveyed geometry or physical validation"
+  },
+  "asset_license": "Proprietary Wendy Labs synthetic fixture; no copied robot assets",
+  "scenario": {
+    "name": "go2-static-overlay",
+    "expected": "explicit selected geometry only; runtime remains paused"
+  },
+  "assets": []
+}

@@ -467,6 +467,15 @@ final class SiteRobotMapModel: ObservableObject {
         }
     }
 
+    /// Starts a Linux find mission as this session's next order, so a later
+    /// Stop or destination from this model supersedes it.
+    func find(query: String, bark: Bool, model: String, port: UInt32) async throws {
+        guard handle != 0, reading?.ready == true else { throw WendyError(message: "Go2 is not ready to move yet.") }
+        actionGeneration += 1
+        destination = nil
+        try await SiteRobotClient.shared.find(handle, sequence: actionGeneration, frame: frame, query: query, bark: bark, model: model, port: port)
+    }
+
     func stop() {
         positioningEnabled = false
         actionGeneration += 1

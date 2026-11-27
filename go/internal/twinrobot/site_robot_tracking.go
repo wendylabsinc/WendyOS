@@ -18,7 +18,7 @@ type roomTracking struct {
 
 // Geometry is bound to the imported model revision. It supplies no pose and
 // cannot authorize motion. Manual placement can provide it along with Align.
-func trackingGeometry(request SiteFusionRequest) (*roomTracking, error) {
+func (r *SiteRobot) trackingGeometry(request SiteFusionRequest) (*roomTracking, error) {
 	if request.Frame == "" || len(request.Frame) > 200 {
 		return nil, errors.New("Invalid room frame.")
 	}
@@ -30,7 +30,7 @@ func trackingGeometry(request SiteFusionRequest) (*roomTracking, error) {
 	if err != nil {
 		return nil, err
 	}
-	m, err := sitenav.NewLayeredRoom(a, f)
+	m, err := r.geometryCache.load(a, f)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func (r *SiteRobot) AlignWithGeometry(sequence uint64, frame string, x, z, floor
 	if request.Frame != frame {
 		return errors.New("Room geometry frame mismatch.")
 	}
-	geometry, err := trackingGeometry(request)
+	geometry, err := r.trackingGeometry(request)
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func (r *SiteRobot) refineRoomAlignment() {
 	r.mu.Lock()
 	now := time.Now()
 	g := r.roomTracking
-	if g == nil || r.closed || r.ctx.Err() != nil || r.frame == "" || r.frame != g.frame || r.poseEpoch != g.epoch || r.stopUnconfirmed || r.lookTurn != nil || r.discoveryMove != nil || r.observed.SurfaceReady(now) != nil || r.observed.CloudReceived == r.lastTrackingScan {
+	if g == nil || r.intentActive || r.closed || r.ctx.Err() != nil || r.frame == "" || r.frame != g.frame || r.poseEpoch != g.epoch || r.stopUnconfirmed || r.lookTurn != nil || r.discoveryMove != nil || r.observed.SurfaceReady(now) != nil || r.observed.CloudReceived == r.lastTrackingScan {
 		r.mu.Unlock()
 		return
 	}
@@ -104,7 +104,7 @@ func (r *SiteRobot) refineRoomAlignment() {
 }
 
 func (r *SiteRobot) commitRoomFitLocked(g *roomTracking, pose sitenav.Pose, alignment sitenav.Alignment, sequence uint64, captured time.Time, fit sitenav.PoseCandidate) {
-	if r.closed || r.ctx.Err() != nil || r.roomTracking != g || r.poseEpoch != g.epoch || r.frame != g.frame || r.alignment != alignment || r.commandSequence != sequence || r.stopUnconfirmed || !sitenav.Fresh(captured, time.Now()) || r.observed.SurfaceReady(time.Now()) != nil {
+	if r.intentActive || r.lookTurn != nil || r.discoveryMove != nil || r.closed || r.ctx.Err() != nil || r.roomTracking != g || r.poseEpoch != g.epoch || r.frame != g.frame || r.alignment != alignment || r.commandSequence != sequence || r.stopUnconfirmed || !sitenav.Fresh(captured, time.Now()) || r.observed.SurfaceReady(time.Now()) != nil {
 		return
 	}
 	r.applyRoomFitLocked(pose, fit)

@@ -12,6 +12,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
 )
 
+// Fresh observations may resolve an ambiguous final view, but an exhausted
+// search must not spend the rest of its five-minute budget standing still.
+const localizationFinalObservationWindow = 10 * time.Second
+
 func (s *Server) startSearch(session *robotSession, q twinrobot.Request) error {
 	var input twinrobot.SiteFusionRequest
 	if err := json.Unmarshal(q.Fusion, &input); err != nil {
@@ -22,6 +26,9 @@ func (s *Server) startSearch(session *robotSession, q twinrobot.Request) error {
 	}
 	room, err := s.Store.Frame(input.Frame)
 	if err != nil {
+		return err
+	}
+	if err := s.Store.SaveLocalizationGeometry(input); err != nil {
 		return err
 	}
 	input.Reference = room.References[session.serial]
@@ -79,6 +86,9 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		}
 	}
 	wait := func() bool {
+		if owner, ok := session.robot.(interface{ Check() error }); ok && owner.Check() != nil {
+			return false
+		}
 		select {
 		case <-ctx.Done():
 			return false
@@ -87,6 +97,11 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		}
 	}
 	fail := func(message string) {
+		// Owner expiry can appear as a disconnected status before wait observes
+		// the deadline. Keep the last matching and clearance diagnosis either way.
+		if ctx.Err() != nil {
+			message = "Position search ended. " + details()
+		}
 		log.Printf("localization stopped: %s", message)
 		session.robot.Stop(root + 999999)
 		finish("failed", message, lastReport)
@@ -124,6 +139,7 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		// adds no new viewpoint when all translations were blocked.
 		maxTurns--
 	}
+	var finalObservationDeadline time.Time
 searchLoop:
 	for turn := 0; turn <= maxTurns; {
 		for {
@@ -138,6 +154,10 @@ searchLoop:
 			}
 			if recoveringMotion && !state.MotionRecoveryAllowed {
 				fail("Discovery cannot resume automatically after control or Stop confirmation was lost.")
+				return
+			}
+			if !finalObservationDeadline.IsZero() && !time.Now().Before(finalObservationDeadline) {
+				fail("Position search exhausted its available viewpoints without confirming alignment. " + details())
 				return
 			}
 			if state.MeasurementsReady && !state.Moving && !time.Now().Before(settledAfter) &&
@@ -197,17 +217,17 @@ searchLoop:
 			finish("complete", report.Message, &report)
 			return
 		}
+		if turn == maxTurns && finalObservationDeadline.IsZero() {
+			finalObservationDeadline = time.Now().Add(localizationFinalObservationWindow)
+		}
 		if report.WaitingForObservations {
 			awaitObservations(turn, report.Message, false)
 			continue
 		}
-		// Exhausting motion never starts another spin. Keep matching fresh
-		// measurements at rest for the remainder of this bounded session.
-		if input.Explore && moves == 3 {
-			awaitObservations(turn, "Movement limit reached. Checking new observations while Go2 stays still.", false)
-			continue
-		}
-		if input.Explore && !attempted[turn] {
+		// Translation and turn budgets are independent. Started translations
+		// count even when aborted, because they may already have moved the robot.
+		// Exhausting them must not discard the remaining permitted headings.
+		if input.Explore && moves < 3 && !attempted[turn] {
 			attempted[turn] = true
 			if ctx.Err() != nil {
 				fail("Position search ended. " + details())
@@ -244,12 +264,15 @@ searchLoop:
 					}
 					state := session.robot.Status()
 					if state.Disconnected || state.DiscoveryState == 3 {
+						message := searchMotionStopMessage(state)
 						if !state.Disconnected && state.MotionRecoveryAllowed {
+							blockedHeadings[turn] = true
+							blockedReason = message
 							recoveringMotion = true
-							awaitObservations(turn, state.Message, true)
+							awaitObservations(turn, message, true)
 							continue searchLoop
 						}
-						fail(state.Message)
+						fail(message)
 						return
 					}
 					if state.DiscoveryState == 2 && !state.Moving {
@@ -262,11 +285,11 @@ searchLoop:
 			}
 		}
 		if turn == maxTurns {
-			message := "Checking new observations while Go2 stays still. " + lastReason
-			if input.Explore && blockedReason != "" {
-				message = "Waiting for observed clear floor before another nearby move."
+			message := "Final observation check, at most 10 seconds. " + details()
+			if input.Explore && moves < 3 && blockedReason != "" {
+				message = "Final clear-floor check, at most 10 seconds. " + details()
 			}
-			awaitObservations(turn, message, input.Explore)
+			awaitObservations(turn, message, input.Explore && moves < 3)
 			continue
 		}
 		if ctx.Err() != nil {
@@ -297,12 +320,13 @@ searchLoop:
 			}
 			state := session.robot.Status()
 			if state.LookState == 3 || state.Disconnected {
+				message := searchMotionStopMessage(state)
 				if !state.Disconnected && state.MotionRecoveryAllowed {
 					recoveringMotion = true
-					awaitObservations(turn, state.Message, true)
+					awaitObservations(turn, message, true)
 					continue searchLoop
 				}
-				fail(state.Message)
+				fail(message)
 				return
 			}
 			if state.LookState == 2 && !state.Moving {
@@ -314,4 +338,14 @@ searchLoop:
 			}
 		}
 	}
+}
+
+// Packet rejection diagnostics may update the legacy message after a movement
+// has stopped. Its latched failure records why this goal stopped; a terminal
+// stream disconnection still takes precedence over that historical motion.
+func searchMotionStopMessage(state twinrobot.SiteRobotSnapshot) string {
+	if !state.Disconnected && state.LastMotionFailure != "" {
+		return state.LastMotionFailure
+	}
+	return state.Message
 }

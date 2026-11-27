@@ -1,0 +1,22 @@
+# This image uses the WendyOS module, but only needs World sources and notices.
+**
+!go.mod
+!go.sum
+!go/
+!go/babel/
+!go/babel/go.mod
+!go/proto/
+!go/proto/gen/
+!go/proto/gen/sensorlinkpb/
+!go/proto/gen/sensorlinkpb/**
+!go/world/
+!go/world/internal/
+!go/world/internal/**
+!go/world/command/
+!go/world/command/**
+!go/world/gateway/
+!go/world/gateway/**
+!go/world/cmd/
+!go/world/cmd/**
+!go/world/third_party/
+!go/world/third_party/**

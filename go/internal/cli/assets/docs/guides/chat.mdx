@@ -152,6 +152,64 @@ Camera status alone does not prove what a camera sees. Continuous video and
 audio playback for the user are available through separate background tools,
 described below.
 
+## Go2 camera, object search, and movement
+
+A paired Go2 has its own video stream. Ask “What do you see through the Go2
+camera?” to capture it with `robot_camera_snapshot`. An empty gateway
+`camera_list` does not mean the Go2 has no camera. The snapshot is attached to
+your selected chat model; use a local vision-capable model to keep that inference
+local. GStreamer must be installed on the computer running the CLI.
+
+`robot_find_object` uses a fresh Go2 snapshot and an installed vision model in
+Ollama on the robot gateway's loopback port 11434. This tool returns text and
+bounding-box evidence to chat; it does not send the image to the chat provider.
+It does not download models or move the robot. “Find the blue chair and go to
+it” first finds the object, then uses `robot_command` with `go_to_object` only
+when the result supplies a navigable evidence ID. The controller checks current
+pose, LiDAR geometry, and measured floor before accepting the approach.
+Objects can be visible without a usable distance or route. Camera calibration
+and receipt-time alignment are estimates; object association is a candidate,
+not proof of semantic identity. Ambiguous evidence is reported without a goal.
+
+Other examples:
+
+```text
+Is my Go2 paired and connected?
+Connect to the Go2 controller.
+Turn 45 degrees left, then walk 1 meter forward.
+Remember this position as the kitchen.
+Go to the kitchen.
+Stop.
+```
+
+Forward distance is bounded to 0.1–2 meters and measured by odometry. Named
+navigation needs localization in the current map. Movement uses the digital
+twin's existing controller and obstacle checks. A rejected or superseded
+command is not completion. These commands require the updated digital-twin
+app; its container ID is not an AppStore installation identifier.
+
+## Run chat inference on a Wendy device
+
+Use an already installed, tool-capable model on a Wendy-managed Ollama runtime:
+
+```sh
+wendy chat --device <robot-gateway> --model-device <inference-device> --model <installed-model>
+```
+
+The two devices may be the same, or inference can run on a Thor or Spark while
+robot tools target the gateway. `--model-port` selects a managed runtime port
+(default 11434). The connection uses the authenticated Agent transport. Local
+mode ignores saved and environment model credentials, has no hosted fallback,
+and keeps delegated agents on that same model. It does not install a runtime or
+download weights. `--model-device` cannot be combined with hosted provider,
+voice, peer-agent, or per-agent model configuration.
+
+For a local OpenAI-compatible server you manage separately, the existing
+`--provider local --base-url http://localhost:8080/v1 --model <installed-model>`
+connection is also supported. See `wendy chat --help-all` for connection options.
+Object-search VLM inference stays on the robot gateway independently of the chat
+model's location.
+
 ## Open live video and listen to a device
 
 Ask Wendy to open a live camera window or play the connected device's microphone

@@ -1,0 +1,6 @@
+<mujoco model="synthetic-asset-office-v1">
+  <compiler meshdir="meshes"/>
+  <option timestep="0.01" gravity="0 0 -9.81"/>
+  <include file="parts/room.xml"/>
+  <actuator><motor name="drive" joint="travel" ctrlrange="0 1" ctrllimited="true"/></actuator>
+</mujoco>

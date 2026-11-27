@@ -39,6 +39,14 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 		return errors.New("This robot order was superseded.")
 	}
 	r.commandSequence = sequence
+	return r.lookLocked(direction)
+}
+
+func (r *SiteRobot) lookLocked(direction int) error {
+	return r.lookAngleLocked(direction, lookAngle)
+}
+
+func (r *SiteRobot) lookAngleLocked(direction int, angle float64) error {
 	if r.moving || r.stopUnconfirmed {
 		if err := r.stopLocked(); err != nil {
 			return err
@@ -49,7 +57,7 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	}
 	now := time.Now()
 	if r.closed || r.ctx.Err() != nil || now.Sub(r.heartbeat) > 600*time.Millisecond {
-		return errors.New("The map is no longer active.")
+		return ErrOperatorLease
 	}
 	if err := r.observed.Ready(now); err != nil {
 		return fmt.Errorf("%w: %v", ErrObservationUnavailable, err)
@@ -61,13 +69,13 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	}
 	if direction == 0 {
 		direction = 1
-		if !r.navigationGridLocked(departure).Turn(p.Position, p.Yaw, p.Yaw+lookAngle+lookStopMargin) {
+		if !r.navigationGridLocked(departure).Turn(p.Position, p.Yaw, p.Yaw+angle+lookStopMargin) {
 			direction = -1
 		}
 	}
-	target := p.Yaw + float64(direction)*lookAngle
+	target := p.Yaw + float64(direction)*angle
 	if !r.navigationGridLocked(departure).Turn(p.Position, p.Yaw, target+float64(direction)*lookStopMargin) {
-		if r.allowUnobservedFloor {
+		if r.allowUnobservedFloor && !r.strictMeasuredFloor {
 			return fmt.Errorf("%w: An obstacle or drop overlaps Go2's body during this turn.", ErrDiscoveryBlocked)
 		}
 		return fmt.Errorf("%w: Go2's body would cross an obstacle, drop or unobserved floor during this turn.", ErrDiscoveryBlocked)
@@ -82,7 +90,7 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	r.localizations = nil
 	r.started = now
 	r.moving = true
-	r.message = "Looking around · turning 60°"
+	r.message = fmt.Sprintf("Turning %.0f°", angle*180/math.Pi)
 	return nil
 }
 
@@ -90,7 +98,7 @@ func (r *SiteRobot) stepLookLocked(now time.Time) {
 	turn := r.lookTurn
 	p := r.observed.Pose
 	progress := math.Remainder(p.Yaw-turn.startYaw, 2*math.Pi) * turn.direction
-	if p.Position.Distance(turn.origin) > .08 || progress < -.08 || progress > lookAngle+lookStopMargin {
+	if p.Position.Distance(turn.origin) > .08 || progress < -.08 || progress > math.Abs(turn.targetYaw-turn.startYaw)+lookStopMargin {
 		r.message = "Look turn stopped: unexpected drift or rotation."
 		r.stopLocked()
 		return
@@ -115,7 +123,7 @@ func (r *SiteRobot) stepLookLocked(now time.Time) {
 	}
 	if !r.navigationGridLocked(r.departure).Turn(p.Position, p.Yaw, p.Yaw+turn.direction*(remaining+lookStopMargin)) {
 		r.message = "Look turn stopped: the scan marks an obstacle or drop in the turning footprint."
-		if !r.allowUnobservedFloor {
+		if !r.allowUnobservedFloor || r.strictMeasuredFloor {
 			r.message = "Look turn stopped: the scan marks blocked or unobserved floor in the turning footprint."
 		}
 		r.stopForObservationLossLocked()

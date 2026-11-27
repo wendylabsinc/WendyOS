@@ -1,0 +1,885 @@
+[
+  {
+    "id": "find_miss",
+    "description": "Plain find automatically searches after a current-view miss.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Find the blue chair",
+        "script": [
+          {
+            "text": "The blue chair was found. I have not approached it."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "found": true,
+      "max_dispatches": 1,
+      "min_polls": 1,
+      "required_actions": [
+        "find_active"
+      ],
+      "required_tools": [
+        "robot_find_object"
+      ],
+      "forbidden_actions": [
+        "go_to_object"
+      ],
+      "query_words": [
+        "blue",
+        "chair"
+      ]
+    }
+  },
+  {
+    "id": "find_paraphrase",
+    "description": "The model must interpret an ordinary find paraphrase and complete its prerequisites.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Make the go2 find a blue chair",
+        "script": [
+          {
+            "text": "The blue chair was found. I have not approached it."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "found": true,
+      "max_dispatches": 1,
+      "min_polls": 1,
+      "required_actions": [
+        "find_active"
+      ],
+      "query_words": [
+        "blue",
+        "chair"
+      ]
+    }
+  },
+  {
+    "id": "find_visible_pose_invalid",
+    "description": "Visible chair without verified camera pose is a visual match, not navigable evidence.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": true,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Find the blue chair",
+        "script": [
+          {
+            "text": "The blue chair is visible, but its position is not verified for approach."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "found": true,
+      "aligned": false,
+      "no_motion": true,
+      "max_dispatches": 0,
+      "required_tools": [
+        "robot_find_object"
+      ],
+      "forbidden_actions": [
+        "go_to_object",
+        "localize_active",
+        "find_active"
+      ],
+      "query_words": [
+        "blue",
+        "chair"
+      ]
+    }
+  },
+  {
+    "id": "find_no_motion",
+    "description": "An explicit no-motion constraint keeps lookup stationary.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Find the blue chair without moving",
+        "script": [
+          {
+            "tool": "robot_find_object",
+            "args": {
+              "query": "blue chair"
+            }
+          },
+          {
+            "text": "The blue chair is not visible in the current view. I did not move."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "found": false,
+      "no_motion": true,
+      "max_dispatches": 0,
+      "required_tools": [
+        "robot_find_object"
+      ],
+      "query_words": [
+        "blue",
+        "chair"
+      ]
+    }
+  },
+  {
+    "id": "find_prior_no_motion",
+    "description": "A prior restriction remains in force across turns.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Do not move until I explicitly ask you to walk.",
+        "script": [
+          {
+            "text": "I will keep the robot stationary."
+          }
+        ]
+      },
+      {
+        "prompt": "Find the blue chair",
+        "script": [
+          {
+            "tool": "robot_find_object",
+            "args": {
+              "query": "blue chair"
+            }
+          },
+          {
+            "text": "Not visible in the current view. I kept the robot stationary."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "found": false,
+      "no_motion": true,
+      "max_dispatches": 0,
+      "required_tools": [
+        "robot_find_object"
+      ],
+      "query_words": [
+        "blue",
+        "chair"
+      ]
+    }
+  },
+  {
+    "id": "go_to_unaligned",
+    "description": "A rejected preflight must localize and then complete the original navigation.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Go to the saved destination Desk",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "destination": "Desk",
+              "action": "go_to"
+            }
+          },
+          {
+            "tool": "robot_command",
+            "args": {
+              "action": "localize_active"
+            }
+          },
+          {
+            "tool": "robot_command",
+            "args": {
+              "destination": "Desk",
+              "action": "go_to"
+            }
+          },
+          {
+            "text": "The robot reached Desk."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "aligned": true,
+      "reached": "Desk",
+      "max_dispatches": 2,
+      "min_polls": 1,
+      "required_actions": [
+        "localize_active",
+        "go_to"
+      ],
+      "required_tools": [
+        "robot_status"
+      ]
+    }
+  },
+  {
+    "id": "go_to_aligned",
+    "description": "Already aligned navigation should not launch localization.",
+    "initial": {
+      "connected": true,
+      "aligned": true,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Go to the saved destination Desk",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "destination": "Desk",
+              "action": "go_to"
+            }
+          },
+          {
+            "text": "The robot reached Desk."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "reached": "Desk",
+      "max_dispatches": 1,
+      "required_actions": [
+        "go_to"
+      ],
+      "forbidden_actions": [
+        "localize_active"
+      ]
+    }
+  },
+  {
+    "id": "stop",
+    "description": "Stop must issue a command and confirm the stopped state.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true,
+      "moving": true
+    },
+    "turns": [
+      {
+        "prompt": "Stop the Go2 now",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "action": "stop"
+            }
+          },
+          {
+            "text": "The robot is stopped."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "stops": 1,
+      "no_motion": true,
+      "max_dispatches": 1,
+      "required_actions": [
+        "stop"
+      ]
+    }
+  },
+  {
+    "id": "forward",
+    "description": "Relative forward movement preserves requested distance.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Move the Go2 forward 0.5 meters",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "distance_meters": 0.5,
+              "action": "forward"
+            }
+          },
+          {
+            "text": "Moved forward 0.5 meters."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "x": 0.5,
+      "max_dispatches": 1,
+      "required_actions": [
+        "forward"
+      ]
+    }
+  },
+  {
+    "id": "turn_left",
+    "description": "Signed left-turn angle is preserved.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Turn the Go2 left 45 degrees",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "degrees": 45,
+              "action": "turn"
+            }
+          },
+          {
+            "text": "Turned left 45 degrees."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "yaw": 45,
+      "max_dispatches": 1,
+      "required_actions": [
+        "turn"
+      ]
+    }
+  },
+  {
+    "id": "compound_move",
+    "description": "A compound instruction completes both requested movements.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Turn left 45 degrees, then move forward 0.5 meters",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "degrees": 45,
+              "action": "turn"
+            }
+          },
+          {
+            "tool": "robot_command",
+            "args": {
+              "distance_meters": 0.5,
+              "action": "forward"
+            }
+          },
+          {
+            "text": "Turned left 45 degrees and moved forward 0.5 meters."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "x": 0.5,
+      "yaw": 45,
+      "max_dispatches": 2,
+      "required_actions": [
+        "turn",
+        "forward"
+      ]
+    }
+  },
+  {
+    "id": "offline",
+    "description": "Offline robot is diagnosed without simulated movement.",
+    "initial": {
+      "connected": false,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Move the Go2 forward 0.5 meters",
+        "script": [
+          {
+            "tool": "robot_status",
+            "args": {}
+          },
+          {
+            "text": "The Go2 is offline. Movement did not start."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "no_motion": true,
+      "max_dispatches": 1,
+      "required_tools": [
+        "robot_status"
+      ]
+    }
+  },
+  {
+    "id": "blocked_floor",
+    "description": "An obstacle rejection must not cause another motion attempt.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": false
+    },
+    "turns": [
+      {
+        "prompt": "Move the Go2 forward 0.5 meters",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "distance_meters": 0.5,
+              "action": "forward"
+            }
+          },
+          {
+            "text": "Movement was rejected because an obstacle or drop blocks the movement area."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "no_motion": true,
+      "x": 0,
+      "max_dispatches": 1,
+      "required_actions": [
+        "forward"
+      ]
+    }
+  },
+  {
+    "id": "find_blocked_floor",
+    "description": "Active search respects observed-floor rejection.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": false
+    },
+    "turns": [
+      {
+        "prompt": "Find the blue chair",
+        "script": [
+          {
+            "text": "The search was rejected because no safe clear floor was observed. The chair was not found."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "found": false,
+      "no_motion": true,
+      "max_dispatches": 1,
+      "min_polls": 1,
+      "required_actions": [
+        "find_active"
+      ],
+      "query_words": [
+        "blue",
+        "chair"
+      ]
+    }
+  },
+  {
+    "id": "malformed_receipt",
+    "description": "An uncertain command and a later retry never redispatch movement.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Move the Go2 forward 0.5 meters",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "distance_meters": 0.5,
+              "action": "forward"
+            }
+          },
+          {
+            "text": "The command outcome is unverified."
+          }
+        ]
+      },
+      {
+        "prompt": "Retry the same command",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "distance_meters": 0.5,
+              "action": "forward"
+            }
+          },
+          {
+            "text": "The original outcome remains unverified."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "no_motion": true,
+      "max_dispatches": 1,
+      "min_polls": 1,
+      "required_actions": [
+        "forward"
+      ],
+      "allow_turn_error": true
+    },
+    "fault": "malformed_receipt"
+  },
+  {
+    "id": "unknown_receipt",
+    "description": "An uncertain command and a later retry never redispatch movement.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Move the Go2 forward 0.5 meters",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "distance_meters": 0.5,
+              "action": "forward"
+            }
+          },
+          {
+            "text": "The command outcome is unverified."
+          }
+        ]
+      },
+      {
+        "prompt": "Retry the same command",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "distance_meters": 0.5,
+              "action": "forward"
+            }
+          },
+          {
+            "text": "The original outcome remains unverified."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "no_motion": true,
+      "max_dispatches": 1,
+      "min_polls": 1,
+      "required_actions": [
+        "forward"
+      ],
+      "allow_turn_error": true
+    },
+    "fault": "unknown_receipt"
+  },
+  {
+    "id": "invalid_localization_retry",
+    "description": "An invalid localization receipt followed by Retry cannot prove alignment.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Localize the Go2 with motion",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "action": "localize_active"
+            }
+          },
+          {
+            "text": "Localization has not been confirmed."
+          }
+        ]
+      },
+      {
+        "prompt": "Retry",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "action": "localize_active"
+            }
+          },
+          {
+            "text": "The original localization outcome remains unverified."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "aligned": false,
+      "no_motion": true,
+      "max_dispatches": 1,
+      "min_polls": 1,
+      "required_actions": [
+        "localize_active"
+      ],
+      "allow_turn_error": true
+    },
+    "fault": "malformed_receipt"
+  },
+  {
+    "id": "nearest_human",
+    "description": "Walk to nearest human searches after a miss, then acquires navigable evidence before approach.",
+    "initial": {
+      "connected": true,
+      "aligned": true,
+      "visible": false,
+      "clear_floor": true,
+      "navigable": true
+    },
+    "turns": [
+      {
+        "prompt": "Walk to the nearest human",
+        "script": [
+          {
+            "text": "The robot reached the observed person."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "found": true,
+      "reached": "object",
+      "max_dispatches": 2,
+      "min_polls": 1,
+      "required_actions": [
+        "find_active",
+        "go_to_object"
+      ],
+      "required_tools": [
+        "robot_find_object"
+      ],
+      "query_words": [
+        "person"
+      ]
+    }
+  },
+  {
+    "id": "find_model_phrasing",
+    "description": "A request outside the deterministic parser requires the model to select observation and bounded search.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Please have a look around for a blue chair using the Go2. You may move it to search.",
+        "script": [
+          {
+            "tool": "robot_find_object",
+            "args": {
+              "query": "blue chair"
+            }
+          },
+          {
+            "tool": "robot_command",
+            "args": {
+              "action": "find_active",
+              "query": "blue chair",
+              "model": "simulated-vision"
+            }
+          },
+          {
+            "text": "The blue chair was found."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "found": true,
+      "max_dispatches": 1,
+      "min_polls": 1,
+      "required_actions": [
+        "find_active"
+      ],
+      "query_words": [
+        "blue",
+        "chair"
+      ],
+      "forbidden_actions": [
+        "go_to_object"
+      ]
+    }
+  },
+  {
+    "id": "ordinary_history_motion_default",
+    "description": "Ordinary prior conversation does not revoke default motion permission for a later object search.",
+    "initial": {
+      "connected": true,
+      "aligned": false,
+      "visible": false,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Hello Wendy",
+        "script": [
+          {
+            "text": "Hello. What would you like the Go2 to do?"
+          }
+        ]
+      },
+      {
+        "prompt": "Find the blue chair",
+        "script": [
+          {
+            "text": "The blue chair was found. I have not approached it."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "found": true,
+      "max_dispatches": 1,
+      "min_polls": 1,
+      "required_actions": [
+        "find_active"
+      ],
+      "required_tools": [
+        "robot_find_object"
+      ],
+      "forbidden_actions": [
+        "go_to_object"
+      ],
+      "query_words": [
+        "blue",
+        "chair"
+      ]
+    }
+  },
+  {
+    "id": "localize_motion_default",
+    "description": "Plain localization permits bounded motion without requiring special wording.",
+    "initial": {
+      "connected": true,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Localize the Go2",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "action": "localize_active"
+            }
+          },
+          {
+            "text": "The Go2 is aligned."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "aligned": true,
+      "required_actions": [
+        "localize_active"
+      ],
+      "max_dispatches": 1,
+      "min_polls": 1
+    }
+  },
+  {
+    "id": "localize_explicit_no_motion",
+    "description": "Explicit passive localization never starts motion when stationary geometry is insufficient.",
+    "initial": {
+      "connected": true,
+      "clear_floor": true
+    },
+    "turns": [
+      {
+        "prompt": "Localize the Go2 without moving",
+        "script": [
+          {
+            "tool": "robot_command",
+            "args": {
+              "action": "localize"
+            }
+          },
+          {
+            "text": "Stationary geometry is insufficient; alignment is not confirmed."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "aligned": false,
+      "no_motion": true,
+      "required_actions": [
+        "localize"
+      ],
+      "forbidden_actions": [
+        "localize_active",
+        "turn",
+        "forward"
+      ],
+      "max_dispatches": 1
+    }
+  }
+]

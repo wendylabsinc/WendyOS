@@ -144,9 +144,18 @@ rate measurement does not establish sensor acquisition freshness, localization
 quality, coverage, or readiness to move. Reception times are not sensor times.
 Use the robot app's readiness and navigation tools when it provides them.
 
-Examples/RobotNavigation is a deployable app providing robot_status, supervised
-navigation_goal/status/renew/cancel, robot_stop, robot_observe, robot_targets,
-and approach_person. Its default configuration disables motor output. It needs
+Use unitree_pairings to read saved Go2 pairings directly. The digital twin
+provides robot_status and robot_command for named destinations, bounded turns,
+measured forward distance, evidence-backed object approach, and stopping through
+the existing map controller. robot_camera_snapshot reads the paired Go2 camera
+through its Unitree stream; an empty gateway camera_list does not exclude that
+camera. robot_find_object sends a fresh Go2 JPEG to local Ollama on the gateway,
+then checks measured geometry. It never moves. Use go_to_object only with its
+navigable evidence_id when the user requested an approach. Interactive pairing tabs are
+not a status command. A completed controller receipt confirms completion.
+
+Examples/RobotNavigation is a separate deployable app providing status, supervised
+navigation goals, stop, observations, targets, and person approach tools. Its default configuration disables motor output. It needs
 standard scan/odometry/IMU inputs, calibrated RGB-D for person targets, and a
 commissioned local driver/watchdog before motion. Read-only status calls do not
 renew navigation leases; cancellation is confirmed only after the action ends

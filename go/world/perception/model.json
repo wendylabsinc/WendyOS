@@ -1,0 +1,13 @@
+{
+  "model_id": "google/movenet/multipose/lightning",
+  "model_version": "1",
+  "conversion_repository": "Xenova/movenet-multipose-lightning",
+  "conversion_revision": "8506174df310cf154b97352afa98d1ea4b1e4b47",
+  "url": "https://huggingface.co/Xenova/movenet-multipose-lightning/resolve/8506174df310cf154b97352afa98d1ea4b1e4b47/onnx/model.onnx",
+  "sha256": "60f724a56f0119d22d2afcf530019db307c77d4ea598eb5bd53bb65afe93930d",
+  "bytes": 19049169,
+  "license": "Apache-2.0",
+  "original_model_document": "https://github.com/tensorflow/tfhub.dev/blob/master/assets/docs/google/models/movenet/multipose/lightning/1.md",
+  "original_model_card": "https://storage.googleapis.com/movenet/MoveNet.MultiPose%20Model%20Card.pdf",
+  "conversion_model_card": "https://huggingface.co/Xenova/movenet-multipose-lightning/blob/8506174df310cf154b97352afa98d1ea4b1e4b47/README.md"
+}

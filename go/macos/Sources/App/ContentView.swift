@@ -1,4 +1,6 @@
 import SwiftUI
+import WorldOperator
+import WorldTwin
 
 struct ContentView: View {
     @State private var actions = AsyncActions()
@@ -8,6 +10,8 @@ struct ContentView: View {
     @State private var showingEventLog = false
     @State private var requestedClip: (session: UInt64, id: String)?
     @State private var showingOrganization = false
+    @StateObject private var worldSession = WorldOperatorSession()
+    @State private var showingWorld = false
     @State private var showingSites = false
     @State private var showingActivity = false
     @State private var showingSimulators = false
@@ -30,6 +34,35 @@ struct ContentView: View {
     @State private var errorDetails: String?
     @Environment(\.scenePhase) private var scenePhase
 
+    private let worldLaunch: WorldTwinLaunchRequest?
+    private let worldRender: WorldTimelineRenderRequest?
+    private let worldLaunchError: String?
+
+    init() {
+        let arguments = ProcessInfo.processInfo.arguments
+        var profile: URL?
+        do {
+            let render = try WorldTimelineRenderRequest.parse(arguments)
+            let launch = try WorldTwinLaunchRequest.parse(arguments)
+            let operatorProfile = try WorldOperatorLaunchRequest.parse(arguments)
+            if operatorProfile != nil && (render != nil || launch != nil) {
+                throw WorldTwinLaunchRequest.InvalidArguments.conflictingModes
+            }
+            profile = operatorProfile
+            worldRender = render
+            worldLaunch = launch
+            worldLaunchError = nil
+        } catch {
+            worldRender = nil
+            worldLaunch = nil
+            worldLaunchError = error.localizedDescription
+        }
+        _showingWorld = State(initialValue: WorldTwinLaunchRequest.recognizes(arguments) || WorldTimelineRenderRequest.recognizes(arguments) || WorldOperatorLaunchRequest.recognizes(arguments))
+        let session = WorldOperatorSession(profile: profile)
+        if worldLaunch != nil || worldRender != nil { session.open(.sessions) }
+        _worldSession = StateObject(wrappedValue: session)
+    }
+
     var body: some View {
         actionContent.task { await actions.run() }
             .task(id: "\(model.initialized)/\(scenePhase == .active)") {
@@ -37,10 +70,17 @@ struct ContentView: View {
             }
             .onChange(of: model.requestedDevice) { _, device in
                 if let device {
-                    showingSites = false; showingActivity = false; showingOrganization = false; showingSimulators = false
+                    showingWorld = false; showingSites = false; showingActivity = false; showingOrganization = false; showingSimulators = false
                     tab = "overview"; model.requestedDevice = nil
                     actions.submit { await model.connect(device) }
                 }
+            }
+            .onChange(of: model.requestedWorldSection) { _, section in
+                guard let section else { return }
+                worldSession.open(section)
+                showingWorld = true; showingSites = false; showingActivity = false
+                showingOrganization = false; showingSimulators = false; sidebarSelection = nil
+                model.requestedWorldSection = nil
             }
             .modifier(NearbySetupPrompt())
     }
@@ -49,18 +89,21 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             VStack(spacing: 0) {
                 VStack(spacing: 2) {
-                    sidebarDestination("Devices", icon: "square.grid.2x2", selected: !showingSites && !showingActivity && !showingSimulators && model.selection == nil) {
-                        showingOrganization = false; showingSites = false; showingActivity = false; showingSimulators = false
+                    sidebarDestination("Devices", icon: "square.grid.2x2", selected: !showingWorld && !showingSites && !showingActivity && !showingSimulators && model.selection == nil) {
+                        showingOrganization = false; showingWorld = false; showingSites = false; showingActivity = false; showingSimulators = false
                         sidebarSelection = nil; model.selection = nil
                     }
                     sidebarDestination("Sites", icon: "building.2", selected: showingSites) {
-                        showingSites = true; showingActivity = false; showingSimulators = false; showingOrganization = false; sidebarSelection = nil
+                        showingWorld = false; showingSites = true; showingActivity = false; showingSimulators = false; showingOrganization = false; sidebarSelection = nil
+                    }
+                    sidebarDestination("World", icon: "globe.americas", selected: showingWorld) {
+                        showingWorld = true; showingSites = false; showingActivity = false; showingSimulators = false; showingOrganization = false; sidebarSelection = nil
                     }
                     sidebarDestination("Activity", icon: "clock", selected: showingActivity) {
-                        showingActivity = true; showingSites = false; showingSimulators = false; showingOrganization = false; sidebarSelection = nil
+                        showingActivity = true; showingWorld = false; showingSites = false; showingSimulators = false; showingOrganization = false; sidebarSelection = nil
                     }
                     sidebarDestination("Simulators", icon: "cube.transparent", selected: showingSimulators) {
-                        showingSimulators = true; showingActivity = false; showingOrganization = false; showingSites = false; sidebarSelection = nil
+                        showingSimulators = true; showingActivity = false; showingOrganization = false; showingWorld = false; showingSites = false; sidebarSelection = nil
                     }
                 }
                 .padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 8)
@@ -132,22 +175,24 @@ struct ContentView: View {
                 .keyboardRowSelection(visibleDevices.map(\.id), selection: $sidebarSelection, focusRequest: deviceListFocusRequest)
                 .onChange(of: sidebarSelection) { _, id in
                     guard let device = visibleDevices.first(where: { $0.id == id }) else { return }
-                    showingOrganization = false; showingSites = false; showingSimulators = false; showingActivity = false
+                    showingOrganization = false; showingWorld = false; showingSites = false; showingSimulators = false; showingActivity = false
                     actions.submit { await model.connect(device) }
                 }
                 Divider()
                 HStack {
                     AccountPicker(app: model)
-                    Button { showingOrganization = true; showingSites = false; showingActivity = false; showingSimulators = false } label: { Image(systemName: "gearshape") }
+                    Button { showingOrganization = true; showingWorld = false; showingSites = false; showingActivity = false; showingSimulators = false } label: { Image(systemName: "gearshape") }
                         .buttonStyle(.plain).help("Manage organization")
                 }
 
             }
             .navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 380)
         } detail: {
-            if showingActivity {
+            if showingWorld {
+                WorldWorkspaceView(session: worldSession, launch: worldLaunch, launchError: worldLaunchError, render: worldRender)
+            } else if showingActivity {
                 ExperienceActivityView(model: model) { device in
-                    showingActivity = false; tab = "overview"
+                    showingWorld = false; showingActivity = false; tab = "overview"
                     actions.submit { await model.connect(device) }
                 }
             } else if showingSimulators {
@@ -157,7 +202,7 @@ struct ContentView: View {
                 }
             } else if showingSites {
                 SitesView { device in
-                    showingSites = false; showingOrganization = false
+                    showingWorld = false; showingSites = false; showingOrganization = false
                     actions.submit { await model.connect(device) }
                 }.id(model.account?.context)
             } else if showingOrganization {
@@ -207,9 +252,11 @@ struct ContentView: View {
         .toolbar {
             ToolbarItem { VPNToolbarControls(model: model, vpn: model.vpn) }
             ToolbarItemGroup {
+                if !showingWorld {
                 DesktopPaneRefreshButton(model: model, actions: actions,
                                          showingSimulators: showingSimulators, showingSites: showingSites,
                                          showingOrganization: showingOrganization, tab: tab, deviceSource: deviceSource)
+                }
                 Menu {
                     Button { showingNearbySetup = true } label: {
                         Label("Set up nearby device…", systemImage: "antenna.radiowaves.left.and.right")
@@ -219,8 +266,8 @@ struct ContentView: View {
                     Button("Connect by address") { showingAddress = true }
                     Button("Connect to Unitree Go2") { selectedUnitree = nil; showingUnitree = true }
                     if model.selectedDeviceReady {
-                        Button("Pair a device") { showingOrganization = false; showingSites = false; showingSimulators = false; showingActivity = false; tab = "pairing" }
-                        Button("Campaigns") { showingOrganization = false; showingSites = false; showingSimulators = false; showingActivity = false; tab = "campaigns" }
+                        Button("Pair a device") { showingOrganization = false; showingWorld = false; showingSites = false; showingSimulators = false; showingActivity = false; tab = "pairing" }
+                        Button("Campaigns") { showingOrganization = false; showingWorld = false; showingSites = false; showingSimulators = false; showingActivity = false; tab = "campaigns" }
                     }
                 } label: { Label("Add", systemImage: "plus") }
             }
@@ -252,7 +299,7 @@ struct ContentView: View {
                     Button("Connect") {
                         let address = manualAddress.trimmingCharacters(in: .whitespacesAndNewlines)
                         showingAddress = false
-                        showingOrganization = false; showingSites = false; showingSimulators = false; showingActivity = false
+                        showingOrganization = false; showingWorld = false; showingSites = false; showingSimulators = false; showingActivity = false
                         actions.submit { await model.connect(Device(id: address, name: address, selector: address, transport: .lan, address: address)) }
                     }.keyboardShortcut(.defaultAction).disabled(manualAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -302,8 +349,8 @@ struct ContentView: View {
             deviceAvailable: model.selectedDeviceReady && !model.connectedLite,
             findDevice: { columnVisibility = .all; searchFocused = true },
             focusDevices: focusDevices,
-            showOrganization: { showingActivity = false; showingOrganization = true; showingSimulators = false; showingSites = false; sidebarSelection = nil },
-            showSites: { showingActivity = false; showingSites = true; showingSimulators = false; showingOrganization = false; sidebarSelection = nil },
+            showOrganization: { showingActivity = false; showingOrganization = true; showingSimulators = false; showingWorld = false; showingSites = false; sidebarSelection = nil },
+            showSites: { showingActivity = false; showingWorld = false; showingSites = true; showingSimulators = false; showingOrganization = false; sidebarSelection = nil },
             showSource: { source in deviceSource = source; focusDevices() },
             showPage: showPage,
             cyclePage: { forward in showPage(DesktopDevicePage.adjacent(to: tab, forward: forward)) },
@@ -331,6 +378,7 @@ struct ContentView: View {
     private func showPage(_ page: DesktopDevicePage) {
         guard model.selectedDeviceReady, !model.connectedLite else { return }
         showingOrganization = false
+        showingWorld = false
         showingSites = false
         showingSimulators = false
         showingActivity = false

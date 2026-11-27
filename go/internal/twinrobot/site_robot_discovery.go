@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
@@ -11,6 +12,11 @@ import (
 )
 
 const discoveryDistance = .4 // preferred viewpoint distance, not a required motion
+// Preserve the hardware-tested Go2 walking rate for discovery too. Do not
+// lower, taper or special-case this speed to fit a smaller observed floor patch:
+// the SDK can ignore slower commands. Changes require an explicit user request
+// and validation on a real Go2. Adjust the path or stopping plan instead,
+// retaining full clearance.
 const discoverySpeed = sitenav.WalkingSpeed
 const discoveryMargin = .10 // 6 cm lateral drift plus the footprint swept by 0.1 rad yaw drift
 
@@ -22,8 +28,14 @@ type discoveryMove struct {
 	origin, target                        sitenav.Point
 	yaw, progress                         float64
 	progressAt                            time.Time
+	epoch                                 uint64
+	relative                              bool
 	turning                               bool
 	startYaw, turnDirection, turnProgress float64
+	turnStopping, turnPulse               bool
+	turnStopAt, turnSampleAt              time.Time
+	turnSampleYaw                         float64
+	turnSamplePosition                    sitenav.Point
 }
 
 type discoveryHistory struct {
@@ -42,12 +54,16 @@ func (r *SiteRobot) DiscoveryStep(sequence, root uint64) error {
 		return errors.New("This robot order was superseded.")
 	}
 	r.commandSequence = sequence
+	return r.discoveryStepLocked(root)
+}
+
+func (r *SiteRobot) discoveryStepLocked(root uint64) error {
 	if r.moving || r.stopUnconfirmed {
 		return errors.New("Stop Go2 before gathering another viewpoint.")
 	}
 	now := time.Now()
 	if r.closed || r.ctx.Err() != nil || now.Sub(r.heartbeat) > 600*time.Millisecond {
-		return errors.New("The map is no longer active.")
+		return ErrOperatorLease
 	}
 	if err := r.observed.Ready(now); err != nil {
 		return fmt.Errorf("%w: %v", ErrObservationUnavailable, err)
@@ -74,6 +90,7 @@ func (r *SiteRobot) DiscoveryStep(sequence, root uint64) error {
 	r.clearMotionFailureLocked()
 	history.starts++
 	move.progressAt = now
+	move.epoch = r.poseEpoch
 	r.discoveryMove = move
 	r.discoveryState = 1
 	r.departure = departure
@@ -109,7 +126,7 @@ func planDiscoveryView(grid sitenav.Grid, pose sitenav.Pose, history discoveryHi
 				lastErr = errors.New("the next viewpoint is too close to a previously visited position")
 				continue
 			}
-			if err := discoveryClearanceError(grid, pose.Position, target, yaw); err != nil {
+			if err := discoveryClearanceErrorAtSpeed(grid, pose.Position, target, yaw, discoverySpeed, pose.Yaw); err != nil {
 				lastErr = err
 				continue
 			}
@@ -124,10 +141,21 @@ func planDiscoveryView(grid sitenav.Grid, pose sitenav.Pose, history discoveryHi
 }
 
 func discoveryClearanceError(grid sitenav.Grid, start, target sitenav.Point, yaw float64) error {
+	return discoveryClearanceErrorAtSpeed(grid, start, target, yaw, discoverySpeed, yaw)
+}
+
+func discoveryMoveSpeed(move *discoveryMove) float64 {
+	if move.relative {
+		return sitenav.WalkingSpeed
+	}
+	return discoverySpeed
+}
+
+func discoveryClearanceErrorAtSpeed(grid sitenav.Grid, start, target sitenav.Point, yaw, speed, bodyYaw float64) error {
 	// Check the target and the stopping horizon from the current pose. Repeat
 	// before every command, as waypoint navigation does; do not add another
 	// full stopping distance beyond a viewpoint we may never need to reach.
-	horizon := discoverySpeed*.5 + discoverySpeed*discoverySpeed + .05
+	horizon := speed*.5 + speed*speed + .05
 	distance := math.Max(start.Distance(target), horizon)
 	end := sitenav.Point{X: start.X + math.Cos(yaw)*distance, Y: start.Y + math.Sin(yaw)*distance}
 	if grid.SweepWithMargin(start, end, yaw, discoveryMargin) {
@@ -143,6 +171,19 @@ func discoveryClearanceError(grid sitenav.Grid, start, target sitenav.Point, yaw
 	floorOnly := grid
 	floorOnly.Obstacles = nil
 	if !floorOnly.SweepWithMargin(start, end, yaw, discoveryMargin) {
+		gap, found := floorOnly.NearestMissingFloorInSweep(start, end, yaw, discoveryMargin)
+		if found {
+			dx, dy := gap.X-start.X, gap.Y-start.Y
+			forward, left := dx*math.Cos(bodyYaw)+dy*math.Sin(bodyYaw), -dx*math.Sin(bodyYaw)+dy*math.Cos(bodyYaw)
+			along, side := "ahead", "left"
+			if forward < 0 {
+				along = "behind"
+			}
+			if left < 0 {
+				side = "right"
+			}
+			return fmt.Errorf("LiDAR has not observed all the floor in the movement and stopping area, including the safety margin. The nearest floor gap is %.2f m %s and %.2f m %s of Go2's body center.", math.Abs(forward), along, math.Abs(left), side)
+		}
 		return errors.New("LiDAR has not observed all the floor in the movement and stopping area, including the safety margin.")
 	}
 	return errors.New("An obstacle or drop overlaps the movement or stopping area, including the safety margin.")
@@ -151,8 +192,22 @@ func discoveryClearanceError(grid sitenav.Grid, start, target sitenav.Point, yaw
 func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 	move := r.discoveryMove
 	p := r.observed.Pose
-	if now.Sub(r.started) > 12*time.Second || now.Sub(move.progressAt) > 2*time.Second || r.discoveryHistory.epoch != r.poseEpoch {
-		r.message = "Discovery stopped: no timely progress or odometry changed."
+	operation := "Discovery"
+	if move.relative {
+		operation = "Forward movement"
+	}
+	if now.Sub(r.started) > 12*time.Second || now.Sub(move.progressAt) > 2*time.Second || move.epoch != r.poseEpoch {
+		var faults []string
+		if now.Sub(r.started) > 12*time.Second {
+			faults = append(faults, fmt.Sprintf("movement elapsed %.2f s exceeds 12.00 s", now.Sub(r.started).Seconds()))
+		}
+		if now.Sub(move.progressAt) > 2*time.Second {
+			faults = append(faults, fmt.Sprintf("no progress for %.2f s exceeds 2.00 s", now.Sub(move.progressAt).Seconds()))
+		}
+		if move.epoch != r.poseEpoch {
+			faults = append(faults, fmt.Sprintf("odometry epoch changed from %d to %d", move.epoch, r.poseEpoch))
+		}
+		r.message = operation + " stopped: " + strings.Join(faults, "; ") + "."
 		r.stopLocked()
 		return
 	}
@@ -164,16 +219,35 @@ func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 	dx, dy := p.Position.X-move.origin.X, p.Position.Y-move.origin.Y
 	progress := dx*math.Cos(move.yaw) + dy*math.Sin(move.yaw)
 	lateral := math.Abs(-dx*math.Sin(move.yaw) + dy*math.Cos(move.yaw))
-	if lateral > .06 || math.Abs(math.Remainder(p.Yaw-move.yaw, 2*math.Pi)) > .1 ||
-		progress < -.05 || progress > distance+.1 {
-		r.message = "Discovery stopped: unexpected drift or odometry change."
+	headingError := math.Abs(math.Remainder(p.Yaw-move.yaw, 2*math.Pi))
+	if lateral > .06 || headingError > .1 || progress < -.05 || progress > distance+.1 {
+		// Retain the measured cause before stopLocked discards the move. A
+		// later fresh pose cannot reconstruct which guard ended this attempt.
+		var faults []string
+		if lateral > .06 {
+			faults = append(faults, fmt.Sprintf("lateral drift %.3f m exceeds 0.060 m", lateral))
+		}
+		if headingError > .1 {
+			faults = append(faults, fmt.Sprintf("heading drift %.3f rad exceeds 0.100 rad", headingError))
+		}
+		if progress < -.05 {
+			faults = append(faults, fmt.Sprintf("reverse progress %.3f m exceeds 0.050 m", -progress))
+		}
+		if progress > distance+.1 {
+			faults = append(faults, fmt.Sprintf("overshoot %.3f m exceeds 0.100 m", progress-distance))
+		}
+		r.message = fmt.Sprintf("%s stopped: %s (progress %.3f/%.3f m; odometry epoch %d).", operation, strings.Join(faults, "; "), progress, distance, r.poseEpoch)
 		r.stopLocked()
 		return
 	}
 	if progress >= distance-.025 {
 		r.discoveryState = 2
-		r.discoveryHistory.visited = append(r.discoveryHistory.visited, p.Position)
-		r.message = "New viewpoint reached. Gathering fresh observations."
+		if move.relative {
+			r.message = "Forward distance reached."
+		} else {
+			r.discoveryHistory.visited = append(r.discoveryHistory.visited, p.Position)
+			r.message = "New viewpoint reached. Gathering fresh observations."
+		}
 		if r.stopLocked() != nil {
 			r.discoveryState = 3
 		}
@@ -182,13 +256,13 @@ func (r *SiteRobot) stepDiscoveryLocked(now time.Time) {
 	if progress-move.progress >= .025 {
 		move.progress, move.progressAt = progress, now
 	}
-	if err := discoveryClearanceError(r.observed.Grid.WithDeparture(r.departure), p.Position, move.target, p.Yaw); err != nil {
-		r.message = "Discovery stopped: " + err.Error()
+	if err := discoveryClearanceErrorAtSpeed(r.observed.Grid.WithDeparture(r.departure), p.Position, move.target, p.Yaw, discoveryMoveSpeed(move), p.Yaw); err != nil {
+		r.message = operation + " stopped: " + err.Error()
 		r.stopForObservationLossLocked()
 		return
 	}
-	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, discoverySpeed, 0); err != nil {
-		r.message = siteCommandFailure("Discovery movement", err)
+	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, discoveryMoveSpeed(move), 0); err != nil {
+		r.message = siteCommandFailure(operation, err)
 		r.stopLocked()
 	}
 }
@@ -199,27 +273,91 @@ func (r *SiteRobot) stepDiscoveryTurnLocked(now time.Time) {
 	move, pose := r.discoveryMove, r.observed.Pose
 	progress := math.Remainder(pose.Yaw-move.startYaw, 2*math.Pi) * move.turnDirection
 	angle := math.Abs(math.Remainder(move.yaw-move.startYaw, 2*math.Pi))
-	if pose.Position.Distance(move.origin) > .06 || progress < -.08 || progress > angle+lookStopMargin {
-		r.message = "Discovery stopped: unexpected drift or rotation."
+	drift := pose.Position.Distance(move.origin)
+	if drift > .06 || progress < -.08 || progress > angle+lookStopMargin {
+		var faults []string
+		if drift > .06 {
+			faults = append(faults, fmt.Sprintf("turn position drift %.3f m exceeds 0.060 m", drift))
+		}
+		if progress < -.08 {
+			faults = append(faults, fmt.Sprintf("reverse rotation %.3f rad exceeds 0.080 rad", -progress))
+		}
+		if progress > angle+lookStopMargin {
+			faults = append(faults, fmt.Sprintf("rotation overshoot %.3f rad exceeds %.3f rad", progress-angle, lookStopMargin))
+		}
+		r.message = fmt.Sprintf("Discovery stopped: %s (rotation %.3f/%.3f rad; odometry epoch %d).", strings.Join(faults, "; "), progress, angle, r.poseEpoch)
 		r.stopLocked()
 		return
 	}
 	remaining := math.Remainder(move.yaw-pose.Yaw, 2*math.Pi)
-	if math.Abs(remaining) <= .04 {
-		// Acknowledge STOP before changing from rotation to forward motion.
-		if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_STOP, 0, 0); err != nil {
-			r.message = siteCommandFailure("Discovery turn stop", err)
-			r.stopLocked()
-			return
-		}
-		move.turning = false
-		move.progressAt = now
-		return
-	}
-	if remaining*move.turnDirection < 0 {
-		r.message = "Discovery stopped: the viewpoint turn overshot."
+	// 0.04 rad is the desired completion window, not an assumption that a
+	// 0.8 rad/s turn sampled every 100 ms must hit it. The existing forward
+	// controller's 0.1 rad heading limit remains the maximum accepted error.
+	if remaining*move.turnDirection < -.1 {
+		r.message = fmt.Sprintf("Discovery stopped: viewpoint turn overshot by %.3f rad (maximum 0.100 rad).", math.Abs(remaining))
 		r.stopLocked()
 		return
+	}
+	if move.turnStopping {
+		// An acknowledged STOP is not proof of settled pose. Require distinct
+		// post-STOP captures with little movement before selecting a forward path.
+		if !pose.Captured.After(move.turnStopAt) || !pose.Received.After(move.turnStopAt) || !pose.Captured.After(move.turnSampleAt) {
+			return
+		}
+		if move.turnSampleAt.IsZero() || math.Abs(math.Remainder(pose.Yaw-move.turnSampleYaw, 2*math.Pi)) > .015 || pose.Position.Distance(move.turnSamplePosition) > .01 {
+			move.turnSampleAt, move.turnSampleYaw, move.turnSamplePosition = pose.Captured, pose.Yaw, pose.Position
+			return
+		}
+		if pose.Captured.Sub(move.turnSampleAt) < 100*time.Millisecond {
+			return
+		}
+		if remaining*move.turnDirection <= .04 {
+			// Replan the straight leg from the measured stopped heading. Never
+			// silently translate along a path validated for a different heading.
+			distance := move.origin.Distance(move.target)
+			target := sitenav.Point{X: pose.Position.X + math.Cos(pose.Yaw)*distance, Y: pose.Position.Y + math.Sin(pose.Yaw)*distance}
+			if len(r.discoveryHistory.visited) == 0 || pose.Position.Distance(r.discoveryHistory.visited[0]) > 1.3 || target.Distance(r.discoveryHistory.visited[0]) > 1.3 {
+				r.message = "Discovery stopped: the settled turn would exceed the discovery radius."
+				r.stopLocked()
+				return
+			}
+			for _, visited := range r.discoveryHistory.visited {
+				if target.Distance(visited) < .25 {
+					r.message = "Discovery stopped: the settled turn does not reach a separated viewpoint."
+					r.stopLocked()
+					return
+				}
+			}
+			if err := discoveryClearanceError(r.observed.Grid.WithDeparture(r.departure), pose.Position, target, pose.Yaw); err != nil {
+				r.message = "Discovery stopped after turning: " + err.Error()
+				r.stopLocked()
+				return
+			}
+			move.origin, move.target, move.yaw = pose.Position, target, pose.Yaw
+			move.turning, move.turnStopping = false, false
+			move.progressAt = now
+			return
+		}
+		// A conservative brake can stop short. Advance for one controller
+		// tick at the supported rate, then Stop and measure again.
+		move.turnStopping, move.turnPulse = false, true
+		move.turnSampleAt = time.Time{}
+	} else {
+		age := math.Max(now.Sub(pose.Captured).Seconds(), now.Sub(pose.Received).Seconds())
+		brake := .04 + lookSpeed*(math.Max(0, age)+.1)
+		if remaining*move.turnDirection <= brake || move.turnPulse {
+			if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_STOP, 0, 0); err != nil {
+				r.message = siteCommandFailure("Discovery turn stop", err)
+				r.stopLocked()
+				return
+			}
+			move.turnStopping, move.turnPulse, move.turnStopAt = true, false, now
+			if acknowledgedAt := time.Now(); acknowledgedAt.After(move.turnStopAt) {
+				move.turnStopAt = acknowledgedAt
+			}
+			move.turnSampleAt = time.Time{}
+			return
+		}
 	}
 	if math.Abs(math.Remainder(pose.Yaw-move.turnProgress, 2*math.Pi)) >= .025 {
 		move.turnProgress, move.progressAt = pose.Yaw, now

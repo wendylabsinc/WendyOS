@@ -176,6 +176,28 @@ func (g Grid) SweepWithMargin(a, b Point, yaw, margin float64) bool {
 	return g.sweptCells(a, b, yaw, margin, func(c Cell) bool { return g.Floor[c] && !g.obstacleOverlaps(c, a, b, yaw, margin) })
 }
 
+// NearestMissingFloorInSweep explains a rejected sweep using exactly the same
+// occupied cells as its clearance check. It does not fill cells or authorize
+// motion. Call only after SweepWithMargin has rejected the path.
+func (g Grid) NearestMissingFloorInSweep(a, b Point, yaw, margin float64) (Point, bool) {
+	if !finite(margin) || margin < 0 || margin > 1 {
+		return Point{}, false
+	}
+	closest := Point{}
+	found := false
+	distance := math.Inf(1)
+	g.sweptCells(a, b, yaw, margin, func(c Cell) bool {
+		if !g.Floor[c] {
+			p := center(c)
+			if d := a.Distance(p); d < distance {
+				closest, found, distance = p, true, d
+			}
+		}
+		return true
+	})
+	return closest, found
+}
+
 // Turn checks the shortest in-place turn used by the controller. Padding bounds
 // every corner's travel between angular samples, so intermediate poses cannot
 // slip between the checks. Translation and rotation are commanded separately.
@@ -218,6 +240,21 @@ func (g Grid) turnCellsAtMargin(p Point, from, to, margin float64, visit func(Ce
 }
 
 func Heading(a, b Point) float64 { return math.Atan2(b.Y-a.Y, b.X-a.X) }
+
+// RayHit returns the distance from origin to the first measured obstacle cell
+// along heading, sampled between from and to metres. It reads LiDAR evidence
+// for ranging a seen object; it never authorizes movement.
+func (g Grid) RayHit(origin Point, heading, from, to float64) (float64, bool) {
+	if !origin.Valid() || !finite(heading) {
+		return 0, false
+	}
+	for d := from; d <= to; d += CellSize / 2 {
+		if g.Obstacles[cell(Point{origin.X + d*math.Cos(heading), origin.Y + d*math.Sin(heading)})] {
+			return d, true
+		}
+	}
+	return 0, false
+}
 
 func (g Grid) Transition(a Point, yaw float64, b Point) bool {
 	if a.Distance(b) < 1e-9 {
@@ -510,11 +547,16 @@ func (a Alignment) ToRobot(p Point) Point {
 }
 
 // The physical Go2 ignores forward requests below roughly 0.5 m/s. Use its
-// walking rate until stopping; a lower proportional command is not a slow gait.
+// hardware-tested 0.65 m/s walking rate until stopping; a lower proportional
+// command is not a slow gait. Do not lower, taper or special-case discovery
+// without an explicit user request and validation on a real Go2. Adjust paths
+// or stopping plans to fit space, never these speeds merely to reduce clearance.
 const WalkingSpeed = .65
 
-// Route and localization turns use the same rate. Small corrections stop
-// at the heading tolerance instead of tapering into rejected SDK velocities.
+// Preserve the hardware-tested 0.8 rad/s rate for route and localization turns.
+// Changes require an explicit user request and validation on a real Go2.
+// Small corrections stop at the heading tolerance instead of tapering into
+// rejected SDK velocities.
 const TurningSpeed = .8
 
 // Cover the 500ms MOVE lease, braking at 1 rad/s² and 0.05rad tolerance.

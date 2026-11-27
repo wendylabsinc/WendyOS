@@ -10,7 +10,9 @@ h = hashlib.sha256()
 h.update(subprocess.check_output(["go", "version"]))
 h.update(platform.machine().encode())
 for base, dirs, files in os.walk(root / "go"):
-    dirs[:] = sorted(d for d in dirs if d not in {".git", "Build", "build", "bin", "DerivedData", "node_modules"} and not d.endswith(".xcodeproj"))
+    dirs[:] = sorted(d for d in dirs if d not in {".git", ".build", ".swiftpm", "Build", "build", "bin", "DerivedData", "node_modules"} and not d.endswith(".xcodeproj"))
+    if pathlib.Path(base) == root / "go/macos":
+        dirs[:] = [d for d in dirs if d != "WorldClient"]
     for name in sorted(files):
         p = pathlib.Path(base) / name
         if ("/macos/Sources/" in str(p) and p.suffix != ".h") or "/macos/Tests/" in str(p):

@@ -30,6 +30,11 @@ type Engine struct {
 	maxRounds int
 	nextID    uint64
 	memory    *MemoryTools
+	// Local robot control skips the extra post-turn model request. Recall and
+	// explicit memory tools remain available under the normal memory setting.
+	skipAutomaticLearning      bool
+	robotControlMode           bool
+	allowAutomaticObjectSearch bool
 }
 
 func NewEngine(provider Provider, executor Executor, system string) *Engine {
@@ -91,7 +96,14 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		defer e.learnMemory(ctx, prompt, emit)
 	}
 	e.messages = append(e.messages, Message{Role: "user", Content: prompt})
+	turnStart := len(e.messages) - 1
+	localizationNudges := 0
+	var objectSearch *robotFindWorkflow
+	if query, navigate := requestedObjectGoal(prompt); e.automaticObjectSearchAllowed(ctx, e.messages[:turnStart]) && query != "" {
+		objectSearch = &robotFindWorkflow{query: query, navigate: navigate}
+	}
 	memoryWarned := false
+	lastFailedTool, consecutiveFailures := "", 0
 	for round := 0; round < e.maxRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -122,10 +134,35 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 				memoryWarned = true
 			}
 		}
-		message, err := e.provider.Stream(ctx, messages, available, func(chunk string) {
-			streamed.WriteString(chunk)
-			emit(Event{Type: "text", Text: chunk})
-		})
+		var message Message
+		if objectSearch != nil && !e.automaticObjectSearchAllowed(ctx, e.messages[:turnStart]) {
+			objectSearch = nil
+		}
+		forced, workflowErr := objectSearch.nextCall(available, round)
+		if workflowErr != nil {
+			return workflowErr
+		}
+		if forced == nil {
+			forced = e.robotEvidenceCall(prompt, available, round)
+		}
+		if forced != nil {
+			message = Message{ToolCalls: []ToolCall{*forced}}
+			if objectSearch != nil && forced.Name == "robot_command" {
+				var goal struct{ Action string }
+				_ = json.Unmarshal(forced.Arguments, &goal)
+				switch goal.Action {
+				case "find_active":
+					message.Content = "The object is not in the current view. I'll search nearby viewpoints with bounded movement."
+				case "go_to_object":
+					message.Content = "The target has a verified approach route. I'll move to its stand-off position."
+				}
+			}
+		} else {
+			message, err = e.provider.Stream(ctx, messages, available, func(chunk string) {
+				streamed.WriteString(chunk)
+				emit(Event{Type: "text", Text: chunk})
+			})
+		}
 		if message.Usage != nil {
 			emit(Event{Type: "usage", Usage: message.Usage})
 		}
@@ -178,12 +215,22 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		}
 		e.messages = append(e.messages, message)
 		if len(message.ToolCalls) == 0 {
+			if e.robotControlMode && needsLocalizationContinuation(e.messages[turnStart:], message.Content) {
+				if localizationNudges >= 2 {
+					return errors.New("the model did not issue the promised localization command; the requested navigation has not completed")
+				}
+				localizationNudges++
+				e.messages = append(e.messages, Message{Role: "system", Content: localizationContinuationReminder})
+				continue
+			}
 			return ctx.Err()
 		}
 		var turnErr error
 		for i, call := range message.ToolCalls {
+			objectSearch.observeCall(call)
 			var result string
 			var images []Image
+			var callFailure error
 			emit(Event{Type: "tool_start", Call: &call})
 			switch {
 			case turnErr != nil:
@@ -192,6 +239,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 				turnErr = ctx.Err()
 				result = "Tool was not executed because the turn was canceled."
 			case validation[i] != nil:
+				callFailure = validation[i]
 				result = "Tool error: " + validation[i].Error()
 			default:
 				allowed := !byName[call.Name].RequiresApproval
@@ -220,10 +268,20 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 					if toolErr == nil {
 						images, toolErr = validateImages(output.Images)
 					}
+					if ctx.Err() == nil {
+						if workflowErr := objectSearch.observeResult(call, output, toolErr); workflowErr != nil {
+							turnErr = workflowErr
+						}
+					}
 					if e.memory != nil && ctx.Err() == nil {
 						e.memory.observe(call, output, toolErr)
 					}
 					if toolErr != nil {
+						var monitoringErr *robotMonitoringError
+						if errors.As(toolErr, &monitoringErr) || errors.Is(toolErr, errRobotReceiptUnknown) {
+							turnErr = toolErr
+						}
+						callFailure = toolErr
 						result = "Tool error: " + toolErr.Error()
 						if output.Text != "" {
 							result += "\n" + output.Text
@@ -234,11 +292,31 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 					}
 				}
 			}
+			if callFailure != nil && turnErr == nil {
+				if lastFailedTool == call.Name {
+					consecutiveFailures++
+				} else {
+					lastFailedTool, consecutiveFailures = call.Name, 1
+				}
+				if consecutiveFailures >= 3 {
+					turnErr = fmt.Errorf("stopped after three consecutive %s failures: %w", call.Name, callFailure)
+				}
+			} else if turnErr == nil {
+				lastFailedTool, consecutiveFailures = "", 0
+			}
 			if len(images) > 0 {
 				result = fmt.Sprintf("[%d image(s) attached for visual inspection.]\n%s", len(images), result)
 			}
+			modelResult := result
+			if callFailure == nil && turnErr == nil {
+				var outcome string
+				modelResult, outcome = robotResultEvidence(call, result)
+				if outcome != "" {
+					emit(Event{Type: "robot_outcome", Text: outcome, Call: &call})
+				}
+			}
 			result = truncateOutput(result)
-			e.messages = append(e.messages, Message{Role: "tool", ToolCallID: call.ID, Content: result, Images: images})
+			e.messages = append(e.messages, Message{Role: "tool", ToolCallID: call.ID, Content: truncateOutput(modelResult), Images: images})
 			e.trimImageHistory()
 			emit(Event{Type: "tool_result", Text: result, Call: &call})
 		}

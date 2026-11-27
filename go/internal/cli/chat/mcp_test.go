@@ -24,6 +24,9 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv("WENDY_CHAT_TEST_MCP") == "1" && len(os.Args) >= 3 && os.Args[1] == "mcp" && os.Args[2] == "serve" {
 		srv := server.NewMCPServer("chat-test", "1", server.WithToolCapabilities(true))
+		srv.AddTool(mcpgo.NewTool("robot_status", mcpgo.WithReadOnlyHintAnnotation(true)), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+			return mcpgo.NewToolResultText(`{"localization_camera":{"message":"` + strings.Repeat("x", maxToolOutputBytes+100) + `"},"snapshot":{"Aligned":true},"state":"completed","message":"Alignment confirmed"}`), nil
+		})
 		srv.AddTool(mcpgo.NewTool("test_status", mcpgo.WithReadOnlyHintAnnotation(true)), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -62,6 +65,26 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+func TestMCPRobotReceiptSurvivesDisplayLimit(t *testing.T) {
+	t.Setenv("WENDY_CHAT_TEST_MCP", "1")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tools, err := NewTools(ctx, executable, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tools.Close()
+	result, err := tools.callMCPResult(ctx, ToolCall{Name: "robot_status", Arguments: json.RawMessage(`{}`)})
+	var receipt robotReceipt
+	if err != nil || json.Unmarshal([]byte(result.Text), &receipt) != nil || receipt.State != "completed" || len(result.Text) <= maxToolOutputBytes {
+		t.Fatalf("receipt was truncated before control validation: state=%q bytes=%d err=%v", receipt.State, len(result.Text), err)
+	}
 }
 
 func TestMCPSubprocessInitializeListCallAndRefresh(t *testing.T) {

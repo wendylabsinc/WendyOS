@@ -63,6 +63,8 @@ type ApplyOptions struct {
 	// avahi mounts are mutually exclusive (one /var/run/dbus); declaring
 	// both entitlements refuses container start.
 	AvahiProxySocketDir string
+	// WorldSocketDir contains the exact service deployment's World socket.
+	WorldSocketDir string
 	// SystemAPISocketDir is the app-specific host directory prepared by
 	// AppSystemAPISocketManager. It contains only the narrow System API socket.
 	SystemAPISocketDir string
@@ -158,6 +160,8 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 				didSetDeviceCapabilities = true
 				SetDeviceCapabilities(spec)
 			}
+		case appconfig.EntitlementWorld:
+			applyWorldSocket(spec, opts.WorldSocketDir)
 		case appconfig.EntitlementNotifications:
 			applySystemAPI(spec, opts.SystemAPISocketDir)
 		case appconfig.EntitlementEpisodeWrite:
@@ -190,6 +194,8 @@ func ApplyHostSockets(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) {
 		switch ent.Type {
 		case appconfig.EntitlementBluetooth:
 			mountDBusProxy(spec, opts.DBusProxySocketDir)
+		case appconfig.EntitlementWorld:
+			applyWorldSocket(spec, opts.WorldSocketDir)
 		case appconfig.EntitlementNotifications:
 			applySystemAPI(spec, opts.SystemAPISocketDir)
 		case appconfig.EntitlementEpisodeWrite:

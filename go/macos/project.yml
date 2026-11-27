@@ -25,6 +25,8 @@ settings:
     Release:
       WENDY_PUSH_ENVIRONMENT: production
 packages:
+  WorldClient:
+    path: WorldClient
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm.git
     exactVersion: 1.18.0
@@ -51,6 +53,10 @@ targets:
         type: folder
         buildPhase: resources
     dependencies:
+      - package: WorldClient
+        product: WorldOperator
+      - package: WorldClient
+        product: WorldTwin
       - package: SwiftTerm
       - target: WendyNetwork
         embed: true
