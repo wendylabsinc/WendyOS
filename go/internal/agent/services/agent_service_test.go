@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -236,6 +237,96 @@ func TestReadWendyOSVersionFromFallsBackToLegacyPath(t *testing.T) {
 	}
 	if got != "WendyOS-0.10.4" {
 		t.Fatalf("version = %q, want legacy version", got)
+	}
+}
+
+// /etc/issue as a WendyOS image ships it: the console banner and getty's
+// escapes. The Builder appends its stamp lines below.
+const osIssueBanner = "      XXXXX   XXXXXXXXX\n\nWendyOS - AI-Powered Edge Computing Platform\n\\n \\l\n\n"
+
+func TestGetAgentVersionReportsTheOSBuildStamp(t *testing.T) {
+	const sha = "4db3514d8971c00739d0831ae04ee6f663e09484"
+	const missing = "<no file>"
+	for _, tc := range []struct {
+		name       string
+		notWendyOS bool
+		issue      string
+		commit     string
+		wantBuild  string
+		wantCommit string
+	}{
+		{name: "pull request image", issue: osIssueBanner + "Build: pr-375\nCommit: " + sha + "\n", commit: sha + "\n", wantBuild: "pr-375", wantCommit: sha},
+		{name: "nightly image", issue: osIssueBanner + "Build: nightly-20261121T165425\n", commit: sha + "\n", wantBuild: "nightly-20261121T165425", wantCommit: sha},
+		{name: "release image", issue: osIssueBanner + "Build: 0.21.0\n", commit: sha + "\n", wantBuild: "0.21.0", wantCommit: sha},
+		{name: "image built outside CI has no commit", issue: osIssueBanner + "Build: 0.21.0\n", commit: "\n", wantBuild: "0.21.0"},
+		{name: "image from before the stamp", issue: osIssueBanner, commit: missing},
+		{name: "no files at all", issue: missing, commit: missing},
+		{name: "another Linux is not read", notWendyOS: true, issue: "Ubuntu 24.04 LTS \\n \\l\nBuild: pr-375\n", commit: sha + "\n"},
+		{name: "a second stamp replaces the first", issue: osIssueBanner + "Build: 0.21.0\nBuild: pr-375\n", commit: sha + "\n", wantBuild: "pr-375", wantCommit: sha},
+		{name: "CRLF line endings", issue: osIssueBanner + "Build: pr-375\r\n", commit: sha + "\r\n", wantBuild: "pr-375", wantCommit: sha},
+		{name: "longest label", issue: "Build: " + strings.Repeat("a", 64) + "\n", commit: missing, wantBuild: strings.Repeat("a", 64)},
+		{name: "label too long", issue: "Build: " + strings.Repeat("a", 65) + "\n", commit: sha, wantCommit: sha},
+		{name: "label with terminal escapes", issue: "Build: \x1b[31mpr-375\x1b[0m\n", commit: sha, wantCommit: sha},
+		{name: "label with a space", issue: "Build: my own build\n", commit: sha, wantCommit: sha},
+		{name: "label outside ASCII", issue: "Build: pr-\u00fc375\n", commit: sha, wantCommit: sha},
+		{name: "empty label", issue: osIssueBanner + "Build:\n", commit: sha, wantCommit: sha},
+		{name: "issue file larger than any real one", issue: "Build: pr-375\n" + strings.Repeat("x\n", 32<<10), commit: sha, wantCommit: sha},
+		{name: "issue file of the largest size read", issue: strings.Repeat("x\n", 32<<10-7) + "Build: pr-375\n", commit: sha, wantBuild: "pr-375", wantCommit: sha},
+		{name: "commit in upper case", issue: "Build: pr-375\n", commit: strings.ToUpper(sha), wantBuild: "pr-375", wantCommit: sha},
+		{name: "commit that is not a hash", issue: "Build: pr-375\n", commit: "not a commit\n", wantBuild: "pr-375"},
+		{name: "commit too short", issue: "Build: pr-375\n", commit: "4db35\n", wantBuild: "pr-375"},
+		{name: "commit too long", issue: "Build: pr-375\n", commit: strings.Repeat("a", 65), wantBuild: "pr-375"},
+		{name: "commit followed by other lines", issue: "Build: pr-375\n", commit: sha + "\nextra\n", wantBuild: "pr-375"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write := func(name, content string) string {
+				path := filepath.Join(dir, name)
+				if content != missing {
+					if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return path
+			}
+			s := &AgentService{
+				deviceTypePath: filepath.Join(dir, "device-type"),
+				discoverGPUs:   func() []gpudiscovery.Device { return nil },
+				isWendyOSHost:  func() bool { return !tc.notWendyOS },
+				osIssuePath:    write("issue", tc.issue),
+				osCommitPath:   write("commit", tc.commit),
+			}
+			resp, err := s.GetAgentVersion(context.Background(), &agentpb.GetAgentVersionRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// An absent stamp leaves the field unset, never set and empty.
+			if resp.GetOsBuild() != tc.wantBuild || (resp.OsBuild != nil) != (tc.wantBuild != "") {
+				t.Errorf("os_build = %q (set: %v), want %q", resp.GetOsBuild(), resp.OsBuild != nil, tc.wantBuild)
+			}
+			if resp.GetOsCommit() != tc.wantCommit || (resp.OsCommit != nil) != (tc.wantCommit != "") {
+				t.Errorf("os_commit = %q (set: %v), want %q", resp.GetOsCommit(), resp.OsCommit != nil, tc.wantCommit)
+			}
+		})
+	}
+}
+
+// A stamp that cannot be read, here a directory in its place, is no stamp.
+func TestGetAgentVersionSkipsAStampThatIsNotAFile(t *testing.T) {
+	dir := t.TempDir()
+	s := &AgentService{
+		deviceTypePath: filepath.Join(dir, "device-type"),
+		discoverGPUs:   func() []gpudiscovery.Device { return nil },
+		isWendyOSHost:  func() bool { return true },
+		osIssuePath:    dir,
+		osCommitPath:   dir,
+	}
+	resp, err := s.GetAgentVersion(context.Background(), &agentpb.GetAgentVersionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OsBuild != nil || resp.OsCommit != nil {
+		t.Fatalf("os_build %q, os_commit %q; want neither", resp.GetOsBuild(), resp.GetOsCommit())
 	}
 }
 

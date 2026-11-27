@@ -31,7 +31,7 @@ func TestOSUpdateBaselinePreservesClearedReceiptWithSkewedClock(t *testing.T) {
 			if got := usableOSUpdateOutcomeSince(resp, now, baseline); got != tc.want {
 				t.Fatalf("usable = %v, want %v", got, tc.want)
 			}
-			_, err := evaluateOSUpdateOutcomeSince(resp, nil, version, version, baseline, now)
+			_, err := evaluateOSUpdateOutcomeSince(resp, nil, version, version, osBuild{}, baseline, now)
 			if (err == nil) != tc.want {
 				t.Fatalf("evaluation error = %v; want verified=%v", err, tc.want)
 			}
