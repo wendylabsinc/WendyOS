@@ -343,7 +343,7 @@ func TestDiscoveryChecksCurrentStoppingHorizonBeforeEveryCommand(t *testing.T) {
 	r, commands := readySiteRobot()
 	// This obstacle is beyond the initial body sweep, but enters the live
 	// stopping sweep near arrival. Gathering part of a view is OK.
-	r.observed.Grid.Obstacles[sitenav.Cell{X: 9, Y: 0}] = true
+	r.observed.Grid.Obstacles[sitenav.Cell{X: 14, Y: 0}] = true
 	if err := r.DiscoveryStep(1, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestDiscoveryChecksCurrentStoppingHorizonBeforeEveryCommand(t *testing.T) {
 		t.Fatal("did not gather data within clear stopping room")
 	}
 	// Before reaching the desired view, the live horizon reaches the obstacle.
-	r.observed.Pose.Position.X = .34
+	r.observed.Pose.Position.X = .2
 	r.stepLocked(time.Now())
 	if r.moving || commands.commands[len(commands.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP || !strings.Contains(r.message, "obstacle or drop") {
 		t.Fatal("did not stop as the live stopping horizon reached a hazard")
@@ -477,40 +477,43 @@ func measuredHalfMeterBeyondNose() sitenav.Grid {
 	return grid
 }
 
-func TestDiscoveryUsesSlowSpeedWithinMeasuredHalfMeterBeyondNose(t *testing.T) {
+func TestDiscoveryRetainsHardwareSpeed(t *testing.T) {
+	if sitenav.TurningSpeed != .8 {
+		t.Fatalf("turns must retain the hardware turning speed: %v", sitenav.TurningSpeed)
+	}
+	if discoverySpeed != .65 {
+		t.Fatalf("discovery must retain the hardware walking speed: %v", discoverySpeed)
+	}
 	for _, distance := range []float64{.3, .4} {
 		t.Run(fmt.Sprint(distance), func(t *testing.T) {
 			grid := measuredHalfMeterBeyondNose()
-			if err := discoveryClearanceError(grid, sitenav.Point{}, sitenav.Point{X: distance}, 0); err != nil {
-				t.Fatalf("slow view rejected measured patch: %v", err)
-			}
-			if err := discoveryClearanceErrorAtSpeed(grid, sitenav.Point{}, sitenav.Point{X: distance}, 0, sitenav.WalkingSpeed, 0); err == nil {
-				t.Fatal("walking speed reused the slow stopping reservation")
+			if err := discoveryClearanceError(grid, sitenav.Point{}, sitenav.Point{X: distance}, 0); err == nil {
+				t.Fatal("discovery accepted less floor than its walking-speed stopping horizon")
 			}
 		})
 	}
 	r, commands := readySiteRobot()
-	r.observed.Grid = measuredHalfMeterBeyondNose()
 	if err := r.DiscoveryStep(1, 1); err != nil {
 		t.Fatal(err)
 	}
 	r.stepLocked(time.Now())
 	command := commands.commands[len(commands.commands)-1]
-	if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE || command.Forward != .20 {
+	if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE || command.Forward != .65 {
 		t.Fatalf("wrong nearby-view speed: %+v", command)
 	}
 	// A newly revealed hole or obstacle still stops the bounded movement.
 	r.observed.Grid.Obstacles[sitenav.Cell{X: 6, Y: 0}] = true
 	r.stepLocked(time.Now())
 	if r.moving || commands.commands[len(commands.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
-		t.Fatal("slow discovery ignored newly observed hazard")
+		t.Fatal("discovery ignored newly observed hazard")
 	}
 }
 
-func TestSlowDiscoveryStillRejectsUnknownFloorAndDrops(t *testing.T) {
+func TestDiscoveryRejectsFloorHazards(t *testing.T) {
 	for _, fault := range []string{"unknown-floor", "drop", "body-margin"} {
 		t.Run(fault, func(t *testing.T) {
-			grid := measuredHalfMeterBeyondNose()
+			r, _ := readySiteRobot()
+			grid := r.observed.Grid
 			c := sitenav.Cell{X: 6, Y: 0}
 			switch fault {
 			case "unknown-floor":
@@ -521,7 +524,7 @@ func TestSlowDiscoveryStillRejectsUnknownFloorAndDrops(t *testing.T) {
 				delete(grid.Floor, sitenav.Cell{X: 0, Y: 2})
 			}
 			if err := discoveryClearanceError(grid, sitenav.Point{}, sitenav.Point{X: .3}, 0); err == nil {
-				t.Fatal("slow speed bypassed floor/hazard evidence")
+				t.Fatal("discovery bypassed floor/hazard evidence")
 			}
 		})
 	}
@@ -539,7 +542,7 @@ func TestExplicitForwardKeepsWalkingSpeedAndStoppingHorizon(t *testing.T) {
 	r, commands = readySiteRobot()
 	r.observed.Grid = measuredHalfMeterBeyondNose()
 	if err := r.forwardLocked(.4); err == nil || r.moving || len(commands.commands) != 0 {
-		t.Fatal("explicit forward used slower discovery stopping distance")
+		t.Fatal("explicit forward accepted insufficient stopping distance")
 	}
 }
 

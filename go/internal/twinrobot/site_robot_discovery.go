@@ -12,10 +12,12 @@ import (
 )
 
 const discoveryDistance = .4 // preferred viewpoint distance, not a required motion
-// Nearby observation moves use a slower gait than an explicit forward goal.
-// At 0.65 m/s the stopping horizon alone was 0.80 m, longer than any
-// requested viewpoint and needlessly requiring floor 1.25 m ahead.
-const discoverySpeed = .20
+// Preserve the hardware-tested Go2 walking rate for discovery too. Do not
+// lower, taper or special-case this speed to fit a smaller observed floor patch:
+// the SDK can ignore slower commands. Changes require an explicit user request
+// and validation on a real Go2. Adjust the path or stopping plan instead,
+// retaining full clearance.
+const discoverySpeed = sitenav.WalkingSpeed
 const discoveryMargin = .10 // 6 cm lateral drift plus the footprint swept by 0.1 rad yaw drift
 
 // ErrDiscoveryBlocked identifies preflight clearance loss for a viewpoint or

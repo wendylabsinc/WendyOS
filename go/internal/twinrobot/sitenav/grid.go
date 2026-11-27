@@ -547,11 +547,16 @@ func (a Alignment) ToRobot(p Point) Point {
 }
 
 // The physical Go2 ignores forward requests below roughly 0.5 m/s. Use its
-// walking rate until stopping; a lower proportional command is not a slow gait.
+// hardware-tested 0.65 m/s walking rate until stopping; a lower proportional
+// command is not a slow gait. Do not lower, taper or special-case discovery
+// without an explicit user request and validation on a real Go2. Adjust paths
+// or stopping plans to fit space, never these speeds merely to reduce clearance.
 const WalkingSpeed = .65
 
-// Route and localization turns use the same rate. Small corrections stop
-// at the heading tolerance instead of tapering into rejected SDK velocities.
+// Preserve the hardware-tested 0.8 rad/s rate for route and localization turns.
+// Changes require an explicit user request and validation on a real Go2.
+// Small corrections stop at the heading tolerance instead of tapering into
+// rejected SDK velocities.
 const TurningSpeed = .8
 
 // Cover the 500ms MOVE lease, braking at 1 rad/s² and 0.05rad tolerance.
