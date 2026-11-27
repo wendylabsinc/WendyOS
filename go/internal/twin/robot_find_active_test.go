@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
@@ -25,11 +26,16 @@ type objectSearchTestOwner struct {
 	fault        error
 	blocked      bool
 	rejectView   bool
+	abortStep    bool
+	staleScan    bool
 }
 
 func (o *objectSearchTestOwner) Status() twinrobot.SiteRobotSnapshot {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if !o.staleScan {
+		o.state.ScanReceivedUnixNanos = time.Now().UnixNano()
+	}
 	return o.state
 }
 func (o *objectSearchTestOwner) Check() error { o.mu.Lock(); defer o.mu.Unlock(); return o.fault }
@@ -56,6 +62,10 @@ func (o *objectSearchTestOwner) ObjectSearchStep(uint64) error {
 	}
 	o.moves++
 	o.state.DiscoveryState = 2
+	if o.abortStep {
+		o.state.DiscoveryState = 3
+		o.state.LastMotionFailure = "Discovery stopped: measured obstacle overlaps route."
+	}
 	return nil
 }
 func (o *objectSearchTestOwner) SearchCameraView(received int64, after time.Time) (*twinrobot.SearchCameraView, error) {
@@ -148,7 +158,7 @@ func submitObjectTestView(server *Server, job *activeObjectJob, token string, re
 }
 func awaitObjectResult(t *testing.T, server *Server, job *activeObjectJob, feed bool) twinrobot.CommandResult {
 	t.Helper()
-	deadline := time.After(12 * time.Second)
+	deadline := time.After(25 * time.Second)
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -159,6 +169,9 @@ func awaitObjectResult(t *testing.T, server *Server, job *activeObjectJob, feed 
 			return result
 		}
 		if feed && result.ObjectSearch != nil && result.ObjectSearch.ViewID != "" {
+			// A captured frame arrives after its demand, including under synctest's
+			// virtual clock where both goroutines may otherwise share an instant.
+			time.Sleep(time.Nanosecond)
 			w := submitObjectTestView(server, job, result.ObjectSearch.ViewID, time.Now().UnixNano())
 			if w.Code != 200 {
 				t.Fatal(w.Body.String())
@@ -203,6 +216,77 @@ func TestActiveObjectSearchStopsAtMovementAndTurnLimits(t *testing.T) {
 	defer owner.mu.Unlock()
 	if result.State != "failed" || result.ObjectSearch.Seen || owner.moves != 3 || owner.turns != 6 || !owner.closed {
 		t.Fatalf("unbounded search: %s moves%d turns%d", result.Message, owner.moves, owner.turns)
+	}
+}
+
+func TestActiveObjectSearchRecoversBlockedTranslationWithSafeTurn(t *testing.T) {
+	server, _, job, owner := activeObjectFixture(t, &objectSearchTestVision{seenAt: 2})
+	owner.mu.Lock()
+	owner.abortStep = true
+	owner.state.MotionRecoveryAllowed = true
+	owner.mu.Unlock()
+	started := time.Now()
+	result := awaitObjectResult(t, server, job, true)
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if result.State != "completed" || owner.moves != 1 || owner.turns != 1 || result.ObjectSearch.Viewpoints != 1 || result.ObjectSearch.Turns != 1 || time.Since(started) < 2*time.Second {
+		t.Fatalf("blocked move recovery incorrect: result=%+v moves=%d turns=%d", result, owner.moves, owner.turns)
+	}
+}
+
+func TestActiveObjectSearchDoesNotRecoverUnacknowledgedStop(t *testing.T) {
+	server, _, job, owner := activeObjectFixture(t, &objectSearchTestVision{})
+	owner.mu.Lock()
+	owner.abortStep = true
+	owner.mu.Unlock()
+	result := awaitObjectResult(t, server, job, true)
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if result.State != "failed" || owner.moves != 1 || owner.turns != 0 || !owner.closed {
+		t.Fatal("unsafe recovery after unacknowledged stop", result)
+	}
+}
+
+func TestActiveObjectSearchRecoveryRetainsAllMotionBudgets(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		server, _, job, owner := activeObjectFixture(t, &objectSearchTestVision{})
+		owner.mu.Lock()
+		owner.abortStep = true
+		owner.state.MotionRecoveryAllowed = true
+		owner.mu.Unlock()
+		result := awaitObjectResult(t, server, job, true)
+		owner.mu.Lock()
+		defer owner.mu.Unlock()
+		if result.State != "failed" || owner.moves != 3 || owner.turns != 6 || result.ObjectSearch.Viewpoints != 1 || !owner.closed {
+			t.Fatalf("recovery reset the search budget: moves=%d turns=%d result=%+v", owner.moves, owner.turns, result)
+		}
+	})
+}
+
+func TestObjectSearchRecoveryRejectsLostControlAndStaleScans(t *testing.T) {
+	for _, mode := range []string{"stale", "revoked", "superseded", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				owner := &objectSearchTestOwner{staleScan: mode == "stale", state: twinrobot.SiteRobotSnapshot{MeasurementsReady: true, MotionRecoveryAllowed: true}}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				time.AfterFunc(500*time.Millisecond, func() {
+					owner.mu.Lock()
+					defer owner.mu.Unlock()
+					switch mode {
+					case "revoked":
+						owner.state.MotionRecoveryAllowed = false
+					case "superseded":
+						owner.fault = twinrobot.ErrLocalizationSearchSuperseded
+					case "canceled":
+						cancel()
+					}
+				})
+				if err := waitObjectSearchRecovery(ctx, owner, owner.Status()); err == nil {
+					t.Fatal("invalid recovery accepted")
+				}
+			})
+		})
 	}
 }
 func TestActiveObjectSearchRejectsStaleForeignAndDuplicateFrames(t *testing.T) {
