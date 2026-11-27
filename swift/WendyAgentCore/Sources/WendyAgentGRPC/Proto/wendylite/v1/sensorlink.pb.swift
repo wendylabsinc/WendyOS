@@ -298,6 +298,10 @@ public nonisolated struct Wendylite_V1_SensorData: Sendable {
 
   public var chunkSeq: UInt32 = 0
 
+  /// When the first sample in the frame was taken, in microseconds on the
+  /// source's own clock. That clock need not be wall time: a Wendy Lite counts
+  /// from its boot. A source that does not stamp its frames leaves this zero.
+  /// A forwarding agent passes it through unchanged.
   public var tsUs: UInt64 = 0
 
   /// bit0 = keyframe, bit1 = last chunk in frame
@@ -305,9 +309,30 @@ public nonisolated struct Wendylite_V1_SensorData: Sendable {
 
   public var payload: Data = Data()
 
+  /// How far ts_us may be from the instant that sample was really taken, in
+  /// microseconds on the same clock: the sample was taken no earlier than
+  /// ts_us - ts_uncertainty_us and no later than ts_us + ts_uncertainty_us.
+  /// The source that took the sample measures it, for example as half the time
+  /// the read took. It says nothing about how the source's clock relates to any
+  /// other clock; a receiver that places the sample on its own clock adds the
+  /// uncertainty of doing so. Absent means the source makes no claim, which is
+  /// not the same as zero. Receivers read it from the first chunk of a frame,
+  /// as they do ts_us. A forwarding agent passes it through unchanged and never
+  /// adds one of its own.
+  public var tsUncertaintyUs: UInt32 {
+    get {_tsUncertaintyUs ?? 0}
+    set {_tsUncertaintyUs = newValue}
+  }
+  /// Returns true if `tsUncertaintyUs` has been explicitly set.
+  public var hasTsUncertaintyUs: Bool {self._tsUncertaintyUs != nil}
+  /// Clears the value of `tsUncertaintyUs`. Subsequent reads from it will return its default value.
+  public mutating func clearTsUncertaintyUs() {self._tsUncertaintyUs = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
+
+  fileprivate var _tsUncertaintyUs: UInt32? = nil
 }
 
 public nonisolated struct Wendylite_V1_Ping: Sendable {
@@ -767,7 +792,7 @@ nonisolated extension Wendylite_V1_Unsubscribe: SwiftProtobuf.Message, SwiftProt
 
 nonisolated extension Wendylite_V1_SensorData: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".SensorData"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}channel_id\0\u{3}frame_seq\0\u{3}chunk_seq\0\u{3}ts_us\0\u{1}flags\0\u{1}payload\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}channel_id\0\u{3}frame_seq\0\u{3}chunk_seq\0\u{3}ts_us\0\u{1}flags\0\u{1}payload\0\u{3}ts_uncertainty_us\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -781,12 +806,17 @@ nonisolated extension Wendylite_V1_SensorData: SwiftProtobuf.Message, SwiftProto
       case 4: try { try decoder.decodeSingularUInt64Field(value: &self.tsUs) }()
       case 5: try { try decoder.decodeSingularUInt32Field(value: &self.flags) }()
       case 6: try { try decoder.decodeSingularBytesField(value: &self.payload) }()
+      case 7: try { try decoder.decodeSingularUInt32Field(value: &self._tsUncertaintyUs) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if self.channelID != 0 {
       try visitor.visitSingularUInt32Field(value: self.channelID, fieldNumber: 1)
     }
@@ -805,6 +835,9 @@ nonisolated extension Wendylite_V1_SensorData: SwiftProtobuf.Message, SwiftProto
     if !self.payload.isEmpty {
       try visitor.visitSingularBytesField(value: self.payload, fieldNumber: 6)
     }
+    try { if let v = self._tsUncertaintyUs {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 7)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -815,6 +848,7 @@ nonisolated extension Wendylite_V1_SensorData: SwiftProtobuf.Message, SwiftProto
     if lhs.tsUs != rhs.tsUs {return false}
     if lhs.flags != rhs.flags {return false}
     if lhs.payload != rhs.payload {return false}
+    if lhs._tsUncertaintyUs != rhs._tsUncertaintyUs {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
