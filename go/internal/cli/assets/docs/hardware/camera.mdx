@@ -114,8 +114,15 @@ recordings can read one USB camera at the same time. Add `"mode": "direct"` to
 the camera entitlement to get the real device instead.
 
 An app deployed before this version must be deployed again to get a camera
-node. The extra device path that carried the H.264 of a camera that produces
-it is gone: the app reads the camera at its own path.
+node.
+
+Before this version, an app on a camera that produces H.264 also got an extra
+device node, named `Wendy sensor N` and numbered high, such as
+`/dev/video255`, and read the camera's H.264 there. That node is gone. Such an
+app now sets `"format": "native"` on its camera entitlement, and
+`"stamp": "frame"` if it reads frame numbers from the buffer timestamp, and
+reads the camera at its own path. It must be deployed again.
+`"mode": "direct"` still gives the real device.
 
 Sharing covers local USB cameras that produce MJPEG, H.264 or packed raw
 formats. These keep today's behavior and are not shared: CSI cameras, depth,
