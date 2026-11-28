@@ -104,31 +104,17 @@ func TestPlan_WithoutEncoderNeedsATap(t *testing.T) {
 	}
 }
 
-func TestPlan_MJPEGCaptureTeesDecodedFramesUpToThePictureLimit(t *testing.T) {
+func TestPlan_OversizedMJPEGFrameKeepsTodaysPipeline(t *testing.T) {
 	withYUYVModes(t, [][2]uint32{{1920, 1080}})
 	prev := deviceSupportsMJPEGSize
 	deviceSupportsMJPEGSize = func(string, uint32, uint32) bool { return true }
 	t.Cleanup(func() { deviceSupportsMJPEGSize = prev })
-	available := map[string]bool{"x264enc": true, "jpegdec": true}
-
-	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 1920, Height: 1080}, available)
-	if plan.pixels == nil || plan.pixels.GetWidth() != 1920 || plan.pixels.GetHeight() != 1080 ||
-		plan.pixels.GetFourcc() != fourccYUYV || plan.pixels.GetBytesPerLine() != 3840 {
-		t.Errorf("pixels = %v, want 1920x1080 YUYV 3840", plan.pixels)
-	}
-	if got, w := plan.rawReason(), "camera is captured as MJPEG at 1920x1080; raw frames are not offered"; plan.raw != nil || got != w {
-		t.Errorf("raw = %v, refused with %q; want none, refused with %q", plan.raw, got, w)
-	}
-	if joined := strings.Join(plan.args, " "); !strings.Contains(joined, "jpegdec ! tee name=rawtap") {
-		t.Errorf("pipeline has no tap for its decoded frames: %s", joined)
-	}
-
-	plan = mustPlan(t, &agentpb.StreamVideoRequest{Width: 3840, Height: 2160}, available)
+	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 1920, Height: 1080}, map[string]bool{"x264enc": true, "jpegdec": true})
 	if plan.pixels != nil {
-		t.Errorf("pixels = %v for a frame over the picture limit", plan.pixels)
+		t.Errorf("pixels = %v for a frame over the limit", plan.pixels)
 	}
 	if joined := strings.Join(plan.args, " "); strings.Contains(joined, "tee") || !strings.Contains(joined, "jpegdec") {
-		t.Errorf("pipeline of a frame over the picture limit changed: %s", joined)
+		t.Errorf("pipeline changed: %s", joined)
 	}
 }
 

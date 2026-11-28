@@ -293,58 +293,28 @@ func TestPlan_NoRawThroughPipeWire(t *testing.T) {
 	}
 }
 
+// An uncompressed capture whose frame is above a default gRPC message is not
+// offered raw, and its pipeline is the one it had without a tap: no format
+// pinned on the camera, no tee, nothing written to fd 3.
 func TestPlan_RawFrameMustFitADefaultGRPCMessage(t *testing.T) {
 	if maxRawFrameBytes >= 4*1024*1024 {
 		t.Fatalf("maxRawFrameBytes %d does not leave room under grpc-go's 4 MiB default", maxRawFrameBytes)
 	}
 	withYUYVModes(t, [][2]uint32{{1920, 1080}})
-	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 1920, Height: 1080}, map[string]bool{"x264enc": true})
-	if plan.raw != nil {
-		t.Fatalf("a 1080p YUYV frame (%d bytes) must not be offered raw", 1920*1080*2)
+	size := &agentpb.StreamVideoRequest{Width: 1920, Height: 1080}
+	plan := mustPlan(t, size, map[string]bool{"x264enc": true})
+	if plan.raw != nil || plan.pixels != nil {
+		t.Fatalf("a 1080p YUYV frame (%d bytes): raw = %v, pixels = %v; want neither", 1920*1080*2, plan.raw, plan.pixels)
 	}
 	if got, want := plan.rawReason(), "a 1920x1080 YUYV frame exceeds the 4128768-byte raw frame limit"; got != want {
 		t.Errorf("raw refused with %q, want today's reason %q", got, want)
 	}
-}
-
-// A capture whose frame is above a default gRPC message and within the picture
-// limit is not offered raw, and its frames still go to the tap, untouched, for
-// pixel subscribers.
-func TestPlan_ACaptureAboveADefaultGRPCMessageStillTapsItsFramesAsPictures(t *testing.T) {
-	withYUYVModes(t, [][2]uint32{{1920, 1080}, {3840, 2160}})
-	available := map[string]bool{"x264enc": true}
-	size := &agentpb.StreamVideoRequest{Width: 1920, Height: 1080}
-	check := func(what string, plan gstPipelinePlan, wantSuffix string) {
-		t.Helper()
-		if plan.raw != nil || plan.pixels == nil || plan.pixels.GetWidth() != 1920 || plan.pixels.GetHeight() != 1080 ||
-			plan.pixels.GetFourcc() != fourccYUYV || plan.pixels.GetBytesPerLine() != 3840 {
-			t.Fatalf("%s: raw = %v, pixels = %v; want no raw and 1920x1080 YUYV 3840 pictures", what, plan.raw, plan.pixels)
-		}
-		joined := strings.Join(plan.args, " ")
-		if !strings.Contains(joined, "format=YUY2") || !strings.HasSuffix(joined, wantSuffix) || strings.Contains(joined, "videoconvert ! video/x-raw,format=YUY2") {
-			t.Errorf("%s: the capture's frames do not reach the tap untouched: %s", what, joined)
-		}
+	joined := strings.Join(plan.args, " ")
+	if strings.Contains(joined, "tee") || strings.Contains(joined, "fd=3") || strings.Contains(joined, "format=YUY2") {
+		t.Errorf("pipeline must be unchanged when raw is not offered: %s", joined)
 	}
-	check("encoding", mustPlan(t, size, available), "rawtap. ! "+rawTapQueue+" ! fdsink fd=3")
-	if joined := strings.Join(mustPlan(t, size, available).args, " "); !strings.Contains(joined, "tee name=rawtap") {
-		t.Errorf("encoding: no tee for the tap: %s", joined)
-	}
-	tapOnly, err := planGStreamerPipelineShaped(pipelineShape{}, "gst", "/dev/video4", size, "x264enc", true, camera.TransportUSB, "", pipeWireSource{}, available)
-	if err != nil || !tapOnly.tapOnly {
-		t.Fatalf("without the encoder: tapOnly=%v, %v", tapOnly.tapOnly, err)
-	}
-	check("without the encoder", tapOnly, rawTapQueue+" ! fdsink fd=3")
-
-	large := &agentpb.StreamVideoRequest{Width: 3840, Height: 2160}
-	plan := mustPlan(t, large, available)
-	if got, want := plan.rawReason(), "a 3840x2160 YUYV frame exceeds the 4128768-byte raw frame limit"; plan.raw != nil || plan.pixels != nil || got != want {
-		t.Errorf("3840x2160: raw = %v, pixels = %v, refused with %q; want neither, refused with %q", plan.raw, plan.pixels, got, want)
-	}
-	if joined := strings.Join(plan.args, " "); strings.Contains(joined, "tee") || strings.Contains(joined, "fd=3") {
-		t.Errorf("3840x2160: the pipeline has a tap: %s", joined)
-	}
-	if _, err := planGStreamerPipelineShaped(pipelineShape{}, "gst", "/dev/video4", large, "x264enc", true, camera.TransportUSB, "", pipeWireSource{}, available); !errors.Is(err, errNoTapOnlyPipeline) {
-		t.Errorf("3840x2160 without the encoder: %v, want errNoTapOnlyPipeline", err)
+	if _, err := planGStreamerPipelineShaped(pipelineShape{}, "gst", "/dev/video4", size, "x264enc", true, camera.TransportUSB, "", pipeWireSource{}, map[string]bool{"x264enc": true}); !errors.Is(err, errNoTapOnlyPipeline) {
+		t.Errorf("without the encoder: %v, want errNoTapOnlyPipeline", err)
 	}
 }
 
@@ -859,27 +829,33 @@ func waitSignal(t *testing.T, ch <-chan struct{}, what string) {
 	}
 }
 
-// The tap carries a pipeline's decoded pictures too, and one of those may be
-// larger than a raw frame.
-func TestPumpRawTap_ReadsA1920x1080PictureWholeAndNothingAboveThePictureLimit(t *testing.T) {
+// A tap carries no frame above a raw frame's limit: no pipeline is planned
+// with one, and a pump given one reads nothing.
+func TestPumpRawTap_ReadsAFrameAtTheRawFrameLimitAndNothingAboveIt(t *testing.T) {
+	const limit = 4*1024*1024 - 64*1024
 	sink := newPumpTestSink(true)
-	p := startPumpFormat(t, sink, &agentpb.RawFormat{Width: 1920, Height: 1080, Fourcc: fourccYUYV, BytesPerLine: 3840}, nil)
-	picture := make([]byte, 1920*2*1080)
-	picture[0], picture[len(picture)-1] = 0xA5, 0x5A
-	go p.w.Write(picture) //nolint:errcheck
-	waitUntil(t, "the pump publishes the picture", func() bool { return len(sink.published()) == 1 })
-	if got := sink.published()[0]; len(got) != len(picture) || got[0] != 0xA5 || got[len(got)-1] != 0x5A {
-		t.Fatalf("published %d bytes, want the whole %d-byte picture", len(got), len(picture))
+	p := startPumpFormat(t, sink, &agentpb.RawFormat{Width: limit / 2, Height: 1, Fourcc: fourccYUYV, BytesPerLine: limit}, nil)
+	frame := make([]byte, limit)
+	frame[0], frame[len(frame)-1] = 0xA5, 0x5A
+	go p.w.Write(frame) //nolint:errcheck
+	waitUntil(t, "the pump publishes the frame", func() bool { return len(sink.published()) == 1 })
+	if got := sink.published()[0]; len(got) != limit || got[0] != 0xA5 || got[len(got)-1] != 0x5A {
+		t.Fatalf("published %d bytes, want the whole %d-byte frame", len(got), limit)
 	}
 
-	tooLarge := startPumpFormat(t, newPumpTestSink(true), &agentpb.RawFormat{Width: 3840, Height: 2160, Fourcc: fourccYUYV, BytesPerLine: 7680}, nil)
-	select {
-	case err := <-tooLarge.done:
-		if err != nil {
-			t.Fatalf("the pump of a tap above the picture limit returned %v", err)
+	for name, format := range map[string]*agentpb.RawFormat{
+		"one byte above the limit": {Width: limit/2 + 1, Height: 1, Fourcc: "GREY", BytesPerLine: limit + 1},
+		"a 1920x1080 YUYV picture": {Width: 1920, Height: 1080, Fourcc: fourccYUYV, BytesPerLine: 3840},
+	} {
+		tooLarge := startPumpFormat(t, newPumpTestSink(true), format, nil)
+		select {
+		case err := <-tooLarge.done:
+			if err != nil {
+				t.Fatalf("%s: the pump returned %v", name, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the pump is reading the tap", name)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the pump of a tap above the picture limit is reading it")
 	}
 }
 

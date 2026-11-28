@@ -252,6 +252,39 @@ func TestGDPReaderSkipsAnOversizedPayloadAndStaysAligned(t *testing.T) {
 	}
 }
 
+// The bound is the largest payload taken: a buffer of exactly that size is a
+// whole frame of the largest kind its reader expects.
+func TestGDPReaderTakesAPayloadAtItsBoundAndRefusesOneByteMore(t *testing.T) {
+	const bound = 16
+	stream := func() *bytes.Buffer {
+		var stream bytes.Buffer
+		w := &gdpWriter{w: &stream}
+		for i, size := range []int{bound, bound + 1} {
+			if err := w.buffer(uint64(i), bytes.Repeat([]byte{byte(i + 1)}, size)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return &stream
+	}
+	whole := &gdpReader{r: stream(), maxPayload: bound}
+	if packet, err := whole.next(); err != nil || len(packet.payload) != bound {
+		t.Fatalf("a whole packet at the bound = %d bytes, %v", len(packet.payload), err)
+	}
+	if _, err := whole.next(); !errors.Is(err, errGDPPayloadTooLarge) {
+		t.Fatalf("a whole packet one byte over the bound: %v, want errGDPPayloadTooLarge", err)
+	}
+	headers := &gdpReader{r: stream(), maxPayload: bound}
+	if _, length, err := headers.nextBufferHeader(); err != nil || length != bound {
+		t.Fatalf("the header of a buffer at the bound = %d bytes, %v", length, err)
+	}
+	if payload, err := headers.payload(); err != nil || len(payload) != bound {
+		t.Fatalf("the payload of a buffer at the bound = %d bytes, %v", len(payload), err)
+	}
+	if _, _, err := headers.nextBufferHeader(); !errors.Is(err, errGDPPayloadTooLarge) {
+		t.Fatalf("the header of a buffer one byte over the bound: %v, want errGDPPayloadTooLarge", err)
+	}
+}
+
 func TestGDPReaderPassesOverAPayloadItsCallerDidNotTake(t *testing.T) {
 	var stream bytes.Buffer
 	w := &gdpWriter{w: &stream}

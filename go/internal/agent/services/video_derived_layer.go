@@ -311,6 +311,12 @@ func (l *derivedLayer) needs(demand encodeDemand) pipelineShape {
 	shape := pipelineShape{pixels: demand.wantRaw()}
 	if l.transform.encodes {
 		shape = branchesOnDemand(demand)
+		// A picture a tap could not carry is too costly to keep converting and
+		// reading under a viewer with no pixel subscriber, at the price of a
+		// restart under that viewer when one joins.
+		if rawFormatBytes(l.pictures) > maxRawFrameBytes {
+			shape.pixels = demand.wantRaw()
+		}
 	}
 	shape.pixels = shape.pixels && l.pictures != nil
 	return shape

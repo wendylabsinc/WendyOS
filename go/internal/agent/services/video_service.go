@@ -4410,35 +4410,30 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 		plan.rawWhy = mjpegRawWhy(capW, capH)
 		plan.nativeWhy = gstDecodedNativeWhy
 		// Decoded frames still reach in-agent consumers, as YUYV, when one fits.
-		plan.pixels = yuyvPictureFormat(capW, capH)
+		// A pipeline writes its tap whether or not anyone reads it, so only a
+		// picture within a raw frame's size is put on one.
+		if pictures := yuyvPictureFormat(capW, capH); rawFormatBytes(pictures) <= maxRawFrameBytes {
+			plan.pixels = pictures
+		}
 	case capW == 0 || capH == 0:
 		plan.rawWhyLazy = func() string { return rawWhyNoCaptureSize(devicePath) }
 	case rawFormatFor(devicePath, capW, capH) == nil:
 		plan.rawWhyLazy = func() string { return rawWhyNoFormat(devicePath, capW, capH) }
+	case uint64(capH)*uint64(rawFormatFor(devicePath, capW, capH).bytesPerLine(capW)) > maxRawFrameBytes:
+		f := rawFormatFor(devicePath, capW, capH)
+		plan.rawWhy = fmt.Sprintf("a %dx%d %s frame exceeds the %d-byte raw frame limit",
+			capW, capH, strings.TrimSpace(f.fourcc), maxRawFrameBytes)
 	default:
 		f := rawFormatFor(devicePath, capW, capH)
-		captured := &agentpb.RawFormat{
+		plan.raw = &agentpb.RawFormat{
 			Width:        capW,
 			Height:       capH,
 			Fourcc:       f.fourcc,
 			BytesPerLine: f.bytesPerLine(capW),
 		}
-		frameBytes := uint64(capH) * uint64(captured.BytesPerLine)
-		if frameBytes <= maxRawFrameBytes {
-			plan.raw = captured
-		} else {
-			plan.rawWhy = fmt.Sprintf("a %dx%d %s frame exceeds the %d-byte raw frame limit",
-				capW, capH, strings.TrimSpace(f.fourcc), maxRawFrameBytes)
-		}
-		// The frames no raw subscriber can be sent are still pictures for
-		// in-agent consumers when one fits.
-		if frameBytes <= maxPictureBytes {
-			capsParts = append(capsParts, "format="+f.gstFormat)
-			plan.pixels = captured
-		}
+		capsParts = append(capsParts, "format="+f.gstFormat)
+		plan.pixels = plan.raw
 	}
-	// tapsCapture says the tap carries the capture's frames untouched.
-	tapsCapture := rawCapture && plan.pixels != nil
 	if !shape.encode && plan.pixels == nil {
 		return plan, errNoTapOnlyPipeline
 	}
@@ -4462,7 +4457,7 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 		if len(capsParts) > 0 {
 			stages = append(stages, "video/x-raw,"+strings.Join(capsParts, ","))
 		}
-		if tapsCapture && shape.encode {
+		if plan.raw != nil && shape.encode {
 			// Branch the untouched capture off BEFORE the queue, crop and encoder,
 			// so the raw subscriber sees the camera's frame and the viewer's path
 			// is unchanged from here on. Each branch gets its own leaky queue: a
@@ -4493,7 +4488,7 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 		stages = append(stages, convertStages...)
 		stages = append(stages, encoderSegment(encoder, hasH264Parse, gop, shape.preset), "fdsink fd=1")
 		pipeline = strings.Join(stages, " ! ")
-		if tapsCapture {
+		if plan.raw != nil {
 			pipeline += fmt.Sprintf(" %s. ! %s ! fdsink fd=%d", rawTeeName, rawTapQueue, rawTapFD)
 		} else if plan.pixels != nil {
 			pipeline += fmt.Sprintf(" %s. ! %s ! %s", rawTeeName, rawTapQueue, mjpegTapTail)
@@ -4502,7 +4497,7 @@ func planGStreamerPipelineShaped(shape pipelineShape, gstPath, devicePath string
 		// No encoder: the capture feeds the tap directly, with no tee.
 		plan.tapOnly = true
 		stages = append(stages, rawTapQueue)
-		if !tapsCapture {
+		if plan.raw == nil {
 			stages = append(stages, mjpegTapTail)
 		} else {
 			stages = append(stages, fmt.Sprintf("fdsink fd=%d", rawTapFD))

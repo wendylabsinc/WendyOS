@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -890,11 +891,122 @@ func TestDeviceHub_ARawSubscriberIsNeverSentAFrameAboveADefaultGRPCMessage(t *te
 		t.Fatalf("a frame of %d bytes: the raw subscriber holds %d frame(s) and the pixel subscriber %d, want it sent to the pixel subscriber alone",
 			maxRawFrameBytes+1, len(chRaw), len(chPix))
 	}
-	h.broadcast(uncompressed(maxPictureBytes))
-	h.broadcast(uncompressed(maxPictureBytes + 1))
+	const pictureLimit = 1920 * 2 * 1080
+	h.broadcast(uncompressed(pictureLimit))
+	h.broadcast(uncompressed(pictureLimit + 1))
 	if len(chRaw) != 1 || len(chPix) != 3 {
 		t.Fatalf("frames of %d and %d bytes: the raw subscriber holds %d frame(s) and the pixel subscriber %d, want the first sent to the pixel subscriber alone and the second to nobody",
-			maxPictureBytes, maxPictureBytes+1, len(chRaw), len(chPix))
+			pictureLimit, pictureLimit+1, len(chRaw), len(chPix))
+	}
+}
+
+// The picture bound is a count of bytes, the bytes of one 1920x1080 YUYV
+// picture, and holds from above wherever a picture is declared or read.
+func TestPictureBound_IsTheBytesOfOne1920x1080YUYVPictureAndNoMore(t *testing.T) {
+	const pictureLimit = 1920 * 2 * 1080
+	for _, size := range [][2]uint32{{1920, 1080}, {2560, 810}, {3840, 540}} {
+		if f := yuyvPictureFormat(size[0], size[1]); f == nil || f.GetBytesPerLine()*f.GetHeight() != pictureLimit {
+			t.Errorf("a %dx%d picture, of exactly %d bytes, is declared as %v", size[0], size[1], pictureLimit, f)
+		}
+	}
+	for _, size := range [][2]uint32{{1928, 1080}, {1920, 1082}, {2560, 812}} {
+		if f := yuyvPictureFormat(size[0], size[1]); f != nil {
+			t.Errorf("a %dx%d picture, of %d bytes, is declared as %v; want none above %d bytes", size[0], size[1], size[0]*2*size[1], f, pictureLimit)
+		}
+	}
+	available := map[string]bool{"gdpdepay": true, "gdppay": true, "jpegdec": true, "h264parse": true, "x264enc": true, "avdec_h264": true}
+	for name, format := range map[string]agentpb.VideoCodec{"JPEG": videoCodecMJPEG, "H.264": agentpb.VideoCodec_VIDEO_CODEC_H264} {
+		over, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), format: format, gstPath: "gst-launch-1.0", available: available,
+			width: 1928, height: 1080, demand: newFakeEncodeDemand(false, true)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if over.pictures != nil || over.needs(newFakeEncodeDemand(false, true)).pixels {
+			t.Errorf("%s: a layer at 1928x1080, whose picture is 4164480 bytes, has pictures %v", name, over.pictures)
+		}
+		at, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), format: format, gstPath: "gst-launch-1.0", available: available,
+			width: 1920, height: 1080, demand: newFakeEncodeDemand(false, true)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The reader of the child's pictures refuses a payload above the bound
+		// from its header, before any of it is read into memory.
+		var stream bytes.Buffer
+		w := &gdpWriter{w: &stream}
+		for _, payloadBytes := range []int{pictureLimit, pictureLimit + 1} {
+			if err := w.buffer(1, make([]byte, payloadBytes)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		reader := &gdpReader{r: &stream, maxPayload: at.picturesOutput(nil).maxPayload}
+		if _, length, err := reader.nextBufferHeader(); err != nil || length != pictureLimit {
+			t.Errorf("%s: a picture of %d bytes from the child: %d bytes, %v", name, pictureLimit, length, err)
+		}
+		if _, _, err := reader.nextBufferHeader(); !errors.Is(err, errGDPPayloadTooLarge) {
+			t.Errorf("%s: a payload of %d bytes from the child: %v, want errGDPPayloadTooLarge", name, pictureLimit+1, err)
+		}
+	}
+}
+
+const derived1080pEncoderOnly = "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! " + derivedEncoder + " fd=3"
+
+// A picture above a default gRPC message is converted only while a pixel
+// subscriber reads it. A smaller one is kept under a viewer, so that a pixel
+// subscriber never restarts the viewer's stream; at 1920x1080 that would cost
+// every viewer and recording the conversion and the read of every picture.
+func TestDerivedLayer_A1920x1080PictureIsConvertedOnlyWhileAPixelSubscriberReads(t *testing.T) {
+	launchLog := fakeGStreamer(t, 0, derivedLayerElements...)
+	gstPath, available, err := gstDiscover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, cancel := newTestHub(t)
+	defer cancel()
+	idViewer, viewer, err := h.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.unsubscribe(idViewer)
+	go func() {
+		for range viewer {
+		}
+	}()
+	const grace = 400 * time.Millisecond
+	layer, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), device: "/dev/video4", format: videoCodecMJPEG,
+		gstPath: gstPath, available: available, width: 1920, height: 1080, framerate: 30,
+		grace: grace, demand: h, publish: h.broadcastDerivedFrom})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layer.pictures == nil {
+		t.Fatal("a 1920x1080 JPEG camera's layer has no pictures")
+	}
+	layer.restartPause = time.Millisecond
+	runDerivedLayer(t, layer)
+
+	if launched := waitForLaunches(t, launchLog, 1); launched[0] != derived1080pEncoderOnly {
+		t.Fatalf("with a viewer alone the child is\n     %q\nwant %q, with no picture branch", launched[0], derived1080pEncoderOnly)
+	}
+	time.Sleep(grace + grace/2)
+	if launched := launchedPipelines(t, launchLog); len(launched) != 1 {
+		t.Fatalf("with a viewer alone the child was replaced: %q", launched)
+	}
+
+	idPictures, pictures, err := h.subscribePixels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for range pictures {
+		}
+	}()
+	if launched := waitForLaunches(t, launchLog, 2); launched[1] != derivedPicturesAndEncoder {
+		t.Fatalf("with a pixel subscriber the child is\n     %q\nwant %q", launched[1], derivedPicturesAndEncoder)
+	}
+
+	h.unsubscribe(idPictures)
+	if launched := waitForLaunches(t, launchLog, 3); launched[2] != derived1080pEncoderOnly {
+		t.Fatalf("once the pixel subscriber left the child is\n     %q\nwant %q, with no picture branch", launched[2], derived1080pEncoderOnly)
 	}
 }
 

@@ -129,8 +129,8 @@ The app opens the same path as before, for example `/dev/video0` or its
 `/dev/v4l/by-id` link, and sees one mode: one size up to 1280x720, one frame
 rate, and YUYV when the camera itself produces MJPEG or H.264. A camera that
 produces H.264 and lists no size up to 1280x720 is shared at the smallest size
-it lists: as YUYV pictures when that is no larger than 1920x1080, and as its
-own H.264 above that. `wendy run` prints one
+it lists: as YUYV pictures when one picture is at most 4,147,200 bytes, which
+is 1920x1080, and as its own H.264 above that. `wendy run` prints one
 line when this applies, naming each camera and its mode:
 
 ```

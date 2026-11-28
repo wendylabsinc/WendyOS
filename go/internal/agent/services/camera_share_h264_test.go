@@ -131,7 +131,16 @@ func TestShareDecision_H264CameraWithoutPicturesServesItsOwnFramesAndSaysWhy(t *
 				return s
 			},
 			sharedMode{Width: 3840, Height: 2160, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes},
-			"a 3840x2160 picture exceeds the 4147200-byte picture limit (1920x1080 YUYV)",
+			"a 3840x2160 picture is 16588800 bytes, and a node carries one of at most 4147200 bytes, which is 1920x1080 YUYV",
+		},
+		"a picture eight columns over the picture limit": {
+			func(t *testing.T) *VideoService {
+				s := hcService(t, "avdec_h264")
+				captureSizeFor = func(string, uint32, uint32, uint32) (uint32, uint32) { return 1928, 1080 }
+				return s
+			},
+			sharedMode{Width: 1928, Height: 1080, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes},
+			"a 1928x1080 picture is 4164480 bytes, and a node carries one of at most 4147200 bytes, which is 1920x1080 YUYV",
 		},
 		"decoding failed recently": {
 			func(t *testing.T) *VideoService {

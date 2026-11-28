@@ -16,15 +16,18 @@ test_name=TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity
 h264_tests=(TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame TestDerivedLayerPairsNoPictureOfAnH264StreamItsDecoderReorders)
 store_test=TestStoreBothThroughTheDerivedLayerIndexesEverySampleAsItsJPEGAndItsH264
 tag_table_test=TestDerivedTagTableUndoesTheSegmentStartARealH264EncoderSends
+# A 1920x1080 YUYV picture is larger than a default gRPC message, and exactly
+# as large as the largest payload the layer takes from its child.
+whole_picture_test=TestDerivedLayerDeliversA1920x1080PictureWhole
 # expect PATTERN LOG: the log has a line matching the pattern, or say which is missing.
 expect() {
   grep -q -- "$1" "$2" || { echo "Expected in $2: $1" >&2; exit 1; }
 }
 go test -race -c -o "$output/services.test" ./go/internal/agent/services
 trap 'rm -f "$output/services.test"' EXIT
-required="$(IFS='|'; echo "$test_name|$store_test|$tag_table_test|${h264_tests[*]}")"
+required="$(IFS='|'; echo "$test_name|$store_test|$tag_table_test|$whole_picture_test|${h264_tests[*]}")"
 "$output/services.test" -test.run "^(${required})$" -test.v -test.count=1 -test.timeout=240s | tee "$output/normal.log"
-for required_test in "$test_name" "$store_test" "$tag_table_test" "${h264_tests[@]}"; do
+for required_test in "$test_name" "$store_test" "$tag_table_test" "$whole_picture_test" "${h264_tests[@]}"; do
   expect "^--- PASS: $required_test " "$output/normal.log"
 done
 expect 'H.264 decoder: h264parse ! avdec_h264' "$output/normal.log"
@@ -45,15 +48,24 @@ from pathlib import Path
 import sys
 
 out = Path(sys.argv[1]).resolve()
-source = Path('go/internal/agent/services/video_derived_tags.go').resolve()
-original = source.read_text()
-# Pair every output with the newest frame fed instead of the frame its tag names.
-before, after = 't.sources[nearestDerivedTag(outputTimestamp-shift)]', 't.sources[t.last]'
-if original.count(before) != 1:
-    raise SystemExit('newest-frame: source mutation no longer identifies exactly one site')
-replacement = out / 'newest-frame.go'
-replacement.write_text(original.replace(before, after))
-(out / 'newest-frame.json').write_text(json.dumps({'Replace': {str(source): str(replacement)}}))
+services = Path('go/internal/agent/services').resolve()
+mutations = {
+    # Pair every output with the newest frame fed instead of the frame its tag names.
+    'newest-frame': (services / 'video_derived_tags.go',
+                     't.sources[nearestDerivedTag(outputTimestamp-shift)]', 't.sources[t.last]'),
+    # Refuse a payload exactly as large as the reader's bound, which a
+    # 1920x1080 picture is.
+    'picture-at-bound': (services / 'video_gdp.go',
+                         'case packet.kind == gdpPacketBuffer && length > int64(g.maxPayload):',
+                         'case packet.kind == gdpPacketBuffer && length >= int64(g.maxPayload):'),
+}
+for name, (source, before, after) in mutations.items():
+    original = source.read_text()
+    if original.count(before) != 1:
+        raise SystemExit(f'{name}: source mutation no longer identifies exactly one site')
+    replacement = out / (name + '.go')
+    replacement.write_text(original.replace(before, after))
+    (out / (name + '.json')).write_text(json.dumps({'Replace': {str(source): str(replacement)}}))
 PY
 # The control runs the H.264 picture fixture too: fed one frame at a time, the
 # newest frame fed is the picture's own, so that fixture also feeds frames
@@ -72,3 +84,12 @@ expect "^--- FAIL: $h264_picture_test " "$output/newest-frame.log"
 expect "but shows luma .* that sample's JPEG shows" "$output/newest-frame.log"
 expect 'but decodes to luma' "$output/newest-frame.log"
 expect "but shows luma .* that sample's frame shows" "$output/newest-frame.log"
+
+if go test -race -overlay "$output/picture-at-bound.json" ./go/internal/agent/services -run "^${whole_picture_test}$" -v -count=1 -timeout 240s > "$output/picture-at-bound.log" 2>&1; then
+  cat "$output/picture-at-bound.log"
+  echo 'Regression did not reject a reader that refuses a picture exactly at its bound' >&2
+  exit 1
+fi
+cat "$output/picture-at-bound.log"
+expect "^--- FAIL: $whole_picture_test " "$output/picture-at-bound.log"
+expect 'came back as 0 of 1 pictures' "$output/picture-at-bound.log"
