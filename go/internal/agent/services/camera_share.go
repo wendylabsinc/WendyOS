@@ -342,7 +342,7 @@ func (s *VideoService) makeCameraShare(ctx context.Context, containerID, appID s
 	// budget (its GStreamer element listing is not context-aware), so it runs
 	// on its own goroutine.
 	decision, ok := withinBudget(ctx, func() shareDecision {
-		if held, shared := s.sharedCaptureOf(dev.GetPath(), containerID); shared {
+		if held, shared := s.sharedCaptureOfCamera(dev.GetPath(), containerID); shared {
 			return s.shareDecisionStating(dev, format, stated, &held)
 		}
 		return s.shareDecisionStating(dev, format, stated, nil)
@@ -983,7 +983,7 @@ func (s *VideoService) storeShare(containerID, appID string, r *shareRecord, nod
 	case creation != nil && creation.removed:
 		return nil, shareRefusedRemoved
 	}
-	if held, shared := s.sharedCaptureLocked(r.cameraPath, containerID); shared && held.size() != r.captureSize() {
+	if held, shared := s.sharedCaptureLocked(containerID, sharesCamera(r.cameraPath, &r.camera)); shared && held.size() != r.captureSize() {
 		return nil, shareSizeTaken
 	}
 	if s.shares.containers == nil {

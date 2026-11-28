@@ -795,3 +795,32 @@ func TestJoinHubForShare_ACameraHeldAtAnotherSizeThanTheStatedOne(t *testing.T) 
 		}
 	})
 }
+
+// The camera came back at another path while the agent was down, and an app is
+// deployed before the first sync has looked for it: the camera is still the
+// one cv-a shares at its stated size.
+func TestCreateCameraShares_ACameraThatMovedWhileTheAgentWasDownIsStillSharedAtItsSize(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	sfCanDeriveFrames(h.s)
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", []appconfig.Entitlement{szCameraEntitlement("", "1920x1080")})
+	state, err := os.ReadFile(cameraSharesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.s.Shutdown()
+
+	moved := csBrio()
+	moved.base = "video2"
+	h = newCSHarness(t, moved)
+	sfCanDeriveFrames(h.s)
+	h.loop.aux[255] = "Brio 101"
+	h.writeState(string(state))
+	h.s.loadCameraShares()
+	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b", []appconfig.Entitlement{szCameraEntitlement("", "640x480")})
+
+	b := h.records("cv-b")
+	if len(b) != 1 || b[0].mode != szFullModes[appconfig.CameraFormatPixels] || !b[0].sized || b[0].askedSize != szSmall ||
+		b[0].askedSizeWhyNot != "the camera is shared with cv-a at 1920x1080, and a camera is captured at one size" {
+		t.Fatalf("cv-b's records = %+v, want one at the size cv-a shares the camera at; logs: %v", b, h.logs.All())
+	}
+}

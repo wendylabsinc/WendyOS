@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -241,18 +242,41 @@ func (c sharedCapture) size() appconfig.CameraSize {
 func (s *VideoService) sharedCaptureOf(path, except string) (sharedCapture, bool) {
 	s.shares.mu.Lock()
 	defer s.shares.mu.Unlock()
-	return s.sharedCaptureLocked(path, except)
+	return s.sharedCaptureLocked(except, sharesCamera(path, nil))
 }
 
-// sharedCaptureLocked is sharedCaptureOf for callers that hold s.shares.mu.
-func (s *VideoService) sharedCaptureLocked(path, except string) (sharedCapture, bool) {
+// sharedCaptureOfCamera is sharedCaptureOf for a share being made of the
+// camera at path. It reads the camera's identity, to count a record that
+// holds the camera by it at a path the camera has left: no /dev watch runs
+// while the agent is down, and a create can come before the first sync.
+func (s *VideoService) sharedCaptureOfCamera(path, except string) (sharedCapture, bool) {
+	var held *camera.Identity
+	if id, err := s.identityOf(filepath.Base(path)); err == nil {
+		held = &id
+	}
+	s.shares.mu.Lock()
+	defer s.shares.mu.Unlock()
+	return s.sharedCaptureLocked(except, sharesCamera(path, held))
+}
+
+// sharesCamera reports whether a record shares the camera at path, as
+// sharedModeOf counts it, or the camera with identity id when one is given.
+func sharesCamera(path string, id *camera.Identity) func(*shareRecord) bool {
+	return func(r *shareRecord) bool {
+		return (r.cameraPath == path && !r.cameraAbsent) || (id != nil && r.camera == *id)
+	}
+}
+
+// sharedCaptureLocked is how the camera whose records shares picks out is
+// captured, for callers that hold s.shares.mu.
+func (s *VideoService) sharedCaptureLocked(except string, shares func(*shareRecord) bool) (sharedCapture, bool) {
 	records := make(map[string]*shareRecord)
 	for id, c := range s.shares.containers {
 		if c == nil || id == except {
 			continue
 		}
 		for _, r := range c.shares {
-			if r != nil && r.cameraPath == path && !r.cameraAbsent {
+			if r != nil && shares(r) {
 				records[id] = r
 				break
 			}
