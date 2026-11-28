@@ -2272,11 +2272,19 @@ func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *a
 	}
 	if !streamRequestAssertsParams(req) {
 		hub, id, ch, width, height, framerate, err = s.joinHubReportingParams(ctx, key, req, kind, preset)
-		if err == nil && admitted != nil && framerate == 0 && ((width == 0 && height == 0) || (width == admitted.Width && height == admitted.Height)) {
-			// A shared camera's defaults are its shared mode, which is what this
-			// capture asked for; reporting 0x0@0, or the stated size its hub was
-			// started at without a rate, would note a mismatch that is not.
-			width, height, framerate = admitted.Width, admitted.Height, admitted.FPS
+		if err == nil && framerate == 0 {
+			// A shared camera's defaults are its shared mode. Its hub reports
+			// 0x0@0, or the stated size it was started at without a rate, and
+			// either as it stands would note a mismatch that is not: a capture
+			// that asked for the shared mode got it, and so did one that asked
+			// for nothing.
+			at := appconfig.CameraSize{Width: width, Height: height}
+			switch {
+			case admitted != nil && (at == noSize || at == admitted.size()):
+				width, height, framerate = admitted.Width, admitted.Height, admitted.FPS
+			case admitted == nil && at != noSize && at == s.sharedSizeOf(key):
+				width, height = 0, 0
+			}
 		}
 		return hub, id, ch, width, height, framerate, false, err
 	}

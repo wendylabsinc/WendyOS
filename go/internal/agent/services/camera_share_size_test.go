@@ -624,6 +624,21 @@ func TestSharedMode_ACameraSharedAtAStatedSizeRunsAtItWhoeverStartsIt(t *testing
 		}
 	})
 
+	t.Run("a recording that names nothing starts it at the shared size and reports no other size than it asked for", func(t *testing.T) {
+		h, fp := sized(t)
+		hub, id, _, w, hgt, fps, restarted, err := h.s.joinHubForCapture(context.Background(), path, &agentpb.StreamVideoRequest{}, encodedFrames, noPreset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer hub.unsubscribe(id)
+		if w != 0 || hgt != 0 || fps != 0 || restarted {
+			t.Errorf("reported %dx%d@%d (restarted %v), want what it asked for: nothing", w, hgt, fps, restarted)
+		}
+		if req := fp.request(0); req.GetWidth() != 1920 || req.GetHeight() != 1080 {
+			t.Errorf("started with %dx%d, want 1920x1080", req.GetWidth(), req.GetHeight())
+		}
+	})
+
 	t.Run("a capture running at the size it chose is taken over", func(t *testing.T) {
 		h := newCSHarness(t, csBrio())
 		sfCanDeriveFrames(h.s)
