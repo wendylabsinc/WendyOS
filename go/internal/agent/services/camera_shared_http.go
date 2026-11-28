@@ -275,6 +275,9 @@ func resolveJPEGFeedEncoder() (string, gstEncoderResult, error) {
 // the hub. A pump that fails while the hub still wants frames is reported as
 // Unavailable, prefixed with stopped.
 func (s *VideoService) runJPEGFeed(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, sink rawSink, enc gstEncoderResult, plan gstPipelinePlan, pump func(context.Context, io.Writer) error, stopped string) error {
+	if demand, ok := sink.(encodeDemand); ok {
+		demand.setEncoderPreset(encoderPreset(enc.element, jpegFeedPreset))
+	}
 	feedCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	r, w := io.Pipe()
@@ -337,9 +340,16 @@ func pumpSharedJPEG(ctx context.Context, out io.Writer, client *http.Client, end
 }
 
 func planSharedJPEGPipeline(gst, path string, req *agentpb.StreamVideoRequest, enc gstEncoderResult, first sharedCameraJPEG) (gstPipelinePlan, error) {
-	return planJPEGFeedPipeline(gst, path, req, enc, first.width, first.height,
+	plan, err := planJPEGFeedPipeline(gst, path, req, enc, first.width, first.height,
 		"app-owned JPEG capture", "camera owner publishes JPEG; original raw frames are not available")
+	plan.nativeWhy = "another application holds the camera and the agent re-encodes the JPEG feed it publishes"
+	return plan, err
 }
+
+// jpegFeedPreset is what a JPEG feed's encoder is given: the feed is not run
+// in the shape its subscribers need, so the preset they state does not reach
+// it and it runs at the default.
+const jpegFeedPreset = noPreset
 
 // planJPEGFeedPipeline encodes whole width x height JPEG frames written to the
 // pipeline's stdin, without opening any capture device. The frames arrive at
@@ -363,7 +373,7 @@ func planJPEGFeedPipeline(gst, path string, req *agentpb.StreamVideoRequest, enc
 	if req.GetWidth() != 0 && req.GetHeight() != 0 {
 		stages = append(stages, "videoscale", fmt.Sprintf("video/x-raw,width=%d,height=%d", req.GetWidth(), req.GetHeight()))
 	}
-	stages = append(stages, encoderSegment(enc.element, enc.hasH264Parse, keyframeIntervalFrames(10)), "fdsink fd=1")
+	stages = append(stages, encoderSegment(enc.element, enc.hasH264Parse, keyframeIntervalFrames(10), jpegFeedPreset), "fdsink fd=1")
 	return gstPipelinePlan{
 		args:   append([]string{gst, "-q"}, strings.Fields(strings.Join(stages, " ! "))...),
 		rawWhy: rawWhy,

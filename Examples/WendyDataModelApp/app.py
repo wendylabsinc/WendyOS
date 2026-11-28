@@ -3,13 +3,14 @@
 
 Demonstrates the three harness contracts end to end:
 
-  1. Frames in     — camera frames FED BY THE HARNESS on a v4l2loopback node
-                     granted by the camera entitlement. The app never opens
-                     the physical device: it reads the same producer the
-                     episode capture adapter consumes, so the two never fight
-                     over the camera, and every frame the model sees is
-                     recorded into the active episode under the identity that
-                     arrives with it in the buffer timestamp.
+  1. Frames in     — camera frames FED BY THE HARNESS at the camera's own
+                     device path, through the node the camera entitlement
+                     gives this app. The app never opens the physical device:
+                     it reads the same producer the episode capture adapter
+                     consumes, so the two never fight over the camera, and
+                     every frame the model sees is recorded into the active
+                     episode under the frame number that arrives with it in
+                     the buffer timestamp ("stamp": "frame").
   2. Predictions out — one "prediction" record per processed frame, naming
                      the sample identifiers it was computed from, plus a
                      "person_detected" event, over the app-private data
@@ -44,19 +45,16 @@ MODEL_NAME = "yolov8n"
 # Pinned in the Dockerfile export stage; keep the two in sync.
 MODEL_VERSION = os.environ.get("WENDY_MODEL_VERSION", "8.3.63")
 MODEL_PATH = os.environ.get("WENDY_MODEL_PATH", os.path.join(os.path.dirname(__file__), "yolov8n.onnx"))
-# The harness source to consume, as reported by `wendy data sources`
-# (for example "v4l2:/dev/video0" or "ipcamera:200"). Empty means "pick the
-# first subscribable camera the harness offers", which is what a
-# single-camera demo device wants.
-# The agent-fed node. wendy sets WENDY_CAMERA_NODE when it wires the two-plane
-# path; the default is the first loopback node it creates.
-CAMERA_NODE = os.environ.get("WENDY_CAMERA_NODE", "/dev/video10")
-# An agent restart takes the node away while the app is perfectly healthy, so
-# that is treated as transient. The budget refills on every frame delivered;
-# 0 exits on the first failure.
+# The camera to read, at its own device path. The camera entitlement in
+# wendy.json puts this app's agent-fed node there.
+CAMERA_DEVICE = os.environ.get("WENDY_CAMERA_DEVICE", "/dev/video0")
+# A camera can be unplugged and plugged back in while the app is perfectly
+# healthy, so losing it is treated as transient. The budget refills on every
+# frame delivered; 0 exits on the first failure.
 CAMERA_RECONNECT_ATTEMPTS = int(os.environ.get("WENDY_CAMERA_RECONNECT_ATTEMPTS", "5"))
 CAMERA_RECONNECT_DELAY_SECONDS = float(os.environ.get("WENDY_CAMERA_RECONNECT_DELAY_SECONDS", "2"))
-CAMERA_SOURCE = os.environ.get("WENDY_CAMERA_SOURCE", "")
+# The camera's source ID in the episode, as `wendy data sources` reports it.
+CAMERA_SOURCE = os.environ.get("WENDY_CAMERA_SOURCE", "") or "v4l2:" + CAMERA_DEVICE
 CONFIDENCE_THRESHOLD = float(os.environ.get("WENDY_CONFIDENCE_THRESHOLD", "0.25"))
 IOU_THRESHOLD = float(os.environ.get("WENDY_IOU_THRESHOLD", "0.45"))
 # Rate-limit friendliness: the agent caps an app at 200 records per second
@@ -72,7 +70,6 @@ IOU_THRESHOLD = float(os.environ.get("WENDY_IOU_THRESHOLD", "0.45"))
 # episode's model-input ledger records every one of them, and each
 # prediction reports how many it passed over.
 PREDICTIONS_PER_SECOND = float(os.environ.get("WENDY_PREDICTIONS_PER_SECOND", "5"))
-# The sensor stream can end while the app is still healthy: the agent
 # Actuation is optional: a plain Jetson demo has no ROS 2 stack. Set
 # WENDY_MODEL_APP_ROS2=1 (and run an image with rclpy) to publish Twists.
 ROS2_REQUESTED = os.environ.get("WENDY_MODEL_APP_ROS2", "0") == "1"
@@ -236,23 +233,23 @@ def main() -> None:
     log.info("data socket: %s", client.path)
     actuator = Actuator()
 
-    log.info("camera node: %s", CAMERA_NODE)
+    log.info("camera: %s as %s", CAMERA_DEVICE, CAMERA_SOURCE)
 
     interval = 1.0 / max(PREDICTIONS_PER_SECOND, 0.1)
     next_score_at = 0.0
     person_present = False
     skipped = 0
     try:
-        # freshest_frames decodes on its own thread and hands over only the most
-        # recent frame, so inference always runs on current input rather than
-        # draining a backlog. Without it the loop falls behind the producer by
+        # resilient_frames hands over only the most recent frame and says how
+        # many it passed over, so inference always runs on current input. A
+        # loop that drained the backlog would fall behind the producer by
         # however much slower inference is than capture, and the sample
-        # identifiers each prediction references drift out of the range the
-        # episode recorded, which is what makes the join unresolvable.
+        # identifiers each prediction references would drift out of the range
+        # the episode recorded, which is what makes the join unresolvable.
         for sensor_frame, discarded in wendyframes.resilient_frames(
-            CAMERA_NODE, CAMERA_SOURCE, CAMERA_RECONNECT_ATTEMPTS, CAMERA_RECONNECT_DELAY_SECONDS
+            CAMERA_DEVICE, CAMERA_SOURCE, CAMERA_RECONNECT_ATTEMPTS, CAMERA_RECONNECT_DELAY_SECONDS
         ):
-            # Decoded while the previous inference was still running, then
+            # Queued while the previous inference was still running, then
             # dropped on purpose. Added to the same counter the rate gate feeds
             # so one field accounts for every frame that arrived and was not
             # scored, whatever the reason.
@@ -307,13 +304,9 @@ def main() -> None:
 
             angular_z, linear_x = steer_towards(detections, frame.shape[1])
             actuator.act(angular_z, linear_x)
-        # Reached only once the stream stayed gone for the whole reconnect
-        # budget; frames_with_reconnect has already said why.
-        log.info("no more frames from %s; shutting down", source_id)
     except KeyboardInterrupt:
         log.info("interrupted by user; shutting down")
     finally:
-        sensors.close()
         client.close()
         actuator.close()
 

@@ -406,7 +406,7 @@ func TestParameterlessCaptureFallsBackToExistingParameters(t *testing.T) {
 	adapter := &cameraDataAdapter{video: video}
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0}
-	hub, id, ch, w, h, fps, restarted, err := adapter.subscribeHub(context.Background(), "/dev/video0", req)
+	hub, id, ch, w, h, fps, restarted, err := adapter.subscribeHub(context.Background(), "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatalf("collision failed the episode: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestExplicitCaptureRefusedAgainstExplicitlyHeldHub(t *testing.T) {
 	adapter := &cameraDataAdapter{video: video}
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1280, Height: 720, Framerate: 15}
-	_, _, _, _, _, _, _, err := adapter.subscribeHub(context.Background(), "/dev/video0", req)
+	_, _, _, _, _, _, _, err := adapter.subscribeHub(context.Background(), "/dev/video0", req, encodedFrames, noPreset)
 	if !errors.Is(err, errCameraHeldExplicitly) {
 		t.Fatalf("expected errCameraHeldExplicitly, got %v", err)
 	}
@@ -740,7 +740,7 @@ func TestCaptureRejoinsAfterTheProducerDies(t *testing.T) {
 	c.ctx, c.cancel = ctx, cancel
 	c.done, c.ready = make(chan struct{}), make(chan error, 1)
 	var rejoins atomic.Int64
-	c.rejoin = func(context.Context) (*deviceHub, int, chan *videoFrame, error) {
+	c.rejoin = func(context.Context, frameKind) (*deviceHub, int, chan *videoFrame, error) {
 		rejoins.Add(1)
 		id, ch, joinErr := liveHub.subscribe()
 		return liveHub, id, ch, joinErr

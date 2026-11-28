@@ -40,12 +40,14 @@ func TestWendyDataModelAppExampleValidates(t *testing.T) {
 	if !episodeWrite {
 		t.Error("missing episode-write entitlement (predictions-out contract)")
 	}
-	// Reads are native: the app opens the agent-fed v4l2loopback node, and
-	// that node is a device-node grant, which is what the camera entitlement
-	// is. Frame identity arrives in-band in the buffer timestamp, so there is
-	// no second entitlement and no second socket to declare.
 	if !camera {
 		t.Error("missing camera entitlement (the agent-fed node the app reads)")
+	}
+	// The app matches each frame it reads to the frame the episode recorded:
+	// it needs the camera's own frames and the agent's frame number in each
+	// buffer's timestamp.
+	if format, stamp, _, _ := CameraNodeSettings(cfg.Entitlements, CameraIdentity{Path: "/dev/video0"}); format != CameraFormatNative || stamp != CameraStampFrame {
+		t.Errorf("the app's camera node is format %q, stamp %q; want native frames stamped with their frame number", format, stamp)
 	}
 
 	// The published JSON schema must accept every entitlement type the

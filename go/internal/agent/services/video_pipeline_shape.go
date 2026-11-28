@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -14,24 +15,98 @@ type pipelineShape struct {
 	// encode adds the H.264 branch writing fd 1. False builds only the tap on
 	// rawTapFD, so a camera nobody is watching costs no encode.
 	encode bool
+	// pixels adds a branch of decoded pictures. Only a derived layer's pipeline
+	// reads it: a camera pipeline tees its tap whenever it has one.
+	pixels bool
+	// preset is what the encode branch's encoder runs at. Unset without that
+	// branch and for an encoder that takes none, so that a preset never tells
+	// two shapes apart unless both run an encoder it changes.
+	preset appconfig.EncodePreset
+}
+
+func (s pipelineShape) lacksBranchOf(wanted pipelineShape) bool {
+	return (wanted.encode && !s.encode) || (wanted.pixels && !s.pixels)
+}
+
+func (s pipelineShape) hasBranchNotIn(wanted pipelineShape) bool {
+	return (s.encode && !wanted.encode) || (s.pixels && !wanted.pixels)
+}
+
+func (s pipelineShape) encodesSlowerThan(wanted pipelineShape) bool {
+	return wanted.preset.FasterThan(s.preset)
+}
+
+func (s pipelineShape) encodesFasterThan(wanted pipelineShape) bool {
+	return s.preset.FasterThan(wanted.preset)
+}
+
+// graceReason is what the idle grace of a running pipeline waits for.
+type graceReason uint8
+
+const (
+	noGrace graceReason = iota
+	branchUnwanted
+	presetFaster
+)
+
+var errPipelineEndedRestartable = errors.New("pipeline ended and can be restarted")
+
+type shapeNeeds func(demand encodeDemand) pipelineShape
+
+func encoderOnDemand(demand encodeDemand) pipelineShape {
+	return pipelineShape{encode: demand.wantEncoded()}
+}
+
+// A pipeline that encodes keeps its pictures, as a camera pipeline keeps its
+// tap, so a pixel subscriber joining or leaving never restarts it under a
+// viewer or a recording.
+func branchesOnDemand(demand encodeDemand) pipelineShape {
+	encode := demand.wantEncoded()
+	return pipelineShape{encode: encode, pixels: encode || demand.wantRaw()}
 }
 
 // errNoTapOnlyPipeline is returned when a shape without the encoder is asked
 // of a pipeline that has no uncompressed frames to hand out.
 var errNoTapOnlyPipeline = errors.New("pipeline has no uncompressed frames to run without an encoder")
 
-// mjpegTapTail converts decoded MJPEG frames to YUYV and writes them to the tap.
-// jpegdec's native output varies (I420 and others); pinning YUY2 makes the bytes
-// match the RawFormat the plan reports.
-var mjpegTapTail = fmt.Sprintf("videoconvert ! video/x-raw,format=YUY2 ! fdsink fd=%d", rawTapFD)
+// yuyvPictureStages converts decoded frames to YUYV. A decoder's own output
+// format varies (I420 and others); pinning YUY2 makes the bytes match the
+// RawFormat yuyvPictureFormat reports.
+const yuyvPictureStages = "videoconvert ! video/x-raw,format=YUY2"
 
-// mjpegPixelsFormat describes the YUYV frames an MJPEG capture tees to the tap,
-// or nil when a frame would exceed the raw frame limit.
-func mjpegPixelsFormat(w, h uint32) *agentpb.RawFormat {
-	if uint64(w)*2*uint64(h) > maxRawFrameBytes {
+var mjpegTapTail = fmt.Sprintf("%s ! fdsink fd=%d", yuyvPictureStages, rawTapFD)
+
+func mjpegRawWhy(w, h uint32) string {
+	return fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", w, h)
+}
+
+// maxPictureBytes bounds a picture the derived layer decodes for pixel
+// subscribers, which are camera nodes: the bytes of one 1920x1080 YUYV
+// picture, whatever its width and height. A picture is never a gRPC message,
+// so maxRawFrameBytes does not bound it, and a v4l2loopback node takes any
+// frame up to 8192x8192. What bounds it is the memory and the copying of each
+// picture on its way to a node, which no device has been measured to carry at
+// 3840x2160, four times this.
+const (
+	maxPictureWidth, maxPictureHeight = 1920, 1080
+	maxPictureBytes                   = maxPictureWidth * maxPictureHeight * yuyvBytesPerPixel
+)
+
+// The hub holds raw frames and pictures to the picture bound alone.
+const _ = uint(maxPictureBytes - maxRawFrameBytes)
+
+func pictureTooLargeWhy(w, h uint32) string {
+	return fmt.Sprintf("a %dx%d picture is %d bytes, and a node carries one of at most %d bytes, which is %dx%d YUYV",
+		w, h, uint64(w)*yuyvBytesPerPixel*uint64(h), maxPictureBytes, maxPictureWidth, maxPictureHeight)
+}
+
+// yuyvPictureFormat describes the YUYV pictures decoded from a camera's
+// compressed frames, or nil when one would exceed maxPictureBytes.
+func yuyvPictureFormat(w, h uint32) *agentpb.RawFormat {
+	if uint64(w)*yuyvBytesPerPixel*uint64(h) > maxPictureBytes {
 		return nil
 	}
-	return &agentpb.RawFormat{Width: w, Height: h, Fourcc: fourccYUYV, BytesPerLine: w * 2}
+	return &agentpb.RawFormat{Width: w, Height: h, Fourcc: fourccYUYV, BytesPerLine: w * yuyvBytesPerPixel}
 }
 
 // tapFormat is the format of the frames the pipeline writes to rawTapFD, or nil
@@ -57,9 +132,16 @@ const defaultEncoderIdleGrace = 30 * time.Second
 // hub, so every subscriber stays attached across it.
 //
 // The encoder is added as soon as a viewer or recording arrives, because it is
-// waiting for its first frame. It is dropped only after grace with raw or pixel
-// subscribers alone. With nobody at all the hub cancels ctx, so there is nothing
-// to switch to.
+// waiting for its first frame. It is dropped only after grace with no viewer or
+// recording among the subscribers that remain. With nobody at all the hub
+// cancels ctx, so there is nothing to switch to.
+//
+// encoder is the element the encode branch runs. It runs at the fastest preset
+// a subscriber to encoded frames states, so that it never costs more than the
+// cheapest request on the camera allows: a pipeline that encodes is launched
+// again at once for a faster preset than it runs at, and for a slower one only
+// after grace, like a branch nobody wants any more. An encoder that takes no
+// preset is never launched again for one.
 //
 // launch runs one pipeline until its ctx ends or the pipeline does. Each launch
 // returns before the next starts, so the device is released in between. A
@@ -69,8 +151,12 @@ const defaultEncoderIdleGrace = 30 * time.Second
 // with that launch's error, as a single pipeline's end did before.
 //
 // With no demand to read (a producer whose sink is not a hub), launch runs once
-// with the encoder: today's behaviour.
-func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Duration, launch func(ctx context.Context, shape pipelineShape) error) error {
+// with the encoder, at the default preset.
+func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Duration, encoder string, launch func(ctx context.Context, shape pipelineShape) error) error {
+	return runPipelinesShapedBy(ctx, demand, grace, encoderOnDemand, encoder, launch)
+}
+
+func runPipelinesShapedBy(ctx context.Context, demand encodeDemand, grace time.Duration, needs shapeNeeds, encoder string, launch func(ctx context.Context, shape pipelineShape) error) error {
 	if demand == nil {
 		return launch(ctx, pipelineShape{encode: true})
 	}
@@ -79,8 +165,11 @@ func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Dur
 	// decided: each launch starts in it, and a running launch is replaced only
 	// when it differs, never by another launch of the same shape.
 	wanted := func() pipelineShape {
-		shape := pipelineShape{encode: demand.wantEncoded()}
+		shape := needs(demand)
 		shape.encode = shape.encode || noTap
+		if shape.encode {
+			shape.preset = encoderPreset(encoder, demand.statedPreset())
+		}
 		return shape
 	}
 	for launches := 0; ; launches++ {
@@ -94,12 +183,16 @@ func runShapedPipelines(ctx context.Context, demand encodeDemand, grace time.Dur
 			demand.encodedStreamRestarted()
 		}
 		demand.setPipelineEncodes(shape.encode)
+		demand.setEncoderPreset(shape.preset)
 		switched, err := superviseShape(ctx, demand, grace, shape, wanted, launch)
 		if switched {
 			continue
 		}
 		if !shape.encode && errors.Is(err, errNoTapOnlyPipeline) {
 			noTap = true
+			continue
+		}
+		if errors.Is(err, errPipelineEndedRestartable) && ctx.Err() == nil {
 			continue
 		}
 		return err
@@ -123,6 +216,7 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 	changed := demand.demandChanged()
 	var graceTimer *time.Timer
 	var graceUp <-chan time.Time
+	var graceFor graceReason
 	stopGrace := func() {
 		if graceTimer != nil {
 			graceTimer.Stop()
@@ -130,26 +224,43 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 		}
 	}
 	defer stopGrace()
-	// encoderIdle is the one condition for dropping the encoder: apps still read
-	// frames, and the shape they call for has none.
-	encoderIdle := func() bool { return !wanted().encode && demand.wantRaw() }
+	// waitsFor is the one condition for dropping a branch, the encoder or a
+	// derived layer's pictures, and for slowing the encoder down: the hub still
+	// has an audience, and the shape it calls for lacks a branch this launch
+	// runs, or encodes at a slower preset.
+	waitsFor := func() graceReason {
+		wanted := wanted()
+		switch {
+		case !demand.wantEncoded() && !demand.wantRaw() && !demand.wantNative():
+			return noGrace
+		case shape.hasBranchNotIn(wanted):
+			return branchUnwanted
+		case shape.encodesFasterThan(wanted):
+			return presetFaster
+		}
+		return noGrace
+	}
 
 	for {
 		// Re-read the hub on every pass, starting with the first: a change that
 		// landed between the shape decision and this launch is acted on too.
+		wanted, reason := wanted(), waitsFor()
 		switch {
-		case !shape.encode && wanted().encode:
+		case shape.lacksBranchOf(wanted) || shape.encodesSlowerThan(wanted):
 			stop()
 			return true, nil
-		case shape.encode && encoderIdle():
-			// Started once and left running while the encoder stays idle, so a run
-			// of raw joins and leaves cannot postpone the drop indefinitely.
-			if graceTimer == nil {
-				graceTimer = time.NewTimer(grace)
-				graceUp = graceTimer.C
-			}
-		default:
+		case reason == noGrace:
 			stopGrace()
+		case graceTimer == nil || reason != graceFor:
+			// Started once and left running while it waits for the same thing,
+			// so a run of raw joins and leaves cannot postpone the drop
+			// indefinitely. It starts again when what it waits for changes: an
+			// encoder whose last consumer left late in a grace for a slower
+			// preset keeps its own full grace, and so does a consumer of a
+			// slower preset that joined late in the grace of an idle encoder.
+			stopGrace()
+			graceTimer = time.NewTimer(grace)
+			graceUp, graceFor = graceTimer.C, reason
 		}
 		select {
 		case launchErr := <-done:
@@ -173,7 +284,7 @@ func superviseShape(ctx context.Context, demand encodeDemand, grace time.Duratio
 			// kill takes, and the new stream opens with a keyframe the viewer's
 			// decoder can start from, so it is accepted rather than closed by
 			// holding the hub's lock across the kill.
-			if encoderIdle() {
+			if waitsFor() == graceFor {
 				stop()
 				return true, nil
 			}

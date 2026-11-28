@@ -53,6 +53,13 @@ const (
 	// shareNodeBuffers is how many OUTPUT buffers the writer round-robins.
 	shareNodeBuffers = 2
 
+	// v4l2BufTypeVideoOutput is V4L2_BUF_TYPE_VIDEO_OUTPUT.
+	v4l2BufTypeVideoOutput = 2
+	// v4l2BufFlagTimestampCopy is V4L2_BUF_FLAG_TIMESTAMP_COPY: the buffer's
+	// timestamp is the writer's, which is how a reader tells it from the
+	// module's own clock.
+	v4l2BufFlagTimestampCopy = 0x00004000
+
 	// v4l2EventCountOffset and v4l2EventPendingOffset locate the client count
 	// (first word of the event union, which starts at 8 on 64-bit) and the
 	// number of events still queued behind this one in struct v4l2_event.
@@ -85,6 +92,12 @@ var (
 	_ [unsafe.Sizeof(v4l2Event{}) - 136]byte
 )
 
+// The length (offset 72), bytesused (8) and field (16) members of struct
+// v4l2_buffer.
+func v4l2BufLength(b *v4l2Buf) uint32          { return *(*uint32)(unsafe.Pointer(&b[72])) }
+func v4l2BufSetBytesUsed(b *v4l2Buf, n uint32) { *(*uint32)(unsafe.Pointer(&b[8])) = n }
+func v4l2BufSetField(b *v4l2Buf, field uint32) { *(*uint32)(unsafe.Pointer(&b[16])) = field }
+
 func (e *v4l2Event) count() uint32   { return *(*uint32)(unsafe.Pointer(&e[v4l2EventCountOffset])) }
 func (e *v4l2Event) pending() uint32 { return *(*uint32)(unsafe.Pointer(&e[v4l2EventPendingOffset])) }
 
@@ -96,8 +109,43 @@ func (e *v4l2Event) pending() uint32 { return *(*uint32)(unsafe.Pointer(&e[v4l2E
 // every call returns the first call's result.
 type shareNodeIO interface {
 	Counts() <-chan uint32
-	WriteFrame(data []byte, monoNs int64) error
+	WriteFrame(data []byte, stamp shareFrameStamp) error
+	// Mode is the mode the node took: the one it was opened in, with the
+	// maximum frame size the kernel gave a compressed format.
+	Mode() sharedMode
 	Close() error
+}
+
+// shareFrameStamp is what one node buffer's timestamp field holds: the frame's
+// capture time on the monotonic clock, or its sample ID.
+type shareFrameStamp struct {
+	captureMonoNs int64
+	sampleID      uint64
+	holdsSampleID bool
+}
+
+func stampWithCaptureTime(monoNs int64) shareFrameStamp {
+	return shareFrameStamp{captureMonoNs: monoNs}
+}
+
+func stampWithSampleID(sampleID uint64) shareFrameStamp {
+	return shareFrameStamp{sampleID: sampleID, holdsSampleID: true}
+}
+
+// v4l2loopback copies a writer's timestamp to readers only when it is not
+// zero, and puts its own clock in a zero one, so sample ID 0 cannot be carried.
+var errShareFrameWithoutSampleID = errors.New("the frame has no sample ID for the buffer timestamp to hold")
+
+func (s shareFrameStamp) writeTo(buffer *v4l2Buf) error {
+	if !s.holdsSampleID {
+		buffer.setTimestampNanos(s.captureMonoNs)
+		return nil
+	}
+	if s.sampleID == 0 {
+		return errShareFrameWithoutSampleID
+	}
+	setLoopbackSampleID(buffer, s.sampleID)
+	return nil
 }
 
 // openShareNode is a variable so the pump's tests can substitute a fake.
@@ -107,6 +155,8 @@ var openShareNode = openShareNodeV4L2
 var checkShareNodeFreshStart = checkShareNodeFreshStartV4L2
 
 var errShareNodeClosed = errors.New("share node writer is closed")
+
+var errShareFrameTooLarge = errors.New("frame exceeds the node's maximum frame size")
 
 var errShareFreshStartUnsupported = errors.New("the loopback module has no fresh_start support; update the WendyOS camera driver to share cameras")
 var errShareFreshStartUnverified = errors.New("retained camera node cannot guarantee a fresh first frame")
@@ -125,6 +175,7 @@ type shareNodeWriter struct {
 	buffers   [][]byte
 	next      int
 	streaming bool
+	oversized uint64
 	closed    bool
 	closeErr  error
 
@@ -139,8 +190,8 @@ func openShareNodeV4L2(logger *zap.Logger, path string, mode sharedMode) (shareN
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	if mode.pixelFormat() == 0 {
-		return nil, fmt.Errorf("share node %s: unknown pixel format %q", path, mode.Fourcc)
+	if mode.pixelFormat() == 0 || mode.bufferBytes() <= 0 {
+		return nil, fmt.Errorf("share node %s: no node can declare %s", path, mode)
 	}
 	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
@@ -214,14 +265,24 @@ func (w *shareNodeWriter) configure() error {
 	vfmt.PixelFormat = mode.pixelFormat()
 	vfmt.Field = v4l2FieldNone
 	vfmt.BytesPerLine = mode.BytesPerLine
-	vfmt.SizeImage = uint32(mode.frameBytes())
+	vfmt.SizeImage = uint32(mode.bufferBytes())
 	if err := w.ioctl(vidiocSFmt, unsafe.Pointer(&vfmt)); err != nil {
 		return fmt.Errorf("VIDIOC_S_FMT on %s: %w", w.path, err)
 	}
-	if vfmt.Width != mode.Width || vfmt.Height != mode.Height || vfmt.PixelFormat != mode.pixelFormat() ||
-		vfmt.BytesPerLine != mode.BytesPerLine || vfmt.SizeImage != uint32(mode.frameBytes()) {
+	// A picture's layout is exact. v4l2loopback sizes a compressed format's
+	// image itself, whatever size was asked for, so the node's maximum frame
+	// is the size it reports.
+	layoutTaken := vfmt.BytesPerLine == mode.BytesPerLine && vfmt.SizeImage == uint32(mode.bufferBytes())
+	if mode.compressed() {
+		layoutTaken = vfmt.SizeImage > 0
+	}
+	if vfmt.Width != mode.Width || vfmt.Height != mode.Height || vfmt.PixelFormat != mode.pixelFormat() || !layoutTaken {
 		return fmt.Errorf("share node %s took %dx%d %s (%d bytes per line, %d bytes) instead of %s",
 			w.path, vfmt.Width, vfmt.Height, fourccName(vfmt.PixelFormat), vfmt.BytesPerLine, vfmt.SizeImage, mode)
+	}
+	if mode.compressed() {
+		mode.MaxFrameBytes = vfmt.SizeImage
+		w.mode = mode
 	}
 
 	// Best effort. A refusal leaves the driver's default interval, which is a
@@ -267,8 +328,8 @@ func (w *shareNodeWriter) configure() error {
 			return fmt.Errorf("mmap buffer %d on %s: %w", i, w.path, err)
 		}
 		w.buffers = append(w.buffers, mem)
-		if len(mem) < mode.frameBytes() {
-			return fmt.Errorf("share node %s buffer %d holds %d bytes, a frame is %d", w.path, i, len(mem), mode.frameBytes())
+		if len(mem) < mode.bufferBytes() {
+			return fmt.Errorf("share node %s buffer %d holds %d bytes, a frame is up to %d", w.path, i, len(mem), mode.bufferBytes())
 		}
 	}
 
@@ -384,17 +445,35 @@ func pumpShareEvents(logger *zap.Logger, path string, nodeFd, wakeFd int, wantEv
 
 func (w *shareNodeWriter) Counts() <-chan uint32 { return w.counts }
 
-func (w *shareNodeWriter) WriteFrame(data []byte, monoNs int64) error {
-	if len(data) != w.mode.frameBytes() {
-		return fmt.Errorf("share node %s: frame is %d bytes, mode %s needs %d", w.path, len(data), w.mode, w.mode.frameBytes())
-	}
+func (w *shareNodeWriter) Mode() sharedMode { return w.mode }
+
+// WriteFrame queues one frame. A picture must be exactly the mode's frame
+// size. A compressed frame may be any size up to the maximum the node took; a
+// larger one is dropped and counted (errShareFrameTooLarge).
+func (w *shareNodeWriter) WriteFrame(data []byte, stamp shareFrameStamp) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.queueLocked(data, monoNs)
+	switch {
+	case !w.mode.compressed() && len(data) != w.mode.frameBytes():
+		return fmt.Errorf("share node %s: frame is %d bytes, mode %s needs %d", w.path, len(data), w.mode, w.mode.frameBytes())
+	case w.mode.compressed() && len(data) == 0:
+		return fmt.Errorf("share node %s: frame is empty", w.path)
+	case w.mode.compressed() && len(data) > int(w.mode.MaxFrameBytes):
+		w.oversized++
+		return fmt.Errorf("share node %s: %w: %d bytes, the maximum is %d; dropped %d so far",
+			w.path, errShareFrameTooLarge, len(data), w.mode.MaxFrameBytes, w.oversized)
+	}
+	return w.queueLocked(data, stamp)
+}
+
+func (w *shareNodeWriter) oversizedFrames() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.oversized
 }
 
 // queueLocked copies data into the next ring buffer and queues it. w.mu is held.
-func (w *shareNodeWriter) queueLocked(data []byte, monoNs int64) error {
+func (w *shareNodeWriter) queueLocked(data []byte, stamp shareFrameStamp) error {
 	if w.closed {
 		return errShareNodeClosed
 	}
@@ -402,7 +481,6 @@ func (w *shareNodeWriter) queueLocked(data []byte, monoNs int64) error {
 		return fmt.Errorf("share node %s has no buffers", w.path)
 	}
 	idx := w.next
-	copy(w.buffers[idx], data)
 
 	var qbuf v4l2Buf
 	qbuf.setIndex(uint32(idx))
@@ -411,7 +489,10 @@ func (w *shareNodeWriter) queueLocked(data []byte, monoNs int64) error {
 	v4l2BufSetBytesUsed(&qbuf, uint32(len(data)))
 	v4l2BufSetField(&qbuf, v4l2FieldNone)
 	qbuf.setFlags(v4l2BufFlagTimestampCopy)
-	qbuf.setTimestampNanos(monoNs)
+	if err := stamp.writeTo(&qbuf); err != nil {
+		return fmt.Errorf("share node %s: %w", w.path, err)
+	}
+	copy(w.buffers[idx], data)
 	if err := w.ioctl(vidiocQbuf, unsafe.Pointer(&qbuf)); err != nil {
 		return fmt.Errorf("VIDIOC_QBUF on %s: %w", w.path, err)
 	}

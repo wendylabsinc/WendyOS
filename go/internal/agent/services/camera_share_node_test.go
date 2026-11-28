@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/binary"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -57,10 +58,10 @@ func closedChan() chan struct{} {
 func TestShareNodeWriteFrameRefusesWrongSize(t *testing.T) {
 	mode := sharedMode{Width: 4, Height: 2, Fourcc: "YUYV", BytesPerLine: 8, FPS: 30}
 	w := &shareNodeWriter{mode: mode, fd: -1, wakeR: -1, wakeW: -1, done: closedChan()}
-	if err := w.WriteFrame(make([]byte, mode.frameBytes()-1), 1); err == nil {
+	if err := w.WriteFrame(make([]byte, mode.frameBytes()-1), stampWithCaptureTime(1)); err == nil {
 		t.Fatal("a short frame was accepted")
 	}
-	if err := w.WriteFrame(make([]byte, mode.frameBytes()+1), 1); err == nil {
+	if err := w.WriteFrame(make([]byte, mode.frameBytes()+1), stampWithCaptureTime(1)); err == nil {
 		t.Fatal("a long frame was accepted")
 	}
 }
@@ -72,13 +73,13 @@ func TestShareNodeCloseIsIdempotentAndConcurrent(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		wg.Add(2)
 		go func() { defer wg.Done(); _ = w.Close() }()
-		go func() { defer wg.Done(); _ = w.WriteFrame(make([]byte, mode.frameBytes()), 1) }()
+		go func() { defer wg.Done(); _ = w.WriteFrame(make([]byte, mode.frameBytes()), stampWithCaptureTime(1)) }()
 	}
 	wg.Wait()
 	if err := w.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
-	if err := w.WriteFrame(make([]byte, mode.frameBytes()), 1); !errors.Is(err, errShareNodeClosed) {
+	if err := w.WriteFrame(make([]byte, mode.frameBytes()), stampWithCaptureTime(1)); !errors.Is(err, errShareNodeClosed) {
 		t.Fatalf("write after Close: %v, want errShareNodeClosed", err)
 	}
 }
@@ -282,5 +283,53 @@ func TestRetainedShareNodeChecksFreshStartWithoutClaimingWriter(t *testing.T) {
 				t.Fatalf("calls=%d error=%v", calls, err)
 			}
 		})
+	}
+}
+
+// A byte-layout test: v4l2Buf's fields are reached by hand-computed offsets,
+// and a setter and a getter that agree on a wrong offset would round-trip
+// while the kernel reads the timestamp somewhere else. The offsets are those
+// TestV4L2BufferTimestampMetadata pins from the reading side.
+func TestV4L2BufferTimestampSetterRoundTrip(t *testing.T) {
+	const nanos int64 = 12*int64(time.Second) + 3456*int64(time.Microsecond) + 789
+
+	var buffer v4l2Buf
+	buffer.setTimestampNanos(nanos)
+	if sec := binary.LittleEndian.Uint64(buffer[24:32]); sec != 12 {
+		t.Errorf("tv_sec at offset 24 = %d, want 12", sec)
+	}
+	if usec := binary.LittleEndian.Uint64(buffer[32:40]); usec != 3456 {
+		t.Errorf("tv_usec at offset 32 = %d, want 3456", usec)
+	}
+	if buffer.bytesUsed() != 0 || buffer.flags() != 0 || buffer.sequence() != 0 || buffer.index() != 0 {
+		t.Errorf("setTimestampNanos disturbed a neighbouring field: index=%d bytesused=%d flags=%#x sequence=%d",
+			buffer.index(), buffer.bytesUsed(), buffer.flags(), buffer.sequence())
+	}
+	// struct timeval holds whole microseconds.
+	wantTruncated := 12*int64(time.Second) + 3456*int64(time.Microsecond)
+	if got := buffer.timestampNanos(); got != wantTruncated {
+		t.Errorf("timestampNanos() = %d, want %d", got, wantTruncated)
+	}
+	buffer.setFlags(v4l2BufFlagTimestampCopy)
+	if got := buffer.flags(); got != 0x4000 {
+		t.Errorf("flags() = %#x after setFlags(v4l2BufFlagTimestampCopy), want 0x4000", got)
+	}
+	if got := buffer.timestampNanos(); got != wantTruncated {
+		t.Errorf("timestampNanos() = %d after setFlags, want %d", got, wantTruncated)
+	}
+}
+
+func TestLoopbackSampleIDWireEncoding(t *testing.T) {
+	for _, id := range []uint64{1, 999999, 1000000, 12345678, 1<<64 - 1} {
+		var buffer v4l2Buf
+		setLoopbackSampleID(&buffer, id)
+		sec := binary.LittleEndian.Uint64(buffer[24:32])
+		usec := binary.LittleEndian.Uint64(buffer[32:40])
+		if usec >= 1000000 || sec*1000000+usec != id {
+			t.Fatalf("lost sample ID %d: %d/%d", id, sec, usec)
+		}
+		if buffer.sequence() != 0 || buffer.flags() != 0 {
+			t.Fatal("sample ID changed neighboring fields")
+		}
 	}
 }

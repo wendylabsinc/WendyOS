@@ -45,7 +45,6 @@ func (p *go2CameraDemand) SetCameraContainerConsumers(_ context.Context, names [
 	defer p.mu.Unlock()
 	p.names = slices.Clone(names)
 }
-func (p *go2CameraDemand) SetTwoPlaneContainerConsumers(context.Context, []string) {}
 func (p *go2CameraDemand) active(name string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

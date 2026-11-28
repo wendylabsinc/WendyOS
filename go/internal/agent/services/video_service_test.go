@@ -6,12 +6,15 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 	"unsafe"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -281,27 +284,154 @@ func TestBuildGStreamerArgs_WithoutH264Parse(t *testing.T) {
 	// With nothing to convert its output, x264enc itself must emit Annex B:
 	// left to negotiate against fdsink it picks stream-format=avc, which loses
 	// SPS/PPS over the raw pipe.
-	want := fmt.Sprintf("x264enc tune=zerolatency key-int-max=%d bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au ! fdsink fd=1", keyframeIntervalFrames(0))
+	want := fmt.Sprintf("x264enc tune=zerolatency speed-preset=ultrafast key-int-max=%d bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au ! fdsink fd=1", keyframeIntervalFrames(0))
 	if !strings.Contains(joined, want) {
 		t.Errorf("x264enc without h264parse must pin Annex B byte-stream caps\nwant substring: %s\ngot: %s", want, joined)
+	}
+}
+
+// x264enc is the one encoder the agent sets a speed for. Every pipeline it
+// builds with x264enc runs it at the preset the pipeline's shape holds, and at
+// the default, x264's fastest, when the shape holds none; a feed of JPEG
+// frames and a Jetson sensor captured through Argus are not shaped and always
+// run at the default. Beside the preset come
+// the settings the derived layer's frame numbering rests on: no frame delay
+// and no B-frames. No pipeline built with another encoder is given a preset
+// or a tune, whatever is stated.
+func TestPipelines_OnlyX264RunsAtAPresetAndEveryPipelineWithItRunsAtTheOneItsShapeHolds(t *testing.T) {
+	stubV4L2NodeUsable(t, true)
+	request := &agentpb.StreamVideoRequest{}
+	type builder struct {
+		shaped bool
+		build  func(t *testing.T, encoder string, hasH264Parse bool, preset appconfig.EncodePreset) string
+	}
+	builders := map[string]builder{
+		"the encoder stage": {true, func(_ *testing.T, encoder string, hasH264Parse bool, preset appconfig.EncodePreset) string {
+			return encoderSegment(encoder, hasH264Parse, 30, preset)
+		}},
+		"a camera captured through GStreamer": {true, func(t *testing.T, encoder string, hasH264Parse bool, preset appconfig.EncodePreset) string {
+			plan, err := planGStreamerPipelineShaped(pipelineShape{encode: true, preset: preset}, "gst", "/dev/video0", request, encoder, hasH264Parse, camera.TransportUSB, "", pipeWireSource{}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return strings.Join(plan.args, " ")
+		}},
+		"a Jetson sensor captured through Argus": {false, func(_ *testing.T, encoder string, hasH264Parse bool, _ appconfig.EncodePreset) string {
+			return strings.Join(buildArgusGStreamerArgs("gst", request, 0, encoder, hasH264Parse, map[string]bool{"nvarguscamerasrc": true, encoder: true}), " ")
+		}},
+		"a feed of JPEG frames": {false, func(t *testing.T, encoder string, hasH264Parse bool, _ appconfig.EncodePreset) string {
+			plan, err := planSharedJPEGPipeline("gst", "", request, gstEncoderResult{element: encoder, hasH264Parse: hasH264Parse}, sharedCameraJPEG{width: 640, height: 480})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return strings.Join(plan.args, " ")
+		}},
+		"the layer derived from a webcam's frames": {true, func(t *testing.T, encoder string, hasH264Parse bool, preset appconfig.EncodePreset) string {
+			if !hasH264Parse || encoder == "vp8enc" {
+				return "" // the layer is built only with an H.264 encoder and h264parse
+			}
+			layer, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), format: videoCodecMJPEG, gstPath: "gst", width: 1280, height: 720, framerate: 30,
+				available: map[string]bool{"gdpdepay": true, "gdppay": true, "jpegdec": true, "h264parse": true, encoder: true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if layer.encoder.element != encoder {
+				t.Fatalf("the layer chose %s", layer.encoder.element)
+			}
+			return strings.Join(layer.pipelineArgs(pipelineShape{encode: true, pixels: true, preset: preset}), " ")
+		}},
+	}
+	presets := []appconfig.EncodePreset{noPreset}
+	for _, name := range appconfig.EncodePresets {
+		presets = append(presets, appconfig.ParseEncodePreset(name))
+	}
+	encoders := append(slices.Clone(h264EncoderPreference), "vtenc_h264", "vtenc_h264_hw", "vp8enc")
+	for name, b := range builders {
+		for _, encoder := range encoders {
+			for _, hasH264Parse := range []bool{true, false} {
+				for _, preset := range presets {
+					pipeline := b.build(t, encoder, hasH264Parse, preset)
+					if pipeline == "" {
+						continue
+					}
+					if !strings.Contains(pipeline, encoder) {
+						t.Fatalf("%s with %s (h264parse %v) does not run it: %s", name, encoder, hasH264Parse, pipeline)
+					}
+					runsAt := "ultrafast"
+					if b.shaped && preset != noPreset {
+						runsAt = preset.String()
+					}
+					x264 := regexp.MustCompile(`x264enc tune=zerolatency speed-preset=` + runsAt + ` key-int-max=\d+ bframes=0 ! `)
+					switch {
+					case encoder == "x264enc" && (len(x264.FindAllString(pipeline, -1)) != 1 || strings.Count(pipeline, "x264enc") != 1 || strings.Count(pipeline, "speed-preset") != 1):
+						t.Errorf("%s with x264enc (h264parse %v, preset %q) does not run it once, at %s without frame delay or B-frames: %s", name, hasH264Parse, preset, runsAt, pipeline)
+					case encoder != "x264enc" && (strings.Contains(pipeline, "speed-preset") || strings.Contains(pipeline, "tune=") || strings.Contains(pipeline, "x264enc")):
+						t.Errorf("%s with %s (h264parse %v, preset %q) is given x264's settings: %s", name, encoder, hasH264Parse, preset, pipeline)
+					}
+				}
+			}
+		}
+	}
+}
+
+// The preset reaches a gst-launch-1.0 argument, so the stage must hold one of
+// the six names whatever value of the type it is built with.
+func TestEncoderSegment_ThePresetArgumentIsAlwaysOneOfTheSixNames(t *testing.T) {
+	named := regexp.MustCompile(` speed-preset=(` + strings.Join(appconfig.EncodePresets, "|") + `) `)
+	for value := 0; value < 256; value++ {
+		stage := encoderSegment("x264enc", true, 30, appconfig.EncodePreset(value))
+		if !named.MatchString(stage) || len(strings.Fields(stage)) != len(strings.Fields(encoderSegment("x264enc", true, 30, noPreset))) {
+			t.Fatalf("EncodePreset(%d) built %q", value, stage)
+		}
+	}
+}
+
+func TestEncoderPreset_OnlyX264TakesOneAndRunsAtTheDefaultWhenNoneIsStated(t *testing.T) {
+	if got := encoderPreset("x264enc", noPreset); got != appconfig.DefaultEncodePreset {
+		t.Errorf("x264enc with none stated runs at %q, want the default", got)
+	}
+	if got := encoderPreset("x264enc", appconfig.EncodePresetMedium); got != appconfig.EncodePresetMedium {
+		t.Errorf("x264enc with medium stated runs at %q", got)
+	}
+	for _, encoder := range append(slices.Clone(h264EncoderPreference), "vtenc_h264", "vtenc_h264_hw", "vp8enc", "") {
+		if encoder == "x264enc" {
+			continue
+		}
+		if got := encoderPreset(encoder, appconfig.EncodePresetMedium); got != noPreset {
+			t.Errorf("%q is said to run at preset %q; only an encoder with a property for it takes one", encoder, got)
+		}
+		if arg := presetArg(encoder, appconfig.EncodePresetMedium); arg != "" {
+			t.Errorf("%q is given %q", encoder, arg)
+		}
 	}
 }
 
 // The byte-stream caps are x264enc's: hardware encoders keep their own caps,
 // and with h264parse present the parser does the conversion as before.
 func TestEncoderSegment_ByteStreamCapsOnlyForX264WithoutH264Parse(t *testing.T) {
-	for _, tc := range []struct {
+	type row struct {
 		encoder      string
 		hasH264Parse bool
+		preset       appconfig.EncodePreset
 		want         string
-	}{
-		{"x264enc", false, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au"},
-		{"x264enc", true, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high" + h264ByteStream},
-		{"v4l2h264enc", false, "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc extra-controls=\"controls,h264_i_frame_period=30\" ! video/x-h264,profile=baseline,level=(string)4"},
-		{"vaapih264enc", false, "videoconvert ! video/x-raw,format=I420 ! vaapih264enc"},
-	} {
-		if got := encoderSegment(tc.encoder, tc.hasH264Parse, 30); got != tc.want {
-			t.Errorf("encoderSegment(%q, h264parse=%v)\n got: %s\nwant: %s", tc.encoder, tc.hasH264Parse, got, tc.want)
+	}
+	rows := []row{
+		{"x264enc", false, noPreset, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au"},
+		{"x264enc", true, noPreset, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bframes=0 ! video/x-h264,profile=high" + h264ByteStream},
+		{"v4l2h264enc", false, noPreset, "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc extra-controls=\"controls,h264_i_frame_period=30\" ! video/x-h264,profile=baseline,level=(string)4"},
+		{"v4l2h264enc", false, appconfig.EncodePresetMedium, "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc extra-controls=\"controls,h264_i_frame_period=30\" ! video/x-h264,profile=baseline,level=(string)4"},
+		{"vaapih264enc", false, noPreset, "videoconvert ! video/x-raw,format=I420 ! vaapih264enc"},
+		{"vaapih264enc", false, appconfig.EncodePresetVeryfast, "videoconvert ! video/x-raw,format=I420 ! vaapih264enc"},
+	}
+	for _, name := range appconfig.EncodePresets {
+		rows = append(rows,
+			row{"x264enc", false, appconfig.ParseEncodePreset(name), "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency speed-preset=" + name + " key-int-max=30 bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au"},
+			row{"x264enc", true, appconfig.ParseEncodePreset(name), "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency speed-preset=" + name + " key-int-max=30 bframes=0 ! video/x-h264,profile=high" + h264ByteStream},
+		)
+	}
+	for _, tc := range rows {
+		if got := encoderSegment(tc.encoder, tc.hasH264Parse, 30, tc.preset); got != tc.want {
+			t.Errorf("encoderSegment(%q, h264parse=%v, preset %q)\n got: %s\nwant: %s", tc.encoder, tc.hasH264Parse, tc.preset, got, tc.want)
 		}
 	}
 }
@@ -716,6 +846,59 @@ func TestFindGStreamerEncoder_PrefersVP8OverOtherH264EncodersWhenH264ParseAbsent
 	}
 	if result.element != "vp8enc" || result.codec != agentpb.VideoCodec_VIDEO_CODEC_VP8 {
 		t.Errorf("got %q (%v), want vp8enc (VP8)", result.element, result.codec)
+	}
+}
+
+// An encoder joins the preference list only with a row here: the test holds
+// its own copy of what each element is, and vtenc_h264, which VideoToolbox
+// runs on hardware or in software as it sees fit, is in neither.
+func TestH264EncoderKinds_EveryPreferredEncoderIsHardwareOrSoftware(t *testing.T) {
+	want := map[string]h264EncoderKind{
+		"nvv4l2h264enc": hardwareH264Encoder,
+		"v4l2h264enc":   hardwareH264Encoder,
+		"omxh264enc":    hardwareH264Encoder,
+		"avenc_h264":    softwareH264Encoder,
+		"x264enc":       softwareH264Encoder,
+		"openh264enc":   softwareH264Encoder,
+		"vaapih264enc":  hardwareH264Encoder,
+		"nvh264enc":     hardwareH264Encoder,
+		"msdkh264enc":   hardwareH264Encoder,
+	}
+	if len(h264EncoderPreference) != len(want) {
+		t.Errorf("the preference list holds %d encoders and this test knows %d: %v", len(h264EncoderPreference), len(want), h264EncoderPreference)
+	}
+	for _, element := range h264EncoderPreference {
+		kind, known := want[element]
+		if !known {
+			t.Errorf("%s is preferred and this test does not say whether it is hardware or software", element)
+			continue
+		}
+		if got := h264EncoderKinds[element]; got != kind {
+			t.Errorf("%s is kind %d in the table, want %d", element, got, kind)
+		}
+		if got := encodesH264InSoftware(element); got != (kind == softwareH264Encoder) {
+			t.Errorf("encodesH264InSoftware(%s) = %v", element, got)
+		}
+	}
+	if got := h264EncoderKinds["vtenc_h264_hw"]; got != hardwareH264Encoder {
+		t.Errorf("vtenc_h264_hw is kind %d, want hardware", got)
+	}
+	for _, element := range []string{"vtenc_h264", "avenc_h264_omx", "", "vp8enc"} {
+		if kind, listed := h264EncoderKinds[element]; listed || encodesH264InSoftware(element) {
+			t.Errorf("%q is in the table as kind %d: an element not known to be software must get no warning", element, kind)
+		}
+	}
+}
+
+// The preference list is what selection walks: every element of it is chosen
+// when it is the only encoder installed.
+func TestFindGStreamerEncoder_ChoosesEachEncoderOfThePreferenceList(t *testing.T) {
+	stubV4L2NodeUsable(t, true)
+	for _, element := range h264EncoderPreference {
+		result, err := findGStreamerEncoderFromSet(map[string]bool{element: true, "h264parse": true})
+		if err != nil || result.element != element {
+			t.Errorf("%s alone: got %q (%v)", element, result.element, err)
+		}
 	}
 }
 

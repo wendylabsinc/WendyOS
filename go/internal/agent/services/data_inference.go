@@ -645,6 +645,11 @@ func (j *campaignInferenceJob) notifications(ctx context.Context, queue <-chan D
 }
 
 func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCampaign, error) {
+	return campaignMessage(s.withInferenceStatus(campaign))
+}
+
+// withInferenceStatus is the campaign with what its inference is doing now.
+func (s *DataService) withInferenceStatus(campaign data.Campaign) data.Campaign {
 	eventNotifications := campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent
 	if campaign.Inference != nil || eventNotifications {
 		campaign.InferenceStatus = &data.InferenceStatus{State: "disabled"}
@@ -670,7 +675,7 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 			campaign.InferenceStatus.State = "stopping"
 		}
 	}
-	return campaignMessage(campaign)
+	return campaign
 }
 
 func (s *DataService) triggerInference(ctx context.Context, campaign data.Campaign, record data.ApplicationRecord) (bool, error) {

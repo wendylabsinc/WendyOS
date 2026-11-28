@@ -200,8 +200,7 @@ func (s *CalibratedFrameService) joinRunning(name string, opts framesource.Optio
 // Canceled, finish closes the newcomer with no error, and the client sees a
 // clean EOF with zero frames. So an ending hub is evicted, its producer waited
 // for (the old capture must release the camera before a fresh one can claim
-// it), and the lookup retried -- the same dance VideoService.getOrCreateHub
-// does.
+// it), and the lookup retried.
 func (s *CalibratedFrameService) getOrCreateHub(ctx context.Context, desc *agentpbv2.CalibratedSource, src framesource.Source, opts framesource.Options, require []agentpbv2.FrameRequirement, clientLimit uint64) (*frameHub, int, *frameSub, error) {
 	name := desc.GetSource()
 	for retries := 0; ; retries++ {

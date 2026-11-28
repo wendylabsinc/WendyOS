@@ -47,15 +47,71 @@ device deployment; it does not fan deployment out to every fleet member.
   through `30s`, defaults to `2s`, and accepts late app results after sensor
   capture stops. It extends episode lifetime, not sensor recording duration.
 - Camera `continuous` and `snapshot` modes are implemented. Snapshot requires
-  `interval`, for example `2s`, and a transport that delivers whole access
-  units. Byte-chunk streams record continuously and explain this in the
-  manifest. Rate caps also depend on transport and can be best effort at GOP
-  granularity. A snapshot is not guaranteed to be a JPEG.
+  `interval`, for example `2s`, and a camera that delivers whole frames. Each
+  still is one of the camera's own frames: a webcam the agent captures
+  natively stores its JPEG frame, unchanged, as `snapshot-NNNNNN.jpg`, and a
+  camera whose own frames are H.264 stores a key frame as
+  `snapshot-NNNNNN.h264`. Read the index `codec` or the file extension rather
+  than assuming JPEG. Byte-chunk streams record continuously and explain this
+  in the manifest, with the reason the camera's own frames were not used. Rate
+  caps also depend on transport and can be best effort at GOP granularity.
 - Camera `max_resolution: 1280x720` and continuous `rate` request stream
   parameters. Buffered capture keeps the existing producer parameters and
   reports these requests as unachieved. For an exact resolution/rate request,
   use `buffer: 0s` and inspect the achieved parameters. Unsupported modes or
   conflicts with an existing parameter-specific consumer remain visible.
+- Camera `store` chooses what the episode stores of that camera's continuous
+  recording: `video` (default), `frames` (single frames, each with its frame
+  number and capture time), or `both`. Other values, `store` on a non-camera
+  source, and `store` with `mode: snapshot` (which always stores single
+  frames) are rejected. Use `store: both` rather than listing a camera twice; a repeated
+  camera selector warns at deployment and only its last capture block applies.
+  An agent older than the release that added `store` rejects a campaign that
+  uses the key as an unknown field, so omit it there to get `video`.
+- `store: frames` writes a camera's own whole frames. A webcam's JPEG frames
+  go to `segment-NNNNNN.mjpeg` files (a new file every 10 seconds), each
+  indexed in `index.jsonl` with its sample ID, capture time, file, byte offset,
+  and size under codec `VIDEO_CODEC_MJPEG`. A webcam has frames of its own only
+  when the agent captures it natively: at a size up to 1920x1080, on a device
+  with the GStreamer elements that turn its JPEG into pictures and H.264. Any
+  other camera, such as a network camera, records video instead for the whole
+  episode; read the source's detail in the episode manifest for the reason
+  before assuming frames exist. `store: both` writes the frame files beside
+  the `segment-NNNNNN.h264` video in the same index, told apart by `segment`
+  and `codec`; the source's frame and drop counts are then sums over both, and
+  a `rate` cap keeps whole groups of pictures of video but single JPEG frames.
+  `playable.mp4` comes from the video only, so a `frames` source whose frames
+  are JPEG has none, and neither has a snapshot source whose stills are JPEG.
+  A camera whose own frames are already H.264 has one stream, stored once as
+  video for every `store` value. `wendy data campaign deploy` warns when a
+  camera's video would be encoded as H.264 in software and the device's
+  GStreamer elements could be listed: the encoder runs while the campaign
+  records or buffers, and for as long as the campaign's inference runs when it
+  has `inference`. Without inference, `store: frames` keeps the own frames of a
+  webcam captured as JPEG without encoding; a camera that hands on no frames
+  of its own is recorded as video whatever `store` says.
+- `preset` on a camera source that stores video sets how fast the software
+  H.264 encoder works: `ultrafast`, `superfast`, `veryfast`, `faster`, `fast`
+  or `medium`, fastest first. A slower preset spends more CPU on each frame for
+  fewer bits. A camera has one encoder for all its consumers (recordings, apps
+  and viewers), which runs at the fastest preset any of them states, so it
+  never costs more than the cheapest request on that camera allows, and at
+  `ultrafast` when none states one. The encoder restarts to change preset: at
+  once to a faster one, and to a slower one after 30 seconds in which no
+  consumer called for the faster one. The recording goes on in a new segment
+  file from the new encoder's first key frame, and the camera frames that
+  became no stored video meanwhile count as drops. The deploy warning names
+  the preset, and the source's detail in the episode manifest says how many
+  video frames were encoded at another one.
+- A preset is not applied where no encoder takes it: the device encodes with
+  a hardware encoder or another element without presets, the camera produces
+  H.264 itself (a network camera, a webcam with H.264 output), or the camera's
+  pipeline always runs at the default (a SensorLink camera, a Jetson CSI
+  sensor). `wendy data campaign deploy` warns of each such camera with the
+  reason, and the episode manifest gives the same reason. `preset` is rejected
+  on a source that is not a camera, with `store: frames` and with
+  `mode: snapshot`, and an agent from before it rejects the campaign as it
+  does any unknown field.
 - Audio supports `continuous` and `threshold`, such as
   `trigger: "level_db > -20"` and `fragment: 30s`. ROS 2 and telemetry support
   `continuous`. Other mode/kind combinations validate, warn, and record

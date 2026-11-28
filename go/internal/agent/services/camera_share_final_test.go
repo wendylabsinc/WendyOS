@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/devwatch"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -49,7 +50,7 @@ func TestSharedMode_ACameraSwappedAtThePathDoesNotInheritTheRules(t *testing.T) 
 
 	t.Run("seen by the /dev watch", func(t *testing.T) {
 		h := newCSHarness(t, csBrio())
-		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 		h.watch()
 		if !refused(h) {
 			t.Fatal("before the swap, 1920x1080 on the shared camera was admitted")
@@ -81,7 +82,7 @@ func TestSharedMode_ACameraSwappedAtThePathDoesNotInheritTheRules(t *testing.T) 
 
 	t.Run("seen by the listing and the sync, with no watch", func(t *testing.T) {
 		h := newCSHarness(t, csBrio())
-		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+		h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 		listed := []CameraShareContainer{{ID: "cv-a"}}
 
 		h.takeOut("video0")
@@ -119,7 +120,7 @@ func TestSyncCameraShares_AnAdoptedNodeAtAnOldModeAsksForARedeploy(t *testing.T)
 	// the check (the test's decision fakes write package state).
 	adopt := func(t *testing.T, stored func(today sharedMode) sharedMode) (h *csHarness, today sharedMode) {
 		h = newCSHarness(t, csBrio())
-		today = h.s.shareDecisionFor(context.Background(), dev).Mode
+		today = h.s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels).Mode
 		h.writeState(`{"version":1,"containers":{"cv-a":{"app":"sh.wendy.cv-a","shares":[` +
 			csStateRecord(csBrio(), "/dev/video0", stored(today), 254) + `]}}}`)
 		h.loop.addLiveAux(254, "Brio 101")
@@ -129,11 +130,11 @@ func TestSyncCameraShares_AnAdoptedNodeAtAnOldModeAsksForARedeploy(t *testing.T)
 	}
 
 	t.Run("another mode today", func(t *testing.T) {
-		old := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 15}
+		old := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 15, Format: appconfig.CameraFormatPixels}
 		h, today := adopt(t, func(sharedMode) sharedMode { return old })
 		h.waitLogged("but a share made now would get "+today.String(), 1)
 		h.s.Shutdown() // the check has finished; the listing below decides again
-		want := "cv-a (idle; redeploy the app: its node keeps 640x480 YUYV, 15 fps, and the camera's shared mode is now " + today.String() + ")"
+		want := "cv-a [format pixels, stamp time] (idle; redeploy the app: its node keeps 640x480 YUYV, 15 fps, and the camera's shared mode is now " + today.String() + ")"
 		if got := h.reportOf("/dev/video0")["share_state"]; got != want {
 			t.Fatalf("share_state = %q\nwant          %q", got, want)
 		}
@@ -161,12 +162,12 @@ func TestSyncCameraShares_AnAdoptedNodeAtAnOldModeAsksForARedeploy(t *testing.T)
 // the listing says so, and a sync covers it again once the start is surely done.
 func TestCoverCameraShares_AFailedStartCoverIsShownAndRetried(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.setCoverErr("/dev/video0", errors.New("move_mount(-> /dev/video0): invalid argument"))
 	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 4242); len(errs) != 1 {
 		t.Fatalf("errors = %v, want one", errs)
 	}
-	want := "cv-a (not sharing: its start's cover failed: move_mount(-> /dev/video0): invalid argument)"
+	want := "cv-a [format pixels, stamp time] (not sharing: its start's cover failed: move_mount(-> /dev/video0): invalid argument)"
 	if got := h.reportOf("/dev/video0")["share_state"]; got != want {
 		t.Fatalf("share_state = %q\nwant          %q", got, want)
 	}
@@ -184,8 +185,8 @@ func TestCoverCameraShares_AFailedStartCoverIsShownAndRetried(t *testing.T) {
 		t.Fatalf("covers = %+v, want %+v", got, want)
 	}
 	h.waitLogged("camera share: covered /dev/video0 for cv-a again; its start's cover had failed", 1)
-	if got := h.reportOf("/dev/video0")["share_state"]; got != "cv-a (idle)" {
-		t.Fatalf("share_state after the retry = %q, want cv-a (idle)", got)
+	if got := h.reportOf("/dev/video0")["share_state"]; got != "cv-a [format pixels, stamp time] (idle)" {
+		t.Fatalf("share_state after the retry = %q, want cv-a [format pixels, stamp time] (idle)", got)
 	}
 	h.s.SyncCameraShares(context.Background(), listed)
 	if n := len(h.coverList()); n != 1 {
@@ -196,23 +197,23 @@ func TestCoverCameraShares_AFailedStartCoverIsShownAndRetried(t *testing.T) {
 // M1: the next start's cover clears the note, and so does the run ending.
 func TestCoverCameraShares_AFailedStartCoverNoteEndsWithTheRun(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.setCoverErr("/dev/video0", errors.New("boom"))
 	h.s.CoverCameraShares(context.Background(), "cv-a", 11)
-	if h.reportOf("/dev/video0")["share_state"] == "cv-a (idle)" {
+	if h.reportOf("/dev/video0")["share_state"] == "cv-a [format pixels, stamp time] (idle)" {
 		t.Fatal("no note after a failed start cover")
 	}
 	h.s.ReleaseCameraShares("cv-a")
-	if got := h.reportOf("/dev/video0")["share_state"]; got != "cv-a (idle)" {
-		t.Fatalf("after the task exited: %q, want cv-a (idle)", got)
+	if got := h.reportOf("/dev/video0")["share_state"]; got != "cv-a [format pixels, stamp time] (idle)" {
+		t.Fatalf("after the task exited: %q, want cv-a [format pixels, stamp time] (idle)", got)
 	}
 	h.s.CoverCameraShares(context.Background(), "cv-a", 12)
 	h.setCoverErr("/dev/video0", nil)
 	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 13); len(errs) != 0 {
 		t.Fatalf("errors = %v", errs)
 	}
-	if got := h.reportOf("/dev/video0")["share_state"]; got != "cv-a (idle)" {
-		t.Fatalf("after a start that covered: %q, want cv-a (idle)", got)
+	if got := h.reportOf("/dev/video0")["share_state"]; got != "cv-a [format pixels, stamp time] (idle)" {
+		t.Fatalf("after a start that covered: %q, want cv-a [format pixels, stamp time] (idle)", got)
 	}
 }
 
@@ -220,13 +221,13 @@ func TestCoverCameraShares_AFailedStartCoverNoteEndsWithTheRun(t *testing.T) {
 // logged and the share is made all the same.
 func TestCreateCameraShares_ANewNodeGetsUdevsAccessAtOnce(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	if got := h.entryLog(); !reflect.DeepEqual(got, []string{"access /dev/video255"}) {
 		t.Fatalf("entry operations = %v, want access /dev/video255", got)
 	}
 
 	h.setEntryErrs(errors.New("looking up the video group: group: unknown group video"), nil, nil)
-	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b")
+	h.s.CreateCameraShares(context.Background(), "cv-b", "sh.wendy.cv-b", nil)
 	if n := len(h.records("cv-b")); n != 1 {
 		t.Fatalf("cv-b has %d shares, want 1 although the access change failed", n)
 	}
@@ -240,7 +241,7 @@ func TestCreateCameraShares_ANewNodeGetsUdevsAccessAtOnce(t *testing.T) {
 // the node.
 func TestRemoveShareNode_UnlinksItsEntryFirstAndRestoresItWhenRefused(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.loop.mu.Lock()
 	h.loop.refuseRemove = true
 	h.loop.mu.Unlock()
@@ -272,7 +273,7 @@ func TestRemoveShareNode_UnlinksItsEntryFirstAndRestoresItWhenRefused(t *testing
 // some other way, the next attempt removes the entry.
 func TestRemoveShareNode_ARestoredEntryWhoseNodeWentIsRemoved(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.loop.mu.Lock()
 	h.loop.refuseRemove = true
 	h.loop.mu.Unlock()
@@ -298,7 +299,7 @@ func TestRemoveShareNode_ARestoredEntryWhoseNodeWentIsRemoved(t *testing.T) {
 // gone is read from sysfs, not from /dev.
 func TestRemoveShareNode_ANodeLeftWithoutItsEntryIsStillRemoved(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.loop.mu.Lock()
 	h.loop.refuseRemove = true
 	h.loop.mu.Unlock()
@@ -353,7 +354,7 @@ func TestCreateCameraShares_NeverTakesANumberWhoseNodeLostItsEntry(t *testing.T)
 	h := newCSHarness(t, csBrio())
 	h.loop.addLiveAux(255, "Brio 101") // no record, no queued removal
 	h.loop.setEntry(255, false)
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	recs := h.records("cv-a")
 	if len(recs) != 1 || recs[0].node != 254 {
 		t.Fatalf("records = %+v, want one share at node 254", recs)
@@ -379,7 +380,7 @@ func TestCreateCameraShares_NeverTakesANumberWhoseNodeLostItsEntry(t *testing.T)
 // once the node has gone.
 func TestRemoveShareNode_ARestoredEntryIsTrackedAcrossAnAttemptThatStopsEarly(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.loop.mu.Lock()
 	h.loop.refuseRemove = true
 	h.loop.mu.Unlock()
@@ -408,7 +409,7 @@ func TestRemoveShareNode_ARestoredEntryIsTrackedAcrossAnAttemptThatStopsEarly(t 
 // M4: an entry that cannot be made again is logged; the removal stays queued.
 func TestRemoveShareNode_AnEntryThatCannotBeMadeAgainIsLogged(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.loop.mu.Lock()
 	h.loop.refuseRemove = true
 	h.loop.mu.Unlock()
@@ -427,7 +428,7 @@ func TestRemoveShareNode_AnEntryThatCannotBeMadeAgainIsLogged(t *testing.T) {
 // and never written over; this agent's shares live in memory.
 func TestCameraShareState_ANewerVersionIsLeftInPlace(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	newer := `{"version":2,"containers":{"cv-x":{"app":"sh.wendy.cv-x","shares":[]}},"somethingNew":true}`
+	newer := `{"version":4,"containers":{"cv-x":{"app":"sh.wendy.cv-x","shares":[]}},"somethingNew":true}`
 	h.writeState(newer)
 	h.s.loadCameraShares()
 	if ids := h.containerIDs(); len(ids) != 0 {
@@ -436,11 +437,11 @@ func TestCameraShareState_ANewerVersionIsLeftInPlace(t *testing.T) {
 	if _, err := os.Stat(cameraSharesPath + ".corrupt"); !os.IsNotExist(err) {
 		t.Fatalf("the newer file was set aside as corrupt: %v", err)
 	}
-	if n := h.logged("is version 2, written by a newer agent; this agent reads version 1"); n != 1 {
+	if n := h.logged("is version 4, written by a newer agent; this agent reads version 3"); n != 1 {
 		t.Fatalf("version line logged %d times; logs: %v", n, h.logs.All())
 	}
 
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.s.RemoveCameraShares("cv-a")
 	h.drainRemovals()
 	if got, err := os.ReadFile(cameraSharesPath); err != nil || string(got) != newer {
@@ -468,7 +469,7 @@ func TestRecover_AReplugEndsAReadingPumpsBackoff(t *testing.T) {
 	t.Cleanup(func() { shareRetryBackoff = prev }) // after the harness's Shutdown
 	h := newCSHarness(t, csBrio())
 	fp := installFakeProducers(h.s)
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	h.watch()
 	h.unplug("video0")
 
@@ -479,8 +480,8 @@ func TestRecover_AReplugEndsAReadingPumpsBackoff(t *testing.T) {
 	if !csWaitFor(2*time.Second, func() bool { return fp.count() == 1 }) {
 		t.Fatalf("the camera did not start within 2 s of coming back (producers %d); logs: %v", fp.count(), h.logs.All())
 	}
-	if got := h.reportOf("/dev/video0")["share_state"]; got != "cv-a (reading)" {
-		t.Fatalf("share_state = %q, want cv-a (reading)", got)
+	if got := h.reportOf("/dev/video0")["share_state"]; got != "cv-a [format pixels, stamp time] (reading)" {
+		t.Fatalf("share_state = %q, want cv-a [format pixels, stamp time] (reading)", got)
 	}
 }
 
@@ -513,7 +514,7 @@ func TestStartDiscovery_ListsGStreamerElementsAhead(t *testing.T) {
 	}) {
 		t.Fatal("the listing was not kept")
 	}
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	if n := len(h.records("cv-a")); n != 1 || len(listed) != 0 {
 		t.Fatalf("records %d, further listings %d; want the share made from the kept listing", n, len(listed))
 	}
@@ -523,7 +524,7 @@ func TestStartDiscovery_ListsGStreamerElementsAhead(t *testing.T) {
 // checked and made again where they are gone.
 func TestRecover_AWatchOverflowChecksEveryCover(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a")
+	h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a", nil)
 	if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
 		t.Fatalf("errors: %v", errs)
 	}

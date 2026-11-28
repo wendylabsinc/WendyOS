@@ -413,6 +413,53 @@ Fields belonging to a different mode than the declared one are rejected.
 | `trigger` | `threshold` | Required expression `<field> <op> <number>`, for example `model.uncertainty > 0.9` or `level_db > -20`. Only `model.uncertainty` is bounded to 0 through 1; other fields carry their own units. |
 | `fragment` | `threshold` | Optional captured duration per threshold crossing. |
 | `max_resolution` | any | Camera sources only: `WxH` cap such as `1280x720`. |
+| `store` | not `snapshot` | Camera sources only: what the episode stores of the camera's continuous recording. `video` (default) stores video, `frames` stores single frames, each with its frame number and capture time, and `both` stores video and frames. |
+| `preset` | not `snapshot` | Camera sources that store video only: how fast the software H.264 encoder works, one of `ultrafast`, `superfast`, `veryfast`, `faster`, `fast`, `medium`, fastest first. Without it the source states no preset. |
+
+Any other `store` value, `store` on a source that is not a camera, or `store`
+with `mode: snapshot` is rejected; snapshot mode always stores single frames.
+Each snapshot still is one of the camera's own frames. A webcam the agent
+captures natively as JPEG stores that JPEG frame, unchanged, in a
+`snapshot-NNNNNN.jpg` file, and the source asks for no encoding. A camera
+whose own frames are H.264 stores a key frame with its parameter sets in a
+`snapshot-NNNNNN.h264` file. `index.jsonl` gives each still's sample ID,
+capture time, file, and codec. A source that holds only JPEG stills has no
+`playable.mp4`.
+Use `store: both` instead of listing a camera twice: a camera is
+recorded once per episode, only its last `capture` block applies, and
+deployment warns when the same camera selector is listed more than once. An
+agent older than the release that added `store` rejects a campaign that uses
+the key, because campaign parsing rejects unknown fields; leave it out to get
+`video` on those agents. `wendy data campaign deploy` warns when a camera's
+video would be encoded as H.264 in software and the device's GStreamer
+elements could be listed: the encoder runs while the campaign records or
+buffers, and for as long as the campaign's inference runs when it has
+`inference`. Without inference, `store: frames` keeps the own frames of a
+webcam captured as JPEG without encoding; a camera that hands on no frames of
+its own is recorded as video whatever `store` says.
+
+`preset` applies only where the device encodes the camera's video in
+software with an encoder that takes one; a slower preset spends more CPU on
+each frame for fewer bits. A camera has one encoder for all its consumers:
+recordings, apps and viewers. It runs at the fastest preset any of them
+states, so the encoder never costs more than the cheapest request on that
+camera allows, and at `ultrafast` when none states one. The encoder restarts
+to change preset: at once to a faster one, and to a slower one after 30
+seconds in which no consumer called for the faster one. A recording goes on
+in a new segment file from the new encoder's first key frame, and the camera
+frames that became no stored video meanwhile count as drops. The deployment
+warning names the preset, and the source's detail in the episode manifest
+says how many video frames were encoded at another one.
+
+A preset is not applied where no encoder takes it: the device encodes with a
+hardware encoder or another element without presets, the camera produces
+H.264 itself (a network camera, a webcam with H.264 output), or the camera's
+pipeline always runs at the default preset (a SensorLink camera, a Jetson CSI
+sensor). `wendy data campaign deploy` warns of each such camera with the
+reason, and the source's detail in the episode manifest gives the same
+reason. Any other `preset` value, `preset` on a source that is not a camera,
+with `store: frames` or with `mode: snapshot` is rejected, and an agent older
+than the release that added `preset` rejects a campaign that uses the key.
 
 What each adapter honors today: cameras implement `continuous` and `snapshot`,
 audio implements `continuous` and `threshold`, and the ROS 2 and telemetry
@@ -421,10 +468,12 @@ deploys, and deployment prints a warning naming each source whose requested
 mode is not implemented for its kind; those sources record continuously for
 now.
 
-Camera snapshots and the continuous capture-rate cap require a stream that
-delivers whole encoded frames, currently local V4L2 cameras with native H.264.
+Camera snapshots and the continuous capture-rate cap require a camera that
+delivers whole frames, currently local V4L2 cameras the agent captures
+natively: those with H.264 output and webcams whose JPEG it captures whole.
 IP cameras and GStreamer-encoded streams record continuously at their stream
-rate instead; the episode's source detail reports the unapplied policy.
+rate instead; the episode's source detail reports the unapplied policy and,
+for a snapshot source, why the camera's own frames were not used.
 Snapshot cameras do not maintain a video pre-buffer. Audio threshold capture
 uses `level_db`, for example `trigger: "level_db > -20"`, to retain WAV
 fragments during an active episode. It does not itself start a campaign.

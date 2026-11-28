@@ -819,17 +819,19 @@ func (l *Loopback) fireIdleGrace(camID uint32, cp *camPump, gen uint64) {
 // Auxiliary nodes: v4l2loopback nodes that are NOT backed by a registered
 // network camera.
 //
-// The two-plane camera path needs a node for a LOCAL camera, fed from the
-// agent's own producer hub rather than from an RTSP pump. Everything above is
-// keyed to the network camera registry (the node number IS the camera's
-// registry ID), so those nodes have no registry entry to hang off. Rather than
-// stand up a second node manager beside this one, they reuse the same module
-// detection, the same create and remove primitives, and the same "module
-// missing is not an error" posture. Only the numbering and the lifetime differ,
-// and both belong to the caller.
+// An app's camera share node is fed from the agent's own producer hub rather
+// than from an RTSP pump. Everything above is keyed to the network camera
+// registry (the node number IS the camera's registry ID), so those nodes have
+// no registry entry to hang off. Rather than stand up a second node manager
+// beside this one, they reuse the same module detection, the same create and
+// remove primitives, and the same "module missing is not an error" posture.
+// Only the numbering and the lifetime differ, and both belong to the caller.
 
-// AllocateAuxNodeNumber returns a free v4l2loopback node number for a node that
-// has no camera registry entry, or ErrBandExhausted if there is none.
+// AllocateAuxNodeNumberSkipping returns a free v4l2loopback node number for a
+// node that has no camera registry entry, or ErrBandExhausted if there is none.
+// It passes over every number skip reports (nil skips nothing more): a camera
+// share's record keeps its number across a reboot, which removes every node,
+// until the container's next start makes the node again.
 //
 // Numbers come from the TOP of the same reserved band the registry allocates
 // from, downward, because the registry allocates the lowest free number upward.
@@ -841,15 +843,6 @@ func (l *Loopback) fireIdleGrace(camID uint32, cp *camPump, gen uint64) {
 // room above it to give auxiliary nodes a band of their own. Sharing with a
 // skip check is the honest option; silently reusing a camera's number would
 // point an app at the wrong camera's frames.
-func (l *Loopback) AllocateAuxNodeNumber() (int, error) {
-	return l.AllocateAuxNodeNumberSkipping(nil)
-}
-
-// AllocateAuxNodeNumberSkipping is AllocateAuxNodeNumber that also passes over
-// every number skip reports (nil skips nothing more). It is for a caller that
-// holds numbers whose nodes do not exist right now: a camera share's record
-// keeps its number across a reboot, which removes every node, until the
-// container's next start makes the node again.
 func (l *Loopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, error) {
 	taken := map[int]struct{}{}
 	for _, cam := range l.reg.List() {
@@ -873,8 +866,7 @@ func (l *Loopback) AllocateAuxNodeNumberSkipping(skip func(nr int) bool) (int, e
 // EnsureAuxNode creates the node at nr if it does not already exist.
 //
 // Like EnsureNodes it is idempotent and treats a missing module as "nothing to
-// do" rather than an error, so a build without v4l2loopback simply has no data
-// plane instead of failing container start.
+// do" rather than an error.
 func (l *Loopback) EnsureAuxNode(_ context.Context, nr int, label string) error {
 	if err := l.Available(); err != nil {
 		return nil

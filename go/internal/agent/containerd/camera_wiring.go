@@ -14,11 +14,8 @@ import (
 )
 
 // CameraLoopbackProvider is the narrow capability the client needs from the
-// video service to keep host-side v4l2loopback camera nodes and their pump
-// consumers in sync with which entitled containers are actually running.
-// Declared here (mirroring AppSystemAPISocketProvider, client.go:61-65) so
-// *services.VideoService satisfies it structurally without an adapter — see
-// the compile-time assertion below.
+// video service to keep the host-side v4l2loopback nodes of network cameras
+// and their pump consumers in sync with which entitled containers are running.
 type CameraLoopbackProvider interface {
 	// EnsureCameraNodes creates a v4l2loopback device node for every
 	// registered network camera that does not already have one.
@@ -27,25 +24,14 @@ type CameraLoopbackProvider interface {
 	// containers entitled to camera access, so the loopback manager can
 	// start or stop its pumps to match.
 	SetCameraContainerConsumers(ctx context.Context, containerIDs []string)
-	// SetTwoPlaneContainerConsumers replaces, wholesale, the set of running
-	// containers entitled to the two-plane camera path. Since frame identity
-	// moved in-band, that is the camera set; the call stays separate because
-	// the two-plane pump has its own lifecycle.
-	SetTwoPlaneContainerConsumers(ctx context.Context, containerIDs []string)
 }
 
-// Compile-time check that *services.VideoService satisfies CameraLoopbackProvider
-// without an adapter (Task C6 wires it in directly via SetCameraLoopbackProvider).
 var _ CameraLoopbackProvider = (*services.VideoService)(nil)
 
 // SetCameraLoopbackProvider injects the manager for host-side camera loopback
-// nodes and pump consumers. Called once from main.go at agent startup,
-// mirroring SetAppSystemAPISocketProvider (client.go:194-197): not protected
-// by c.mu, since it is set during single-threaded startup before the Client
-// is exposed to concurrent callers. A nil provider (build without the ipcam
-// module, or before main.go wires it in) leaves camera-loopback sync a
-// complete no-op — see SyncCameraLoopbacks and the create-hook gate in
-// CreateContainerWithProgress.
+// nodes and pump consumers. It is not protected by c.mu: it must be called
+// during single-threaded startup, before the Client is exposed to concurrent
+// callers. With a nil provider, camera-loopback sync does nothing.
 func (c *Client) SetCameraLoopbackProvider(p CameraLoopbackProvider) {
 	c.cameraLoopbackProvider = p
 }
@@ -62,11 +48,9 @@ type containerCameraInfo struct {
 
 // cameraConsumerNames returns the names of containers that currently count
 // as camera-loopback consumers: a Running task AND the camera entitlement or
-// its deprecated alias, video (both map to applyCamera, entitlements.go:83).
-// Labels are revalidated here rather than trusted outright — same
-// defense-in-depth posture as appSystemAPIOwnersFromLabels (client.go:204-217)
-// — so a container whose appID/serviceName labels fail validation is dropped
-// rather than handed to the loopback manager as a consumer name.
+// its deprecated alias, video. Labels are revalidated here rather than trusted
+// outright, so a container whose appID/serviceName labels fail validation is
+// dropped rather than handed to the loopback manager as a consumer name.
 func cameraConsumerNames(infos []containerCameraInfo) []string {
 	var names []string
 	for _, info := range infos {
@@ -86,37 +70,6 @@ func cameraConsumerNames(infos []containerCameraInfo) []string {
 	return names
 }
 
-// twoPlaneConsumerNames returns the names of containers entitled to the
-// two-plane camera path: a Running task holding the camera entitlement (or its
-// deprecated alias, video).
-//
-// # Why camera alone is the whole grant
-//
-// The path has two halves. The data plane is a v4l2loopback device node the app
-// opens and reads, which is a device-node grant, and device-node grants are what
-// the camera entitlement is.
-//
-// The control plane is frame identity: source id, sample id, canonical time and
-// uncertainty. It used to travel as its own gRPC stream, which is why this gate
-// once demanded a second entitlement to authorise it. It no longer does. Identity
-// now rides in-band, in the v4l2 buffer timestamp the agent writes when it feeds
-// the node, so the app that is entitled to the pixels receives the identity with
-// them and there is no second channel to authorise.
-//
-// That in-band carriage is what makes one entitlement correct rather than merely
-// convenient. The node is agent-fed, so the app is not an independent second
-// reader: the frame it scores is provably the frame the episode recorded, which
-// is the property the harness exists to deliver. An app holding camera without
-// the agent-fed path keeps exactly the behaviour it has today.
-func twoPlaneConsumerNames(infos []containerCameraInfo) []string {
-	// Identical to the camera set, and deliberately still its own call. The two
-	// gates collapsed into one when frame identity moved in-band and the second
-	// entitlement went away; the two-plane pump keeps its own lifecycle, so the
-	// caller still says which set it means rather than relying on them being the
-	// same list forever.
-	return cameraConsumerNames(infos)
-}
-
 // shouldEnsureCameraNodes reports whether appCfg's entitlements include the
 // camera entitlement or its deprecated alias, video — the create-hook gate in
 // CreateContainerWithProgress that decides whether pre-creating v4l2loopback
@@ -129,8 +82,7 @@ func shouldEnsureCameraNodes(appCfg *appconfig.AppConfig) bool {
 }
 
 // SyncCameraLoopbacks recomputes v4l2loopback node existence and pump
-// consumers from container truth: it lists Wendy-managed containers (the same
-// label-filter pattern as RestoreAppSystemAPISockets, client.go:227), keeps
+// consumers from container truth: it lists Wendy-managed containers, keeps
 // the ones with a Running task and a camera/video entitlement via
 // cameraConsumerNames, then calls EnsureCameraNodes and
 // SetCameraContainerConsumers on the registered provider.
@@ -168,7 +120,6 @@ func (c *Client) SyncCameraLoopbacks(ctx context.Context) {
 			c.logger.Warn("camera loopback sync: ensuring camera nodes failed", zap.Error(err))
 		}
 		c.cameraLoopbackProvider.SetCameraContainerConsumers(ctx, cameraConsumerNames(infos))
-		c.cameraLoopbackProvider.SetTwoPlaneContainerConsumers(ctx, twoPlaneConsumerNames(infos))
 	}
 	c.syncCameraShares(ctx, infos, complete)
 }

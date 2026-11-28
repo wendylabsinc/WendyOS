@@ -1192,8 +1192,7 @@ func multiServiceCreateConfig(appCfg *appconfig.AppConfig, name string, svc *app
 		// Tells the device whether the app still has a sketch.
 		MCU: appCfg.MCU,
 	}
-	cfg.Entitlements = append(append([]appconfig.Entitlement{}, appCfg.Entitlements...), svc.Entitlements...)
-	cfg.Entitlements = deduplicateEntitlements(cfg.Entitlements)
+	cfg.Entitlements = deduplicateEntitlements(appCfg.ContainerEntitlements(svc))
 	if svc.Frameworks != nil {
 		cfg.Frameworks = svc.Frameworks
 	}

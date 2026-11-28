@@ -82,9 +82,11 @@ identity from that socket; the administrative agent socket is never exposed.
 The name says write, because that is what it grants, and the grant is stronger
 than plain logging: campaign triggers match on application event names and
 prediction attributes, so an app holding `episode-write` can start recordings.
-It grants no read access to any sensor. Reading is native: an app opens the
-agent-fed device node granted by `camera`, and frame identity arrives in-band
-with the frames.
+It grants no read access to any sensor. Reading is native: an app with the
+`camera` entitlement opens the camera at its own device path and reads the node
+the agent feeds for it. With `"stamp": "frame"` on that entitlement, each
+frame's timestamp field holds the agent's frame number, which is the frame's
+`sample_id` in the episode.
 
 | Boundary | Value |
 |---|---|
@@ -361,11 +363,28 @@ spi.close()
 
 ## Camera
 
-Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for MJPEG cameras). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares.
+Omit to share the camera with other apps at its shared mode (one size up to 1280x720, one rate, YUYV for cameras that produce MJPEG or H.264). `"direct"` gives this app the real device, with its own formats, sizes and controls. Only the exact value `"direct"` does; any other value also shares.
 
 ```json
 { "type": "camera", "mode": "direct" }
 ```
+
+`format` and `stamp` choose what the app's camera node carries, `preset` how its H.264 is encoded, and `size` the size it is made at. All four are optional, and the defaults are what an app gets without them.
+
+| Key | Values |
+|-----|--------|
+| `format` | `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames, for example MJPEG or H.264. `"h264"`: H.264, one whole frame per buffer. |
+| `stamp` | `"time"` (default): each frame's timestamp is its capture time. `"frame"`: each frame's timestamp field holds the agent's frame number instead. |
+| `preset` | Only with `"format": "h264"`: how fast the software H.264 encoder works, one of `"ultrafast"`, `"superfast"`, `"veryfast"`, `"faster"`, `"fast"`, `"medium"`, fastest first. Without the key the entry states no preset. |
+| `size` | The size the node is made at, as `"WxH"`, for example `"1920x1080"`: one the camera lists, up to 1920x1080 for a camera that produces JPEG. Without the key the node has the default size. |
+
+```json
+{ "type": "camera", "format": "pixels", "stamp": "time" }
+{ "type": "camera", "format": "h264", "preset": "veryfast" }
+{ "type": "camera", "format": "native", "size": "1920x1080" }
+```
+
+An app gets one node per camera, at the camera's own device path. On a camera that produces H.264, `"native"` and `"h264"` both carry the camera's own H.264. Where the device encodes the `"h264"` of a camera that produces JPEG in software, the encoder runs for as long as the app reads its node, and `wendy run` says so; `"native"` and `"pixels"` run no encoder. `preset` applies only where the device encodes that H.264 in software: a slower preset spends more CPU on each frame for fewer bits. A camera has one encoder for all its consumers (apps, campaign recordings and viewers), which runs at the fastest preset any of them states, so it never costs more than the cheapest request on that camera allows, and at `"ultrafast"` when none states one. On a device that encodes with a hardware encoder or with a software encoder that takes no preset, and for a camera that produces H.264 itself, a stated preset is not applied, and `wendy run` and the camera's status say so. A camera that cannot provide the `format` asked for is served in another one, and `wendy run` says which and why. A `size` the camera is not captured at leaves the node at the default size. A camera is captured at one size, so a node made while another app shares the camera has that app's size. `wendy run` says which size is served and why. An entry's `allowlist` selects which cameras its `format`, `stamp`, `preset` and `size` apply to; an entry without one applies to every camera. An allowlist entry names a camera by any identifier `wendy device camera list --json` prints for it: its `stable_id` (`by-id:usb-046d_HD_Pro_Webcam_C920-video-index0`, with or without the `by-id:` prefix), its `path` (`/dev/video0`, or `v4l2:/dev/video0` as a campaign file writes it) or its `name`. An entry cannot be empty. Prefer a `by-id:` stable id: it follows the camera across reboots and replugging. A `by-path:` stable id follows the port the camera is plugged into, a device path can pass to another camera at a reboot or a replug, and a name is shared by every camera of the model. Two cameras of one model without distinct serial numbers share one `by-id:` name: one is listed with it and the other with a `by-path:` id, and which is which can change. Name such cameras by device path, and expect a reboot or a replug to move the settings. When the device's agent reports that it shares cameras, `wendy run` prints a line for each allowlist entry that selects no shared camera's node, and for each that names a camera that is not shared through a node, such as a network camera: such an entry configures nothing. It prints none for a Compose project, on a device that lists no camera, or when the agent does not answer within three seconds. An agent from before stable id and `v4l2:` entries matches only the exact device path or name, and an agent from before `format` and `stamp` reads neither of them nor the allowlist and gives every camera pictures stamped with the capture time; `wendy run` says so when the app asks for something the device's agent does not read. Two `camera` or `video` entries that claim the same camera must agree on `format`, `stamp`, `preset` and `size`; an entry that states a preset or a size and one that states none do not agree. Validation compares allowlist entries as written, and also knows `/dev/video0` and `v4l2:/dev/video0` for one camera, and a `by-id:` stable id with and without its prefix. Entries that name one camera by different identifiers, such as its stable id and its path, are only found on the device: there the stable id decides before the path and the path before the name, and `wendy run`, the agent's log and the camera's status say which entry decided and which was passed over. None of the four keys can be used when any of the app's camera entries has `"mode": "direct"`: the app then gets the real device, and there is no node to configure. `preset` can be used only on an entry with `"format": "h264"`.
 
 ## Audio
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
@@ -85,7 +86,7 @@ func TestCaptureTakesOverDefaultedHub(t *testing.T) {
 	defer oldHub.unsubscribe(sensorID)
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	newHub, captureID, _, w, h, fps, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req)
+	newHub, captureID, _, w, h, fps, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatalf("takeover failed: %v", err)
 	}
@@ -151,7 +152,7 @@ func TestCaptureRefusedWhenHubHeldExplicitly(t *testing.T) {
 	defer viewerHub.unsubscribe(viewerID)
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	_, _, _, _, _, _, _, err = svc.joinHubForCapture(ctx, "/dev/video0", req)
+	_, _, _, _, _, _, _, err = svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if !errors.Is(err, errCameraHeldExplicitly) {
 		t.Fatalf("expected errCameraHeldExplicitly, got %v", err)
 	}
@@ -197,7 +198,7 @@ func TestTakeoverAllowedAfterExplicitHolderLeaves(t *testing.T) {
 	viewerHub.unsubscribe(viewerID)
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req)
+	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil {
 		t.Fatalf("takeover after the explicit holder left failed: %v", err)
 	}
@@ -308,7 +309,7 @@ func TestParameterlessCaptureReattachesAcrossTakeover(t *testing.T) {
 
 	// A concurrent campaign takes the camera over at explicit parameters.
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req)
+	newHub, captureID, _, _, _, _, restarted, err := svc.joinHubForCapture(ctx, "/dev/video0", req, encodedFrames, noPreset)
 	if err != nil || !restarted {
 		t.Fatalf("takeover failed: restarted=%v err=%v", restarted, err)
 	}
@@ -345,75 +346,39 @@ func hubSubscriberCount(h *deviceHub) int {
 	return len(h.subs)
 }
 
-// installSlowProducers is installFakeProducers whose teardown takes longer
-// than hubTeardownTimeout, standing in for a producer still holding the device
-// file descriptor when the takeover's wait expires.
-func installSlowProducers(svc *VideoService, teardown time.Duration) *fakeProducers {
-	fp := &fakeProducers{}
-	svc.startProducer = func(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) {
-		fp.mu.Lock()
-		fp.started = append(fp.started, req)
-		fp.hubs = append(fp.hubs, h)
-		fp.mu.Unlock()
-		go func() {
-			<-ctx.Done()
-			time.Sleep(teardown)
-			svc.mu.Lock()
-			if svc.hubs[path] == h {
-				delete(svc.hubs, path)
-			}
-			svc.mu.Unlock()
-			h.mu.Lock()
-			for _, sub := range h.subs {
-				if !sub.closed {
-					sub.closed = true
-					close(sub.ch)
-				}
-			}
-			h.mu.Unlock()
-			close(h.done)
-		}()
-	}
-	return fp
-}
+// A takeover of a camera whose outgoing capture is slow to close it is not
+// refused: the replacement is started, and captures at the campaign's
+// parameters once the camera is closed, however long that takes.
+func TestTakeoverStartsItsReplacementWhichCapturesOnceTheCameraIsClosed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc, device, pipeWireLookups := exclusiveCamera(t)
+		ctx := context.Background()
 
-// A takeover whose outgoing producer does not release the device in time must
-// be abandoned with a named refusal. Starting the replacement anyway would
-// fail to bind (EBUSY) and take the camera from every parameter-less
-// subscriber that had reattached to the replacement hub.
-func TestTakeoverAbortsWhenTheCameraDoesNotReleaseInTime(t *testing.T) {
-	svc := newTestVideoService(nil, nil)
-	fp := installSlowProducers(svc, 2*hubTeardownTimeout)
-	ctx := context.Background()
+		oldHub, sensorID, sensor, err := svc.joinHub(ctx, exclusiveCameraPath, &agentpb.StreamVideoRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { oldHub.unsubscribe(sensorID) })
+		waitForFrame(t, sensor, "frame at the camera's defaults")
 
-	oldHub, sensorID, _, err := svc.joinHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{DeviceId: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer oldHub.unsubscribe(sensorID)
+		req := &agentpb.StreamVideoRequest{Width: 640, Height: 480, Framerate: 15}
+		hub, id, frames, width, height, framerate, restarted, err := svc.joinHubForCapture(ctx, exclusiveCameraPath, req, encodedFrames, noPreset)
+		if err != nil {
+			t.Fatalf("takeover of a camera its old capture is still closing: %v", err)
+		}
+		t.Cleanup(func() { hub.unsubscribe(id) })
+		if !restarted || [3]uint32{width, height, framerate} != [3]uint32{640, 480, 15} || currentHub(svc, exclusiveCameraPath) != hub {
+			t.Fatalf("takeover: restarted=%v at %dx%d@%d, want the camera restarted at 640x480@15 on the hub in the map", restarted, width, height, framerate)
+		}
 
-	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
-	_, _, _, _, _, _, _, err = svc.joinHubForCapture(ctx, "/dev/video0", req)
-	if !errors.Is(err, errCameraReleaseTimeout) {
-		t.Fatalf("takeover returned %v, want a refusal wrapping errCameraReleaseTimeout", err)
-	}
-	if !isCameraCaptureRefusal(err) {
-		t.Fatal("the refusal is not one the campaign records in its manifest")
-	}
-	if !strings.Contains(err.Error(), "/dev/video0") {
-		t.Fatalf("refusal does not name the camera: %v", err)
-	}
-	// Exactly one producer was ever started: no replacement was launched
-	// against a device the old producer still holds.
-	if got := fp.count(); got != 1 {
-		t.Fatalf("producers started = %d, want 1: a replacement was started for a device that had not been released", got)
-	}
-	// The abandoned replacement hub must not be left in the map for a
-	// reattaching subscriber to join.
-	svc.mu.Lock()
-	_, stillMapped := svc.hubs["/dev/video0"]
-	svc.mu.Unlock()
-	if stillMapped {
-		t.Fatal("the abandoned replacement hub was left registered for the device")
-	}
+		time.Sleep(time.Hour)
+		device.keptClosedToOthers(t, 1)
+		if !channelStillOpen(frames) {
+			t.Fatalf("the campaign's capture ended while it waited for the camera: %v", hub.terminalErr())
+		}
+
+		device.close()
+		waitForFrame(t, frames, "frame of the replacement capture")
+		device.servedByItsOwnCaptures(t, 2, pipeWireLookups)
+	})
 }

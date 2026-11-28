@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -587,5 +588,103 @@ func TestProjectNetworkDefaultsAndModeChange(t *testing.T) {
 	data := readProjectTestFile(t, path)
 	if strings.Contains(data, "serviceCIDR") || !strings.Contains(data, `"mode": "bridge"`) {
 		t.Fatal(data)
+	}
+}
+
+func TestProjectEditsCameraNodeFormatAndStamp(t *testing.T) {
+	_, path := projectTestSetup(t, `{"appId":"robot","entitlements":[{"type":"camera"}]}`)
+	if _, err := projectTestCommand(t, "edit", "camera", "--format", "native", "--stamp", "frame", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	saved := readProjectTestFile(t, path)
+	for _, want := range []string{`"format": "native"`, `"stamp": "frame"`} {
+		if !strings.Contains(saved, want) {
+			t.Errorf("missing %s in %s", want, saved)
+		}
+	}
+	_, err := projectTestCommand(t, "edit", "camera", "--format", "vp8", "--file", path)
+	if err == nil || !strings.Contains(err.Error(), `camera format must be one of "pixels", "native", "h264"`) {
+		t.Fatalf("error = %v, want the accepted formats", err)
+	}
+	if readProjectTestFile(t, path) != saved {
+		t.Fatal("rejected format changed the file")
+	}
+}
+
+func TestProjectAddsAndEditsCameraPreset(t *testing.T) {
+	_, path := projectTestSetup(t, `{"appId":"robot"}`)
+	if _, err := projectTestCommand(t, "add", "camera", "--format", "h264", "--preset", "veryfast", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	if saved := readProjectTestFile(t, path); !strings.Contains(saved, `"preset": "veryfast"`) || !strings.Contains(saved, `"format": "h264"`) {
+		t.Fatalf("add camera --preset did not write the preset: %s", saved)
+	}
+	if _, err := projectTestCommand(t, "edit", "camera", "--preset", "medium", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	saved := readProjectTestFile(t, path)
+	if !strings.Contains(saved, `"preset": "medium"`) {
+		t.Fatalf("edit camera --preset did not write the preset: %s", saved)
+	}
+	for args, want := range map[string]string{
+		"--preset slow":     `camera preset must be one of "ultrafast", "superfast", "veryfast", "faster", "fast", "medium"; got "slow"`,
+		"--format native":   `camera preset applies only to format "h264": a node of format "native" runs no encoder`,
+		"--preset veryslow": `got "veryslow"`,
+	} {
+		_, err := projectTestCommand(t, append(append([]string{"edit", "camera"}, strings.Fields(args)...), "--file", path)...)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("edit camera %s: error = %v, want %q", args, err, want)
+		}
+		if readProjectTestFile(t, path) != saved {
+			t.Fatalf("edit camera %s changed the file", args)
+		}
+	}
+}
+
+func TestProjectAddsAndEditsCameraSize(t *testing.T) {
+	_, path := projectTestSetup(t, `{"appId":"robot"}`)
+	if _, err := projectTestCommand(t, "add", "camera", "--format", "native", "--size", "1920x1080", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	if saved := readProjectTestFile(t, path); !strings.Contains(saved, `"size": "1920x1080"`) || !strings.Contains(saved, `"format": "native"`) {
+		t.Fatalf("add camera --size did not write the size: %s", saved)
+	}
+	if _, err := projectTestCommand(t, "edit", "camera", "--size", "640x480", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	saved := readProjectTestFile(t, path)
+	if !strings.Contains(saved, `"size": "640x480"`) {
+		t.Fatalf("edit camera --size did not write the size: %s", saved)
+	}
+	_, err := projectTestCommand(t, "edit", "camera", "--size", "1080p", "--file", path)
+	if want := `camera size must be WxH in pixels, for example "1920x1080"; got "1080p"`; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("edit camera --size 1080p: error = %v, want %q", err, want)
+	}
+	if readProjectTestFile(t, path) != saved {
+		t.Fatal("a rejected size changed the file")
+	}
+	for _, feature := range []string{"camera", "video"} {
+		if !slices.ContainsFunc(projectFields(feature), func(field projectField) bool { return field.flag == "size" && field.key == "size" }) {
+			t.Errorf("%s has no --size flag", feature)
+		}
+	}
+}
+
+func TestProjectCameraPresetFlagListsThePresets(t *testing.T) {
+	for _, feature := range []string{"camera", "video"} {
+		var hint string
+		for _, field := range projectFields(feature) {
+			if field.flag == "preset" {
+				hint = field.hint
+			}
+		}
+		if hint == "" {
+			t.Fatalf("%s has no --preset flag", feature)
+		}
+		for _, preset := range appconfig.EncodePresets {
+			if !strings.Contains(hint, preset) {
+				t.Errorf("%s --preset help %q does not list %s", feature, hint, preset)
+			}
+		}
 	}
 }

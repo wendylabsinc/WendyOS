@@ -49,6 +49,16 @@ func TestEntitlementAnnotationValue(t *testing.T) {
 			want: "allowlist=/dev/video0,/dev/video1",
 		},
 		{
+			name: "camera node format and stamp",
+			ent:  Entitlement{Type: EntitlementCamera, Format: CameraFormatNative, Stamp: CameraStampFrame},
+			want: "format=native,stamp=frame",
+		},
+		{
+			name: "camera node keys with allowlist",
+			ent:  Entitlement{Type: EntitlementCamera, Format: CameraFormatNative, Stamp: CameraStampFrame, Allowlist: []string{"/dev/video0", "Brio 101"}},
+			want: "format=native,stamp=frame,allowlist=/dev/video0,Brio 101",
+		},
+		{
 			name: "port mappings",
 			ent:  Entitlement{Type: EntitlementNetwork, Ports: []PortMapping{{Host: 8080, Container: 80}, {Host: 9090, Container: 90}}},
 			want: "ports=8080:80,9090:90",
@@ -125,6 +135,18 @@ func TestParseEntitlementAnnotation(t *testing.T) {
 			want:    Entitlement{Type: EntitlementCamera, Allowlist: []string{"/dev/video0", "/dev/video1"}},
 		},
 		{
+			name:    "camera node format and stamp",
+			entType: EntitlementCamera,
+			value:   "format=native,stamp=frame",
+			want:    Entitlement{Type: EntitlementCamera, Format: CameraFormatNative, Stamp: CameraStampFrame},
+		},
+		{
+			name:    "camera node keys after an allowlist",
+			entType: EntitlementVideo,
+			value:   "allowlist=/dev/video0,Brio 101,stamp=frame,format=native",
+			want:    Entitlement{Type: EntitlementVideo, Format: CameraFormatNative, Stamp: CameraStampFrame, Allowlist: []string{"/dev/video0", "Brio 101"}},
+		},
+		{
 			name:    "port mappings",
 			entType: EntitlementNetwork,
 			value:   "ports=8080:80,9090:90",
@@ -162,6 +184,11 @@ func TestEntitlementAnnotationRoundTrip(t *testing.T) {
 		{Type: EntitlementNetwork, Mode: "host", Ports: []PortMapping{{Host: 8080, Container: 80}, {Host: 9090, Container: 90}}},
 		{Type: EntitlementPersist, Name: "data", Path: "/data"},
 		{Type: EntitlementCamera, Mode: "detect", Allowlist: []string{"/dev/video0", "/dev/video1"}},
+		{Type: EntitlementCamera},
+		{Type: EntitlementCamera, Format: CameraFormatNative, Stamp: CameraStampFrame},
+		{Type: EntitlementCamera, Format: CameraFormatPixels},
+		{Type: EntitlementCamera, Stamp: CameraStampTime},
+		{Type: EntitlementVideo, Format: CameraFormatNative, Stamp: CameraStampFrame, Allowlist: []string{"/dev/video0", "Brio 101"}},
 		{Type: EntitlementGPIO, Pins: []int{17, 18, 27}},
 		{Type: EntitlementMCP, Port: 8080},
 		{Type: EntitlementI2C, Device: "i2c-1"},
@@ -174,6 +201,47 @@ func TestEntitlementAnnotationRoundTrip(t *testing.T) {
 		got := ParseEntitlementAnnotation(want.Type, value)
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("round-trip %+v: encoded %q, decoded %+v", want, value, got)
+		}
+	}
+}
+
+func TestBuildEntitlementAnnotationsKeepsEachCameraEntrysNodeSettings(t *testing.T) {
+	want := []Entitlement{
+		{Type: EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: CameraFormatNative},
+		{Type: EntitlementCamera, Allowlist: []string{"/dev/video2"}, Stamp: CameraStampFrame},
+	}
+	annotations := BuildEntitlementAnnotations(want)
+	for i, entry := range want {
+		key := EntitlementAnnotationKeyPrefix + EntitlementCamera + "." + strconv.Itoa(i)
+		if got := ParseEntitlementAnnotation(EntitlementCamera, annotations[key]); !reflect.DeepEqual(got, entry) {
+			t.Errorf("%s = %q, decoded %+v, want %+v", key, annotations[key], got, entry)
+		}
+	}
+}
+
+func TestCameraNodeKeysStayOutOfOtherEntitlementsAnnotations(t *testing.T) {
+	cfg, err := LoadFromBytes([]byte(`{"appId": "com.example.app", "entitlements": [{"type":"network","mode":"none","format":"x,mode=host"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	value := EntitlementAnnotationValue(cfg.Entitlements[0])
+	if value != "mode=none" {
+		t.Fatalf("annotation = %q, want %q", value, "mode=none")
+	}
+	if got := ParseEntitlementAnnotation(EntitlementNetwork, value); got.Mode != "none" {
+		t.Fatalf("network mode read back as %q, want %q", got.Mode, "none")
+	}
+
+	for _, typ := range []string{EntitlementNetwork, EntitlementBluetooth, EntitlementPersist} {
+		got := ParseEntitlementAnnotation(typ, "format=native,stamp=frame")
+		if got.Format != "" || got.Stamp != "" {
+			t.Errorf("%s annotation decoded camera node keys: %+v", typ, got)
+		}
+		if value := EntitlementAnnotationValue(Entitlement{Type: typ, Format: CameraFormatNative, Stamp: CameraStampFrame}); value != "" {
+			t.Errorf("%s annotation = %q, want no camera node keys", typ, value)
 		}
 	}
 }
@@ -298,5 +366,21 @@ func TestValidateAcceptsOrdinaryAllowlistEntries(t *testing.T) {
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() rejected ordinary allowlist entries: %v", err)
+	}
+}
+
+// An agent that reads an empty allowlist value as no allowlist applies the
+// entry to every camera, where the command line applied it to none.
+func TestEntitlementAnnotation_AnAllowlistOfEmptyEntriesIsNotReadAsNoAllowlist(t *testing.T) {
+	for _, allowlist := range [][]string{{""}, {"", ""}, {" "}, {"", "/dev/video0"}, {"/dev/video0", ""}} {
+		in := Entitlement{Type: EntitlementCamera, Format: CameraFormatNative, Stamp: CameraStampFrame, Allowlist: allowlist}
+		got := ParseEntitlementAnnotation(EntitlementCamera, EntitlementAnnotationValue(in))
+		if !reflect.DeepEqual(got, in) {
+			t.Errorf("allowlist %q came back as %+v through %q", allowlist, got, EntitlementAnnotationValue(in))
+		}
+	}
+	plain := Entitlement{Type: EntitlementCamera, Format: CameraFormatNative}
+	if got := ParseEntitlementAnnotation(EntitlementCamera, EntitlementAnnotationValue(plain)); !reflect.DeepEqual(got, plain) {
+		t.Errorf("an entry without an allowlist came back as %+v", got)
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
 	"gopkg.in/yaml.v3"
@@ -37,12 +38,16 @@ var ErrInvalidCampaignName = errors.New("invalid campaign name")
 // continuously.
 //
 // Snapshot stills and the continuous-mode rate cap additionally require a
-// camera transport that delivers whole encoded access units, which today
-// means a local V4L2 camera with native H.264 output. IP cameras and
-// GStreamer-encoded pipelines (CSI sensors, USB cameras without native H.264)
-// deliver byte-stream chunks that cannot be cut into standalone files without
+// camera that delivers whole frames, which today means a local V4L2 camera
+// the agent captures natively: one with H.264 output, whose stills are key
+// frames, or a webcam that offers JPEG, whose stills are its JPEG frames and
+// whose video is made one access unit per JPEG frame. IP cameras and
+// GStreamer-encoded pipelines (CSI sensors, USB cameras with neither) deliver
+// byte-stream chunks that cannot be cut into standalone files without
 // corruption, so those sources record continuously at the stream rate and the
 // episode manifest's source detail records that the policy was not applied.
+// Store (frames, both) likewise needs a camera with whole frames of its own;
+// one without records video and says so.
 // Which case applies is only knowable once the stream is running, so this is
 // reported per episode rather than warned at deployment.
 type SourceCapture struct {
@@ -63,6 +68,37 @@ type SourceCapture struct {
 	Fragment string `json:"fragment,omitempty" yaml:"fragment,omitempty"`
 	// MaxResolution caps camera capture as WxH, for example 1280x720 (camera sources only).
 	MaxResolution string `json:"max_resolution,omitempty" yaml:"max_resolution,omitempty"`
+	// Store is what the episode keeps of a camera's continuous recording: video
+	// (default), frames, or both (camera sources only, not snapshot mode).
+	Store string `json:"store,omitempty" yaml:"store,omitempty"`
+	// Preset is how fast the software encoder works for the video this source
+	// stores, one of appconfig.EncodePresets (camera sources that store
+	// video, not snapshot mode). The camera's one encoder runs at the fastest
+	// preset any consumer of its video states.
+	Preset string `json:"preset,omitempty" yaml:"preset,omitempty"`
+}
+
+const (
+	CaptureStoreVideo  = "video"
+	CaptureStoreFrames = "frames"
+	CaptureStoreBoth   = "both"
+)
+
+var validCaptureStores = []string{CaptureStoreVideo, CaptureStoreFrames, CaptureStoreBoth}
+
+func (sc *SourceCapture) StoresVideo() bool {
+	return sc == nil || sc.Store != CaptureStoreFrames
+}
+
+func (sc *SourceCapture) StoresFrames() bool {
+	return sc != nil && (sc.Store == CaptureStoreFrames || sc.Store == CaptureStoreBoth)
+}
+
+func (sc *SourceCapture) EncodePreset() appconfig.EncodePreset {
+	if sc == nil {
+		return appconfig.EncodePresetUnset
+	}
+	return appconfig.ParseEncodePreset(sc.Preset)
 }
 
 // EffectiveMode returns the declared capture mode, defaulting to continuous.
@@ -353,6 +389,14 @@ func (c Campaign) planDigestInput() map[string]any {
 				"fragment":       capture.Fragment,
 				"max_resolution": capture.MaxResolution,
 			}
+			// Absent when unset, so plans deployed before store and preset
+			// existed keep their revision.
+			if capture.Store != "" {
+				entry["capture"].(map[string]any)["store"] = capture.Store
+			}
+			if capture.Preset != "" {
+				entry["capture"].(map[string]any)["preset"] = capture.Preset
+			}
 		}
 		sources = append(sources, entry)
 	}
@@ -639,6 +683,24 @@ func preRollParameterConflicts(c Campaign) []string {
 	return conflicts
 }
 
+// Resolution keys capture policies by source, so only the last capture block
+// of a repeated camera takes effect.
+func repeatedCameraSelectors(c Campaign) []string {
+	listed := map[string]int{}
+	var repeated []string
+	for _, source := range c.Sources {
+		selector := strings.TrimSpace(source.Camera)
+		if selector == "" {
+			continue
+		}
+		listed[selector]++
+		if listed[selector] == 2 {
+			repeated = append(repeated, "camera:"+selector)
+		}
+	}
+	return repeated
+}
+
 func (m *Manager) campaignDir() string { return m.location.CampaignDir }
 
 func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
@@ -673,6 +735,9 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 	}
 	if conflicts := preRollParameterConflicts(campaign); len(conflicts) > 0 {
 		campaign.Warnings = append(campaign.Warnings, "pre-roll and explicit camera stream parameters are mutually exclusive in this release; a buffered camera arms a standby subscription that asserts no stream parameters, so both the pre-roll and the live tail record at the producer's running parameters and the explicit max_resolution or rate is reported as requested but not achieved in the episode manifest: "+strings.Join(conflicts, ", "))
+	}
+	if repeated := repeatedCameraSelectors(campaign); len(repeated) > 0 {
+		campaign.Warnings = append(campaign.Warnings, "these cameras are listed more than once; a camera is recorded once per episode and only its last capture block applies, so list each camera once and use store: both to keep video and frames: "+strings.Join(repeated, ", "))
 	}
 	if campaign.Retention.LocalQuota != "" {
 		campaign.Warnings = append(campaign.Warnings, "retention.local_quota is recorded with the plan, but this release enforces only the device-wide storage quota")
@@ -823,29 +888,13 @@ func (m *Manager) resolveCampaignSources(campaign Campaign, degradeROS2 bool) ([
 				selected[id] = true
 			}
 		case requested.Camera != "":
-			if strings.TrimSpace(requested.Camera) == "*" {
-				matched := false
-				for _, source := range all {
-					if source.Kind == "camera" && source.Healthy {
-						matched = true
-						selected[source.ID] = true
-						if requested.Capture != nil {
-							captures[source.ID] = requested.Capture
-						}
-					}
-				}
-				if !matched {
-					return nil, nil, nil, nil, errors.New("no healthy cameras are available for camera: *")
-				}
-				continue
-			}
-			id, err := resolveCameraSelector(all, requested.Camera)
+			cameras, err := camerasNamedBy(all, requested.Camera)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
-			selected[id] = true
-			if requested.Capture != nil {
-				captures[id] = requested.Capture
+			for _, id := range cameras {
+				selected[id] = true
+				recordWith(captures, id, requested.Capture)
 			}
 		case requested.Audio != "":
 			id, err := resolveKindSelector(all, "audio", requested.Audio)
@@ -890,26 +939,88 @@ func (m *Manager) ResolveCampaignCameraSources(campaign Campaign) ([]Source, err
 		if !loaded {
 			all, loaded = m.Sources(context.Background()), true
 		}
-		if strings.TrimSpace(requested.Camera) == "*" {
-			matched := false
-			for _, source := range all {
-				if source.Kind == "camera" && source.Healthy {
-					matched = true
-					cameras = append(cameras, Source{ID: source.ID, Kind: "camera", Capture: requested.Capture})
-				}
-			}
-			if !matched {
-				return nil, errors.New("no healthy cameras are available for camera: *")
-			}
-			continue
-		}
-		id, err := resolveCameraSelector(all, requested.Camera)
+		named, err := camerasNamedBy(all, requested.Camera)
 		if err != nil {
 			return nil, err
 		}
-		cameras = append(cameras, Source{ID: id, Kind: "camera", Capture: requested.Capture})
+		cameras = append(cameras, listingsOf(named, requested.Capture)...)
 	}
 	return cameras, nil
+}
+
+// camerasNamedBy resolves one camera selector against the device's sources:
+// every healthy camera for "*", else the one camera the selector names.
+func camerasNamedBy(all []Source, selector string) ([]string, error) {
+	if strings.TrimSpace(selector) != "*" {
+		id, err := resolveCameraSelector(all, selector)
+		if err != nil {
+			return nil, err
+		}
+		return []string{id}, nil
+	}
+	var cameras []string
+	for _, source := range all {
+		if source.Kind == "camera" && source.Healthy {
+			cameras = append(cameras, source.ID)
+		}
+	}
+	if len(cameras) == 0 {
+		return nil, errors.New("no healthy cameras are available for camera: *")
+	}
+	return cameras, nil
+}
+
+// recordWith is the rule for a camera a plan lists more than once: a trigger
+// hands its capture the block of the last listing that has one. A camera
+// armed for pre-roll goes on recording by the listing it was armed with
+// instead, so with a buffer that listing decides, not this block.
+func recordWith(captures map[string]*SourceCapture, camera string, capture *SourceCapture) {
+	if capture != nil {
+		captures[camera] = capture
+	}
+}
+
+// listingsOf is the rule for arming: it is handed every listing of a camera,
+// each with the capture block of that listing, in the plan's order.
+func listingsOf(cameras []string, capture *SourceCapture) []Source {
+	listings := make([]Source, 0, len(cameras))
+	for _, id := range cameras {
+		listings = append(listings, Source{ID: id, Kind: "camera", Capture: capture})
+	}
+	return listings
+}
+
+// CamerasAmong resolves the campaign's camera selectors against sources, by
+// the rules a trigger and arming resolve them with, and discovers nothing
+// itself. recorded holds each camera once, sorted by ID, with the capture block
+// a trigger hands its capture (recordWith); listed holds what arming is
+// handed. Which of the two a recording follows is the capture adapter's to
+// say: a camera it armed keeps its armed listing. A selector that names no
+// camera among sources is passed over.
+func (c Campaign) CamerasAmong(sources []Source) (recorded, listed []Source) {
+	sources = append([]Source(nil), sources...)
+	sort.SliceStable(sources, func(i, j int) bool { return sources[i].ID < sources[j].ID })
+	captures := map[string]*SourceCapture{}
+	selected := map[string]bool{}
+	for _, requested := range c.Sources {
+		if requested.Camera == "" {
+			continue
+		}
+		named, err := camerasNamedBy(sources, requested.Camera)
+		if err != nil {
+			continue
+		}
+		for _, id := range named {
+			selected[id] = true
+			recordWith(captures, id, requested.Capture)
+		}
+		listed = append(listed, listingsOf(named, requested.Capture)...)
+	}
+	for id := range selected {
+		recorded = append(recorded, Source{ID: id, Kind: "camera", Capture: captures[id]})
+	}
+	sort.Slice(recorded, func(i, j int) bool { return recorded[i].ID < recorded[j].ID })
+	return recorded, listed
 }
 
 // resolveROS2Selector maps a campaign `ros2:` selector onto discovered source
@@ -1389,6 +1500,31 @@ func validateSourceCapture(source CampaignSource) error {
 		}
 		if err := validateResolution(capture.MaxResolution); err != nil {
 			return err
+		}
+	}
+	if capture.Store != "" {
+		if source.Camera == "" {
+			return errors.New("store applies only to camera sources")
+		}
+		if mode == "snapshot" {
+			return errors.New("store applies only to continuous capture; snapshot mode always stores single frames")
+		}
+		if !slices.Contains(validCaptureStores, capture.Store) {
+			return fmt.Errorf("store must be one of %s", strings.Join(validCaptureStores, ", "))
+		}
+	}
+	if capture.Preset != "" {
+		if source.Camera == "" {
+			return errors.New("preset applies only to camera sources")
+		}
+		if mode == "snapshot" {
+			return errors.New("preset applies only to continuous capture, not snapshot mode")
+		}
+		if !capture.StoresVideo() {
+			return fmt.Errorf("preset applies only to a source that stores video; store: %s stores the camera's own frames", capture.Store)
+		}
+		if capture.EncodePreset() == appconfig.EncodePresetUnset {
+			return fmt.Errorf("preset must be one of %s", strings.Join(appconfig.EncodePresets, ", "))
 		}
 	}
 	return nil

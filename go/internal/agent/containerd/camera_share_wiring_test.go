@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -32,11 +33,13 @@ type shareCall struct {
 // provider, in the order the calls returned. cover, when set, runs inside
 // CoverCameraShares before it returns, and its errors are returned.
 type fakeCameraShares struct {
-	mu     sync.Mutex
-	calls  []shareCall
-	syncs  [][]services.CameraShareContainer
-	cover  func(containerID string, pid uint32) []error
-	remove func(containerID string) // runs inside RemoveCameraShares
+	mu    sync.Mutex
+	calls []shareCall
+	// created holds the entitlements of each create, by container.
+	created map[string][]appconfig.Entitlement
+	syncs   [][]services.CameraShareContainer
+	cover   func(containerID string, pid uint32) []error
+	remove  func(containerID string) // runs inside RemoveCameraShares
 }
 
 var _ CameraShareProvider = (*fakeCameraShares)(nil)
@@ -53,8 +56,34 @@ func (f *fakeCameraShares) record(call shareCall) {
 	f.calls = append(f.calls, call)
 }
 
-func (f *fakeCameraShares) CreateCameraShares(_ context.Context, containerID, appID string) {
+func (f *fakeCameraShares) CreateCameraShares(_ context.Context, containerID, appID string, entitlements []appconfig.Entitlement) {
+	f.mu.Lock()
+	if f.created == nil {
+		f.created = map[string][]appconfig.Entitlement{}
+	}
+	f.created[containerID] = entitlements
+	f.mu.Unlock()
 	f.record(shareCall{op: "create", containerID: containerID, appID: appID})
+}
+
+func (f *fakeCameraShares) createdWith(containerID string) []appconfig.Entitlement {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.created[containerID]
+}
+
+// cameraEntry is what a camera entitlement says of its nodes.
+type cameraEntry struct{ allowlist, format, stamp string }
+
+// cameraEntriesOf are the camera entries among entitlements, in order.
+func cameraEntriesOf(entitlements []appconfig.Entitlement) []cameraEntry {
+	var entries []cameraEntry
+	for _, e := range entitlements {
+		if e.Type == appconfig.EntitlementCamera {
+			entries = append(entries, cameraEntry{strings.Join(e.Allowlist, "|"), e.Format, e.Stamp})
+		}
+	}
+	return entries
 }
 
 func (f *fakeCameraShares) CoverCameraShares(_ context.Context, containerID string, pid uint32) []error {
@@ -288,12 +317,172 @@ func TestCameraShareCoverLogsEachErrorWithTheAppName(t *testing.T) {
 	}
 }
 
+// The share manager is given the entitlements the container's labels carry,
+// so each camera's node gets the format and stamp its entry asks for.
+func TestCreateCameraSharesPassesTheLabelsEntitlements(t *testing.T) {
+	const c920StableID = "by-id:usb-Sonix_Technology_Co.__Ltd._HD_Pro_Webcam_C920_HD_Pro_Webcam_C920-video-index0"
+	fake := &fakeCameraShares{}
+	c := &Client{logger: zap.NewNop()}
+	c.SetCameraShareProvider(fake)
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"Brio 101"}, Format: appconfig.CameraFormatH264},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{c920StableID}, Format: appconfig.CameraFormatH264, Stamp: appconfig.CameraStampFrame},
+		{Type: appconfig.EntitlementNetwork, Mode: "host"},
+	}
+	labels := wendyLabels("app", "", "1.0.0", nil, entitlements, "", nil)
+	addCameraShareLabel(labels, entitlements)
+	if !sharesCamera(labels) {
+		t.Fatalf("labels do not mark the container as sharing: %v", labels)
+	}
+
+	c.createCameraShares(context.Background(), "app", "app", labels)
+
+	got := fake.createdWith("app")
+	want := []cameraEntry{
+		{"/dev/video0", appconfig.CameraFormatNative, appconfig.CameraStampFrame}, {"Brio 101", appconfig.CameraFormatH264, ""},
+		{c920StableID, appconfig.CameraFormatH264, appconfig.CameraStampFrame},
+	}
+	if entries := cameraEntriesOf(got); !reflect.DeepEqual(entries, want) {
+		t.Errorf("camera entries passed on = %+v, want %+v", entries, want)
+	}
+	for _, tc := range []struct {
+		camera        appconfig.CameraIdentity
+		format, stamp string
+	}{
+		{appconfig.CameraIdentity{Path: "/dev/video0", Name: "C920"}, appconfig.CameraFormatNative, appconfig.CameraStampFrame},
+		{appconfig.CameraIdentity{Path: "/dev/video2", Name: "Brio 101"}, appconfig.CameraFormatH264, appconfig.CameraStampTime},
+		{appconfig.CameraIdentity{Path: "/dev/video4", Name: "Other"}, appconfig.CameraFormatPixels, appconfig.CameraStampTime},
+		{appconfig.CameraIdentity{Path: "/dev/video6", StableID: c920StableID, Name: "HD Pro Webcam C920: HD Pro Webc"}, appconfig.CameraFormatH264, appconfig.CameraStampFrame},
+	} {
+		if format, stamp, _, conflicts := appconfig.CameraNodeSettings(got, tc.camera); format != tc.format || stamp != tc.stamp || len(conflicts) != 0 {
+			t.Errorf("%+v: settings from the passed entitlements = (%q, %q) with conflicts %q, want (%q, %q)", tc.camera, format, stamp, conflicts, tc.format, tc.stamp)
+		}
+	}
+}
+
+// The preset an entry states travels in the container's label with its format,
+// so the share manager is given it for the camera's h264 node.
+func TestCreateCameraSharesPassesThePresetAnEntryStates(t *testing.T) {
+	fake := &fakeCameraShares{}
+	c := &Client{logger: zap.NewNop()}
+	c.SetCameraShareProvider(fake)
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"Brio 101"}, Format: appconfig.CameraFormatH264, Preset: "veryfast"},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}, Format: appconfig.CameraFormatH264},
+	}
+	labels := wendyLabels("app", "", "1.0.0", nil, entitlements, "", nil)
+	addCameraShareLabel(labels, entitlements)
+	c.createCameraShares(context.Background(), "app", "app", labels)
+
+	got := fake.createdWith("app")
+	for camera, want := range map[appconfig.CameraIdentity]appconfig.EncodePreset{
+		{Path: "/dev/video2", Name: "Brio 101"}: appconfig.EncodePresetVeryfast,
+		{Path: "/dev/video0", Name: "C920"}:     appconfig.EncodePresetUnset,
+	} {
+		if format, _, preset, conflicts := appconfig.CameraNodeSettings(got, camera); format != appconfig.CameraFormatH264 || preset != want || len(conflicts) != 0 {
+			t.Errorf("%+v: the passed entitlements give format %q and preset %q with conflicts %q, want h264 and %q", camera, format, preset, conflicts, want)
+		}
+	}
+}
+
+// The size an entry states travels in the container's label too, so the share
+// manager makes the camera's node at it.
+func TestCreateCameraSharesPassesTheSizeAnEntryStates(t *testing.T) {
+	fake := &fakeCameraShares{}
+	c := &Client{logger: zap.NewNop()}
+	c.SetCameraShareProvider(fake)
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"Brio 101"}, Size: "1920x1080"},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}},
+	}
+	labels := wendyLabels("app", "", "1.0.0", nil, entitlements, "", nil)
+	addCameraShareLabel(labels, entitlements)
+	c.createCameraShares(context.Background(), "app", "app", labels)
+
+	got := fake.createdWith("app")
+	for camera, want := range map[appconfig.CameraIdentity]appconfig.CameraSize{
+		{Path: "/dev/video2", Name: "Brio 101"}: {Width: 1920, Height: 1080},
+		{Path: "/dev/video0", Name: "C920"}:     {},
+	} {
+		if size := appconfig.CameraNodeSize(got, camera); size != want {
+			t.Errorf("%+v: the passed entitlements state size %q, want %q", camera, size, want)
+		}
+	}
+}
+
+// The label values here are the ones the deploy path's tests hold a service's
+// container to (TestMultiServiceCreateConfig_KeepsAppAndServiceCameraEntriesWithTheirSettings
+// and TestApplyComposeCompanion in the command line's package). The agent
+// makes them from the config it is sent, and reads the camera entries back
+// from them with their format and stamp: two entries, and one alone, whose
+// label has no index.
+func TestCameraEntriesAreReadBackFromADeploysLabels(t *testing.T) {
+	appEntry := appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"},
+		Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame}
+	serviceEntry := appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"Logi H264"},
+		Format: appconfig.CameraFormatH264, Stamp: appconfig.CameraStampFrame}
+	type camera struct{ path, name, format, stamp string }
+	for name, tc := range map[string]struct {
+		entitlements []appconfig.Entitlement
+		labels       map[string]string
+		cameras      []camera
+	}{
+		"the app's entry and the service's": {
+			[]appconfig.Entitlement{appEntry, serviceEntry},
+			map[string]string{
+				"sh.wendy/entitlement.camera.0": "format=native,stamp=frame,allowlist=/dev/video0",
+				"sh.wendy/entitlement.camera.1": "format=h264,stamp=frame,allowlist=Logi H264",
+			},
+			[]camera{
+				{"/dev/video0", "Brio 101", appconfig.CameraFormatNative, appconfig.CameraStampFrame},
+				{"/dev/video2", "Logi H264", appconfig.CameraFormatH264, appconfig.CameraStampFrame},
+				{"/dev/video4", "C920", appconfig.CameraFormatPixels, appconfig.CameraStampTime},
+			},
+		},
+		"the app's entry alone": {
+			[]appconfig.Entitlement{appEntry},
+			map[string]string{"sh.wendy/entitlement.camera": "format=native,stamp=frame,allowlist=/dev/video0"},
+			[]camera{
+				{"/dev/video0", "Brio 101", appconfig.CameraFormatNative, appconfig.CameraStampFrame},
+				{"/dev/video2", "Logi H264", appconfig.CameraFormatPixels, appconfig.CameraStampTime},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			labels := wendyLabels("sh.wendy.examples.vision", "detector", "1.0.0", nil, tc.entitlements, "", nil)
+			for key, value := range tc.labels {
+				if labels[key] != value {
+					t.Fatalf("label %s = %q, want %q; labels: %v", key, labels[key], value, labels)
+				}
+			}
+			if read := parseEntitlementsFromAnnotations(tc.labels); !reflect.DeepEqual(read, tc.entitlements) {
+				t.Fatalf("entries read back from the labels = %+v, want %+v", read, tc.entitlements)
+			}
+
+			fake := &fakeCameraShares{}
+			c := &Client{logger: zap.NewNop()}
+			c.SetCameraShareProvider(fake)
+			c.createCameraShares(context.Background(), "app_detector", "sh.wendy.examples.vision", labels)
+			passed := fake.createdWith("app_detector")
+			if !reflect.DeepEqual(passed, tc.entitlements) {
+				t.Fatalf("entries passed to the share manager = %+v, want %+v", passed, tc.entitlements)
+			}
+			for _, cam := range tc.cameras {
+				if format, stamp, _, _ := appconfig.CameraNodeSettings(passed, appconfig.CameraIdentity{Path: cam.path, Name: cam.name}); format != cam.format || stamp != cam.stamp {
+					t.Errorf("%s (%s): node settings = (%q, %q), want (%q, %q)", cam.path, cam.name, format, stamp, cam.format, cam.stamp)
+				}
+			}
+		})
+	}
+}
+
 // Without a provider (no video service, other platforms) every share call is
 // a no-op.
 func TestCameraShareCallsWithoutAProviderDoNothing(t *testing.T) {
 	c := &Client{logger: zap.NewNop()}
 	ctx := context.Background()
-	c.createCameraShares(ctx, "app", "app")
+	c.createCameraShares(ctx, "app", "app", map[string]string{labelKeyCameraShare: "shared"})
 	if c.coverCameraShares(ctx, "app", "app", 1) {
 		t.Fatal("coverCameraShares reported a cover without a provider")
 	}

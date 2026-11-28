@@ -327,12 +327,66 @@ class TestFramePredictionIdentity(unittest.TestCase):
                 buffer.timestamp.tv_sec, buffer.timestamp.tv_usec = 12, 345678
                 buffer.sequence = 99
         with unittest.mock.patch.object(wendyframes.fcntl, "ioctl", side_effect=ioctl), \
+             unittest.mock.patch.object(wendyframes.select, "select", return_value=([42], [], [])), \
              unittest.mock.patch.object(wendyframes.time, "CLOCK_BOOTTIME", 7, create=True), \
              unittest.mock.patch.object(wendyframes.time, "clock_gettime_ns", return_value=987654321000):
             frame = node.read()
         record = wendydata.build_prediction("model", "v1", 0.5, [], inputs=frame.input_refs())
         self.assertEqual(record["inputs"], [{"source_id": node.source_id, "sample_id": 12345678}])
         self.assertEqual(frame.boottime_nanos, 987654321000)
+
+    def test_a_node_that_is_not_fed_says_so_and_keeps_waiting(self):
+        node = object.__new__(wendyframes.CameraNode)
+        node._fd, node.path = 42, "/dev/video0"
+        waits = iter([([], [], []), ([], [], []), ([42], [], [])])
+        with unittest.mock.patch.object(wendyframes.select, "select", side_effect=lambda *_: next(waits)) as waited, \
+             self.assertLogs("wendyframes", level="WARNING") as logged:
+            node._await_buffer()
+        self.assertEqual(waited.call_count, 3)
+        self.assertEqual(waited.call_args.args[3], wendyframes.NO_FRAME_WARNING_SECONDS)
+        self.assertEqual(len(logged.output), 2)
+        for line in logged.output:
+            self.assertIn("no frame from /dev/video0 in 10 s", line)
+            self.assertIn('"stamp": "frame"', line)
+            self.assertIn("wendy device camera list", line)
+
+
+class TestH264ReaderResynchronises(unittest.TestCase):
+    """A reader that lost frames must not decode pictures that refer to them."""
+
+    IDR = b"\x00\x00\x00\x01\x67\x42\x00\x00\x00\x01\x68\xce\x00\x00\x00\x01\x65\x88"
+    INTER = b"\x00\x00\x00\x01\x41\x9a"
+
+    def decoder(self):
+        class Picture:
+            def __init__(self, pts): self.pts = pts
+            def to_ndarray(self, format): return "pixels"
+        class Codec:
+            def __init__(self): self.fed = []
+            def decode(self, packet):
+                self.fed.append(packet.payload)
+                return [Picture(packet.pts)]
+        class Packet:
+            def __init__(self, payload): self.payload = payload
+        class AV:
+            FFmpegError = RuntimeError
+        AV.Packet = Packet
+        frames = object.__new__(wendyframes.H264Frames)
+        frames._av, frames._codec, frames._source_id = AV, Codec(), "v4l2:/dev/video0"
+        frames._next, frames._pending = 0, {}
+        frames._awaiting_keyframe, frames._startup_dropped = True, 0
+        return frames
+
+    def test_frames_after_a_gap_wait_for_the_next_idr(self):
+        frames = self.decoder()
+        self.assertEqual([f.sample_id for f in frames.decode(self.IDR, 10, 1, 0)], [10])
+        self.assertEqual([f.sample_id for f in frames.decode(self.INTER, 11, 2, 0)], [11])
+        # Two frames never reached the reader; 14 and 15 refer to them.
+        self.assertEqual(frames.decode(self.INTER, 14, 3, 2), [])
+        self.assertEqual(frames.decode(self.INTER, 15, 4, 0), [])
+        resumed = frames.decode(self.IDR, 16, 5, 0)
+        self.assertEqual([(f.sample_id, f.dropped_before) for f in resumed], [(16, 4)])
+        self.assertEqual(frames._codec.fed, [self.IDR, self.INTER, self.IDR])
 
 
 class TestLinux64V4L2Layout(unittest.TestCase):

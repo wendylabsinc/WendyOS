@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -554,8 +555,49 @@ func nativeTestCapture(svc *VideoService, hub *deviceHub) func(buffer []byte, wh
 // hubBroadcast is the callback runProducer gives a capture: it wraps a payload
 // in a frame and hands it to the hub.
 func hubBroadcast(hub *deviceHub) func([]byte, frameTimestamp, agentpb.VideoCodec) bool {
-	return func(payload []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
-		return hub.produce(&videoFrame{data: payload, tsNs: stamp.wallNs, codec: codec, nativeNs: stamp.nativeNs, nativeClock: stamp.nativeClock, nativeFlags: stamp.nativeFlags, sequence: stamp.sequence, sequenceValid: stamp.sequenceValid, auAligned: stamp.auAligned})
+	return hub.produceCaptured
+}
+
+func TestNativeCaptureMarksOnlyWholeFramesNative(t *testing.T) {
+	svc := &VideoService{logger: zap.NewNop()}
+	hub, cancel := newSampleHub(new(atomic.Uint64))
+	defer cancel()
+	camera := nativeTestCapture(svc, hub)
+
+	_, viewer := subscribeDeep(t, hub)
+	nativeID, native, err := hub.subscribeKind(nativeFrames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.unsubscribe(nativeID)
+
+	bareIDR := h264Stream(4, h264TestIDR)
+	camera(h264Stream(4, h264TestSPS, h264TestPPS0), true)
+	camera(bareIDR, true)
+	camera(h264Stream(4, h264TestInter)[:5], false) // cut short by the frame cap
+
+	if len(viewer) != 3 {
+		t.Fatalf("viewer has %d frames queued, want all 3", len(viewer))
+	}
+	parameterSets, keyframe, truncated := <-viewer, <-viewer, <-viewer
+	if !parameterSets.native {
+		t.Error("a whole buffer from the native capture is not marked native")
+	}
+	if _, startsDecoding := h264RandomAccessOffset(keyframe.data); !startsDecoding || len(keyframe.data) <= len(bareIDR) {
+		t.Fatalf("the keyframe was not given the stream's parameter sets: % x", keyframe.data)
+	}
+	if !keyframe.native {
+		t.Error("a keyframe with the stream's own parameter sets prepended is not marked native")
+	}
+	if truncated.native {
+		t.Error("a truncated buffer is marked native")
+	}
+
+	if len(native) != 2 {
+		t.Fatalf("native subscriber has %d frames queued, want the 2 whole ones", len(native))
+	}
+	if first, second := <-native, <-native; first != parameterSets || second != keyframe {
+		t.Error("native subscriber did not receive exactly the whole frames")
 	}
 }
 
@@ -575,8 +617,8 @@ func testCaptureLoop(emit func([]byte, frameTimestamp) bool) func(buffer []byte,
 // The consumers' side of the defect. A camera sends SPS and PPS once, then bare
 // IDRs. Everyone who joins the running hub afterwards (a viewer, an episode
 // recording, a sensor subscription behind its random-access gate, a pre-roll
-// ring, the loopback pump after a rejoin) must be able to start on the next
-// IDR, and all of them must still name that frame identically.
+// ring, an app's camera node) must be able to start on the next IDR, and all of
+// them must still name that frame identically.
 func TestLateJoinersStartOnAnIDRTheCameraSentWithoutParameterSets(t *testing.T) {
 	svc := &VideoService{logger: zap.NewNop()}
 	seq := new(atomic.Uint64)
@@ -715,20 +757,17 @@ func TestLateJoinersStartOnAnIDRTheCameraSentWithoutParameterSets(t *testing.T) 
 		}
 	})
 
-	t.Run("loopback pump", func(t *testing.T) {
-		writer := newFakeLoopbackWriter(100)
-		pump := newHubLoopbackPump(zap.NewNop(), "v4l2:/dev/video0", "/dev/video200")
-		close(pumpFrames)
-		if _, err := pump.pumpFrom(context.Background(), hub, pumpID, pumpFrames, writer, true, 0); err != nil {
-			t.Fatalf("pumpFrom: %v", err)
+	t.Run("camera share node", func(t *testing.T) {
+		joiner := newSpJoiner(func() (shareSubscription, error) {
+			return &hubShareSubscription{hub: hub, id: pumpID, ch: pumpFrames}, nil
+		})
+		h := startSharePump(t, joiner, sfPumpAs(hcNativeMode, appconfig.CameraStampFrame))
+		h.node.send(t, 1)
+		if e := h.node.next(t); e.stamp != stampWithSampleID(keyframeSample) || e.size != len(keyframe) {
+			t.Fatalf("the node's first frame = %+v; want the completed IDR, %d bytes, stamped %d", e, len(keyframe), keyframeSample)
 		}
-		if len(writer.writes) != 2 || !bytes.Equal(writer.writes[0], keyframe) || writer.stamps[0] != keyframeSample {
-			t.Fatalf("node was written %d frames, first %x stamped %v; want the completed IDR stamped %d, then the inter frame",
-				len(writer.writes), writer.writes, writer.stamps, keyframeSample)
-		}
-		binding, ok := pump.Bindings().Lookup(100)
-		if !ok || binding.SampleID != keyframeSample || binding.HubDropsBefore != 1 {
-			t.Fatalf("binding = %+v, found %v; want sample %d with the one gated frame reported", binding, ok, keyframeSample)
+		if e := h.node.next(t); e.stamp != stampWithSampleID(keyframeSample+1) || e.size != len(inter) {
+			t.Fatalf("the node's second frame = %+v; want the inter frame stamped %d", e, keyframeSample+1)
 		}
 	})
 }

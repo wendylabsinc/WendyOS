@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -615,5 +616,203 @@ func TestConvertPlayableClipTurnsAPanicIntoAnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "synthetic mux panic") {
 		t.Fatalf("error does not name the panic: %v", err)
+	}
+}
+
+// writeOwnCameraFrames adds a camera's own JPEG frames to a source the way the
+// camera adapter stores them for store: frames and store: both: an .mjpeg
+// segment, indexed in the source's index.jsonl under their own codec name.
+func writeOwnCameraFrames(t *testing.T, episodeDir, source string, frames int) {
+	t.Helper()
+	dir := filepath.Join(episodeDir, "cameras", source)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var segment, lines []byte
+	for i := 0; i < frames; i++ {
+		jpeg := append(append([]byte{0xFF, 0xD8}, make([]byte, 24+i)...), 0xFF, 0xD9)
+		line, err := json.Marshal(map[string]any{
+			"sample_id":               i + 1,
+			"canonical_episode_nanos": int64(2_000_000_000 + i*40_000_000),
+			"segment":                 "cameras/" + source + "/segment-000001.mjpeg",
+			"byte_offset":             len(segment),
+			"byte_size":               len(jpeg),
+			"codec":                   "VIDEO_CODEC_MJPEG",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		segment = append(segment, jpeg...)
+		lines = append(append(lines, line...), '\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "segment-000001.mjpeg"), segment, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	index, err := os.OpenFile(filepath.Join(dir, "index.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer index.Close()
+	if _, err := index.Write(lines); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func sealCameraEpisode(t *testing.T, lay func(episodeDir string)) (*Manager, Manifest) {
+	t.Helper()
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetSourceProvider(func(context.Context) []Source {
+		return []Source{{ID: "cam-front", Kind: "camera", ClockDomain: "CLOCK_BOOTTIME", Healthy: true}}
+	})
+	if _, err = m.Start(StartOptions{Sources: []string{"applications", "cam-front"}}); err != nil {
+		t.Fatal(err)
+	}
+	session, ok := m.ActiveSession(AdHocEpisodeKey)
+	if !ok {
+		t.Fatal("no active session")
+	}
+	lay(session.Directory)
+	stopped, err := m.Stop(AdHocEpisodeKey)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if stopped.State != "complete" {
+		t.Fatalf("state %q, want complete", stopped.State)
+	}
+	if _, failures, err := m.Inspect(stopped.ID, true); err != nil || len(failures) != 0 {
+		t.Fatalf("verification: err=%v failures=%v", err, failures)
+	}
+	return m, stopped
+}
+
+func TestSealOfAFramesOnlyCameraNamesWhyThereIsNoClip(t *testing.T) {
+	m, stopped := sealCameraEpisode(t, func(episodeDir string) {
+		writeOwnCameraFrames(t, episodeDir, "cam-front", 3)
+	})
+
+	rel := "cameras/cam-front/" + episodeexport.PlayableFileName
+	if _, ok := fileByPath(stopped.Files, rel); ok {
+		t.Errorf("manifest lists %s for a source with no video", rel)
+	}
+	if _, err := os.Stat(filepath.Join(m.root, stopped.ID, rel)); !os.IsNotExist(err) {
+		t.Errorf("a clip was left on disk (stat err %v)", err)
+	}
+	want := rel + " not written: the source stored no H.264 video: its 3 indexed frame(s) are VIDEO_CODEC_MJPEG, and the clip is made from H.264 only"
+	if len(stopped.PlayableNotes) != 1 || stopped.PlayableNotes[0] != want {
+		t.Errorf("playable notes = %q, want %q", stopped.PlayableNotes, want)
+	}
+	frames, ok := fileByPath(stopped.Files, "cameras/cam-front/segment-000001.mjpeg")
+	if !ok {
+		t.Fatalf("manifest does not list the JPEG segment: %+v", stopped.Files)
+	}
+	if frames.Format != "mjpeg" || frames.MediaType != "video/x-motion-jpeg" || frames.SourceID != "cam-front" || frames.Role != "" {
+		t.Errorf("JPEG segment listed as format %q, media type %q, source %q, role %q", frames.Format, frames.MediaType, frames.SourceID, frames.Role)
+	}
+}
+
+// writeJPEGStills lays a camera source the way snapshot mode stores a camera
+// captured as JPEG: one .jpg file per still, each indexed whole.
+func writeJPEGStills(t *testing.T, episodeDir, source string, stills int) {
+	t.Helper()
+	dir := filepath.Join(episodeDir, "cameras", source)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var lines []byte
+	for i := 0; i < stills; i++ {
+		name := fmt.Sprintf("snapshot-%06d.jpg", i+1)
+		jpeg := append(append([]byte{0xFF, 0xD8}, make([]byte, 24+i)...), 0xFF, 0xD9)
+		if err := os.WriteFile(filepath.Join(dir, name), jpeg, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		line, err := json.Marshal(map[string]any{
+			"sample_id":               i + 1,
+			"canonical_episode_nanos": int64(i+1) * 1_000_000_000,
+			"segment":                 "cameras/" + source + "/" + name,
+			"byte_offset":             0,
+			"byte_size":               len(jpeg),
+			"codec":                   "VIDEO_CODEC_MJPEG",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(append(lines, line...), '\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.jsonl"), lines, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSealOfASnapshotCameraWithJPEGStillsNamesWhyThereIsNoClip(t *testing.T) {
+	m, stopped := sealCameraEpisode(t, func(episodeDir string) {
+		writeJPEGStills(t, episodeDir, "cam-front", 3)
+	})
+
+	rel := "cameras/cam-front/" + episodeexport.PlayableFileName
+	if _, ok := fileByPath(stopped.Files, rel); ok {
+		t.Errorf("manifest lists %s for a source with no video", rel)
+	}
+	if _, err := os.Stat(filepath.Join(m.root, stopped.ID, rel)); !os.IsNotExist(err) {
+		t.Errorf("a clip was left on disk (stat err %v)", err)
+	}
+	want := rel + " not written: the source stored no H.264 video: its 3 indexed frame(s) are VIDEO_CODEC_MJPEG, and the clip is made from H.264 only"
+	if len(stopped.PlayableNotes) != 1 || stopped.PlayableNotes[0] != want {
+		t.Errorf("playable notes = %q, want %q", stopped.PlayableNotes, want)
+	}
+	for _, name := range []string{"snapshot-000001.jpg", "snapshot-000002.jpg", "snapshot-000003.jpg"} {
+		still, ok := fileByPath(stopped.Files, "cameras/cam-front/"+name)
+		if !ok {
+			t.Fatalf("manifest does not list %s: %+v", name, stopped.Files)
+		}
+		if still.Format != "jpeg" || still.MediaType != "image/jpeg" || still.SourceID != "cam-front" || still.Role != "" {
+			t.Errorf("%s listed as format %q, media type %q, source %q, role %q", name, still.Format, still.MediaType, still.SourceID, still.Role)
+		}
+	}
+}
+
+func TestSealOfABothCameraMakesItsClipFromTheVideo(t *testing.T) {
+	_, stopped := sealCameraEpisode(t, func(episodeDir string) {
+		writeCameraSource(t, episodeDir, "cam-front", [][]byte{
+			annexB(parsedIDR), annexB(parsedPSlice), annexB(parsedPSlice),
+		})
+		writeOwnCameraFrames(t, episodeDir, "cam-front", 3)
+	})
+
+	if len(stopped.PlayableNotes) != 0 {
+		t.Errorf("playable notes = %q, want none: the JPEG frames are not frames the clip omits", stopped.PlayableNotes)
+	}
+	clip, ok := fileByPath(stopped.Files, "cameras/cam-front/"+episodeexport.PlayableFileName)
+	if !ok || clip.Role != FileRoleDerived || clip.Size == 0 {
+		t.Fatalf("manifest clip entry = %+v (listed %v), want a derived clip made from the H.264 segment", clip, ok)
+	}
+	for _, raw := range []string{"cameras/cam-front/segment-000001.h264", "cameras/cam-front/segment-000001.mjpeg"} {
+		if _, ok := fileByPath(stopped.Files, raw); !ok {
+			t.Errorf("manifest does not list %s", raw)
+		}
+	}
+}
+
+// A clip that loses video frames reports them against the video frames it was
+// made from, not against every record in the index.
+func TestPlayableOmissionNoteCountsOnlyTheVideoFrames(t *testing.T) {
+	previous := convertClip
+	t.Cleanup(func() { convertClip = previous })
+	convertClip = func(string, string) (episodeexport.ClipResult, error) {
+		return episodeexport.ClipResult{IndexLines: 10, OwnFrames: 6, Frames: 3, Skipped: 1, SyncSamples: 1, SkippedReason: "segment truncated"}, nil
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "cameras", "cam-front"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cameras", "cam-front", "index.jsonl"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	notes := muxPlayableClips(dir)
+	want := "cameras/cam-front/playable.mp4 omits 1 of 4 indexed frame(s): segment truncated"
+	if len(notes) != 1 || notes[0] != want {
+		t.Errorf("notes = %q, want %q", notes, want)
 	}
 }

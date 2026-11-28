@@ -102,11 +102,9 @@ To give the camera back to the app, close the view, or switch the campaign off
 with `wendy data campaign disarm <campaign>`. `wendy data campaign arm <campaign>`
 switches it back on.
 
-Starting an app does not make Wendy open a camera that only offers raw or MJPEG
-frames, which covers most USB webcams. A camera that produces H.264 itself is
-different: while an app with the `camera` entitlement runs, Wendy captures that
-camera and feeds its H.264 frames to a separate agent-fed device node, so the
-app should read that node rather than the camera.
+Starting an app does not make Wendy open a camera. An app deployed with the
+`camera` entitlement reads its own node at the camera's path, and Wendy
+captures the camera only while an app reads its node (see the next section).
 
 ## Several apps on one camera
 
@@ -115,17 +113,32 @@ device node at the camera's usual path, so several apps, live views and
 recordings can read one USB camera at the same time. Add `"mode": "direct"` to
 the camera entitlement to get the real device instead.
 
-Sharing covers local USB cameras captured as MJPEG or packed raw formats. These
-keep today's behavior and are not shared: CSI cameras, depth, infrared and
-thermal streams, metadata nodes, cameras that produce H.264 themselves,
-SensorLink, ROS 2 and network cameras. A device without a compatible
+An app deployed before this version must be deployed again to get a camera
+node.
+
+Before this version, an app on a camera that produces H.264 also got an extra
+device node, named `Wendy sensor N` and numbered high, such as
+`/dev/video255`, and read the camera's H.264 there. That node is gone. Such an
+app now sets `"format": "native"` on its camera entitlement, and
+`"stamp": "frame"` if it reads frame numbers from the buffer timestamp, and
+reads the camera at its own path. It must be deployed again.
+`"mode": "direct"` still gives the real device.
+
+Sharing covers local USB cameras that produce MJPEG, H.264 or packed raw
+formats. These keep today's behavior and are not shared: CSI cameras, depth,
+infrared and thermal streams, metadata nodes, SensorLink, ROS 2 and network
+cameras. A device without a compatible
 `v4l2loopback` module also gives the app the real camera.
 
 ### What an app gets
 
 The app opens the same path as before, for example `/dev/video0` or its
-`/dev/v4l/by-id` link, and sees one mode: one size up to 1280x720, one frame
-rate, and YUYV when the camera itself produces MJPEG. `wendy run` prints one
+`/dev/v4l/by-id` link, and sees one mode: one size, up to 1280x720 unless its
+entitlement states another (see `size` below), one frame rate, and YUYV when
+the camera itself produces MJPEG or H.264. A camera that
+produces H.264 and lists no size up to 1280x720 is shared at the smallest size
+it lists: as YUYV pictures when one picture is at most 4,147,200 bytes, which
+is 1920x1080, and as its own H.264 above that. `wendy run` prints one
 line when this applies, naming each camera and its mode:
 
 ```
@@ -140,6 +153,118 @@ When the app is deployed, it gets a node for every shared camera plugged in at
 that moment, not only for the one it opens, so each of those cameras counts as
 shared by the app (see below).
 
+### Choose what the node carries
+
+Two optional keys on the camera entitlement set what the node carries, a
+third sets how its H.264 is encoded, and a fourth the size it is made at:
+
+- `format`: `"pixels"` (default) for decoded pictures, `"native"` for the
+  camera's own frames, for example MJPEG or H.264, or `"h264"` for H.264 with
+  one whole frame per buffer.
+- `stamp`: `"time"` (default) makes each frame's timestamp its capture time;
+  `"frame"` puts the agent's frame number in the timestamp field instead, as
+  `tv_sec * 1000000 + tv_usec`. That number is the frame's `sample_id` in a
+  Wendy Data episode, so an app can match a frame it read to the frame the
+  episode recorded.
+- `preset`: only with `"format": "h264"`, how fast the software H.264 encoder
+  works: `"ultrafast"`, `"superfast"`, `"veryfast"`, `"faster"`, `"fast"` or
+  `"medium"`, fastest first. A slower preset spends more CPU on each frame for
+  fewer bits. An entry without the key states no preset.
+- `size`: the size the camera is captured at for the node, as `"WxH"`, for
+  example `"1920x1080"`. It is served when the camera lists that size in the
+  format the agent captures it in: JPEG for a webcam, up to 1920x1080, and
+  H.264 for a camera that produces it. An entry without the key gets the
+  default size.
+
+On a camera that produces H.264, `"native"` and `"h264"` are the same thing:
+the camera's own H.264, one whole frame per buffer. `"pixels"` on such a
+camera are pictures decoded from it. Where the device encodes the `"h264"` of
+a camera that produces JPEG in software, the encoder runs for as long as the
+app reads its node, and the deploy notice, the agent's log and the camera's
+status say so; `"native"` and `"pixels"` run no encoder.
+
+```json
+{ "type": "camera", "format": "pixels", "stamp": "time" }
+{ "type": "camera", "format": "h264", "preset": "veryfast" }
+{ "type": "camera", "format": "native", "size": "1920x1080" }
+```
+
+`preset` applies only where the device encodes the node's H.264 in software.
+A camera has one encoder for all its consumers: apps, campaign recordings and
+viewers. It runs at the fastest preset any of them states, so the encoder
+never costs more than the cheapest request on that camera allows, and at
+`"ultrafast"` when none states one. The encoder restarts to change preset: at
+once to a faster one, and to a slower one after 30 seconds in which no
+consumer called for the faster one. The deploy notice, the agent's log and
+the camera's status name the preset the encoder runs at, and the status of a
+node that is read says so when that is not the preset its app stated. A
+device that encodes with a hardware encoder, or with a software encoder that
+takes no preset, does not apply a stated one, and neither does a camera that
+produces H.264 itself: the deploy notice and the camera's status then say that
+the preset is not applied, with the encoder or the reason.
+
+An app gets a node for every shared camera. A camera that cannot provide the
+`format` asked for is served in another: pictures in place of `"native"` or
+`"h264"`, and the camera's own frames in place of pictures that cannot be
+made, for example from a camera that produces H.264 on a device without an
+H.264 decoder. The deploy notice and the camera's status say
+`asked for <format>; serving <format> because <reason>`. A compressed node's
+largest frame is the image size the node reports; a larger frame is dropped.
+
+A `size` the camera is not captured at leaves the node at the default size. A
+camera is captured at one size, so a node made while another app shares the
+camera has that app's size, and a node keeps the size it was made with. The
+deploy notice, the agent's log and the camera's status say
+`asked for size <size>; serving <size> because <reason>`. Viewers and
+recordings are held to that size as to any shared mode.
+
+A node keeps the format it was made with. When a camera stops providing it
+while the app runs, for example because pictures can no longer be decoded from
+its frames, the node's status is `cannot serve` with the reason, and deploying
+the app again makes its node in a format the camera provides. While a picture
+node is read, its status names the decoder: `pictures decoded by <element>`. A
+`"frame"` stamp is never replaced by a time: a node whose camera's frames
+carry no frame number gets no frames, and its status says why.
+
+An app gets one node per camera. An entry's `allowlist` selects which cameras
+its `format`, `stamp`, `preset` and `size` apply to; an entry without one applies to
+every camera. An allowlist entry names a camera by any identifier
+`wendy device camera list --json` prints for it: its `stable_id`
+(`by-id:usb-046d_HD_Pro_Webcam_C920-video-index0`, with or without the `by-id:`
+prefix), its `path` (`/dev/video0`, or `v4l2:/dev/video0` as a campaign file
+writes it) or its `name`. An entry cannot be empty.
+
+Prefer a `by-id:` stable id: it follows the camera across reboots and
+replugging. A `by-path:` stable id follows the port the camera is plugged into,
+a device path can pass to another camera at a reboot or a replug, and a name is
+shared by every camera of the model. Two cameras of one model without distinct
+serial numbers share one `by-id:` name: one is listed with it and the other
+with a `by-path:` id, and which is which can change. Name such cameras by
+device path, and expect a reboot or a replug to move the settings.
+
+When the device's agent reports that it shares cameras, `wendy run` prints a
+line for each allowlist entry that selects no shared camera's node, and for
+each that names a camera that is not shared through a node, such as a network
+camera: such an entry configures nothing. It prints none for a Compose project,
+on a device that lists no camera, or when the agent does not answer within
+three seconds. An agent from before stable id and `v4l2:` entries matches only
+the exact device path or name, and an agent from before `format` and `stamp`
+reads neither of them nor the allowlist and gives every camera pictures stamped
+with the capture time; `wendy run` says so when the app asks for something the
+device's agent does not read.
+
+Two `camera` or `video` entries that claim the same camera must agree on
+`format`, `stamp`, `preset` and `size`; an entry that states a preset or a size
+and one that states none do not agree. Validation compares allowlist entries as written, and
+also knows `/dev/video0` and `v4l2:/dev/video0` for one camera, and a `by-id:`
+stable id with and without its prefix. Entries that name one camera by
+different identifiers, such as its stable id and its path, are only found on
+the device: there the stable id decides before the path and the path before
+the name, and `wendy run`, the agent's log and the camera's status say which
+entry decided and which was passed over. None of the four keys can be used
+when any of the app's camera entries has `"mode": "direct"`, and `preset` only
+on an entry with `"format": "h264"`.
+
 ### Apps that need `"mode": "direct"`
 
 Some apps cannot work with the shared mode:
@@ -153,8 +278,8 @@ Some apps cannot work with the shared mode:
   field on `VIDIOC_QBUF`, so `mmap` fails, and it hands out its buffers in turn.
   Map each buffer as `VIDIOC_QUERYBUF` describes it, and read the one
   `VIDIOC_DQBUF` returns. `HelloVideo` did both, and was changed.
-- Apps that need more than 1280x720, a different frame rate, or camera
-  controls.
+- Apps that need a size the node cannot be made at, a different frame rate, or
+  camera controls.
 
 `Examples/RemoteCam` works unchanged. For an app that breaks, either set
 `"mode": "direct"` on its camera entitlement, or change it to accept the shared
@@ -184,11 +309,33 @@ While a camera is shared:
 ### Status of shared cameras
 
 The Status column of `wendy device camera list` shows
-`shared: <app> (<state>), ...` for each app sharing the camera. The same detail
-is in the JSON from `wendy device hardware list --category camera --json` as
-the properties `share_mode`, `share_unavailable`, `shared_with` and
-`share_state`. A camera that is not shared carries `share_unavailable` with the
-reason.
+`shared: <app> [format <format>, stamp <stamp>] (<state>), ...` for each app
+sharing the camera, with `, preset <preset>` after the stamp for an h264 node
+whose app states one, and `, size <size>` for a node at a stated size. When the camera cannot fill a node in its format or with
+its stamp, the state is `cannot serve` with the reason; the node gets no frames
+until the camera can, which the agent checks once a minute. The same detail is
+in the JSON from `wendy device hardware list --category camera --json` as the
+properties `share_mode`, `share_unavailable`, `shared_with` and `share_state`,
+with `share_mode_native` and `share_mode_h264` for the mode of a node in those
+formats, or `share_unavailable_native` and `share_unavailable_h264` for why the
+camera has none. The row of a camera this device shares with an h264 mode and
+encodes in software carries `h264_encoder`, for example `x264enc (software)`.
+The row of a camera with an h264 mode also says what becomes of a stated
+preset: `h264_default_preset` holds the preset the encoder runs at when no
+consumer states one, where the device applies presets, and
+`h264_preset_ignored` holds the reason where it does not.
+`share_sizes` lists the sizes a `size` can state, each with its frame rate, for
+example `640x480@30, 1280x720@30, 1920x1080@30`, or `share_sizes_unavailable`
+says why none can be stated, and `shared_size` holds the size the camera runs
+at for the apps that share it.
+A camera that is not shared carries `share_unavailable` with the reason. The
+row of each camera `wendy device camera list` lists also carries `stable_id`,
+the stable id that command's `--json` prints for it and the one an allowlist
+entry may hold; it is empty for a camera without one. A
+row for a node that list leaves out, such as a camera's metadata node, has no
+`stable_id`. A network or ROS 2 camera's row carries `stable_id` and none of
+the share properties: an app reads it at its own node, not through a share
+node.
 
 ### Behavior to know about
 
@@ -212,6 +359,12 @@ reason.
   `no frames: the real camera is held by another app ("mode": "direct") or
   process`. The agent tries the camera again every 10 seconds, so frames
   return within about 10 seconds of the direct app letting go.
+- **A camera that is slow to stop.** A capture starts only once the camera's
+  previous capture has closed it. An app that opens its node in that time waits
+  for its frames. Its Status says
+  `waiting: the camera's previous capture has not closed it yet` until the
+  previous capture has closed the camera, and `reading` from then on, which is
+  before the new capture delivers its first frame.
 - **Replugging a camera.** The agent re-places each app's node about 2 to 3
   milliseconds after the camera reappears. An app that retries `open()` very
   fast can take the real camera for that moment, and then is not sharing until
@@ -435,12 +588,16 @@ A minimal `wendy.json` camera app looks like this:
 }
 ```
 
-To restrict the app to one camera device:
+To give one camera's node its own `format` and `stamp`, name the camera in the
+entry's `allowlist`. The allowlist does not restrict which cameras the app can
+open: it selects the cameras the entry's `format` and `stamp` apply to, and
+the app still gets a node for every shared camera.
 
 ```json
 {
   "type": "camera",
-  "allowlist": ["/dev/video0"]
+  "allowlist": ["by-id:usb-046d_HD_Pro_Webcam_C920-video-index0"],
+  "format": "native"
 }
 ```
 

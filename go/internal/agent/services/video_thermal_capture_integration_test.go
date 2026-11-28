@@ -61,7 +61,7 @@ func TestThermalRawSubscribersReceiveUnmodified16BitMeasurements(t *testing.T) {
 	hub, stopHub := newTestHub(t)
 	defer stopHub()
 	hub.thermalProfile = &agentpb.ThermalCamera{Adapter: thermal.PureThermal}
-	firstID, firstFrames, err := hub.subscribeKind(true)
+	firstID, firstFrames, err := hub.subscribeKind(rawFrames)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestThermalRawSubscribersReceiveUnmodified16BitMeasurements(t *testing.T) {
 	retained := receive(firstFrames)
 	retainedPhase := assertFrame(retained)
 	// A subscriber joining an active producer receives measurements too.
-	secondID, secondFrames, err := hub.subscribeKind(true)
+	secondID, secondFrames, err := hub.subscribeKind(rawFrames)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,8 @@
 package camera
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -36,8 +38,63 @@ func IdentityOf(base string) (Identity, error) {
 	return Identity{Device: device, Index: index, Name: name}, nil
 }
 
+// USB is what the USB device behind a camera node says of itself, which a move
+// to another port does not change: its vendor and product numbers, its serial
+// where it has one, and the number of the interface the node is on.
+type USB struct {
+	Vendor, Product, Serial, Interface string
+}
+
+// USBOf reads USB for /dev/<base> from sysfs: the node's device is the USB
+// interface, or for some drivers the USB device itself. A node whose device is
+// on no USB device has the zero USB and no error. An error says it could not
+// be read, which is not that: the node has no device link, as for IdentityOf,
+// or an attribute a USB device always has did not read, or the device went
+// while it was read. The serial is the one attribute a USB device may lack,
+// so one that is not found counts as none only when the device's vendor still
+// reads after it.
+func USBOf(base string) (USB, error) {
+	dir, err := filepath.EvalSymlinks(filepath.Join(sysfsRoot, base, "device"))
+	if err != nil {
+		return USB{}, err
+	}
+	for _, device := range []string{dir, filepath.Dir(dir)} {
+		vendor := filepath.Join(device, "idVendor")
+		usb := USB{}
+		if usb.Vendor, err = readAttribute(vendor); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return USB{}, err
+		}
+		if usb.Product, err = readAttribute(filepath.Join(device, "idProduct")); err != nil {
+			return USB{}, err
+		}
+		if device != dir {
+			if usb.Interface, err = readAttribute(filepath.Join(dir, "bInterfaceNumber")); err != nil {
+				return USB{}, err
+			}
+		}
+		if usb.Serial, err = readAttribute(filepath.Join(device, "serial")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return USB{}, err
+		}
+		if _, err := readAttribute(vendor); err != nil {
+			return USB{}, err
+		}
+		return usb, nil
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return USB{}, err
+	}
+	return USB{}, nil
+}
+
+// readFile reads a sysfs attribute. A seam: a device that goes while it is
+// read, and reads that fail for want of a descriptor, have no fixture.
+var readFile = os.ReadFile
+
 func readAttribute(path string) (string, error) {
-	b, err := os.ReadFile(path)
+	b, err := readFile(path)
 	if err != nil {
 		return "", err
 	}

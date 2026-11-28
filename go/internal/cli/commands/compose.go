@@ -952,9 +952,9 @@ func applyComposeCompanion(appCfg *appconfig.AppConfig, companion *appconfig.App
 	appCfg.ServiceName = serviceName
 	appCfg.Isolation = companion.Isolation
 	appCfg.Frameworks = companion.Frameworks
-	appCfg.Entitlements = append(appCfg.Entitlements, companion.Entitlements...)
-	if svc, ok := companion.Services[serviceName]; ok && svc != nil {
-		appCfg.Entitlements = append(appCfg.Entitlements, svc.Entitlements...)
+	svc := companion.Services[serviceName]
+	appCfg.Entitlements = append(appCfg.Entitlements, companion.ContainerEntitlements(svc)...)
+	if svc != nil {
 		if svc.Frameworks != nil {
 			appCfg.Frameworks = svc.Frameworks
 		}

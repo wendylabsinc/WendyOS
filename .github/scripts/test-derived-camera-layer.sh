@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Extend the existing Linux media job. The fixtures feed JPEG frames and H.264
+# access units to the derived layer's real GStreamer child; they open no camera.
+# One records an episode that stores both from the layer's hub.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+# avdec_h264 is the H.264 decoder this image has: the layer takes the first of
+# nvv4l2decoder, v4l2h264dec, avdec_h264 and openh264dec that is installed.
+for element in fdsrc fdsink gdpdepay gdppay jpegdec videoconvert tee queue x264enc h264parse avdec_h264; do
+  gst-inspect-1.0 "$element" > /dev/null
+done
+output="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/wendy-derived-camera-layer"
+mkdir -p "$output"
+export WENDY_GSTREAMER_REQUIRED=1
+test_name=TestDerivedLayerGivesEveryPictureAndAccessUnitItsSourceIdentity
+h264_tests=(TestDerivedLayerDecodesEachH264AccessUnitToThePictureOfItsOwnFrame TestDerivedLayerPairsNoPictureOfAnH264StreamItsDecoderReorders)
+store_test=TestStoreBothThroughTheDerivedLayerIndexesEverySampleAsItsJPEGAndItsH264
+tag_table_test=TestDerivedTagTableUndoesTheSegmentStartARealH264EncoderSends
+# A 1920x1080 YUYV picture is larger than a default gRPC message, and exactly
+# as large as the largest payload the layer takes from its child.
+whole_picture_test=TestDerivedLayerDeliversA1920x1080PictureWhole
+# expect PATTERN LOG: the log has a line matching the pattern, or say which is missing.
+expect() {
+  grep -q -- "$1" "$2" || { echo "Expected in $2: $1" >&2; exit 1; }
+}
+go test -race -c -o "$output/services.test" ./go/internal/agent/services
+trap 'rm -f "$output/services.test"' EXIT
+required="$(IFS='|'; echo "$test_name|$store_test|$tag_table_test|$whole_picture_test|${h264_tests[*]}")"
+"$output/services.test" -test.run "^(${required})$" -test.v -test.count=1 -test.timeout=240s | tee "$output/normal.log"
+for required_test in "$test_name" "$store_test" "$tag_table_test" "$whole_picture_test" "${h264_tests[@]}"; do
+  expect "^--- PASS: $required_test " "$output/normal.log"
+done
+expect 'H.264 decoder: h264parse ! avdec_h264' "$output/normal.log"
+# Both runs of the tag table check are on record with the segment start the
+# encoder sent, whichever it was: on the layer's tags, and on timestamps below
+# them, where an encoder that moves timestamps does.
+expect "timestamps from where the layer's tags start: .* sent segment start" "$output/normal.log"
+expect 'timestamps from one second: .* sent segment start' "$output/normal.log"
+if grep -q '^--- SKIP:' "$output/normal.log"; then
+  echo 'A required derived camera layer regression was skipped' >&2
+  exit 1
+fi
+rm -f "$output/services.test"
+
+python3 - "$output" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+out = Path(sys.argv[1]).resolve()
+services = Path('go/internal/agent/services').resolve()
+mutations = {
+    # Pair every output with the newest frame fed instead of the frame its tag names.
+    'newest-frame': (services / 'video_derived_tags.go',
+                     't.sources[nearestDerivedTag(outputTimestamp-shift)]', 't.sources[t.last]'),
+    # Refuse a payload exactly as large as the reader's bound, which a
+    # 1920x1080 picture is.
+    'picture-at-bound': (services / 'video_gdp.go',
+                         'case packet.kind == gdpPacketBuffer && length > int64(g.maxPayload):',
+                         'case packet.kind == gdpPacketBuffer && length >= int64(g.maxPayload):'),
+}
+for name, (source, before, after) in mutations.items():
+    original = source.read_text()
+    if original.count(before) != 1:
+        raise SystemExit(f'{name}: source mutation no longer identifies exactly one site')
+    replacement = out / (name + '.go')
+    replacement.write_text(original.replace(before, after))
+    (out / (name + '.json')).write_text(json.dumps({'Replace': {str(source): str(replacement)}}))
+PY
+# The control runs the H.264 picture fixture too: fed one frame at a time, the
+# newest frame fed is the picture's own, so that fixture also feeds frames
+# together.
+h264_picture_test=${h264_tests[0]}
+if go test -race -overlay "$output/newest-frame.json" ./go/internal/agent/services -run "^(${test_name}|${h264_picture_test})$" -v -count=1 -timeout 240s > "$output/newest-frame.log" 2>&1; then
+  cat "$output/newest-frame.log"
+  echo 'Regression did not reject pairing outputs with the newest frame' >&2
+  exit 1
+fi
+cat "$output/newest-frame.log"
+expect "^--- FAIL: $test_name " "$output/newest-frame.log"
+expect "^--- FAIL: $h264_picture_test " "$output/newest-frame.log"
+# A picture and an access unit made from JPEG frames, and a picture decoded
+# from H.264, each rejected for showing another frame than the one it names.
+expect "but shows luma .* that sample's JPEG shows" "$output/newest-frame.log"
+expect 'but decodes to luma' "$output/newest-frame.log"
+expect "but shows luma .* that sample's frame shows" "$output/newest-frame.log"
+
+if go test -race -overlay "$output/picture-at-bound.json" ./go/internal/agent/services -run "^${whole_picture_test}$" -v -count=1 -timeout 240s > "$output/picture-at-bound.log" 2>&1; then
+  cat "$output/picture-at-bound.log"
+  echo 'Regression did not reject a reader that refuses a picture exactly at its bound' >&2
+  exit 1
+fi
+cat "$output/picture-at-bound.log"
+expect "^--- FAIL: $whole_picture_test " "$output/picture-at-bound.log"
+expect 'came back as 0 of 1 pictures' "$output/picture-at-bound.log"

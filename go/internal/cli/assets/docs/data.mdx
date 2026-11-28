@@ -167,6 +167,63 @@ continuous camera streams support pre-trigger history. Audio, ROS 2, and
 telemetry begin at the trigger; snapshot cameras do not keep a video pre-buffer.
 The manifest reports the history each source actually retained.
 
+A camera source's `capture` block can set `store` to choose what the episode
+stores of that camera's continuous recording: `video` (the default), `frames`
+for single frames, each with its frame number and capture time, or `both`.
+`store` is rejected with `mode: snapshot`, which always stores single frames:
+a webcam the agent captures natively stores its own JPEG frame, unchanged, as
+`snapshot-NNNNNN.jpg`, and a camera whose own frames are H.264 stores a key
+frame as `snapshot-NNNNNN.h264`. An agent older than the release that added
+`store` rejects a campaign that uses it.
+
+```yaml
+sources:
+  - camera: front
+    capture:
+      store: both
+```
+
+With `frames`, a camera that has whole frames of its own stores them. A
+webcam's JPEG frames go in `segment-NNNNNN.mjpeg` files, a new file every 10
+seconds, and `index.jsonl` gives each frame's sample ID, capture time, file,
+byte offset, and size under codec `VIDEO_CODEC_MJPEG`. A webcam has frames of
+its own only when the agent captures it natively: at a size up to 1920x1080,
+on a device with the GStreamer elements that turn its JPEG into pictures and
+H.264. Any other camera, such as a network camera, records video instead, for
+the whole episode, and the source's detail in the episode manifest says that
+frames were requested and why they were not stored. `both` writes the frame
+files beside the `segment-NNNNNN.h264` video and lists both in the same index,
+told apart by `segment` and `codec`; the source's frame and drop counts are
+then sums over both. `playable.mp4` is made from the video only, so a `frames`
+source whose frames are JPEG seals without one, as does a snapshot source
+whose stills are JPEG. A camera whose own frames are already H.264 has one
+stream, stored once as video for every `store` value. `wendy data campaign
+deploy` warns when a camera's video would be encoded as H.264 in software and
+the device's GStreamer elements could be listed: the encoder runs while the
+campaign records or buffers, and for as long as the campaign's inference runs
+when it has `inference`. Without inference, `store: frames` keeps the own
+frames of a webcam captured as JPEG without encoding; a camera that hands on
+no frames of its own is recorded as video whatever `store` says.
+
+A camera source that stores video can also set `preset`, how fast the
+software H.264 encoder works: `ultrafast`, `superfast`, `veryfast`, `faster`,
+`fast` or `medium`, fastest first. A slower preset spends more CPU on each
+frame for fewer bits. It applies only where the device encodes the video in
+software with an encoder that takes one. A camera has one encoder for all its
+consumers, which runs at the fastest preset any of them states, so it never
+costs more than the cheapest request on that camera allows, and at `ultrafast`
+when none states one. `wendy data campaign deploy` warns of a camera whose
+video the preset will not reach, with the reason, and the source's detail in
+the episode manifest says when video was not encoded at the preset requested.
+
+```yaml
+sources:
+  - camera: front
+    capture:
+      store: video
+      preset: veryfast
+```
+
 See the [campaign YAML reference](/docs/advanced/clients/wendy-cli/commands/data#campaign-yaml-reference)
 for selectors, capture policies, and all fields.
 
@@ -232,9 +289,13 @@ when you are ready to enable model downloads and automatic capture.
 ## Current limits
 
 - Camera snapshots and capture-rate caps require a transport that supplies
-  complete encoded frames, currently local V4L2 cameras with native H.264.
-  Other camera transports record continuously and report unapplied policies
-  in the manifest. Audio supports continuous and level-threshold capture;
+  complete encoded frames: currently local V4L2 cameras the agent captures
+  natively, which are those with H.264 output and webcams whose JPEG it
+  captures whole (see `store` above). Other camera transports record
+  continuously and report unapplied policies in the manifest. A rate cap is
+  applied to video by whole groups of pictures and to a camera's own JPEG
+  frames one frame at a time, so under `store: both` the two hold different
+  samples. Audio supports continuous and level-threshold capture;
   ROS 2 and telemetry support continuous capture only.
 - Buffered continuous cameras use their producer's current parameters.
   Explicit `max_resolution` or `rate` settings on those sources are reported

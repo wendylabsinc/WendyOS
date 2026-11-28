@@ -42,6 +42,20 @@ func EntitlementAnnotationValue(e Entitlement) string {
 	if e.Mode != "" {
 		parts = append(parts, "mode="+e.Mode)
 	}
+	if isCameraEntitlement(e) {
+		if e.Format != "" {
+			parts = append(parts, "format="+e.Format)
+		}
+		if e.Stamp != "" {
+			parts = append(parts, "stamp="+e.Stamp)
+		}
+		if e.Preset != "" {
+			parts = append(parts, "preset="+e.Preset)
+		}
+		if e.Size != "" {
+			parts = append(parts, "size="+e.Size)
+		}
+	}
 	if e.Name != "" {
 		parts = append(parts, "name="+e.Name)
 	}
@@ -97,6 +111,22 @@ func ParseEntitlementAnnotation(entType, value string) Entitlement {
 		switch key {
 		case "mode":
 			ent.Mode = val
+		case "format":
+			if isCameraEntitlement(ent) {
+				ent.Format = val
+			}
+		case "stamp":
+			if isCameraEntitlement(ent) {
+				ent.Stamp = val
+			}
+		case "preset":
+			if isCameraEntitlement(ent) {
+				ent.Preset = val
+			}
+		case "size":
+			if isCameraEntitlement(ent) {
+				ent.Size = val
+			}
 		case "name":
 			ent.Name = val
 		case "path":
@@ -114,9 +144,7 @@ func ParseEntitlementAnnotation(entType, value string) Entitlement {
 				}
 			}
 		case "allowlist":
-			if val != "" {
-				ent.Allowlist = strings.Split(val, ",")
-			}
+			ent.Allowlist = strings.Split(val, ",")
 		case "ports":
 			for _, pm := range strings.Split(val, ",") {
 				protocol := ""

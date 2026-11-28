@@ -1200,6 +1200,8 @@ jobs:
         run: bash .github/scripts/test-sensorlink-capture.sh
       - name: Decode shared app-owned camera capture and reject camera reopens
         run: bash .github/scripts/test-shared-camera-capture.sh
+      - name: Pair derived camera pictures and H264 with their source frames and require a regression control
+        run: bash .github/scripts/test-derived-camera-layer.sh
 
       - name: Record distinct SensorLink microphones through ALSA with live PipeWire
         if: env.WENDY_HOSTED_AUDIO != 'unavailable'

@@ -201,17 +201,12 @@ func (p *h264ParameterSets) asAnnexB() []byte {
 	return p.annexB
 }
 
-// h264PPSID reads pic_parameter_set_id, the first field of a PPS NAL unit: an
-// unsigned Exp-Golomb code directly behind the header byte. The bits are read
-// as they lie, because no emulation prevention byte can fall inside a valid
-// id: one needs two zero bytes ahead of it, and sixteen leading zero bits is
-// already more than the largest id has.
-func h264PPSID(nal []byte) (id int, ok bool) {
-	if len(nal) < 2 {
-		return 0, false
-	}
-	body, bit := nal[1:], 0
-	next := func() (int, bool) {
+// h264ExpGolomb reads one unsigned Exp-Golomb code of body, starting at bit,
+// and returns the bit behind it. The bits are read as they lie: the fields read
+// this way sit directly behind a NAL header and are too short to hold an
+// emulation prevention byte, which needs two zero bytes ahead of it.
+func h264ExpGolomb(body []byte, bit int) (value, next int, ok bool) {
+	readBit := func() (int, bool) {
 		if bit >= len(body)*8 {
 			return 0, false
 		}
@@ -221,29 +216,70 @@ func h264PPSID(nal []byte) (id int, ok bool) {
 	}
 	zeros := 0
 	for {
-		b, more := next()
-		if !more {
-			return 0, false
+		b, more := readBit()
+		if !more || zeros > 16 {
+			return 0, 0, false
 		}
 		if b == 1 {
 			break
 		}
-		if zeros++; zeros > 8 {
-			return 0, false
-		}
+		zeros++
 	}
-	value := 0
 	for i := 0; i < zeros; i++ {
-		b, more := next()
+		b, more := readBit()
 		if !more {
-			return 0, false
+			return 0, 0, false
 		}
 		value = value<<1 | b
 	}
-	if id = 1<<zeros - 1 + value; id > h264MaxPPSID {
+	return 1<<zeros - 1 + value, bit, true
+}
+
+// h264PPSID reads pic_parameter_set_id, the first field of a PPS NAL unit.
+func h264PPSID(nal []byte) (id int, ok bool) {
+	if len(nal) < 2 {
+		return 0, false
+	}
+	id, _, ok = h264ExpGolomb(nal[1:], 0)
+	if !ok || id > h264MaxPPSID {
 		return 0, false
 	}
 	return id, true
+}
+
+// h264FirstSlice finds the header byte of an access unit's first coded slice.
+// An access unit without one holds no picture: parameter sets, a delimiter or
+// SEI alone.
+func h264FirstSlice(au []byte) (header int, found bool) {
+	for _, header, ok := h264NextNAL(au, 0); ok; _, header, ok = h264NextNAL(au, header+1) {
+		switch au[header] & 0x1f {
+		case 1, 2, h264NALIDR:
+			return header, true
+		}
+	}
+	return 0, false
+}
+
+func h264HasCodedPicture(au []byte) bool {
+	_, found := h264FirstSlice(au)
+	return found
+}
+
+// h264PictureIsBidirectional reports whether an access unit's picture is coded
+// in B slices, read off its first slice header (first_mb_in_slice, then
+// slice_type). A decoder hands such a picture back before pictures it was given
+// earlier.
+func h264PictureIsBidirectional(au []byte) bool {
+	header, found := h264FirstSlice(au)
+	if !found {
+		return false
+	}
+	_, bit, ok := h264ExpGolomb(au[header+1:], 0)
+	if !ok {
+		return false
+	}
+	sliceType, _, ok := h264ExpGolomb(au[header+1:], bit)
+	return ok && sliceType%5 == 1
 }
 
 // nativeH264Emit returns the emit callback for one native V4L2 H.264 capture.
@@ -271,6 +307,7 @@ func (s *VideoService) nativeH264Emit(path string, broadcast func([]byte, frameT
 			s.logger.Warn("H.264 keyframe has no SPS/PPS and none could be added; a viewer or recording that joins now cannot start decoding",
 				zap.String("device", path))
 		}
+		stamp.native = stamp.auAligned
 		return broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264)
 	}
 }

@@ -17,7 +17,9 @@ import (
 // capture it derives from. The point is browser playback straight from the
 // bucket: browsers cannot play the raw H.264 elementary stream, and the remux
 // gives every frame the presentation time cameras/<source>/index.jsonl
-// recorded for it.
+// recorded for it. The clip is made from the H.264 segments only: a source
+// that also stored the camera's own frames keeps them beside it, and a source
+// that stored only those seals without a clip.
 //
 // It never fails or blocks the seal. The remux is a copy, not a transcode, so
 // its cost is one more pass over the camera bytes beside the checksum pass the
@@ -55,7 +57,7 @@ func muxPlayableClips(dir string) []string {
 			continue
 		}
 		if result.Skipped > 0 {
-			note := fmt.Sprintf("%s omits %d of %d indexed frame(s)", rel, result.Skipped, result.IndexLines)
+			note := fmt.Sprintf("%s omits %d of %d indexed frame(s)", rel, result.Skipped, result.IndexLines-result.OwnFrames)
 			if result.SkippedReason != "" {
 				note += ": " + result.SkippedReason
 			}

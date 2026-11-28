@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -11,18 +10,32 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/camerashare"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
-// sharedMode is the one picture format an app's agent-fed camera node declares.
-// It always comes from the planner (see shareDecisionFor), so the node declares
-// exactly what the hub's pixel tap produces.
+// sharedMode is the one format an app's agent-fed camera node declares. It
+// always comes from shareDecisionFor, so the node declares exactly what the
+// hub subscription of its Format delivers.
 type sharedMode struct {
 	Width, Height uint32
 	Fourcc        string
 	BytesPerLine  uint32
 	FPS           uint32
+	// Format is the entitlement format the node serves (appconfig.CameraFormats).
+	Format string
+	// MaxFrameBytes is the largest frame of a compressed mode: the size asked
+	// of the node, and once a node has taken the mode, the size its kernel
+	// gave. Zero for a picture mode, whose frames are all frameBytes long.
+	MaxFrameBytes uint32
+}
+
+// asksWhat reports whether a node opened in other would be asked for what m
+// asks: the same mode, whatever maximum frame size a kernel gave either.
+func (m sharedMode) asksWhat(other sharedMode) bool {
+	m.MaxFrameBytes, other.MaxFrameBytes = min(m.MaxFrameBytes, 1), min(other.MaxFrameBytes, 1)
+	return m == other
 }
 
 // String reads "1280x720 YUYV, 30 fps"; the fourcc is trimmed ("Y16 " -> "Y16").
@@ -30,18 +43,105 @@ func (m sharedMode) String() string {
 	return fmt.Sprintf("%dx%d %s, %d fps", m.Width, m.Height, strings.TrimSpace(m.Fourcc), m.FPS)
 }
 
-// frameBytes is the size of one frame in this mode.
+func describeShareNode(mode sharedMode, stamp string) string {
+	return fmt.Sprintf("%s, %s", mode, describeShareSettings(mode.Format, stamp))
+}
+
+func describeShareSettings(format, stamp string) string {
+	return fmt.Sprintf("format %s, stamp %s", format, stamp)
+}
+
+// describeStatedSize names the size of a node whose camera is captured at a
+// size an entitlement states.
+func describeStatedSize(mode sharedMode, sized bool) string {
+	if !sized {
+		return ""
+	}
+	return ", size " + mode.size().String()
+}
+
+func describeStatedPreset(preset appconfig.EncodePreset) string {
+	if preset == noPreset {
+		return ""
+	}
+	return ", preset " + preset.String()
+}
+
 func (m sharedMode) frameBytes() int { return int(m.BytesPerLine) * int(m.Height) }
 
+func (m sharedMode) size() appconfig.CameraSize {
+	return appconfig.CameraSize{Width: m.Width, Height: m.Height}
+}
+
+func (m sharedMode) compressed() bool { return m.MaxFrameBytes > 0 }
+
+// formatCarriesPictures reports whether a node of this entitlement format
+// carries decoded pictures, each exactly one frame size long.
+func formatCarriesPictures(format string) bool { return format == appconfig.CameraFormatPixels }
+
+func (m sharedMode) bufferBytes() int {
+	if m.compressed() {
+		return int(m.MaxFrameBytes)
+	}
+	return m.frameBytes()
+}
+
+type compressedNodeFormat struct {
+	v4l2 uint32
+	name string
+}
+
+var compressedNodeFormats = map[agentpb.VideoCodec]compressedNodeFormat{
+	videoCodecMJPEG:                     {v4l2PixFmtMJPEG, "JPEG"},
+	agentpb.VideoCodec_VIDEO_CODEC_H264: {v4l2PixFmtH264, "H.264"},
+}
+
 // pixelFormat is the V4L2 pixel format of the mode's fourcc, or 0 for a fourcc
-// the raw table does not know.
+// no node can declare.
 func (m sharedMode) pixelFormat() uint32 {
+	if m.compressed() {
+		for _, f := range compressedNodeFormats {
+			if fourccName(f.v4l2) == m.Fourcc {
+				return f.v4l2
+			}
+		}
+		return 0
+	}
 	for _, f := range rawPixelFormats {
 		if f.fourcc == m.Fourcc {
 			return f.v4l2
 		}
 	}
 	return 0
+}
+
+func compressedMode(codec agentpb.VideoCodec, format string, width, height, fps uint32) sharedMode {
+	return sharedMode{
+		Width: width, Height: height, Fourcc: fourccName(compressedNodeFormats[codec].v4l2), FPS: fps,
+		Format: format, MaxFrameBytes: maxFrameBytes,
+	}
+}
+
+// carries reports whether f is a frame a node in this mode declares: a picture
+// in exactly its layout, or a compressed frame of its codec.
+func (m sharedMode) carries(f *videoFrame) bool {
+	if rf := f.rawFmt; rf != nil {
+		return rf.GetWidth() == m.Width && rf.GetHeight() == m.Height &&
+			strings.TrimSpace(rf.GetFourcc()) == strings.TrimSpace(m.Fourcc) &&
+			rf.GetBytesPerLine() == m.BytesPerLine
+	}
+	declared, known := compressedNodeFormats[f.codec]
+	return m.compressed() && known && fourccName(declared.v4l2) == m.Fourcc
+}
+
+func describeNodeFrame(f *videoFrame) string {
+	if f.rawFmt != nil {
+		return describeRawFormat(f.rawFmt)
+	}
+	if declared, known := compressedNodeFormats[f.codec]; known {
+		return declared.name
+	}
+	return strings.TrimPrefix(f.codec.String(), "VIDEO_CODEC_")
 }
 
 // admits reports whether a stream request is satisfied by this mode: every
@@ -60,92 +160,275 @@ func (m sharedMode) admits(req *agentpb.StreamVideoRequest) bool {
 }
 
 // shareDecision says whether a camera is shared and, when it is, at what mode;
-// otherwise Reason says why not.
+// otherwise Reason says why not. AskedFormat is set when the node serves
+// another format than the app asked for, because the camera cannot be declared
+// in that one, and AskedWhyNot says why it cannot. SoftwareEncoder names the
+// software element that makes the node's frames on this device, and is empty
+// for a node that carries what the camera produces, for pictures, and for an
+// encoder not known to be software. PresetIgnored is why a preset stated for
+// an h264 node is not applied, and is empty for an h264 node whose encoder
+// takes one and for a node of another format. Sized says the camera is
+// captured at Mode's size because an app's entitlement states it, where a
+// capture that names no size chooses another. AskedSize is set when the node
+// is made at another size than its app states, and AskedSizeWhyNot says why.
 type shareDecision struct {
-	Shared bool
-	Mode   sharedMode
-	Reason string
+	Shared                   bool
+	Mode                     sharedMode
+	Reason                   string
+	AskedFormat, AskedWhyNot string
+	SoftwareEncoder          string
+	PresetIgnored            string
+	Sized                    bool
+	AskedSize                appconfig.CameraSize
+	AskedSizeWhyNot          string
+}
+
+// describePresetWhenRead says at which preset an encoder that takes one will
+// run for a consumer that states stated, or none, in the words the command
+// line uses too. It is "" for an encoder that takes no preset.
+func describePresetWhenRead(element string, stated appconfig.EncodePreset) string {
+	fallback := encoderPreset(element, noPreset)
+	if fallback == noPreset {
+		return ""
+	}
+	return camerashare.DescribeEncoderPreset(stated.String(), fallback.String())
+}
+
+func betweenCommas(clause string) string {
+	if clause == "" {
+		return ""
+	}
+	return ", " + clause + ","
+}
+
+// describeSoftwareEncoder is what a node in this phase says of the software
+// element that makes its frames: that it feeds the node while the app reads,
+// at the preset it runs at, and that it will once the app does, at the preset
+// the app's statement leaves it. In every other phase nothing feeds it.
+func describeSoftwareEncoder(element string, phase sharePhase, stated, running appconfig.EncodePreset) string {
+	fed := "fed by the software encoder " + element
+	switch phase {
+	case shareReading:
+		if running != noPreset {
+			fed += " at preset " + running.String()
+		}
+		return fed
+	case shareIdle:
+		fed += " when the app reads"
+		if when := describePresetWhenRead(element, stated); when != "" {
+			fed += ", " + when
+		}
+		return fed
+	}
+	return ""
+}
+
+// describePresetNotRunning is what a node that is read says when its app
+// stated a preset and the camera's encoder runs at another.
+func describePresetNotRunning(stated, running appconfig.EncodePreset) string {
+	if stated == noPreset || running == noPreset || stated == running {
+		return ""
+	}
+	return fmt.Sprintf("asked for preset %s; the camera's one encoder serves all its consumers and runs at %s", stated, running)
+}
+
+func describePresetIgnored(stated appconfig.EncodePreset, why string) string {
+	if stated == noPreset || why == "" {
+		return ""
+	}
+	return camerashare.DescribePresetNotApplied(stated.String(), why)
+}
+
+// Why a preset stated for an h264 node or for a campaign's stored video is
+// not applied.
+const (
+	presetIgnoredOwnH264   = "the camera produces H.264 itself, so nothing is encoded"
+	presetIgnoredByEncoder = "this device encodes with %s, which takes no preset"
+	presetIgnoredNoEncoder = "no H.264 encoder that takes one was found on this device"
+	presetIgnoredUnshaped  = "this camera's pipeline always runs its encoder at the default preset, %s"
+)
+
+func describeServedInstead(askedFormat, servedFormat, whyNot string) string {
+	return fmt.Sprintf("asked for %s; serving %s because %s", askedFormat, servedFormat, whyNot)
 }
 
 // defaultSharedFPS is the rate declared when the camera advertises none.
 const defaultSharedFPS = 30
 
-// isDepthOrInfraredNode is behind a var so tests can describe a RealSense node
-// without sysfs.
-var isDepthOrInfraredNode = isRealSenseDepthNode
+// shareDecisionFor decides whether the camera dev is served to an app that
+// asks for format through an agent-fed node, and at which mode. An app gets a
+// node for every camera that can have one: a camera that cannot be declared in
+// the format asked for is served in the first format it can be declared in
+// (appconfig.CameraFormatsServedFor). A camera with no mode at all gives the
+// reason it has no pictures.
+func (s *VideoService) shareDecisionFor(_ context.Context, dev *agentpb.VideoDevice, format string) shareDecision {
+	return s.shareDecisionAt(dev, noSize, format)
+}
 
-// shareDecisionFor decides whether the camera dev is served to apps through an
-// agent-fed node, and at which mode. The first failing rule gives the Reason.
-func (s *VideoService) shareDecisionFor(ctx context.Context, dev *agentpb.VideoDevice) shareDecision {
-	refuse := func(reason string) shareDecision { return shareDecision{Reason: reason} }
+// shareDecisionAt is shareDecisionFor with the camera captured at size, or at
+// the size its capture chooses for noSize.
+func (s *VideoService) shareDecisionAt(dev *agentpb.VideoDevice, size appconfig.CameraSize, format string) shareDecision {
+	candidates := appconfig.CameraFormatsServedFor(format)
+	decisions := s.shareDecisionsAt(dev, size, candidates...)
+	for _, served := range candidates {
+		decision := decisions[served]
+		if !decision.Shared {
+			continue
+		}
+		if served != format {
+			decision.AskedFormat, decision.AskedWhyNot = format, decisions[format].Reason
+		}
+		return decision
+	}
+	return decisions[appconfig.CameraFormatPixels]
+}
 
+// shareDecisionsFor decides each format on its own, with no other format
+// served instead. What the camera has for a node is the capture's to say
+// (framesForNodes); this only declares a mode for it.
+func (s *VideoService) shareDecisionsFor(dev *agentpb.VideoDevice, formats ...string) map[string]shareDecision {
+	return s.shareDecisionsAt(dev, noSize, formats...)
+}
+
+func (s *VideoService) shareDecisionsAt(dev *agentpb.VideoDevice, size appconfig.CameraSize, formats ...string) map[string]shareDecision {
+	decisions := make(map[string]shareDecision, len(formats))
 	if s.loopback == nil || s.loopback.Available() != nil {
-		return refuse("no compatible v4l2loopback module on this device")
-	}
-	switch dev.GetTransport() {
-	case agentpb.VideoTransport_VIDEO_TRANSPORT_USB:
-	case agentpb.VideoTransport_VIDEO_TRANSPORT_CSI:
-		return refuse("CSI cameras are not shared yet")
-	default:
-		return refuse("only USB cameras are shared in this release")
-	}
-	if isDepthOrInfraredNode(dev.GetPath()) {
-		return refuse("depth and infrared nodes are not shared")
-	}
-	if dev.GetThermal() != nil {
-		return refuse("thermal cameras are not shared; an app reads their measurements at a mode it picks")
-	}
-
-	var formats []uint32
-	if s.capturePixelFormats != nil {
-		if got, known := s.capturePixelFormats(dev.GetPath()); known {
-			formats = got
+		for _, format := range formats {
+			decisions[format] = shareDecision{Reason: "no compatible v4l2loopback module on this device"}
 		}
+		return decisions
 	}
-	for _, f := range formats {
-		if f == v4l2PixFmtH264 {
-			return refuse("the camera produces H.264 itself; sharing it comes in a later release")
+	frames := s.framesForNodes(dev, size)
+	for _, format := range formats {
+		decision := shareDecisionOf(frames, format).namingSoftwareEncoderOf(frames).sayingWhyAPresetIsIgnoredOf(frames)
+		decision.Sized = decision.Shared && size != noSize
+		decisions[format] = decision
+	}
+	return decisions
+}
+
+// shareDecisionStating is shareDecisionFor for an app whose entitlement
+// states a size for the camera's node, or none. A camera is captured at one
+// size: while other containers share it, held is how, and the node is made
+// at that size whatever the app states. Otherwise a stated size the camera
+// is captured at is the node's, and one it is not captured at leaves the node
+// at the size a capture chooses.
+func (s *VideoService) shareDecisionStating(dev *agentpb.VideoDevice, format string, stated appconfig.CameraSize, held *sharedCapture) shareDecision {
+	if held != nil {
+		decision := s.shareDecisionAt(dev, held.size(), format)
+		if at := held.mode.size(); decision.Shared && stated != noSize && stated != at {
+			decision.AskedSize, decision.AskedSizeWhyNot = stated, camerashare.SizeSharedWith(held.apps, at.String())
 		}
+		return decision
 	}
-	if len(formats) == 0 {
-		return refuse("the camera's formats could not be read")
+	chosen := s.shareDecisionAt(dev, noSize, format)
+	if stated == noSize || !chosen.Shared || chosen.Mode.size() == stated {
+		return chosen
 	}
+	sized := s.shareDecisionAt(dev, stated, format)
+	if sized.Shared {
+		return sized
+	}
+	chosen.AskedSize, chosen.AskedSizeWhyNot = stated, sized.Reason
+	return chosen
+}
 
-	gstPath, available, err := s.gstElements()
-	if err != nil {
-		return refuse("GStreamer is not installed on this device")
+// namingSoftwareEncoderOf is the decision with the software element that
+// makes its node's frames from the camera's own, for a compressed node whose
+// codec is not the camera's.
+func (d shareDecision) namingSoftwareEncoderOf(frames nodeFrames) shareDecision {
+	if d.Shared && d.Mode.compressed() && frames.nodeCodec(d.Mode.Format) != frames.own.codec {
+		d.SoftwareEncoder = frames.softwareEncoder()
 	}
+	return d
+}
 
-	plan, err := planGStreamerPipelineShaped(pipelineShape{encode: false}, gstPath, dev.GetPath(),
-		&agentpb.StreamVideoRequest{}, "", false, camera.TransportUSB, "", pipeWireSource{}, available)
-	if err != nil && !errors.Is(err, errNoTapOnlyPipeline) {
-		return refuse("no shared mode: " + err.Error())
+func (d shareDecision) sayingWhyAPresetIsIgnoredOf(frames nodeFrames) shareDecision {
+	if !d.Shared || d.Mode.Format != appconfig.CameraFormatH264 {
+		return d
 	}
-	if plan.pixels == nil {
-		return refuse("no shared mode: " + plan.rawReason())
+	switch {
+	case frames.nodeCodec(d.Mode.Format) == frames.own.codec:
+		d.PresetIgnored = presetIgnoredOwnH264
+	case frames.h264Encoder == "":
+		d.PresetIgnored = presetIgnoredNoEncoder
+	case encoderPreset(frames.h264Encoder, noPreset) == noPreset:
+		d.PresetIgnored = fmt.Sprintf(presetIgnoredByEncoder, frames.h264Encoder)
 	}
+	return d
+}
 
-	mode := sharedMode{
-		Width:        plan.pixels.GetWidth(),
-		Height:       plan.pixels.GetHeight(),
-		Fourcc:       plan.pixels.GetFourcc(),
-		BytesPerLine: plan.pixels.GetBytesPerLine(),
-		FPS:          defaultSharedFPS,
+func shareDecisionOf(frames nodeFrames, format string) shareDecision {
+	if whyNot := frames.whyNo(format); whyNot != "" {
+		return shareDecision{Reason: whyNot}
 	}
-	captureFormat := uint32(v4l2PixFmtMJPEG)
-	if plan.raw != nil {
-		captureFormat = mode.pixelFormat()
-	}
-	var best uint32
-	for _, r := range frameRatesFor(dev.GetPath(), captureFormat, mode.Width, mode.Height) {
-		if r > best {
-			best = r
+	var mode sharedMode
+	if formatCarriesPictures(format) {
+		mode = sharedMode{
+			Width: frames.pictures.GetWidth(), Height: frames.pictures.GetHeight(), Fourcc: frames.pictures.GetFourcc(),
+			BytesPerLine: frames.pictures.GetBytesPerLine(), FPS: frames.pictureRate, Format: format,
 		}
+	} else {
+		mode = compressedMode(frames.nodeCodec(format), format, frames.own.width, frames.own.height, frames.own.framerate)
 	}
-	if best > 0 {
-		mode.FPS = best
+	if mode.FPS == 0 {
+		mode.FPS = defaultSharedFPS
 	}
 	return shareDecision{Shared: true, Mode: mode}
+}
+
+// shareFormatCodecs is the codec of the frames a compressed node format
+// carries, for the formats that fix one; a format absent here carries the
+// codec of the camera's own frames.
+var shareFormatCodecs = map[string]agentpb.VideoCodec{
+	appconfig.CameraFormatH264: agentpb.VideoCodec_VIDEO_CODEC_H264,
+}
+
+// ownFramesAtDefaults is the camera's own frames as a capture that names no
+// parameters hands them on whole, or why it hands on none. native says a
+// native source captures the camera either way.
+func (s *VideoService) ownFramesAtDefaults(path string) (own ownFrames, declined string, native bool) {
+	return s.ownFramesFor(path, s.atSharedSize(path, &agentpb.StreamVideoRequest{}))
+}
+
+// Why a node gets no frames from a camera that is captured. Each says what
+// the developer can do: a node keeps the mode it was made with, so the way to
+// another one is another deploy.
+const (
+	picturesWithoutFrameNumbers = `the camera's own frames are not captured whole (%s), so its pictures carry no frame number for the "frame" stamp`
+	picturesNotMade             = `no pictures are made from this camera's frames (%s); deploy the app again and its node carries the camera's own frames, or set "format": "native" on its camera entitlement`
+	nodeModeNotDelivered        = `the camera now delivers %s and the node declares %s; deploy the app again to get a node for what the camera delivers`
+)
+
+// nodeUnservedAt is why a default capture of the camera at path, which is how
+// a share runs it, has no frames for a node of this mode and stamp, or "". It
+// captures nothing: it asks what the capture sources would hand on now, which
+// is not what they listed when the node was made once one of them has refused
+// the camera or the pictures decoded from it have been given up.
+func (s *VideoService) nodeUnservedAt(path string, mode sharedMode, stamp string) string {
+	own, declined, native := s.ownFramesAtDefaults(path)
+	switch {
+	case declined != "" && mode.compressed():
+		return fmt.Sprintf(ownFramesNotWhole, declined)
+	case declined != "" && stamp == appconfig.CameraStampFrame:
+		return fmt.Sprintf(picturesWithoutFrameNumbers, declined)
+	case declined != "" || !native:
+		return ""
+	case mode.compressed():
+		delivered := nodeFrames{own: own}.nodeCodec(mode.Format)
+		if fourccName(compressedNodeFormats[delivered].v4l2) != mode.Fourcc {
+			return fmt.Sprintf(nodeModeNotDelivered, compressedNodeFormats[delivered].name, mode)
+		}
+		return ""
+	}
+	pictures, whyNot := s.decodedPictures(path, own)
+	switch {
+	case pictures == nil:
+		return fmt.Sprintf(picturesNotMade, whyNot)
+	case !mode.carries(&videoFrame{rawFmt: pictures}):
+		return fmt.Sprintf(nodeModeNotDelivered, describeRawFormat(pictures), mode)
+	}
+	return ""
 }
 
 // gstElementsMemo is a successful gst listing kept for the service's life, and
@@ -236,6 +519,16 @@ var (
 	_ [20 - unsafe.Offsetof(v4l2FrmIvalEnum{}.Numerator)]byte
 	_ [unsafe.Offsetof(v4l2FrmIvalEnum{}.Numerator) - 20]byte
 )
+
+// A shared camera's mode declares this rate and a capture that was asked for
+// none runs at it, so the two agree. Zero when the camera advertises no rate.
+func highestFrameRateFor(path string, pixfmt, width, height uint32) uint32 {
+	var best uint32
+	for _, rate := range frameRatesFor(path, pixfmt, width, height) {
+		best = max(best, rate)
+	}
+	return best
+}
 
 // vidiocEnumFrameintervals is VIDIOC_ENUM_FRAMEINTERVALS.
 const vidiocEnumFrameintervals = 0xC034564B

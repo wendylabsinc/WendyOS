@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -489,6 +490,52 @@ func TestMultiServiceCreateConfig_ServiceFrameworksOverride(t *testing.T) {
 	if len(got.Entitlements) != 2 {
 		t.Errorf("listener entitlements = %+v, want shared bluetooth + gpu", got.Entitlements)
 	}
+}
+
+// wantEntitlementLabels fails unless the entitlement annotations made from
+// cfg's entitlements are exactly want. The agent copies them onto the container
+// as labels. How it reads camera entries back from these same label values is
+// its own to test: TestCameraEntriesAreReadBackFromADeploysLabels in the
+// agent's containerd package.
+func wantEntitlementLabels(t *testing.T, cfg *appconfig.AppConfig, want map[string]string) {
+	t.Helper()
+	if labels := appconfig.BuildEntitlementAnnotations(cfg.Entitlements); !reflect.DeepEqual(labels, want) {
+		t.Fatalf("entitlement labels = %v, want %v", labels, want)
+	}
+}
+
+// A service's container gets the app's camera entry and the service's own,
+// each with its format and stamp, in its config and in the labels made from it.
+func TestMultiServiceCreateConfig_KeepsAppAndServiceCameraEntriesWithTheirSettings(t *testing.T) {
+	appEntry := appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"},
+		Format: appconfig.CameraFormatNative, Stamp: appconfig.CameraStampFrame}
+	serviceEntry := appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"Logi H264"},
+		Format: appconfig.CameraFormatH264, Stamp: appconfig.CameraStampFrame}
+	appCfg := &appconfig.AppConfig{
+		AppID:        "sh.wendy.examples.vision",
+		Version:      "1.0.0",
+		Entitlements: []appconfig.Entitlement{appEntry},
+		Services: map[string]*appconfig.ServiceConfig{
+			"detector": {Context: "./detector", Entitlements: []appconfig.Entitlement{serviceEntry}},
+			"viewer":   {Context: "./viewer"},
+		},
+	}
+
+	detector := multiServiceCreateConfig(appCfg, "detector", appCfg.Services["detector"])
+	both := []appconfig.Entitlement{appEntry, serviceEntry}
+	if !reflect.DeepEqual(detector.Entitlements, both) {
+		t.Fatalf("detector entitlements = %+v, want %+v", detector.Entitlements, both)
+	}
+	wantEntitlementLabels(t, detector, map[string]string{
+		"sh.wendy/entitlement.camera.0": "format=native,stamp=frame,allowlist=/dev/video0",
+		"sh.wendy/entitlement.camera.1": "format=h264,stamp=frame,allowlist=Logi H264",
+	})
+
+	viewer := multiServiceCreateConfig(appCfg, "viewer", appCfg.Services["viewer"])
+	if want := []appconfig.Entitlement{appEntry}; !reflect.DeepEqual(viewer.Entitlements, want) {
+		t.Errorf("viewer entitlements = %+v, want the app's entry alone, %+v", viewer.Entitlements, want)
+	}
+	wantEntitlementLabels(t, viewer, map[string]string{"sh.wendy/entitlement.camera": "format=native,stamp=frame,allowlist=/dev/video0"})
 }
 
 // A service's own readiness/hooks must travel with its per-service AppConfig so

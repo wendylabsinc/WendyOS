@@ -156,7 +156,10 @@ func isSensorLinkCameraPath(path string) bool {
 // verify a pass-through against.
 var errSensorFeedNotJPEG = errors.New("SensorLink camera does not send JPEG")
 
-const sensorLinkRawWhy = "SensorLink camera sends JPEG; raw frames are not offered"
+const (
+	sensorLinkRawWhy    = "SensorLink camera sends JPEG; raw frames are not offered"
+	sensorLinkNativeWhy = "SensorLink camera frames arrive over the sensor link and the agent re-encodes them"
+)
 
 // streamSensorLinkCamera encodes a SensorLink camera's JPEG frames from the
 // feed onto the hub, without opening its node.
@@ -190,6 +193,7 @@ func (s *VideoService) streamSensorLinkCamera(ctx context.Context, broadcast fun
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
+	plan.nativeWhy = sensorLinkNativeWhy
 	pump := func(ctx context.Context, w io.Writer) error {
 		return pumpSensorFrames(ctx, w, frames, first)
 	}

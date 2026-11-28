@@ -573,3 +573,152 @@ func TestSingleFrameClipGetsNominalHold(t *testing.T) {
 		t.Fatal("the sample table carries no nominal duration; players would see an empty movie")
 	}
 }
+
+// appendOwnFrames adds a camera's own JPEG frames to a source the way the
+// agent stores them beside video: their own .mjpeg segment, indexed in the
+// same index.jsonl under their own codec name.
+func appendOwnFrames(t *testing.T, sourceDir string, stamps []int64) {
+	t.Helper()
+	var segment, lines []byte
+	for i, stamp := range stamps {
+		jpeg := append(append([]byte{0xFF, 0xD8}, make([]byte, 20+i)...), 0xFF, 0xD9)
+		line, err := json.Marshal(map[string]any{
+			"canonical_episode_nanos": stamp,
+			"segment":                 "cameras/" + filepath.Base(sourceDir) + "/segment-000001.mjpeg",
+			"byte_offset":             len(segment),
+			"byte_size":               len(jpeg),
+			"codec":                   "VIDEO_CODEC_MJPEG",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		segment = append(segment, jpeg...)
+		lines = append(append(lines, line...), '\n')
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "segment-000001.mjpeg"), segment, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	index, err := os.OpenFile(filepath.Join(sourceDir, "index.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer index.Close()
+	if _, err := index.Write(lines); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A source stored as both video and frames gets its clip from the H.264
+// segments. The JPEG records are valid records of another form, not damage.
+func TestClipIsMadeFromTheVideoBesideACamerasOwnFrames(t *testing.T) {
+	key, inter := keyframeAndInter(t)
+	dir, sourceDir := writeSingleSourceEpisode(t, []int64{1_000_000_000, 1_040_000_000, 1_080_000_000}, [][]byte{key, inter, inter})
+	appendOwnFrames(t, sourceDir, []int64{1_000_000_000, 1_040_000_000, 1_080_000_000})
+
+	result, err := ConvertSourceInPlace(dir, sourceDir)
+	if err != nil {
+		t.Fatalf("ConvertSourceInPlace: %v", err)
+	}
+	if result.Frames != 3 || result.Skipped != 0 || result.SyncSamples != 1 {
+		t.Errorf("clip holds %d frame(s), %d skipped, %d sync sample(s); want the 3 H.264 frames", result.Frames, result.Skipped, result.SyncSamples)
+	}
+	if result.OwnFrames != 3 || len(result.OwnFrameCodecs) != 1 || result.OwnFrameCodecs[0] != "VIDEO_CODEC_MJPEG" {
+		t.Errorf("own frames = %d %v, want the 3 JPEG records named", result.OwnFrames, result.OwnFrameCodecs)
+	}
+	if result.Unparsed != 0 || result.TimestampInversions != 0 {
+		t.Errorf("unparsed %d, inversions %d; JPEG records must not read as damage or as out-of-order video", result.Unparsed, result.TimestampInversions)
+	}
+}
+
+func TestASourceWithOnlyACamerasOwnFramesHasNoClipAndSaysWhy(t *testing.T) {
+	dir, sourceDir := writeSingleSourceEpisode(t, nil, nil)
+	if err := os.Remove(filepath.Join(sourceDir, "segment-000001.h264")); err != nil {
+		t.Fatal(err)
+	}
+	appendOwnFrames(t, sourceDir, []int64{1_000_000_000, 1_040_000_000})
+
+	result, err := ConvertSourceInPlace(dir, sourceDir)
+	if err == nil {
+		t.Fatal("a source with no H.264 video produced a clip")
+	}
+	want := "the source stored no H.264 video: its 2 indexed frame(s) are VIDEO_CODEC_MJPEG, and the clip is made from H.264 only"
+	if err.Error() != want {
+		t.Errorf("reason = %q, want %q", err, want)
+	}
+	if result.Unparsed != 0 {
+		t.Errorf("unparsed = %d, want 0", result.Unparsed)
+	}
+	if _, statErr := os.Stat(filepath.Join(sourceDir, PlayableFileName)); !os.IsNotExist(statErr) {
+		t.Errorf("a playable file was left behind (stat err %v)", statErr)
+	}
+}
+
+// A snapshot source on a camera captured as JPEG holds one .jpg file per
+// still and no video. It has no clip, for the reason a frames-only source has
+// none.
+func TestASourceWithOnlyJPEGStillsHasNoClipAndSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "cameras", "cam")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var index []byte
+	for i, name := range []string{"snapshot-000001.jpg", "snapshot-000002.jpg", "snapshot-000003.jpg"} {
+		jpeg := append(append([]byte{0xFF, 0xD8}, make([]byte, 20+i)...), 0xFF, 0xD9)
+		if err := os.WriteFile(filepath.Join(sourceDir, name), jpeg, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		line, err := json.Marshal(map[string]any{
+			"canonical_episode_nanos": int64(i+1) * 1_000_000_000,
+			"segment":                 "cameras/cam/" + name,
+			"byte_offset":             0,
+			"byte_size":               len(jpeg),
+			"codec":                   "VIDEO_CODEC_MJPEG",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		index = append(append(index, line...), '\n')
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "index.jsonl"), index, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ConvertSourceInPlace(dir, sourceDir)
+	if err == nil {
+		t.Fatal("a source holding only JPEG stills produced a clip")
+	}
+	want := "the source stored no H.264 video: its 3 indexed frame(s) are VIDEO_CODEC_MJPEG, and the clip is made from H.264 only"
+	if err.Error() != want {
+		t.Errorf("reason = %q, want %q", err, want)
+	}
+	if result.OwnFrames != 3 || result.Unparsed != 0 || result.Frames != 0 {
+		t.Errorf("own frames %d, unparsed %d, muxed %d; want the 3 stills counted as the camera's own frames and nothing muxed", result.OwnFrames, result.Unparsed, result.Frames)
+	}
+	if _, statErr := os.Stat(filepath.Join(sourceDir, PlayableFileName)); !os.IsNotExist(statErr) {
+		t.Errorf("a playable file was left behind (stat err %v)", statErr)
+	}
+}
+
+// A WebM recording was never a source of the clip, and its seal note is the
+// one it has always had.
+func TestAWebMSourceKeepsItsClipRefusal(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "cameras", "cam")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	index := `{"canonical_episode_nanos":1,"segment":"cameras/cam/segment-000001.webm","byte_offset":40,"byte_size":7,"codec":"VIDEO_CODEC_VP8"}
+{"canonical_episode_nanos":2,"segment":"cameras/cam/segment-000001.webm","byte_offset":47,"byte_size":7,"codec":"VIDEO_CODEC_VP8"}
+`
+	if err := os.WriteFile(filepath.Join(sourceDir, "index.jsonl"), []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := ConvertSourceInPlace(dir, sourceDir)
+	if err == nil || err.Error() != "index names no usable H.264 frames (2 unparsed lines)" {
+		t.Fatalf("reason = %v, want the refusal WebM sources have always had", err)
+	}
+	if result.OwnFrames != 0 || result.Unparsed != 2 {
+		t.Errorf("own frames %d, unparsed %d; want 0 and 2", result.OwnFrames, result.Unparsed)
+	}
+}
