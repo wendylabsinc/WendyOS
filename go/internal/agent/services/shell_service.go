@@ -58,11 +58,11 @@ func (s *ShellService) HostShell(stream grpc.BidiStreamingServer[agentpb.HostShe
 
 	// Audit: a host shell over mTLS is a root shell on the device. Log every
 	// session and its outcome so there is a forensic trail. An empty command
-	// means the resolved login shell. clientAuditFields records the caller's
+	// means the resolved login shell. ClientAuditFields records the caller's
 	// identity (org/entity/serial/remote addr) per the data-minimisation policy
 	// in interceptor/mtls.go — never the certificate Subject/CN.
 	s.logger.Info("host shell started",
-		append([]zap.Field{zap.Strings("command", command)}, clientAuditFields(ctx)...)...)
+		append([]zap.Field{zap.Strings("command", command)}, ClientAuditFields(ctx)...)...)
 	startedAt := time.Now()
 	stdinR, stdinW := io.Pipe()
 	defer stdinR.Close()
@@ -113,13 +113,13 @@ func (s *ShellService) HostShell(stream grpc.BidiStreamingServer[agentpb.HostShe
 	})
 }
 
-// clientAuditFields extracts best-effort, non-PII caller identity for the audit
+// ClientAuditFields extracts best-effort, non-PII caller identity for the audit
 // log. Per the data-minimisation policy in interceptor/mtls.go it records the
 // org id, entity type/id, cert serial, and remote address — never the subject/CN.
 // It returns whatever is available: over the plaintext server or the admin unix
 // socket there is no client certificate, so only the remote address (if any) is
 // logged.
-func clientAuditFields(ctx context.Context) []zap.Field {
+func ClientAuditFields(ctx context.Context) []zap.Field {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return nil

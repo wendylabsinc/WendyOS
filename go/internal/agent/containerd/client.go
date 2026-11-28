@@ -3117,7 +3117,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	dbusProxyStartedForTask = false
 	avahiStartedForTask = false
 	c.logger.Info("Container started", zap.String("app_name", appName))
-	c.startPostStartAgentHook(postStartAgentCommand, appName)
+	c.startPostStartAgentHook(postStartAgentCommand, appName, services.ClientAuditFields(ctx)...)
 
 	c.logger.Info("Container start phase timings",
 		zap.String("container_name", appName),
@@ -3846,7 +3846,8 @@ var startPostStartHookCommand = func(argv []string) (func() error, error) {
 	return cmd.Wait, nil
 }
 
-func (c *Client) startPostStartAgentHook(command, appName string) bool {
+// caller identifies who asked for the start, for the audit record.
+func (c *Client) startPostStartAgentHook(command, appName string, caller ...zap.Field) bool {
 	if command == "" {
 		return false
 	}
@@ -3876,25 +3877,27 @@ func (c *Client) startPostStartAgentHook(command, appName string) bool {
 			zap.String("configured_command", command),
 		)
 	}
+	// Audit (WDY-4398): this runs as root on the host, so record it like a
+	// host shell session. The command is logged as sent, before expansion:
+	// expanded agent environment values may hold secrets.
+	audit := append([]zap.Field{zap.String("app_name", appName), zap.String("command", command)}, caller...)
 	wait, err := startPostStartHookCommand(argv)
 	if err != nil {
-		c.logger.Warn("Failed to start postStart agent hook",
-			zap.String("app_name", appName),
-			zap.Error(err),
-		)
+		c.logger.Warn("post-start host command not started", append(audit, zap.Error(err))...)
 		return false
 	}
+	c.logger.Info("post-start host command started", audit...)
 	go func() {
-		if err := wait(); err != nil {
-			c.logger.Warn("postStart agent hook exited with error",
-				zap.String("app_name", appName),
-				zap.Error(err),
-			)
+		err := wait()
+		code := 0
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		} else if err != nil {
+			code = -1
 		}
+		c.logger.Info("post-start host command exited", append(audit, zap.Int("exit_code", code), zap.Error(err))...)
 	}()
-	c.logger.Info("Started postStart agent hook",
-		zap.String("app_name", appName),
-	)
 	return true
 }
 

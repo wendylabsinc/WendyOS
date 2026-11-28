@@ -50,7 +50,7 @@ func (s *TunnelService) DatagramTunnel(stream agentpbv2.WendyTunnelService_Datag
 	// SECURITY: The established audit helper records the remote address,
 	// certificate serial, and parsed org/entity IDs when available. It never
 	// records certificate subjects, free-form caller input, or frame payloads.
-	s.logger.Info("device datagram tunnel accepted", clientAuditFields(stream.Context())...)
+	s.logger.Info("device datagram tunnel accepted", ClientAuditFields(stream.Context())...)
 	newDatagramRelay(s.logger, &deviceFrameStream{stream: stream}, datagramFlowIdleTimeout,
 		withDatagramFlowSlots(s.flowSlots)).run(stream.Context())
 	return nil
