@@ -1,6 +1,8 @@
 package camera
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,30 +46,55 @@ type USB struct {
 }
 
 // USBOf reads USB for /dev/<base> from sysfs: the node's device is the USB
-// interface, or for some drivers the USB device itself. A node that is not on
-// a USB device has none. The kernel has these attributes before it makes the
-// node, so they are there for whoever sees the node first.
-func USBOf(base string) USB {
+// interface, or for some drivers the USB device itself. A node whose device is
+// on no USB device has the zero USB and no error. An error says it could not
+// be read, which is not that: the node has no device link, as for IdentityOf,
+// or an attribute a USB device always has did not read, or the device went
+// while it was read. The serial is the one attribute a USB device may lack,
+// so one that is not found counts as none only when the device's vendor still
+// reads after it.
+func USBOf(base string) (USB, error) {
 	dir, err := filepath.EvalSymlinks(filepath.Join(sysfsRoot, base, "device"))
 	if err != nil {
-		return USB{}
+		return USB{}, err
 	}
 	for _, device := range []string{dir, filepath.Dir(dir)} {
-		vendor, err := readAttribute(filepath.Join(device, "idVendor"))
-		if err != nil {
+		vendor := filepath.Join(device, "idVendor")
+		usb := USB{}
+		if usb.Vendor, err = readAttribute(vendor); errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		usb := USB{Vendor: vendor}
-		usb.Product, _ = readAttribute(filepath.Join(device, "idProduct"))
-		usb.Serial, _ = readAttribute(filepath.Join(device, "serial"))
-		usb.Interface, _ = readAttribute(filepath.Join(dir, "bInterfaceNumber"))
-		return usb
+		if err != nil {
+			return USB{}, err
+		}
+		if usb.Product, err = readAttribute(filepath.Join(device, "idProduct")); err != nil {
+			return USB{}, err
+		}
+		if device != dir {
+			if usb.Interface, err = readAttribute(filepath.Join(dir, "bInterfaceNumber")); err != nil {
+				return USB{}, err
+			}
+		}
+		if usb.Serial, err = readAttribute(filepath.Join(device, "serial")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return USB{}, err
+		}
+		if _, err := readAttribute(vendor); err != nil {
+			return USB{}, err
+		}
+		return usb, nil
 	}
-	return USB{}
+	if _, err := os.Stat(dir); err != nil {
+		return USB{}, err
+	}
+	return USB{}, nil
 }
 
+// readFile reads a sysfs attribute. A seam: a device that goes while it is
+// read, and reads that fail for want of a descriptor, have no fixture.
+var readFile = os.ReadFile
+
 func readAttribute(path string) (string, error) {
-	b, err := os.ReadFile(path)
+	b, err := readFile(path)
 	if err != nil {
 		return "", err
 	}

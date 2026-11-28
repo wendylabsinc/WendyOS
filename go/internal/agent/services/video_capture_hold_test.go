@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -11,6 +13,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -203,6 +206,64 @@ func TestJoinHubForShare_ACaptureStartsOnlyOnceThePreviousOneHasClosedTheCamera(
 		device.close()
 		ownFrameFrom(t, second, "the reader that joined while the camera was closing")
 		device.servedByItsOwnCaptures(t, 2, pipeWireLookups)
+	})
+}
+
+// A reader opens its node while the camera's node is gone and its previous
+// capture is still closing it, and the camera is back by the time the capture
+// has it. The frames are numbered for the camera the capture has: on from the
+// ones before, not from 1 as for the path that named no camera when the hub
+// was made.
+func TestJoinHubForShare_ACaptureNumbersItsFramesForTheCameraItHas(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc, device, _ := exclusiveCamera(t)
+		base := filepath.Base(exclusiveCameraPath)
+		id := camera.Identity{Device: csPort("1-2.1"), Index: "0", Name: "Exclusive"}
+		var there atomic.Bool
+		there.Store(true)
+		svc.cameraIdentity = func(b string) (camera.Identity, error) {
+			if b != base || !there.Load() {
+				return camera.Identity{}, os.ErrNotExist
+			}
+			return id, nil
+		}
+		svc.presentCameras = func() map[string]camera.Identity {
+			if !there.Load() {
+				return nil
+			}
+			return map[string]camera.Identity{base: id}
+		}
+		svc.cameraUSB = nil
+
+		first := joinExclusiveCamera(t, svc, exclusiveCameraPath)
+		ownFrameFrom(t, first, "the first reader")
+		first.Leave()
+		synctest.Wait()
+		key := svc.sampleSeqKey(exclusiveCameraPath)
+		svc.mu.Lock()
+		numbered := svc.sampleSeqs[key].Load()
+		svc.mu.Unlock()
+		if numbered == 0 {
+			t.Fatal("the first capture numbered no frame")
+		}
+
+		there.Store(false)
+		second := joinExclusiveCamera(t, svc, exclusiveCameraPath)
+		time.Sleep(time.Second)
+		device.keptClosedToOthers(t, 1, second)
+		there.Store(true)
+		device.close()
+		select {
+		case frame, open := <-second.Frames():
+			if !open {
+				t.Fatalf("the second reader got no frame: its capture ended with: %v", second.Err())
+			}
+			if frame.sampleID != numbered+1 {
+				t.Fatalf("the camera's next frame is numbered %d, want %d: it numbered %d before", frame.sampleID, numbered+1, numbered)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the second reader got no frame within 5s")
+		}
 	})
 }
 

@@ -659,6 +659,8 @@ type deviceHub struct {
 	// sampleSeq is the per-camera sample counter, shared with every hub that
 	// has served the same camera (sampleSeqKey). It outlives the hub so sample
 	// identities stay monotonic across producer restarts within one episode.
+	// The hub's capture sets it again once it has the camera, before it
+	// produces a frame (captureSource).
 	sampleSeq *atomic.Uint64
 	// receipt is the service's receiptClock; nil stamps by data.CaptureReceipt.
 	receipt func() (before, midpoint, after int64, err error)
@@ -1373,8 +1375,9 @@ type VideoService struct {
 	// cameraUSB reads what a camera's USB device says of itself
 	// (camera.USBOf); nil reads nothing, so a service whose cameras a test
 	// describes does not read the machine's sysfs for them.
-	cameraUSB func(base string) camera.USB
-	// cameras names each camera for cameraIdentityKey.
+	cameraUSB func(base string) (camera.USB, error)
+	// cameras names each camera for cameraIdentityKey. Nothing else is locked
+	// while its lock is held.
 	cameras knownCameras
 }
 
@@ -2382,6 +2385,14 @@ func (s *VideoService) sampleSeqKey(hubKey string) string {
 	return s.cameraIdentityKey(hubKey)
 }
 
+// sampleSeqFor is the sample counter of what answers at hubKey now.
+func (s *VideoService) sampleSeqFor(hubKey string) *atomic.Uint64 {
+	key := s.sampleSeqKey(hubKey)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sampleSeqLocked(key)
+}
+
 // sampleSeqLocked returns the sample counter for a key (sampleSeqKey), creating
 // it on first use. Callers must hold s.mu. Counters are never removed: a
 // device that comes back must not restart identities a consumer has already
@@ -2472,6 +2483,9 @@ func (s *VideoService) captureSource(ctx context.Context, h *deviceHub, path str
 		return nil
 	}
 	defer release()
+	// The hub was made before the wait, when path may have named no camera or
+	// another one.
+	h.sampleSeq = s.sampleSeqFor(path)
 
 	broadcast := h.produceCaptured
 	// The hub key carries the source kind: network cameras key on "ip:<id>" and

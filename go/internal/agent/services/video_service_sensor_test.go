@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -368,7 +369,7 @@ func TestSampleIdentitiesOfCamerasThatShareAUdevNameStayApart(t *testing.T) {
 	right := csCamera{"video6", "C920", left.formats, camera.Identity{Device: csPort("1-2.4"), Index: "0", Name: "C920"}}
 	sameSerial := camera.USB{Vendor: "0c45", Product: "6366", Serial: "HD Pro Webcam C920", Interface: "00"}
 	h := newCSHarness(t, left, right)
-	h.s.cameraUSB = func(string) camera.USB { return sameSerial }
+	h.s.cameraUSB = func(string) (camera.USB, error) { return sameSerial, nil }
 	udev := h.udevNames()
 	installFakeProducers(h.s)
 	number := func(path string) uint64 {
@@ -389,15 +390,105 @@ func TestSampleIdentitiesOfCamerasThatShareAUdevNameStayApart(t *testing.T) {
 	}
 }
 
+// csTwinC920 is a second C920 that says of itself what csC920 does, on another
+// port.
+func csTwinC920() csCamera {
+	return csCamera{"video6", "C920", csC920().formats, camera.Identity{Device: csPort("1-2.4"), Index: "0", Name: "C920"}}
+}
+
+// sampleNumberAt joins the camera at path as a viewer does, numbers one frame
+// and leaves.
+func sampleNumberAt(t *testing.T, s *VideoService, path string) uint64 {
+	t.Helper()
+	hub, leave := viewerHub(t, s, path, &agentpb.StreamVideoRequest{})
+	defer leave()
+	return numberFrames(hub, 1)[0]
+}
+
+// Of two identical cameras plugged in together only one is used, and it is
+// unplugged before the other is used for the first time. The other was there
+// beside it all along: it is not the first one moved. It starts its own numbers
+// with nothing remembered against it, and the first has its own when it is back.
+func TestSampleIdentitiesOfACameraFirstUsedWhileItsTwinIsAwayAreItsOwn(t *testing.T) {
+	h := newCSHarness(t, csC920(), csTwinC920())
+	installFakeProducers(h.s)
+	failed := func(path string) bool {
+		_, failed := h.s.derivedFailures.recent(h.s.cameraIdentityKey(path))
+		return failed
+	}
+
+	if first, second := sampleNumberAt(t, h.s, "/dev/video4"), sampleNumberAt(t, h.s, "/dev/video4"); first != 1 || second != 2 {
+		t.Fatalf("sample IDs of the camera in use = %d and %d, want 1 and 2", first, second)
+	}
+	h.s.derivedFailures.remember(h.s.cameraIdentityKey("/dev/video4"), errDerivedFramesReordered.Error(), true)
+
+	h.takeOut("video4")
+	if got := sampleNumberAt(t, h.s, "/dev/video6"); got != 1 {
+		t.Errorf("the camera used for the first time is numbered %d, want its own 1", got)
+	}
+	if failed("/dev/video6") {
+		t.Error("the camera used for the first time has the other camera's failure")
+	}
+
+	h.putCameraAt("video4", csC920())
+	if got := sampleNumberAt(t, h.s, "/dev/video4"); got != 3 {
+		t.Errorf("the first camera, back on its port, is numbered %d, want it to go on at 3", got)
+	}
+	if !failed("/dev/video4") {
+		t.Error("the first camera, back on its port, has lost its failure")
+	}
+}
+
+// The one of two identical cameras that is in use moves to another port, twice,
+// while the other stays plugged in unused: its numbers go on each time.
+func TestSampleIdentitiesGoOnWhenACameraMovesBesideAnIdenticalOneThatIsNotUsed(t *testing.T) {
+	h := newCSHarness(t, csC920(), csTwinC920())
+	installFakeProducers(h.s)
+	if first, second := sampleNumberAt(t, h.s, "/dev/video4"), sampleNumberAt(t, h.s, "/dev/video4"); first != 1 || second != 2 {
+		t.Fatalf("sample IDs before the camera moved = %d and %d, want 1 and 2", first, second)
+	}
+	at := "video4"
+	for i, to := range []struct{ base, port string }{{"video0", "1-2.1"}, {"video2", "1-2.2"}} {
+		moved := csC920()
+		moved.id.Device = csPort(to.port)
+		h.takeOut(at)
+		h.putCameraAt(to.base, moved)
+		at = to.base
+		if got, want := sampleNumberAt(t, h.s, "/dev/"+at), uint64(3+i); got != want {
+			t.Fatalf("on port %s the camera is numbered %d, want it to go on at %d", to.port, got, want)
+		}
+	}
+}
+
+// A capture that starts while the camera's USB device cannot be read numbers
+// its frames on, as does the next one, when it can.
+func TestSampleIdentitiesGoOnWhenACamerasUSBDeviceCannotBeRead(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	var unreadable atomic.Bool
+	h.s.cameraUSB = func(string) (camera.USB, error) {
+		if unreadable.Load() {
+			return camera.USB{}, syscall.EMFILE
+		}
+		return camera.USB{Vendor: "046d", Product: "094c", Serial: "SN1", Interface: "00"}, nil
+	}
+	installFakeProducers(h.s)
+	for i, canRead := range []bool{true, true, false, false, true} {
+		unreadable.Store(!canRead)
+		if got, want := sampleNumberAt(t, h.s, "/dev/video0"), uint64(i+1); got != want {
+			t.Fatalf("capture %d (USB device read: %v) is numbered %d, want %d", i+1, canRead, got, want)
+		}
+	}
+}
+
 // A camera of the same model with another serial, plugged in where one was, is
 // another camera, and the first goes on with its own numbers on another port.
 func TestSampleIdentitiesOfACameraWithAnotherSerialOnTheSamePortAreItsOwn(t *testing.T) {
 	h := newCSHarness(t, csBrio())
 	serials := map[string]string{"video0": "SN1"}
-	h.s.cameraUSB = func(base string) camera.USB {
+	h.s.cameraUSB = func(base string) (camera.USB, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		return camera.USB{Vendor: "046d", Product: "094c", Serial: serials[base], Interface: "00"}
+		return camera.USB{Vendor: "046d", Product: "094c", Serial: serials[base], Interface: "00"}, nil
 	}
 	plug := func(base, serial string, c csCamera) {
 		h.mu.Lock()

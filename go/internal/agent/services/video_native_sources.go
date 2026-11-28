@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -315,97 +316,177 @@ type cameraSelf struct {
 	index, name string
 }
 
-// knownCameras holds the cameras seen since the agent started, each with the
-// port it was last at. It is filled from sysfs alone: udev names a camera some
-// time after the kernel has made its node, and a capture that starts in
-// between must find the same camera. Nothing else is locked while its lock is
-// held.
+// cameraNode is one camera node as sysfs has it now. unread: what its USB
+// device says could not be read, so usb is not known.
+type cameraNode struct {
+	id     camera.Identity
+	usb    camera.USB
+	unread bool
+}
+
+func (n cameraNode) self() cameraSelf {
+	return cameraSelf{usb: n.usb, index: n.id.Index, name: n.id.Name}
+}
+
+// knownCameras holds the cameras sysfs has shown since the agent started, each
+// with the port it was last at, and the camera last named at each path. udev's
+// names are not used: it names a camera some time after the kernel has made
+// its node, and a capture that starts in between must find the same camera.
 type knownCameras struct {
-	mu   sync.Mutex
-	seen []*knownCamera
+	mu     sync.Mutex
+	seen   []*knownCamera
+	lastAt map[string]*knownCamera
 }
 
 type knownCamera struct {
 	key  string
 	self cameraSelf
 	port string
-	// unsure: a camera of its kind appeared while this one was away and could
-	// not be told to be it, so this one is known again only at port.
-	unsure bool
+	// stray: nodes of its kind appeared while it was away and it could not be
+	// told which, if any, it was. It is known again at port only, and does
+	// not count among the cameras one that appears later may be.
+	stray bool
 }
 
 // cameraIdentityKey names the camera at path for what belongs to the camera
-// and not to the path or the port it is at this time, its failure memory and
-// its sample counter. A camera is known again by what it says of itself at the
-// port it was last at. At another port it is known again when it is the only
-// known camera of its kind that is away and the node is the only one of its
-// kind no known camera accounts for: cameras that say the same of themselves
-// are told apart by port and never cross. Any other camera is a new one, so
-// one that takes this path or port later starts clean. A node without a sysfs
-// identity is named by the path.
+// and not to its path or port: its failure memory and its sample counter. It
+// goes by what sysfs shows each time it is asked, which cannot tell a camera
+// without a serial of its own from an identical one found on its port, or on
+// another port with the first gone, since it last looked: such a camera goes
+// on with the first one's counter and failure memory. A node sysfs has no
+// camera for is named by its path.
 func (s *VideoService) cameraIdentityKey(path string) string {
 	base := filepath.Base(path)
 	id, err := s.identityOf(base)
-	if err != nil || id == (camera.Identity{}) {
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && id == (camera.Identity{})) {
 		return path
 	}
-	self := cameraSelf{usb: s.usbOf(base), index: id.Index, name: id.Name}
-	s.cameras.mu.Lock()
-	defer s.cameras.mu.Unlock()
-	var alike []*knownCamera
-	for _, known := range s.cameras.seen {
-		if known.self != self {
+	if err != nil {
+		return s.cameras.lastNamedAt(path)
+	}
+	present := s.presentIdentities()
+	nodes := make([]cameraNode, 0, len(present)+1)
+	for other, otherID := range present {
+		if other != base {
+			nodes = append(nodes, s.cameraNode(other, otherID))
+		}
+	}
+	own := s.cameraNode(base, id)
+	return s.cameras.name(path, own, append(nodes, own))
+}
+
+func (s *VideoService) cameraNode(base string, id camera.Identity) cameraNode {
+	if s.cameraUSB == nil {
+		return cameraNode{id: id}
+	}
+	usb, err := s.cameraUSB(base)
+	return cameraNode{id: id, usb: usb, unread: err != nil}
+}
+
+// name is the key of the camera at path, which is own, one of the nodes
+// present. A node that cannot be read is no new camera: it is the camera last
+// named at path if that one was at its port, else the only known camera there.
+// present was listed before the lock was taken, so two listings can be seen
+// out of order; the next one puts the ports right, and no key changes.
+func (k *knownCameras) name(path string, own cameraNode, present []cameraNode) string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.see(present)
+	var named *knownCamera
+	if !own.unread {
+		named = k.at(own.id, func(known *knownCamera) bool { return known.self == own.self() })
+	} else if last := k.lastAt[path]; last != nil && last.sits(own.id) {
+		named = last
+	} else {
+		named = k.at(own.id, func(*knownCamera) bool { return true })
+	}
+	if named == nil {
+		return path
+	}
+	if k.lastAt == nil {
+		k.lastAt = make(map[string]*knownCamera)
+	}
+	k.lastAt[path] = named
+	return named.key
+}
+
+// lastNamedAt is the key for a node whose identity cannot be read now.
+func (k *knownCameras) lastNamedAt(path string) string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if last := k.lastAt[path]; last != nil {
+		return last.key
+	}
+	return path
+}
+
+func (c *knownCamera) sits(id camera.Identity) bool {
+	return c.port == id.Device && c.self.index == id.Index && c.self.name == id.Name
+}
+
+// at is the known camera at id's port with id's index and name that is one of
+// those asked for, or nil when there is none or more than one.
+func (k *knownCameras) at(id camera.Identity, asked func(*knownCamera) bool) *knownCamera {
+	var found *knownCamera
+	for _, known := range k.seen {
+		if !known.sits(id) || !asked(known) {
 			continue
 		}
-		if known.port == id.Device {
-			known.unsure = false
-			return known.key
+		if found != nil {
+			return nil
 		}
-		alike = append(alike, known)
+		found = known
 	}
-	if moved := s.movedCamera(alike, self, id.Device); moved != nil {
-		moved.port = id.Device
-		return moved.key
-	}
-	found := &knownCamera{key: fmt.Sprintf("camera\x00%d", len(s.cameras.seen)), self: self, port: id.Device}
-	s.cameras.seen = append(s.cameras.seen, found)
-	return found.key
+	return found
 }
 
-// movedCamera is the one of alike, the known cameras that say self of
-// themselves, that the camera now at port is, or nil.
-func (s *VideoService) movedCamera(alike []*knownCamera, self cameraSelf, port string) *knownCamera {
-	if len(alike) == 0 {
-		return nil
+// see brings the known cameras up to the nodes present. A camera whose kind
+// has a node at its port is there. A node at a port no known camera of its
+// kind is at is the one camera of that kind that is away, when there is one
+// such node and one such camera; otherwise each such node is a new camera and
+// the ones away are strays. A camera at the port of a node that cannot be
+// read stays where it is.
+func (k *knownCameras) see(present []cameraNode) {
+	unclaimed := map[cameraSelf]map[string]bool{}
+	unread := map[camera.Identity]bool{}
+	for _, node := range present {
+		if node.unread {
+			unread[node.id] = true
+			continue
+		}
+		if unclaimed[node.self()] == nil {
+			unclaimed[node.self()] = map[string]bool{}
+		}
+		unclaimed[node.self()][node.id.Device] = true
 	}
-	unclaimed := map[string]bool{port: true}
-	for base, id := range s.presentIdentities() {
-		if id.Index == self.index && id.Name == self.name && s.usbOf(base) == self.usb {
-			unclaimed[id.Device] = true
+	away := map[cameraSelf][]*knownCamera{}
+	for _, known := range k.seen {
+		switch {
+		case unclaimed[known.self][known.port]:
+			delete(unclaimed[known.self], known.port)
+			known.stray = false
+		case unread[camera.Identity{Device: known.port, Index: known.self.index, Name: known.self.name}]:
+		case !known.stray:
+			away[known.self] = append(away[known.self], known)
 		}
 	}
-	var away []*knownCamera
-	for _, known := range alike {
-		if unclaimed[known.port] {
-			delete(unclaimed, known.port)
-		} else {
-			away = append(away, known)
+	for self, ports := range unclaimed {
+		if len(ports) == 0 {
+			continue
+		}
+		if len(ports) == 1 && len(away[self]) == 1 {
+			for port := range ports {
+				away[self][0].port = port
+			}
+			continue
+		}
+		for _, known := range away[self] {
+			known.stray = true
+		}
+		for port := range ports {
+			k.seen = append(k.seen, &knownCamera{key: fmt.Sprintf("camera\x00%d", len(k.seen)), self: self, port: port})
 		}
 	}
-	if len(away) == 1 && len(unclaimed) == 1 && !away[0].unsure {
-		return away[0]
-	}
-	for _, known := range away {
-		known.unsure = true
-	}
-	return nil
-}
-
-func (s *VideoService) usbOf(base string) camera.USB {
-	if s.cameraUSB == nil {
-		return camera.USB{}
-	}
-	return s.cameraUSB(base)
 }
 
 func (s *VideoService) sourceRefusalKey(path, format string) string {
