@@ -2106,6 +2106,7 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 		explicitHolder = origin
 	}
 	seqKey := s.sampleSeqKey(path)
+	start := s.atSharedSize(path, req)
 	for retries := 0; ; retries++ {
 		if retries >= maxHubRetries {
 			s.logger.Warn("hub retry limit exceeded", zap.String("device", path), zap.Int("retries", retries))
@@ -2171,9 +2172,9 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 		ctx:       hctx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
-		width:     req.GetWidth(),
-		height:    req.GetHeight(),
-		framerate: req.GetFramerate(),
+		width:     start.GetWidth(),
+		height:    start.GetHeight(),
+		framerate: start.GetFramerate(),
 		sampleSeq: s.sampleSeqLocked(seqKey),
 		receipt:   s.receiptClock,
 	}
@@ -2183,7 +2184,7 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 	s.hubs[path] = h
 	s.mu.Unlock()
 
-	s.startProducer(hctx, h, path, req)
+	s.startProducer(hctx, h, path, start)
 	return h, id, ch, nil
 }
 
@@ -2271,9 +2272,10 @@ func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *a
 	}
 	if !streamRequestAssertsParams(req) {
 		hub, id, ch, width, height, framerate, err = s.joinHubReportingParams(ctx, key, req, kind, preset)
-		if err == nil && admitted != nil && width == 0 && height == 0 && framerate == 0 {
+		if err == nil && admitted != nil && framerate == 0 && ((width == 0 && height == 0) || (width == admitted.Width && height == admitted.Height)) {
 			// A shared camera's defaults are its shared mode, which is what this
-			// capture asked for; reporting 0x0@0 would note a mismatch that is not.
+			// capture asked for; reporting 0x0@0, or the stated size its hub was
+			// started at without a rate, would note a mismatch that is not.
 			width, height, framerate = admitted.Width, admitted.Height, admitted.FPS
 		}
 		return hub, id, ch, width, height, framerate, false, err

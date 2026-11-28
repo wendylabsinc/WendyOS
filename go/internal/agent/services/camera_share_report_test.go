@@ -32,7 +32,9 @@ func TestCameraShareReport_NamesModeAppsAndStates(t *testing.T) {
 		"share_mode":               h.s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels).Mode.String(),
 		"share_unavailable_native": sfCannotDerive,
 		"share_unavailable_h264":   sfCannotDerive,
+		"share_sizes_unavailable":  sfCannotDerive,
 		"shared_with":              "cv-a, cv-b, cv-c",
+		"shared_size":              "1280x720@30",
 		"stable_id":                "",
 		"share_state":              "cv-a [format pixels, stamp time] (reading), cv-b [format pixels, stamp time] (waiting: held by cv-x at 1920x1080), cv-c [format pixels, stamp time] (not sharing: took the real camera after a replug)",
 	}
@@ -204,6 +206,7 @@ func TestCameraShareReport_NamesTheSoftwareEncoderOfACamerasH264(t *testing.T) {
 			"share_mode":          "1280x720 YUYV, 30 fps",
 			"share_mode_native":   "1280x720 MJPG, 30 fps",
 			"share_mode_h264":     h264Mode,
+			"share_sizes":         "640x480@30, 1280x720@30, 1920x1080@30",
 			"h264_encoder":        "x264enc (software)",
 			"h264_default_preset": "ultrafast",
 			"stable_id":           "",

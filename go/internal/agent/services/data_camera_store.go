@@ -76,7 +76,7 @@ func (s *VideoService) ownFramesForecast(hubKey string, req *agentpb.StreamVideo
 			return ownFrames{}, "", false, false
 		}
 	}
-	own, declined, native = s.ownFramesFor(hubKey, req)
+	own, declined, native = s.ownFramesFor(hubKey, s.atSharedSize(hubKey, req))
 	return own, declined, native, true
 }
 

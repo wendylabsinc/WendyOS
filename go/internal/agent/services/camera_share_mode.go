@@ -6,6 +6,10 @@ package services
 // explicit request is refused with a message that names the mode. A share
 // node's own capture joins the hub through joinHubForShare, which ends a
 // viewer holding another mode and waits for a recording holding one.
+//
+// The shared mode is what a capture that names no parameters runs at. A
+// camera shared at a size an entitlement states is started at that size by
+// whoever starts it without parameters (atSharedSize), so that stays true.
 
 import (
 	"context"
@@ -105,8 +109,8 @@ type shareContainer struct {
 }
 
 // shareRecord is one camera shared with one container through one node.
-// cameraName, mode, stamp, askedFormat and askedWhyNot never change once the
-// record is stored. Everything else
+// cameraName, mode, sized, stamp, askedFormat, askedWhyNot, askedSize and
+// askedSizeWhyNot never change once the record is stored. Everything else
 // is guarded by cameraShares.mu: cameraPath follows the camera, and
 // cameraAbsent says its last resolve did not find it; camera moves to the
 // camera's new port when it is followed there; node and nodeMade change when
@@ -123,7 +127,10 @@ type shareRecord struct {
 	// different camera that takes the path does not inherit them.
 	cameraAbsent bool
 	mode         sharedMode
-	stamp        string
+	// sized says the camera is captured at the mode's size because an app's
+	// entitlement states it. Every record of one camera agrees on it.
+	sized bool
+	stamp string
 	// preset is what the app states for the encoder of its h264 node; unset
 	// for a node of another format.
 	preset appconfig.EncodePreset
@@ -131,8 +138,12 @@ type shareRecord struct {
 	// camera could not be declared in it and the node serves another format
 	// instead; askedWhyNot is why it could not. Both are empty otherwise.
 	askedFormat, askedWhyNot string
-	node                     int
-	camera                   camera.Identity
+	// askedSize is the size the app's entitlement states when the node is made
+	// at another one, and askedSizeWhyNot is why. Both are empty otherwise.
+	askedSize       appconfig.CameraSize
+	askedSizeWhyNot string
+	node            int
+	camera          camera.Identity
 	// siblings are the ports (Identity.Device) of cameras of the same name and
 	// index seen present while this record's camera was present too, sorted.
 	// A camera on one of them is another camera, so the record never follows
@@ -195,31 +206,84 @@ const shareRestartCause = "an app started sharing the camera, so its producer re
 // path); the records are resolved on every camera node that appears, on every
 // pump join, by every sync and by the camera listing.
 func (s *VideoService) sharedModeOf(path string) (mode sharedMode, apps []string, ok bool) {
+	capture, ok := s.sharedCaptureOf(path, "")
+	return capture.mode, capture.apps, ok
+}
+
+// sharedCapture is how the camera at a path is captured for the containers
+// that share it: at mode's size and rate, and sized when that size is one an
+// entitlement states.
+type sharedCapture struct {
+	mode  sharedMode
+	sized bool
+	apps  []string
+}
+
+// size is the size the camera's capture is asked for.
+func (c sharedCapture) size() appconfig.CameraSize {
+	if !c.sized {
+		return noSize
+	}
+	return c.mode.size()
+}
+
+// sharedCaptureOf is sharedModeOf with how the camera is captured, counting
+// the records of every container but except.
+func (s *VideoService) sharedCaptureOf(path, except string) (sharedCapture, bool) {
 	s.shares.mu.Lock()
 	defer s.shares.mu.Unlock()
-	modes := make(map[string]sharedMode)
+	return s.sharedCaptureLocked(path, except)
+}
+
+// sharedCaptureLocked is sharedCaptureOf for callers that hold s.shares.mu.
+func (s *VideoService) sharedCaptureLocked(path, except string) (sharedCapture, bool) {
+	records := make(map[string]*shareRecord)
 	for id, c := range s.shares.containers {
-		if c == nil {
+		if c == nil || id == except {
 			continue
 		}
 		for _, r := range c.shares {
 			if r != nil && r.cameraPath == path && !r.cameraAbsent {
-				modes[id] = r.mode
+				records[id] = r
 				break
 			}
 		}
 	}
-	if len(modes) == 0 {
-		return sharedMode{}, nil, false
+	if len(records) == 0 {
+		return sharedCapture{}, false
 	}
-	for id := range modes {
+	var apps []string
+	for id := range records {
 		apps = append(apps, id)
 	}
 	slices.Sort(apps)
 	// Records of one camera can differ in format; their size and rate, which
 	// is all the rules compare, are the camera's. Taking the first container's
 	// keeps the answer deterministic.
-	return modes[apps[0]], apps, true
+	first := records[apps[0]]
+	return sharedCapture{mode: first.mode, sized: first.sized, apps: apps}, true
+}
+
+// startRequest is the request the camera's capture is started with for req:
+// req itself, unless it names no size or rate and the camera is shared at a
+// size an entitlement states, which is then the size.
+func (c sharedCapture) startRequest(req *agentpb.StreamVideoRequest) *agentpb.StreamVideoRequest {
+	if !c.sized || !requestsDeviceDefault(req) {
+		return req
+	}
+	out := &agentpb.StreamVideoRequest{}
+	if req != nil {
+		out = proto.Clone(req).(*agentpb.StreamVideoRequest)
+	}
+	out.Width, out.Height = c.mode.Width, c.mode.Height
+	return out
+}
+
+// atSharedSize is the request the capture of the camera at path is started
+// with for req (sharedCapture.startRequest).
+func (s *VideoService) atSharedSize(path string, req *agentpb.StreamVideoRequest) *agentpb.StreamVideoRequest {
+	capture, _ := s.sharedCaptureOf(path, "")
+	return capture.startRequest(req)
 }
 
 // withoutStreamParams returns a copy of req with no width, height or
@@ -270,9 +334,21 @@ func (s *VideoService) applySharedModeToCapture(path string, req *agentpb.Stream
 // runsAtSharedMode reports whether a hub's producer runs at mode: whatever the
 // hub's request named, the mode admits, exactly as applySharedMode admits a
 // viewer's. A hub at defaults runs at the shared mode, which is the camera's
-// default mode; so does one a viewer started with only --fps 30.
-func runsAtSharedMode(h *deviceHub, mode sharedMode) bool {
+// default mode; so does one a viewer started with only --fps 30. A camera
+// shared at a stated size runs at its shared mode only on a hub started at
+// that size.
+func runsAtSharedMode(h *deviceHub, mode sharedMode, size appconfig.CameraSize) bool {
+	if size != noSize && (h.width != size.Width || h.height != size.Height) {
+		return false
+	}
 	return mode.admits(&agentpb.StreamVideoRequest{Width: h.width, Height: h.height, Framerate: h.framerate})
+}
+
+// sharedSizeOf is the size the capture of the camera at path is asked for
+// while containers share it, and noSize when its capture chooses.
+func (s *VideoService) sharedSizeOf(path string) appconfig.CameraSize {
+	capture, _ := s.sharedCaptureOf(path, "")
+	return capture.size()
 }
 
 // heldByCaptureLocked reports whether any current subscriber is an episode
@@ -348,14 +424,15 @@ func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID u
 		return nil, status.Errorf(codes.Internal, "camera share has no subscription for format %q", mode.Format)
 	}
 	req := &agentpb.StreamVideoRequest{DeviceId: devID}
+	size := s.sharedSizeOf(path)
 	for attempt := 0; attempt < maxHubRetries; attempt++ {
 		h, id, ch, err := s.getOrCreateHubKind(ctx, path, req, hubHolderStreamClient, kind, preset)
 		switch {
-		case err == nil && runsAtSharedMode(h, mode):
+		case err == nil && runsAtSharedMode(h, mode, size):
 			return &hubShareSubscription{hub: h, id: id, ch: ch}, nil
 		case err == nil:
 			h.unsubscribe(id)
-		case hubLacksFramesFor(err) && s.liveHubAtOtherMode(path, mode):
+		case hubLacksFramesFor(err) && s.liveHubAtOtherMode(path, mode, size):
 			// The producer has none of the node's frames at the mode a viewer
 			// chose: no decoded tap at a size MJPEG does not cover, say, or
 			// no whole frames of the camera's own. The shared mode has them
@@ -380,11 +457,11 @@ func (s *VideoService) joinHubForShare(ctx context.Context, path string, devID u
 
 // liveHubAtOtherMode reports whether a live hub for path runs at a mode the
 // shared mode does not admit.
-func (s *VideoService) liveHubAtOtherMode(path string, mode sharedMode) bool {
+func (s *VideoService) liveHubAtOtherMode(path string, mode sharedMode, size appconfig.CameraSize) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, ok := s.hubs[path]
-	return ok && h.ctx.Err() == nil && !runsAtSharedMode(h, mode)
+	return ok && h.ctx.Err() == nil && !runsAtSharedMode(h, mode, size)
 }
 
 // takeOverHubForShare is takeOverDefaultedHub with the roles swapped: the
@@ -394,7 +471,9 @@ func (s *VideoService) liveHubAtOtherMode(path string, mode sharedMode) bool {
 // under s.mu and the old hub's mu, so no recording can join between them.
 func (s *VideoService) takeOverHubForShare(path string, req *agentpb.StreamVideoRequest, mode sharedMode, kind frameKind, preset appconfig.EncodePreset) (sub shareSubscription, retry bool, err error) {
 	// Read before s.mu: the share records have their own lock, never nested.
-	_, apps, _ := s.sharedModeOf(path)
+	capture, _ := s.sharedCaptureOf(path, "")
+	apps, size := capture.apps, capture.size()
+	req = capture.startRequest(req)
 	seqKey := s.sampleSeqKey(path)
 	ended := status.Errorf(codes.InvalidArgument,
 		"video stream ended: camera %s is now shared with %s and runs only at its shared mode, %s; reconnect without a size or rate",
@@ -402,7 +481,7 @@ func (s *VideoService) takeOverHubForShare(path string, req *agentpb.StreamVideo
 
 	s.mu.Lock()
 	old, exists := s.hubs[path]
-	if !exists || old.ctx.Err() != nil || runsAtSharedMode(old, mode) {
+	if !exists || old.ctx.Err() != nil || runsAtSharedMode(old, mode, size) {
 		s.mu.Unlock()
 		return nil, true, nil
 	}
@@ -428,6 +507,8 @@ func (s *VideoService) takeOverHubForShare(path string, req *agentpb.StreamVideo
 		ctx:       hctx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
+		width:     req.GetWidth(),
+		height:    req.GetHeight(),
 		sampleSeq: s.sampleSeqLocked(seqKey),
 		receipt:   s.receiptClock,
 	}

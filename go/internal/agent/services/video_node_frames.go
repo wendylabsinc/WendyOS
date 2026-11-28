@@ -1,16 +1,20 @@
 package services
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/camerashare"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
-// nodeFrames is what a capture of a camera that names no parameters has for
-// camera nodes: the camera's own frames, whole, and pictures. A camera type
-// that captures differently changes what this reports, and no node code.
+// nodeFrames is what a capture of a camera has for camera nodes: the camera's
+// own frames, whole, and pictures. A camera type that captures differently
+// changes what this reports, and no node code.
 type nodeFrames struct {
 	// refused is why no capture of this camera feeds a node.
 	refused string
@@ -64,9 +68,61 @@ func (s *VideoService) notCapturedForNodes(dev *agentpb.VideoDevice) string {
 	return ""
 }
 
-// framesForNodes asks the capture sources what a camera has for nodes. It
-// captures nothing.
-func (s *VideoService) framesForNodes(dev *agentpb.VideoDevice) nodeFrames {
+// noSize asks a camera's capture for no size: the capture chooses one.
+var noSize = appconfig.CameraSize{}
+
+const ownFramesNotWholeAt = "the camera's own frames are not captured whole at %s: %s"
+
+// ownFramesAt is what a capture asked for size hands on of the camera's own
+// frames, or why it hands on none whole. Only a capture that does serves a
+// size an entitlement states.
+func (s *VideoService) ownFramesAt(path string, size appconfig.CameraSize) (own ownFrames, whyNot string) {
+	own, declined, native := s.ownFramesFor(path, &agentpb.StreamVideoRequest{Width: size.Width, Height: size.Height})
+	if !native || declined != "" {
+		return ownFrames{}, fmt.Sprintf(ownFramesNotWholeAt, size, declined)
+	}
+	return own, ""
+}
+
+// ownFrameSizes lists the sizes the camera offers its own frames of codec in.
+func ownFrameSizes(path string, codec agentpb.VideoCodec) [][2]uint32 {
+	return enumerateRawFrameSizes(path, compressedNodeFormats[codec].v4l2)
+}
+
+// statableSizes lists the sizes an entitlement can state for the camera's
+// node, smallest first, each with the rate its capture runs at there, or says
+// why none can be stated.
+func (s *VideoService) statableSizes(dev *agentpb.VideoDevice) (sizes []camerashare.SizeAtRate, whyNone string) {
+	chosen, declined, native := s.ownFramesFor(dev.GetPath(), &agentpb.StreamVideoRequest{})
+	if !native || declined != "" {
+		return nil, fmt.Sprintf(ownFramesNotWhole, declined)
+	}
+	for _, listed := range ownFrameSizes(dev.GetPath(), chosen.codec) {
+		own, whyNot := s.ownFramesAt(dev.GetPath(), appconfig.CameraSize{Width: listed[0], Height: listed[1]})
+		if whyNot != "" {
+			continue
+		}
+		size := camerashare.SizeAtRate{Width: listed[0], Height: listed[1], FPS: own.framerate}
+		if size.FPS == 0 {
+			size.FPS = defaultSharedFPS
+		}
+		if !slices.Contains(sizes, size) {
+			sizes = append(sizes, size)
+		}
+	}
+	if len(sizes) == 0 {
+		return nil, "the camera lists no size its own frames are captured whole at"
+	}
+	slices.SortFunc(sizes, func(a, b camerashare.SizeAtRate) int {
+		return cmp.Or(cmp.Compare(uint64(a.Width)*uint64(a.Height), uint64(b.Width)*uint64(b.Height)), cmp.Compare(a.Width, b.Width))
+	})
+	return sizes, ""
+}
+
+// framesForNodes asks the capture sources what a camera captured at size, or
+// at the size its capture chooses for noSize, has for nodes. It captures
+// nothing.
+func (s *VideoService) framesForNodes(dev *agentpb.VideoDevice, size appconfig.CameraSize) nodeFrames {
 	if refused := s.notCapturedForNodes(dev); refused != "" {
 		return nodeFrames{refused: refused}
 	}
@@ -75,7 +131,18 @@ func (s *VideoService) framesForNodes(dev *agentpb.VideoDevice) nodeFrames {
 		return nodeFrames{refused: "GStreamer is not installed on this device"}
 	}
 	var frames nodeFrames
-	frames.own, frames.ownDeclined, frames.native = s.ownFramesFor(dev.GetPath(), &agentpb.StreamVideoRequest{})
+	if size == noSize {
+		frames.own, frames.ownDeclined, frames.native = s.ownFramesFor(dev.GetPath(), &agentpb.StreamVideoRequest{})
+	} else {
+		own, whyNot := s.ownFramesAt(dev.GetPath(), size)
+		if whyNot == "" && !slices.Contains(ownFrameSizes(dev.GetPath(), own.codec), [2]uint32{size.Width, size.Height}) {
+			whyNot = fmt.Sprintf("the camera lists no %s at %s", compressedNodeFormats[own.codec].name, size)
+		}
+		if whyNot != "" {
+			return nodeFrames{refused: whyNot}
+		}
+		frames.own, frames.native = own, true
+	}
 	switch {
 	case !frames.native:
 		frames.pictures, frames.pictureRate, frames.picturesWhyNot = tappedPictures(dev.GetPath(), gstPath, available)

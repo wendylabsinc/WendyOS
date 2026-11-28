@@ -51,6 +51,15 @@ func describeShareSettings(format, stamp string) string {
 	return fmt.Sprintf("format %s, stamp %s", format, stamp)
 }
 
+// describeStatedSize names the size of a node whose camera is captured at a
+// size an entitlement states.
+func describeStatedSize(mode sharedMode, sized bool) string {
+	if !sized {
+		return ""
+	}
+	return ", size " + mode.size().String()
+}
+
 func describeStatedPreset(preset appconfig.EncodePreset) string {
 	if preset == noPreset {
 		return ""
@@ -59,6 +68,10 @@ func describeStatedPreset(preset appconfig.EncodePreset) string {
 }
 
 func (m sharedMode) frameBytes() int { return int(m.BytesPerLine) * int(m.Height) }
+
+func (m sharedMode) size() appconfig.CameraSize {
+	return appconfig.CameraSize{Width: m.Width, Height: m.Height}
+}
 
 func (m sharedMode) compressed() bool { return m.MaxFrameBytes > 0 }
 
@@ -154,7 +167,10 @@ func (m sharedMode) admits(req *agentpb.StreamVideoRequest) bool {
 // for a node that carries what the camera produces, for pictures, and for an
 // encoder not known to be software. PresetIgnored is why a preset stated for
 // an h264 node is not applied, and is empty for an h264 node whose encoder
-// takes one and for a node of another format.
+// takes one and for a node of another format. Sized says the camera is
+// captured at Mode's size because an app's entitlement states it, where a
+// capture that names no size chooses another. AskedSize is set when the node
+// is made at another size than its app states, and AskedSizeWhyNot says why.
 type shareDecision struct {
 	Shared                   bool
 	Mode                     sharedMode
@@ -162,6 +178,9 @@ type shareDecision struct {
 	AskedFormat, AskedWhyNot string
 	SoftwareEncoder          string
 	PresetIgnored            string
+	Sized                    bool
+	AskedSize                appconfig.CameraSize
+	AskedSizeWhyNot          string
 }
 
 // describePresetWhenRead says at which preset an encoder that takes one will
@@ -243,8 +262,14 @@ const defaultSharedFPS = 30
 // (appconfig.CameraFormatsServedFor). A camera with no mode at all gives the
 // reason it has no pictures.
 func (s *VideoService) shareDecisionFor(_ context.Context, dev *agentpb.VideoDevice, format string) shareDecision {
+	return s.shareDecisionAt(dev, noSize, format)
+}
+
+// shareDecisionAt is shareDecisionFor with the camera captured at size, or at
+// the size its capture chooses for noSize.
+func (s *VideoService) shareDecisionAt(dev *agentpb.VideoDevice, size appconfig.CameraSize, format string) shareDecision {
 	candidates := appconfig.CameraFormatsServedFor(format)
-	decisions := s.shareDecisionsFor(dev, candidates...)
+	decisions := s.shareDecisionsAt(dev, size, candidates...)
 	for _, served := range candidates {
 		decision := decisions[served]
 		if !decision.Shared {
@@ -262,6 +287,10 @@ func (s *VideoService) shareDecisionFor(_ context.Context, dev *agentpb.VideoDev
 // served instead. What the camera has for a node is the capture's to say
 // (framesForNodes); this only declares a mode for it.
 func (s *VideoService) shareDecisionsFor(dev *agentpb.VideoDevice, formats ...string) map[string]shareDecision {
+	return s.shareDecisionsAt(dev, noSize, formats...)
+}
+
+func (s *VideoService) shareDecisionsAt(dev *agentpb.VideoDevice, size appconfig.CameraSize, formats ...string) map[string]shareDecision {
 	decisions := make(map[string]shareDecision, len(formats))
 	if s.loopback == nil || s.loopback.Available() != nil {
 		for _, format := range formats {
@@ -269,11 +298,39 @@ func (s *VideoService) shareDecisionsFor(dev *agentpb.VideoDevice, formats ...st
 		}
 		return decisions
 	}
-	frames := s.framesForNodes(dev)
+	frames := s.framesForNodes(dev, size)
 	for _, format := range formats {
-		decisions[format] = shareDecisionOf(frames, format).namingSoftwareEncoderOf(frames).sayingWhyAPresetIsIgnoredOf(frames)
+		decision := shareDecisionOf(frames, format).namingSoftwareEncoderOf(frames).sayingWhyAPresetIsIgnoredOf(frames)
+		decision.Sized = decision.Shared && size != noSize
+		decisions[format] = decision
 	}
 	return decisions
+}
+
+// shareDecisionStating is shareDecisionFor for an app whose entitlement
+// states a size for the camera's node, or none. A camera is captured at one
+// size: while other containers share it, held is how, and the node is made
+// at that size whatever the app states. Otherwise a stated size the camera
+// is captured at is the node's, and one it is not captured at leaves the node
+// at the size a capture chooses.
+func (s *VideoService) shareDecisionStating(dev *agentpb.VideoDevice, format string, stated appconfig.CameraSize, held *sharedCapture) shareDecision {
+	if held != nil {
+		decision := s.shareDecisionAt(dev, held.size(), format)
+		if at := held.mode.size(); decision.Shared && stated != noSize && stated != at {
+			decision.AskedSize, decision.AskedSizeWhyNot = stated, camerashare.SizeSharedWith(held.apps, at.String())
+		}
+		return decision
+	}
+	chosen := s.shareDecisionAt(dev, noSize, format)
+	if stated == noSize || !chosen.Shared || chosen.Mode.size() == stated {
+		return chosen
+	}
+	sized := s.shareDecisionAt(dev, stated, format)
+	if sized.Shared {
+		return sized
+	}
+	chosen.AskedSize, chosen.AskedSizeWhyNot = stated, sized.Reason
+	return chosen
 }
 
 // namingSoftwareEncoderOf is the decision with the software element that
@@ -331,7 +388,7 @@ var shareFormatCodecs = map[string]agentpb.VideoCodec{
 // parameters hands them on whole, or why it hands on none. native says a
 // native source captures the camera either way.
 func (s *VideoService) ownFramesAtDefaults(path string) (own ownFrames, declined string, native bool) {
-	return s.ownFramesFor(path, &agentpb.StreamVideoRequest{})
+	return s.ownFramesFor(path, s.atSharedSize(path, &agentpb.StreamVideoRequest{}))
 }
 
 // Why a node gets no frames from a camera that is captured. Each says what

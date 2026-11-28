@@ -428,7 +428,7 @@ func TestRemoveShareNode_AnEntryThatCannotBeMadeAgainIsLogged(t *testing.T) {
 // and never written over; this agent's shares live in memory.
 func TestCameraShareState_ANewerVersionIsLeftInPlace(t *testing.T) {
 	h := newCSHarness(t, csBrio())
-	newer := `{"version":3,"containers":{"cv-x":{"app":"sh.wendy.cv-x","shares":[]}},"somethingNew":true}`
+	newer := `{"version":4,"containers":{"cv-x":{"app":"sh.wendy.cv-x","shares":[]}},"somethingNew":true}`
 	h.writeState(newer)
 	h.s.loadCameraShares()
 	if ids := h.containerIDs(); len(ids) != 0 {
@@ -437,7 +437,7 @@ func TestCameraShareState_ANewerVersionIsLeftInPlace(t *testing.T) {
 	if _, err := os.Stat(cameraSharesPath + ".corrupt"); !os.IsNotExist(err) {
 		t.Fatalf("the newer file was set aside as corrupt: %v", err)
 	}
-	if n := h.logged("is version 3, written by a newer agent; this agent reads version 2"); n != 1 {
+	if n := h.logged("is version 4, written by a newer agent; this agent reads version 3"); n != 1 {
 		t.Fatalf("version line logged %d times; logs: %v", n, h.logs.All())
 	}
 
