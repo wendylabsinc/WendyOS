@@ -386,6 +386,31 @@ func TestCreateCameraSharesPassesThePresetAnEntryStates(t *testing.T) {
 	}
 }
 
+// The size an entry states travels in the container's label too, so the share
+// manager makes the camera's node at it.
+func TestCreateCameraSharesPassesTheSizeAnEntryStates(t *testing.T) {
+	fake := &fakeCameraShares{}
+	c := &Client{logger: zap.NewNop()}
+	c.SetCameraShareProvider(fake)
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"Brio 101"}, Size: "1920x1080"},
+		{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}},
+	}
+	labels := wendyLabels("app", "", "1.0.0", nil, entitlements, "", nil)
+	addCameraShareLabel(labels, entitlements)
+	c.createCameraShares(context.Background(), "app", "app", labels)
+
+	got := fake.createdWith("app")
+	for camera, want := range map[appconfig.CameraIdentity]appconfig.CameraSize{
+		{Path: "/dev/video2", Name: "Brio 101"}: {Width: 1920, Height: 1080},
+		{Path: "/dev/video0", Name: "C920"}:     {},
+	} {
+		if size := appconfig.CameraNodeSize(got, camera); size != want {
+			t.Errorf("%+v: the passed entitlements state size %q, want %q", camera, size, want)
+		}
+	}
+}
+
 // The label values here are the ones the deploy path's tests hold a service's
 // container to (TestMultiServiceCreateConfig_KeepsAppAndServiceCameraEntriesWithTheirSettings
 // and TestApplyComposeCompanion in the command line's package). The agent
