@@ -983,7 +983,7 @@ func (s *VideoService) storeShare(containerID, appID string, r *shareRecord, nod
 	case creation != nil && creation.removed:
 		return nil, shareRefusedRemoved
 	}
-	if held, shared := s.sharedCaptureLocked(r.cameraPath, containerID); shared && (held.sized != r.sized || held.mode.size() != r.mode.size()) {
+	if held, shared := s.sharedCaptureLocked(r.cameraPath, containerID); shared && held.size() != r.captureSize() {
 		return nil, shareSizeTaken
 	}
 	if s.shares.containers == nil {
@@ -1644,11 +1644,7 @@ func (s *VideoService) checkAdoptedMode(ctx context.Context, containerID string,
 	if dev == nil {
 		return
 	}
-	size := noSize
-	if r.sized {
-		size = r.mode.size()
-	}
-	decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionsAt(dev, size, r.mode.Format)[r.mode.Format] })
+	decision, ok := withinBudget(ctx, func() shareDecision { return s.shareDecisionsAt(dev, r.captureSize(), r.mode.Format)[r.mode.Format] })
 	if !ok || !decision.Shared || decision.Mode.asksWhat(r.mode) {
 		return
 	}

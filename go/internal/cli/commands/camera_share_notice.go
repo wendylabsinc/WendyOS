@@ -160,7 +160,7 @@ func nodeSizeOf(c *cameraRow, stated appconfig.CameraSize, self string) (at *cam
 	case len(sizes) == 0:
 		return nil, agentReadsNoSize
 	}
-	return nil, camerashare.SizeNotAmong(props[camerashare.KeySizes])
+	return nil, camerashare.SizeNotAmong(sizes)
 }
 
 func sharedThroughANode(c *cameraRow) bool {

@@ -219,6 +219,15 @@ type sharedCapture struct {
 	apps  []string
 }
 
+// captureSize is the size the record's camera is asked to capture at for its
+// node, and noSize when its capture chooses.
+func (r *shareRecord) captureSize() appconfig.CameraSize {
+	if !r.sized {
+		return noSize
+	}
+	return r.mode.size()
+}
+
 // size is the size the camera's capture is asked for.
 func (c sharedCapture) size() appconfig.CameraSize {
 	if !c.sized {

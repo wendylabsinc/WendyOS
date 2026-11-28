@@ -656,7 +656,7 @@ func TestCameraShareNotice_AStatedSizeThatIsNotServedSaysWhatIsServedAndWhy(t *t
 		row    *hwCap
 		whyNot string
 	}{
-		"a size the camera is not captured at": {c920RowWithSizes(), "a node of this camera can be made at 640x480@30, 1280x720@30, 1920x1080@15"},
+		"a size the camera is not captured at": {c920RowWithSizes(), "a node of this camera can be made at 640x480, 1280x720 or 1920x1080"},
 		"a camera no size can be stated for":   {notCaptured, "the camera's own frames are not captured whole: the camera offers no JPEG at 1280x720"},
 		"an agent that reads no size":          {c920Row(), "the agent on this device does not read a camera entitlement's size"},
 	} {

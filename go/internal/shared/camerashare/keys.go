@@ -123,9 +123,16 @@ func SizeSharedWith(apps []string, size string) string {
 }
 
 // SizeNotAmong is why a size is not served by a camera whose KeySizes value
-// is sizes.
-func SizeNotAmong(sizes string) string {
-	return "a node of this camera can be made at " + sizes
+// lists sizes.
+func SizeNotAmong(sizes []SizeAtRate) string {
+	listed := make([]string, len(sizes))
+	for i, size := range sizes {
+		listed[i] = size.Size()
+	}
+	if last := len(listed) - 1; last > 0 {
+		listed = append(listed[:last-1], listed[last-1]+" or "+listed[last])
+	}
+	return "a node of this camera can be made at " + strings.Join(listed, ", ")
 }
 
 const softwareEncoderSuffix = " (software)"

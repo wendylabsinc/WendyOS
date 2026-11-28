@@ -43,7 +43,13 @@ func TestSizeSentences(t *testing.T) {
 		"asked for size 640x480; serving 1920x1080 because the camera is shared with cv-a, cv-b at 1920x1080, and a camera is captured at one size"; got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
-	if got, want := SizeNotAmong("640x480@30, 1280x720@30"), "a node of this camera can be made at 640x480@30, 1280x720@30"; got != want {
-		t.Errorf("got  %q\nwant %q", got, want)
+	for want, sizes := range map[string][]SizeAtRate{
+		"a node of this camera can be made at 640x480":                        {{640, 480, 30}},
+		"a node of this camera can be made at 640x480 or 1280x720":            {{640, 480, 30}, {1280, 720, 30}},
+		"a node of this camera can be made at 640x480, 1280x720 or 1920x1080": {{640, 480, 30}, {1280, 720, 30}, {1920, 1080, 15}},
+	} {
+		if got := SizeNotAmong(sizes); got != want {
+			t.Errorf("got  %q\nwant %q", got, want)
+		}
 	}
 }

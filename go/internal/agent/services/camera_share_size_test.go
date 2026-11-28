@@ -7,6 +7,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -680,4 +681,102 @@ func TestCameraShareReport_ListsTheSizesAnEntitlementCanState(t *testing.T) {
 	if row["share_sizes"] != "" || row["share_sizes_unavailable"] != sfCannotDerive {
 		t.Errorf("row = %v, want no sizes because %q", row, sfCannotDerive)
 	}
+}
+
+// szShareForTest is shareModeForTest for a camera captured at mode's size
+// because an entitlement states it.
+func szShareForTest(svc *VideoService, path string, mode sharedMode, containers ...string) {
+	shareModeForTest(svc, path, mode, containers...)
+	svc.shares.mu.Lock()
+	defer svc.shares.mu.Unlock()
+	for _, id := range containers {
+		svc.shares.containers[id].shares[0].sized = true
+	}
+}
+
+// 1280x720 is the size an unsized share of this camera has, so a hub held at
+// it would be joined as it is; a share at a stated size is not served by it.
+func TestJoinHubForShare_ACameraHeldAtAnotherSizeThanTheStatedOne(t *testing.T) {
+	const path = "/dev/video0"
+	mode := szFullModes[appconfig.CameraFormatPixels]
+	held := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 1280, Height: 720}
+
+	t.Run("a viewer is ended and the camera starts at the stated size", func(t *testing.T) {
+		svc := newTestVideoService(nil, nil)
+		fp := installFakeProducers(svc)
+		ctx := context.Background()
+		oldHub, viewerID, viewerCh, err := svc.getOrCreateHub(ctx, path, held, hubHolderStreamClient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		viewerDone := make(chan error, 1)
+		go func() {
+			defer oldHub.unsubscribe(viewerID)
+			viewerDone <- svc.pumpFrames(newFakeVideoStream(ctx), oldHub, viewerID, viewerCh)
+		}()
+
+		szShareForTest(svc, path, mode, "cv-a")
+		share, err := svc.joinHubForShare(ctx, path, 0, mode, noPreset)
+		if err != nil {
+			t.Fatalf("share join: %v", err)
+		}
+		defer share.Leave()
+		select {
+		case err := <-viewerDone:
+			const want = "video stream ended: camera /dev/video0 is now shared with cv-a and runs only at its shared mode, " +
+				"1920x1080 YUYV, 30 fps; reconnect without a size or rate"
+			if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument || st.Message() != want {
+				t.Fatalf("viewer ended with %v\nwant InvalidArgument %q", err, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("the viewer's stream was not ended")
+		}
+		if got := hubParams(currentHub(svc, path)); got != [3]uint32{1920, 1080, 0} {
+			t.Fatalf("replacement hub at %v, want 1920x1080 and no rate", got)
+		}
+		if req := fp.request(1); fp.count() != 2 || req.GetWidth() != 1920 || req.GetHeight() != 1080 {
+			t.Fatalf("producers = %d, the second started with %dx%d; want it at 1920x1080", fp.count(), req.GetWidth(), req.GetHeight())
+		}
+	})
+
+	t.Run("a recording is waited for and then the camera starts at the stated size", func(t *testing.T) {
+		svc := newTestVideoService(nil, nil)
+		fp := installFakeProducers(svc)
+		ctx := context.Background()
+		recHub, recID, recCh, _, _, _, _, err := svc.joinHubForCapture(ctx, path, held, encodedFrames, noPreset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		szShareForTest(svc, path, mode, "cv-a")
+
+		_, err = svc.joinHubForShare(ctx, path, 0, mode, noPreset)
+		var wait *shareWaitError
+		if !errors.As(err, &wait) {
+			recHub.unsubscribe(recID)
+			t.Fatalf("err = %v, want *shareWaitError", err)
+		}
+		if wait.Holder != "episode capture" || wait.Params != "1280x720 at default rate" {
+			t.Fatalf("wait = %+v, want episode capture at 1280x720", wait)
+		}
+		if !channelStillOpen(recCh) || recHub.wasRestarted() || fp.count() != 1 {
+			t.Fatal("the recording was interrupted")
+		}
+		recHub.unsubscribe(recID)
+		select {
+		case <-wait.Done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Done did not close once the recording left")
+		}
+		var share shareSubscription
+		if !csWaitFor(2*time.Second, func() bool {
+			share, err = svc.joinHubForShare(ctx, path, 0, mode, noPreset)
+			return err == nil
+		}) {
+			t.Fatalf("share join after the recording left: %v", err)
+		}
+		defer share.Leave()
+		if got := hubParams(currentHub(svc, path)); got != [3]uint32{1920, 1080, 0} {
+			t.Fatalf("the camera runs at %v after the recording, want 1920x1080", got)
+		}
+	})
 }
