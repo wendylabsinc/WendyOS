@@ -14,6 +14,8 @@ config-variables: null
 paths:
   .github/workflows/swift-e2e-tests.yml:
     ignore:
+      # Official hosted image newer than actionlint v1.7.12's label catalog.
+      - 'label "xcode-27" is unknown'
       # GitHub Actions supports this queue mode, but actionlint v1.7.12 only
       # recognizes the older concurrency.group/cancel-in-progress schema.
       - 'unexpected key "queue" for "concurrency" section'

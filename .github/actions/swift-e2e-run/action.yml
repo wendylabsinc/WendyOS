@@ -386,7 +386,7 @@ runs:
         RUNNER_ID: ${{ inputs.runner_id }}
       run: |
         set -euo pipefail
-        if [[ "$RUNNER_ID" == "macos-26" ]]; then
+        if [[ "$RUNNER_ID" == "macos-26" || "$RUNNER_ID" == "xcode-27" ]]; then
           version="$(xcodebuild -version | awk '/Xcode/ { print $2 }')"
         else
           version="$(swift --version | head -n 1 | tr -cs '[:alnum:]._-' '-')"
