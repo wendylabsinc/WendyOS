@@ -618,6 +618,8 @@ are outside this bounded validation.
 
 ## Writing tests
 
+For CLI contributions, read the [CLI design guidance](../../go/internal/cli/assets/docs/development/contributing.md#cli-design).
+
 ### Organization and naming
 
 Use one flattened suite per command area, and keep exactly one `@Suite` per
