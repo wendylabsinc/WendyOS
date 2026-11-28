@@ -481,7 +481,7 @@ func (s *hubShareSubscription) Leave() {
 	s.leave.Do(func() { s.hub.unsubscribe(s.id) })
 }
 
-func (s *hubShareSubscription) AwaitsCamera() bool { return s.hub.awaitsCamera.Load() }
+func (s *hubShareSubscription) AwaitsCamera() bool { return s.hub.cameraWait.waiting.Load() }
 
 var (
 	_ shareSubscription = (*hubShareSubscription)(nil)

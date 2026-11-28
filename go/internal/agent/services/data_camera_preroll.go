@@ -556,6 +556,7 @@ func (a *armedCameraSource) reattach(ctx context.Context) error {
 // an error only when neither the retained ring nor a fresh live subscription
 // could open.
 func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCapture, bool, error) {
+	triggered := time.Now()
 	a.cancel()
 	<-a.done
 
@@ -630,7 +631,7 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 		ownFramesAreVideo: a.ownFramesAreVideo, ownFramesCodec: a.ownFramesCodec, ownFramesRefused: a.ownFramesRefused,
 		rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel,
 		done: make(chan struct{}), ready: make(chan error, 1), mode: "continuous", rateCap: rateCap,
-		notes: notes, lastSnapshotIdx: -1, preRoll: preRoll, armed: true,
+		notes: notes, joinedAt: triggered, lastSnapshotIdx: -1, preRoll: preRoll, armed: true,
 		dropBaseline: baseline, armedDrops: armedDrops,
 		presetNotApplied: a.video.whyPresetNotApplied(a.devID, a.source.Capture),
 	}

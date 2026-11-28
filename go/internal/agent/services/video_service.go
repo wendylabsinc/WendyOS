@@ -676,9 +676,42 @@ type deviceHub struct {
 	// Protected by h.mu.
 	demand  hubDemand
 	derived atomic.Pointer[derivedLayer]
-	// awaitsCamera is set while the producer waits for the camera's previous
-	// capture to release it (holdCamera).
-	awaitsCamera atomic.Bool
+	// cameraWait is the producer's wait for the camera's previous capture to
+	// release it (holdCamera).
+	cameraWait cameraWait
+}
+
+// cameraWait is one capture's wait for its turn at the camera. The zero value
+// is a capture that has not waited.
+type cameraWait struct {
+	// waiting is set for as long as the capture waits.
+	waiting atomic.Bool
+	mu      sync.Mutex
+	// ended stays zero for a capture that waits still, or whose hub ended
+	// before its turn came.
+	began, ended time.Time
+}
+
+func (w *cameraWait) begin() (began time.Time) {
+	w.mu.Lock()
+	w.began = time.Now()
+	began = w.began
+	w.mu.Unlock()
+	w.waiting.Store(true)
+	return began
+}
+
+func (w *cameraWait) cameraTaken() (waited time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ended = time.Now()
+	return w.ended.Sub(w.began)
+}
+
+func (w *cameraWait) span() (began, ended time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.began, w.ended
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -2400,7 +2433,7 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 // (nativeCaptureSources) and by GStreamer when none delivers. The device is
 // released when it returns. A hub that ends before its turn captures nothing.
 func (s *VideoService) captureSource(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) error {
-	release, held := s.holdCamera(ctx, path, &h.awaitsCamera)
+	release, held := s.holdCamera(ctx, path, &h.cameraWait)
 	if !held {
 		return nil
 	}
@@ -2434,9 +2467,9 @@ const cameraReleaseWarnEvery = 10 * time.Second
 // open until it has returned, which can be long after its hub ended, and one
 // started before then is refused the device as busy: the agent would take its
 // own earlier capture for another client. It returns once every earlier
-// capture has released the device, with no limit on the wait, and awaits is
-// set for as long as it waits. held is false when ctx ended first.
-func (s *VideoService) holdCamera(ctx context.Context, key string, awaits *atomic.Bool) (release func(), held bool) {
+// capture has released the device, with no limit on the wait, which it records
+// in wait. held is false when ctx ended first.
+func (s *VideoService) holdCamera(ctx context.Context, key string, wait *cameraWait) (release func(), held bool) {
 	s.mu.Lock()
 	if s.cameraHolds == nil {
 		s.cameraHolds = make(map[string]chan struct{})
@@ -2451,9 +2484,8 @@ func (s *VideoService) holdCamera(ctx context.Context, key string, awaits *atomi
 	select {
 	case hold <- struct{}{}:
 	default:
-		awaits.Store(true)
-		defer awaits.Store(false)
-		waiting := time.Now()
+		waiting := wait.begin()
+		defer wait.waiting.Store(false)
 		stillHeld := time.NewTicker(cameraReleaseWarnEvery)
 		defer stillHeld.Stop()
 		for taken := false; !taken; {
@@ -2461,7 +2493,7 @@ func (s *VideoService) holdCamera(ctx context.Context, key string, awaits *atomi
 			case hold <- struct{}{}:
 				taken = true
 				s.logger.Info("previous capture released the camera",
-					zap.String("device", key), zap.Duration("waited", time.Since(waiting)))
+					zap.String("device", key), zap.Duration("waited", wait.cameraTaken()))
 			case <-ctx.Done():
 				return nil, false
 			case <-stillHeld.C:

@@ -300,18 +300,18 @@ func TestJoinHubForShare_AReaderThatLeavesWhileItsCaptureWaitsNeverHasTheCameraO
 func TestHoldCamera_AHubThatHasEndedTakesNoTurn(t *testing.T) {
 	svc := newTestVideoService(nil, nil)
 	t.Cleanup(svc.Shutdown)
-	var awaits atomic.Bool
+	var wait cameraWait
 
 	ended, end := context.WithCancel(context.Background())
 	end()
-	if release, held := svc.holdCamera(ended, exclusiveCameraPath, &awaits); held {
+	if release, held := svc.holdCamera(ended, exclusiveCameraPath, &wait); held {
 		release()
 		t.Fatal("the producer of a hub that had ended was given the camera")
 	}
 
 	next, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	release, held := svc.holdCamera(next, exclusiveCameraPath, &awaits)
+	release, held := svc.holdCamera(next, exclusiveCameraPath, &wait)
 	if !held {
 		t.Fatal("the turn an ended hub did not take was not there for the next capture")
 	}
