@@ -615,3 +615,87 @@ func TestAgentWithoutNodeSettingsNotice_CoversAStatedPreset(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func sizedCfg(appID, size string) *appconfig.AppConfig {
+	return &appconfig.AppConfig{AppID: appID, Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Size: size}}}
+}
+
+// c920RowWithSizes is the camera's row from an agent that reads an
+// entitlement's size: it lists the sizes a node can state.
+func c920RowWithSizes() *hwCap {
+	row := c920Row()
+	row.Properties[camerashare.KeySizes] = "640x480@30, 1280x720@30, 1920x1080@15"
+	return row
+}
+
+const directHint = ` For the real device (its own formats, sizes and controls), set "mode": "direct" on the camera entitlement.`
+
+func TestCameraShareNotice_AStatedSizeTheCameraIsCapturedAtIsTheNodesSize(t *testing.T) {
+	got := cameraShareNotice([]*appconfig.AppConfig{sizedCfg("cv-a", "1920x1080")}, []*hwCap{c920RowWithSizes()})
+	want := `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 1920x1080 YUYV, 15 fps, format pixels, stamp time.` + directHint
+	if got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	native := sizedCfg("cv-a", "640x480")
+	native.Entitlements[0].Format, native.Entitlements[0].Stamp = appconfig.CameraFormatNative, appconfig.CameraStampFrame
+	got = cameraShareNotice([]*appconfig.AppConfig{native}, []*hwCap{c920RowWithSizes()})
+	want = `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 640x480 MJPG, 30 fps, format native, stamp frame.` + directHint
+	if got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	if got := cameraShareNotice([]*appconfig.AppConfig{sizedCfg("cv-a", "1280x720")}, []*hwCap{c920RowWithSizes()}); got != c920SharedPlain {
+		t.Fatalf("the size a node has anyway:\ngot  %q\nwant %q", got, c920SharedPlain)
+	}
+}
+
+func TestCameraShareNotice_AStatedSizeThatIsNotServedSaysWhatIsServedAndWhy(t *testing.T) {
+	const at720 = `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 1280x720 YUYV, 30 fps, format pixels, stamp time`
+	notCaptured := c920Row()
+	notCaptured.Properties[camerashare.KeySizesUnavailable] = "the camera's own frames are not captured whole: the camera offers no JPEG at 1280x720"
+	for name, tc := range map[string]struct {
+		row    *hwCap
+		whyNot string
+	}{
+		"a size the camera is not captured at": {c920RowWithSizes(), "a node of this camera can be made at 640x480@30, 1280x720@30, 1920x1080@15"},
+		"a camera no size can be stated for":   {notCaptured, "the camera's own frames are not captured whole: the camera offers no JPEG at 1280x720"},
+		"an agent that reads no size":          {c920Row(), "the agent on this device does not read a camera entitlement's size"},
+	} {
+		got := cameraShareNotice([]*appconfig.AppConfig{sizedCfg("cv-a", "1600x900")}, []*hwCap{tc.row})
+		want := at720 + ` (asked for size 1600x900; serving 1280x720 because ` + tc.whyNot + `).` + directHint
+		if got != want {
+			t.Errorf("%s:\ngot  %q\nwant %q", name, got, want)
+		}
+	}
+}
+
+func TestCameraShareNotice_ACameraOtherAppsShareIsServedAtTheirSize(t *testing.T) {
+	const at1080 = `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 1920x1080 YUYV, 15 fps, format pixels, stamp time`
+	sharedBy := func(apps string) *hwCap {
+		row := c920RowWithSizes()
+		row.Properties[camerashare.KeyWith] = apps
+		row.Properties[camerashare.KeySize] = "1920x1080@15"
+		return row
+	}
+	got := cameraShareNotice([]*appconfig.AppConfig{sizedCfg("cv-b", "640x480")}, []*hwCap{sharedBy("cv-a")})
+	want := at1080 + ` (asked for size 640x480; serving 1920x1080 because the camera is shared with cv-a at 1920x1080, and a camera is captured at one size).` + directHint
+	if got != want {
+		t.Errorf("another size than the camera is shared at:\ngot  %q\nwant %q", got, want)
+	}
+	for name, cfg := range map[string]*appconfig.AppConfig{"the same size": sizedCfg("cv-b", "1920x1080"), "no size": sizedCfg("cv-b", "")} {
+		if got := cameraShareNotice([]*appconfig.AppConfig{cfg}, []*hwCap{sharedBy("cv-a, cv-c")}); got != at1080+"."+directHint {
+			t.Errorf("%s:\ngot  %q\nwant %q", name, got, at1080+"."+directHint)
+		}
+	}
+
+	// A deploy replaces the app's own node, so the size it has now holds no
+	// one to it.
+	got = cameraShareNotice([]*appconfig.AppConfig{sizedCfg("cv-a", "640x480")}, []*hwCap{sharedBy("cv-a")})
+	want = `Camera: this app shares HD Pro Webcam C920: HD Pro Webc (video0) at 640x480 YUYV, 30 fps, format pixels, stamp time.` + directHint
+	if got != want {
+		t.Errorf("the app that alone shares the camera, deployed again:\ngot  %q\nwant %q", got, want)
+	}
+	service := &appconfig.AppConfig{AppID: "robot", ServiceName: "vision", Entitlements: sizedCfg("", "640x480").Entitlements}
+	if got := cameraShareNotice([]*appconfig.AppConfig{service}, []*hwCap{sharedBy(service.ContainerName())}); got != want {
+		t.Errorf("a service that alone shares the camera, deployed again:\ngot  %q\nwant %q", got, want)
+	}
+}

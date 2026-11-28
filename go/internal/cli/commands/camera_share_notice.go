@@ -127,6 +127,42 @@ func servedNodeOf(c *cameraRow, asked string) (served, mode string) {
 	return "", ""
 }
 
+const agentReadsNoSize = "the agent on this device does not read a camera entitlement's size"
+
+// nodeSizeOf returns the size and rate the agent makes an app's node at when
+// that is not the size of the camera's mode, and why a size the app states is
+// not the one served. A camera other containers share is served at their
+// size; self is the app's own container, whose node the deploy replaces.
+func nodeSizeOf(c *cameraRow, stated appconfig.CameraSize, self string) (at *camerashare.SizeAtRate, whyNot string) {
+	props := c.GetProperties()
+	var others []string
+	for _, app := range strings.Split(props[camerashare.KeyWith], ", ") {
+		if app != "" && app != self {
+			others = append(others, app)
+		}
+	}
+	if held := camerashare.ParseSizes(props[camerashare.KeySize]); len(others) > 0 && len(held) > 0 {
+		if stated != (appconfig.CameraSize{}) && stated.String() != held[0].Size() {
+			whyNot = camerashare.SizeSharedWith(others, held[0].Size())
+		}
+		return &held[0], whyNot
+	}
+	if stated == (appconfig.CameraSize{}) {
+		return nil, ""
+	}
+	sizes := camerashare.ParseSizes(props[camerashare.KeySizes])
+	if i := slices.IndexFunc(sizes, func(size camerashare.SizeAtRate) bool { return size.Size() == stated.String() }); i >= 0 {
+		return &sizes[i], ""
+	}
+	switch {
+	case props[camerashare.KeySizesUnavailable] != "":
+		return nil, props[camerashare.KeySizesUnavailable]
+	case len(sizes) == 0:
+		return nil, agentReadsNoSize
+	}
+	return nil, camerashare.SizeNotAmong(props[camerashare.KeySizes])
+}
+
 func sharedThroughANode(c *cameraRow) bool {
 	return slices.ContainsFunc(appconfig.CameraFormats, func(format string) bool {
 		return c.GetProperties()[sharedCameraModeKey(format)] != ""
@@ -162,7 +198,9 @@ func appendOnce(lines []string, line string) []string {
 // will share the camera(s) the agent reports a shared mode for, with the mode,
 // format and stamp of the node each config's entitlements give it. A camera
 // the agent cannot declare in the format asked for is served in another
-// format, and its entry says so with the agent's reason. The line is "" when
+// format, and its entry says so with the agent's reason. The mode is at the
+// size the node is made at, and an entry whose stated size is not that one
+// says so with the reason. The line is "" when
 // nothing will be shared: no config asks for sharing, or no camera row carries
 // a share mode (an older agent, or no shareable camera).
 func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
@@ -182,6 +220,14 @@ func cameraShareNotice(cfgs []*appconfig.AppConfig, cams []*cameraRow) string {
 					why = "the agent on this device does not offer that format"
 				}
 				instead = fmt.Sprintf(" (asked for %s; serving %s because %s)", asked, served, why)
+			}
+			stated := appconfig.CameraNodeSize(cfg.Entitlements, cameraIdentityOf(c))
+			at, whyNotSize := nodeSizeOf(c, stated, cfg.ContainerName())
+			if at != nil {
+				mode = camerashare.ModeAt(mode, *at)
+			}
+			if whyNotSize != "" {
+				instead += fmt.Sprintf(" (%s)", camerashare.DescribeSizeServedInstead(stated.String(), camerashare.SizeOfMode(mode), whyNotSize))
 			}
 			entries = appendOnce(entries, fmt.Sprintf("%s at %s, format %s, stamp %s%s", c.GetDescription(), mode, served, stamp, instead))
 		}

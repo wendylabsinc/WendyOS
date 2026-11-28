@@ -104,6 +104,12 @@ func ModeAt(mode string, at SizeAtRate) string {
 	return fmt.Sprintf("%s %s, %d fps", at.Size(), layout, at.FPS)
 }
 
+// SizeOfMode takes the size out of a KeyMode value.
+func SizeOfMode(mode string) string {
+	size, _, _ := strings.Cut(mode, " ")
+	return size
+}
+
 // DescribeSizeServedInstead says that a node is made at another size than its
 // app's entitlement states, with the agent's reason.
 func DescribeSizeServedInstead(asked, served, why string) string {

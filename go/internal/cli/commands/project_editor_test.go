@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -636,6 +637,35 @@ func TestProjectAddsAndEditsCameraPreset(t *testing.T) {
 		}
 		if readProjectTestFile(t, path) != saved {
 			t.Fatalf("edit camera %s changed the file", args)
+		}
+	}
+}
+
+func TestProjectAddsAndEditsCameraSize(t *testing.T) {
+	_, path := projectTestSetup(t, `{"appId":"robot"}`)
+	if _, err := projectTestCommand(t, "add", "camera", "--format", "native", "--size", "1920x1080", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	if saved := readProjectTestFile(t, path); !strings.Contains(saved, `"size": "1920x1080"`) || !strings.Contains(saved, `"format": "native"`) {
+		t.Fatalf("add camera --size did not write the size: %s", saved)
+	}
+	if _, err := projectTestCommand(t, "edit", "camera", "--size", "640x480", "--file", path); err != nil {
+		t.Fatal(err)
+	}
+	saved := readProjectTestFile(t, path)
+	if !strings.Contains(saved, `"size": "640x480"`) {
+		t.Fatalf("edit camera --size did not write the size: %s", saved)
+	}
+	_, err := projectTestCommand(t, "edit", "camera", "--size", "1080p", "--file", path)
+	if want := `camera size must be WxH in pixels, for example "1920x1080"; got "1080p"`; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("edit camera --size 1080p: error = %v, want %q", err, want)
+	}
+	if readProjectTestFile(t, path) != saved {
+		t.Fatal("a rejected size changed the file")
+	}
+	for _, feature := range []string{"camera", "video"} {
+		if !slices.ContainsFunc(projectFields(feature), func(field projectField) bool { return field.flag == "size" && field.key == "size" }) {
+			t.Errorf("%s has no --size flag", feature)
 		}
 	}
 }

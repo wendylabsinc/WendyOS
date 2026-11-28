@@ -36,6 +36,9 @@ func TestModeAt_KeepsTheLayoutAndTakesTheSizeAndRate(t *testing.T) {
 }
 
 func TestSizeSentences(t *testing.T) {
+	if got := SizeOfMode("1280x720 YUYV, 30 fps"); got != "1280x720" {
+		t.Errorf("SizeOfMode = %q", got)
+	}
 	if got, want := DescribeSizeServedInstead("640x480", "1920x1080", SizeSharedWith([]string{"cv-a", "cv-b"}, "1920x1080")),
 		"asked for size 640x480; serving 1920x1080 because the camera is shared with cv-a, cv-b at 1920x1080, and a camera is captured at one size"; got != want {
 		t.Errorf("got  %q\nwant %q", got, want)

@@ -79,6 +79,7 @@ func projectFields(name string) []projectField {
 			{"format", "format", "Camera node format", cameraNodeFieldHint(appconfig.CameraFormats), "string", "", false},
 			{"stamp", "stamp", "Camera node stamp", cameraNodeFieldHint(appconfig.CameraStamps), "string", "", false},
 			{"preset", "preset", "Encoder preset of an h264 camera node", strings.Join(appconfig.EncodePresets, ", ") + ", fastest first; only with format h264; empty to state none", "string", "", false},
+			{"size", "size", "Camera node size", "WxH in pixels, for example 1920x1080; a size the camera lists; empty for the default size", "string", "", false},
 		}
 	case "episode-write":
 		return []projectField{{"streams", "streams", "Recording streams", "JSON object of recording streams; use edit --raw for larger configurations", "object", "", false}}
