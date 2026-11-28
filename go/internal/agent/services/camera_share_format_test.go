@@ -1112,6 +1112,79 @@ func TestRecover_ANodeWithAFrameStampIsCoveredAndFedAgainAfterAReplug(t *testing
 	}
 }
 
+// The node is put over a returning camera, and its capture started, as soon as
+// the kernel has made the camera's node, before udev has named it: the frame
+// numbers the app reads go on all the same, on the port the camera left or on
+// another.
+func TestRecover_ANodeWithAFrameStampGoesOnNumberingBeforeUdevNamesTheCamera(t *testing.T) {
+	onAnotherPort := csBrio()
+	onAnotherPort.base, onAnotherPort.id.Device = "video2", csPort("1-2.2")
+	for name, back := range map[string]csCamera{
+		"back at its path, on its port":         csBrio(),
+		"back at another path, on another port": onAnotherPort,
+	} {
+		t.Run(name, func(t *testing.T) {
+			prev := shareRetryBackoff
+			shareRetryBackoff = []time.Duration{5 * time.Millisecond, time.Hour}
+			t.Cleanup(func() { shareRetryBackoff = prev }) // after the harness's Shutdown
+			h := newCSHarness(t, csBrio())
+			udev := h.udevNames()
+			udev.name("/dev/video0", sfBrioByID)
+			sfCanDeriveFrames(h.s)
+			fp := installFakeProducers(h.s)
+			h.s.CreateCameraShares(context.Background(), "cv-a", "sh.wendy.cv-a",
+				[]appconfig.Entitlement{sfCameraEntitlement(appconfig.CameraFormatNative, appconfig.CameraStampFrame)})
+			if errs := h.s.CoverCameraShares(context.Background(), "cv-a", 11); len(errs) != 0 {
+				t.Fatalf("errors: %v", errs)
+			}
+			h.watch()
+			records := h.records("cv-a")
+			if len(records) != 1 {
+				t.Fatalf("records = %+v; logs: %v", records, h.logs.All())
+			}
+			node := records[0].io.(*csNode)
+			// The frame numbers the app reads off its node for n camera frames.
+			read := func(hub *deviceHub, n int) []uint64 {
+				t.Helper()
+				var numbers []uint64
+				for range n {
+					hub.produce(sfJPEGFrame(0, 1_000_000_000))
+					e := node.next(t)
+					if !e.stamp.holdsSampleID {
+						t.Fatalf("the node got %+v, want a frame stamped with its number", e)
+					}
+					numbers = append(numbers, e.stamp.sampleID)
+				}
+				return numbers
+			}
+
+			node.send(t, 1)
+			if !csWaitFor(2*time.Second, func() bool { return fp.count() == 1 }) {
+				t.Fatalf("the camera did not start; logs: %v", h.logs.All())
+			}
+			if numbers := read(fp.hub(0), 2); !reflect.DeepEqual(numbers, []uint64{1, 2}) {
+				t.Fatalf("frame numbers before the replug = %v, want [1 2]", numbers)
+			}
+
+			udev.forget("/dev/video0")
+			h.unplug("video0")
+			fp.hub(0).cancel() // its capture ends with the camera
+			h.waitLogged("retrying in 1h0m0s", 1)
+
+			backAt := "/dev/" + back.base
+			h.plug(back)
+			h.waitLogged("camera share: covered "+backAt+" for cv-a again in ", 1)
+			if !csWaitFor(2*time.Second, func() bool { return fp.count() == 2 }) {
+				t.Fatalf("the camera did not start again within 2 s of coming back; logs: %v", h.logs.All())
+			}
+			udev.name(backAt, sfBrioByID)
+			if numbers := read(fp.hub(1), 2); !reflect.DeepEqual(numbers, []uint64{3, 4}) {
+				t.Fatalf("frame numbers after the replug = %v, want [3 4]: they go on from the 2 before it", numbers)
+			}
+		})
+	}
+}
+
 func TestCameraShareState_Version1LoadsAsPixelsWithCaptureTimes(t *testing.T) {
 	h := newCSHarness(t, csBrio())
 	stored := sharedMode{Width: 640, Height: 480, Fourcc: "YUYV", BytesPerLine: 1280, FPS: 15}

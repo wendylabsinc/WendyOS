@@ -1016,7 +1016,7 @@ func shareRefusalReason(logs *observer.ObservedLogs, containerID string) string 
 // that camera, which is not its path.
 func mintedSampleCount(t *testing.T, svc *VideoService, path string) uint64 {
 	t.Helper()
-	// Before svc.mu, as sampleSeqKey asks: it reads udev's names and sysfs.
+	// Before svc.mu, as sampleSeqKey asks: it reads sysfs.
 	key := svc.sampleSeqKey(path)
 	seq, keys := func() (*atomic.Uint64, []string) {
 		svc.mu.Lock()

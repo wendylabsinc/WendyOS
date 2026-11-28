@@ -36,6 +36,36 @@ func IdentityOf(base string) (Identity, error) {
 	return Identity{Device: device, Index: index, Name: name}, nil
 }
 
+// USB is what the USB device behind a camera node says of itself, which a move
+// to another port does not change: its vendor and product numbers, its serial
+// where it has one, and the number of the interface the node is on.
+type USB struct {
+	Vendor, Product, Serial, Interface string
+}
+
+// USBOf reads USB for /dev/<base> from sysfs: the node's device is the USB
+// interface, or for some drivers the USB device itself. A node that is not on
+// a USB device has none. The kernel has these attributes before it makes the
+// node, so they are there for whoever sees the node first.
+func USBOf(base string) USB {
+	dir, err := filepath.EvalSymlinks(filepath.Join(sysfsRoot, base, "device"))
+	if err != nil {
+		return USB{}
+	}
+	for _, device := range []string{dir, filepath.Dir(dir)} {
+		vendor, err := readAttribute(filepath.Join(device, "idVendor"))
+		if err != nil {
+			continue
+		}
+		usb := USB{Vendor: vendor}
+		usb.Product, _ = readAttribute(filepath.Join(device, "idProduct"))
+		usb.Serial, _ = readAttribute(filepath.Join(device, "serial"))
+		usb.Interface, _ = readAttribute(filepath.Join(dir, "bInterfaceNumber"))
+		return usb
+	}
+	return USB{}
+}
+
 func readAttribute(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

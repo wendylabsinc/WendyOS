@@ -309,22 +309,103 @@ func (f *captureFailures) recent(key string) (why string, failed bool) {
 	return failure.why, true
 }
 
+// cameraSelf is what a camera node says of itself wherever it is plugged in.
+type cameraSelf struct {
+	usb         camera.USB
+	index, name string
+}
+
+// knownCameras holds the cameras seen since the agent started, each with the
+// port it was last at. It is filled from sysfs alone: udev names a camera some
+// time after the kernel has made its node, and a capture that starts in
+// between must find the same camera. Nothing else is locked while its lock is
+// held.
+type knownCameras struct {
+	mu   sync.Mutex
+	seen []*knownCamera
+}
+
+type knownCamera struct {
+	key  string
+	self cameraSelf
+	port string
+	// unsure: a camera of its kind appeared while this one was away and could
+	// not be told to be it, so this one is known again only at port.
+	unsure bool
+}
+
 // cameraIdentityKey names the camera at path for what belongs to the camera
-// and not to the path udev gave it this time, its failure memory and its
-// sample counter: by its udev by-id name, which holds its serial, else by the
-// port, index and name a share record follows it by. Another camera that
-// takes the path later then starts clean, and this one keeps what it had when
-// it comes back at another path. A camera with neither is named by the path.
+// and not to the path or the port it is at this time, its failure memory and
+// its sample counter. A camera is known again by what it says of itself at the
+// port it was last at. At another port it is known again when it is the only
+// known camera of its kind that is away and the node is the only one of its
+// kind no known camera accounts for: cameras that say the same of themselves
+// are told apart by port and never cross. Any other camera is a new one, so
+// one that takes this path or port later starts clean. A node without a sysfs
+// identity is named by the path.
 func (s *VideoService) cameraIdentityKey(path string) string {
-	if s.readStableNames != nil {
-		if byID := s.readStableNames()[path].byID; byID != "" {
-			return schemeByID + ":" + byID
+	base := filepath.Base(path)
+	id, err := s.identityOf(base)
+	if err != nil || id == (camera.Identity{}) {
+		return path
+	}
+	self := cameraSelf{usb: s.usbOf(base), index: id.Index, name: id.Name}
+	s.cameras.mu.Lock()
+	defer s.cameras.mu.Unlock()
+	var alike []*knownCamera
+	for _, known := range s.cameras.seen {
+		if known.self != self {
+			continue
+		}
+		if known.port == id.Device {
+			known.unsure = false
+			return known.key
+		}
+		alike = append(alike, known)
+	}
+	if moved := s.movedCamera(alike, self, id.Device); moved != nil {
+		moved.port = id.Device
+		return moved.key
+	}
+	found := &knownCamera{key: fmt.Sprintf("camera\x00%d", len(s.cameras.seen)), self: self, port: id.Device}
+	s.cameras.seen = append(s.cameras.seen, found)
+	return found.key
+}
+
+// movedCamera is the one of alike, the known cameras that say self of
+// themselves, that the camera now at port is, or nil.
+func (s *VideoService) movedCamera(alike []*knownCamera, self cameraSelf, port string) *knownCamera {
+	if len(alike) == 0 {
+		return nil
+	}
+	unclaimed := map[string]bool{port: true}
+	for base, id := range s.presentIdentities() {
+		if id.Index == self.index && id.Name == self.name && s.usbOf(base) == self.usb {
+			unclaimed[id.Device] = true
 		}
 	}
-	if id, err := s.identityOf(filepath.Base(path)); err == nil && id != (camera.Identity{}) {
-		return strings.Join([]string{"sysfs", id.Device, id.Index, id.Name}, "\x00")
+	var away []*knownCamera
+	for _, known := range alike {
+		if unclaimed[known.port] {
+			delete(unclaimed, known.port)
+		} else {
+			away = append(away, known)
+		}
 	}
-	return path
+	if len(away) == 1 && len(unclaimed) == 1 && !away[0].unsure {
+		return away[0]
+	}
+	for _, known := range away {
+		known.unsure = true
+	}
+	return nil
+}
+
+func (s *VideoService) usbOf(base string) camera.USB {
+	if s.cameraUSB == nil {
+		return camera.USB{}
+	}
+	return s.cameraUSB(base)
 }
 
 func (s *VideoService) sourceRefusalKey(path, format string) string {

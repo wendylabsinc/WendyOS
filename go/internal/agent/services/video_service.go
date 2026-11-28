@@ -1350,6 +1350,12 @@ type VideoService struct {
 	// Seams so tests describe cameras without sysfs; nil means the defaults.
 	cameraIdentity func(base string) (camera.Identity, error)
 	presentCameras func() map[string]camera.Identity
+	// cameraUSB reads what a camera's USB device says of itself
+	// (camera.USBOf); nil reads nothing, so a service whose cameras a test
+	// describes does not read the machine's sysfs for them.
+	cameraUSB func(base string) camera.USB
+	// cameras names each camera for cameraIdentityKey.
+	cameras knownCameras
 }
 
 // NewVideoService creates a VideoService whose producer goroutines are tied to ctx.
@@ -1389,6 +1395,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 		},
 		classifyTransport:  camera.Classify,
 		cameraIdentity:     camera.IdentityOf,
+		cameraUSB:          camera.USBOf,
 		presentCameras:     camera.PresentIdentities,
 		enumerateLibcamera: camera.EnumerateLibcamera,
 		findCameraSource:   audio.FindCameraSource,
@@ -2344,8 +2351,7 @@ func (s *VideoService) takeOverDefaultedHub(key string, req *agentpb.StreamVideo
 // video node is keyed by the camera that answers there now (cameraIdentityKey),
 // so the counter goes with the camera to whatever path it comes back at and
 // another camera at this path has its own. Any other source is keyed by its
-// hub key. It reads udev's names and sysfs, so it is called before s.mu is
-// taken.
+// hub key. It reads sysfs, so it is called before s.mu is taken.
 func (s *VideoService) sampleSeqKey(hubKey string) string {
 	base, local := strings.CutPrefix(hubKey, "/dev/")
 	if _, node := videoNodeNumber(base); !local || !node {

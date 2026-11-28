@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -217,6 +218,87 @@ func TestSampleIdentitiesGoOnWhenACameraComesBackAtAnotherPath(t *testing.T) {
 	}
 }
 
+// csUdevNames is what udev lists in /dev/v4l/by-id, by device path. udev names
+// a camera some time after the kernel has made its node, so a capture that
+// starts in between reads a listing without it.
+type csUdevNames struct {
+	mu   sync.Mutex
+	byID map[string]string
+}
+
+// udevNames has the service read its by-id names from the returned listing.
+func (h *csHarness) udevNames() *csUdevNames {
+	u := &csUdevNames{byID: map[string]string{}}
+	h.s.readStableNames = func() map[string]stableNames {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		out := map[string]stableNames{}
+		for path, byID := range u.byID {
+			out[path] = stableNames{byID: byID}
+		}
+		return out
+	}
+	return u
+}
+
+func (u *csUdevNames) name(path, byID string) {
+	u.mu.Lock()
+	u.byID[path] = byID
+	u.mu.Unlock()
+}
+
+func (u *csUdevNames) forget(path string) {
+	u.mu.Lock()
+	delete(u.byID, path)
+	u.mu.Unlock()
+}
+
+const csC920ByID = "usb-Sonix_Technology_Co.__Ltd._HD_Pro_Webcam_C920_HD_Pro_Webcam_C920-video-index0"
+
+// A capture that restarts as soon as the kernel has made a returning camera's
+// node reads udev's names before udev has listed the camera. It is the same
+// camera named or not: its sample IDs go on at that restart, and at the next
+// one, when udev lists it.
+func TestSampleIdentitiesGoOnWhenACameraComesBackBeforeUdevNamesIt(t *testing.T) {
+	onAnotherPort := csC920()
+	onAnotherPort.base, onAnotherPort.id.Device = "video0", csPort("1-2.1")
+	for name, back := range map[string]csCamera{
+		"at its path, on its port":         csC920(),
+		"at another path, on another port": onAnotherPort,
+		"at another path, on its port":     {"video0", "C920", csC920().formats, csC920().id},
+		"at its path, on another port":     {"video4", "C920", csC920().formats, onAnotherPort.id},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCSHarness(t, csC920())
+			udev := h.udevNames()
+			udev.name("/dev/video4", csC920ByID)
+			installFakeProducers(h.s)
+			hub, leave := viewerHub(t, h.s, "/dev/video4", &agentpb.StreamVideoRequest{})
+			if ids := numberFrames(hub, 2); !slices.Equal(ids, []uint64{1, 2}) {
+				t.Fatalf("sample IDs before the camera went = %v, want [1 2]", ids)
+			}
+			leave()
+
+			h.takeOut("video4")
+			udev.forget("/dev/video4")
+			h.putCameraAt(back.base, back)
+			backAt := "/dev/" + back.base
+			hub, leave = viewerHub(t, h.s, backAt, &agentpb.StreamVideoRequest{})
+			if ids := numberFrames(hub, 1); !slices.Equal(ids, []uint64{3}) {
+				t.Fatalf("sample IDs when the camera is back and udev has not named it = %v, want [3]", ids)
+			}
+			leave()
+
+			udev.name(backAt, csC920ByID)
+			hub, leave = viewerHub(t, h.s, backAt, &agentpb.StreamVideoRequest{})
+			defer leave()
+			if ids := numberFrames(hub, 1); !slices.Equal(ids, []uint64{4}) {
+				t.Fatalf("sample IDs once udev has named the camera = %v, want [4]", ids)
+			}
+		})
+	}
+}
+
 // Another camera that takes a path has its own sample IDs, and the camera that
 // had the path before goes on with its own when it is back.
 func TestSampleIdentitiesOfACameraThatTakesAnothersPathAreItsOwn(t *testing.T) {
@@ -278,6 +360,85 @@ func TestSampleIdentitiesOfSameModelCamerasPluggedInTogetherStayApart(t *testing
 	}
 }
 
+// Two cameras of one model that report one serial have one by-id name, which
+// udev gives to one of them at a time. Each numbers its own frames whichever of
+// them holds the name.
+func TestSampleIdentitiesOfCamerasThatShareAUdevNameStayApart(t *testing.T) {
+	left := csC920()
+	right := csCamera{"video6", "C920", left.formats, camera.Identity{Device: csPort("1-2.4"), Index: "0", Name: "C920"}}
+	sameSerial := camera.USB{Vendor: "0c45", Product: "6366", Serial: "HD Pro Webcam C920", Interface: "00"}
+	h := newCSHarness(t, left, right)
+	h.s.cameraUSB = func(string) camera.USB { return sameSerial }
+	udev := h.udevNames()
+	installFakeProducers(h.s)
+	number := func(path string) uint64 {
+		t.Helper()
+		hub, leave := viewerHub(t, h.s, path, &agentpb.StreamVideoRequest{})
+		defer leave()
+		return numberFrames(hub, 1)[0]
+	}
+
+	udev.name("/dev/video4", csC920ByID)
+	if l, r := []uint64{number("/dev/video4"), number("/dev/video4")}, []uint64{number("/dev/video6")}; !slices.Equal(l, []uint64{1, 2}) || !slices.Equal(r, []uint64{1}) {
+		t.Fatalf("sample IDs = %v and %v, want [1 2] and [1]: each camera numbers its own frames", l, r)
+	}
+	udev.forget("/dev/video4")
+	udev.name("/dev/video6", csC920ByID)
+	if l, r := number("/dev/video4"), number("/dev/video6"); l != 3 || r != 2 {
+		t.Fatalf("with the name on the other camera, sample IDs = %d and %d, want 3 and 2", l, r)
+	}
+}
+
+// A camera of the same model with another serial, plugged in where one was, is
+// another camera, and the first goes on with its own numbers on another port.
+func TestSampleIdentitiesOfACameraWithAnotherSerialOnTheSamePortAreItsOwn(t *testing.T) {
+	h := newCSHarness(t, csBrio())
+	serials := map[string]string{"video0": "SN1"}
+	h.s.cameraUSB = func(base string) camera.USB {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return camera.USB{Vendor: "046d", Product: "094c", Serial: serials[base], Interface: "00"}
+	}
+	plug := func(base, serial string, c csCamera) {
+		h.mu.Lock()
+		serials[base] = serial
+		h.mu.Unlock()
+		h.putCameraAt(base, c)
+	}
+	installFakeProducers(h.s)
+	number := func(path string) uint64 {
+		t.Helper()
+		hub, leave := viewerHub(t, h.s, path, &agentpb.StreamVideoRequest{})
+		defer leave()
+		return numberFrames(hub, 1)[0]
+	}
+
+	if first, second := number("/dev/video0"), number("/dev/video0"); first != 1 || second != 2 {
+		t.Fatalf("sample IDs = %d and %d, want 1 and 2", first, second)
+	}
+	plug("video0", "SN2", csBrio())
+	if got := number("/dev/video0"); got != 1 {
+		t.Errorf("a camera with another serial on the first one's port is numbered %d, want its own 1", got)
+	}
+	onAnotherPort := csBrio()
+	onAnotherPort.id.Device = csPort("1-2.2")
+	plug("video2", "SN1", onAnotherPort)
+	if got := number("/dev/video2"); got != 3 {
+		t.Errorf("the first camera, on another port beside it, is numbered %d, want it to go on at 3", got)
+	}
+	if got := number("/dev/video0"); got != 2 {
+		t.Errorf("the second camera is numbered %d, want it to go on at 2", got)
+	}
+}
+
+func TestNewVideoService_ReadsWhatACamerasUSBDeviceSaysOfItself(t *testing.T) {
+	s := NewVideoService(context.Background(), zap.NewNop(), nil)
+	defer s.Shutdown()
+	if s.cameraUSB == nil {
+		t.Fatal("the agent's video service reads no USB serial, so cameras of one model with their own serials are told apart by port alone")
+	}
+}
+
 // A network camera and a ROS 2 topic have no device node: their hub key is
 // already their own, and stays their sample counter's key.
 func TestSampleSeqKey_OnlyALocalVideoNodeIsKeyedByItsCamera(t *testing.T) {
@@ -285,17 +446,12 @@ func TestSampleSeqKey_OnlyALocalVideoNodeIsKeyedByItsCamera(t *testing.T) {
 	s.cameraIdentity = func(base string) (camera.Identity, error) {
 		return camera.Identity{Device: csPort("1-3"), Index: "0", Name: "the camera at " + base}, nil
 	}
-	for hubKey, want := range map[string]string{
-		"/dev/video4":  "sysfs\x00" + csPort("1-3") + "\x000\x00the camera at video4",
-		"ip:200":       "ip:200",
-		"ros2:3":       "ros2:3",
-		"/dev/media0":  "/dev/media0",
-		"/dev/video":   "/dev/video",
-		"video4":       "video4",
-		"/dev/video4x": "/dev/video4x",
-	} {
-		if got := s.sampleSeqKey(hubKey); got != want {
-			t.Errorf("sample counter key of %q = %q, want %q", hubKey, got, want)
+	if got := s.sampleSeqKey("/dev/video4"); got == "/dev/video4" || got != s.cameraIdentityKey("/dev/video4") {
+		t.Errorf("sample counter key of /dev/video4 = %q, want its camera's, %q", got, s.cameraIdentityKey("/dev/video4"))
+	}
+	for _, hubKey := range []string{"ip:200", "ros2:3", "/dev/media0", "/dev/video", "video4", "/dev/video4x"} {
+		if got := s.sampleSeqKey(hubKey); got != hubKey {
+			t.Errorf("sample counter key of %q = %q, want the hub key", hubKey, got)
 		}
 	}
 }

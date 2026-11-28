@@ -663,25 +663,226 @@ func TestCaptureFailures_AreRememberedForTheCameraNotItsPath(t *testing.T) {
 	}
 }
 
-func TestCameraIdentityKey_PrefersTheSerialThenTheSysfsIdentityThenThePath(t *testing.T) {
-	s := &VideoService{}
-	s.cameraIdentity = func(base string) (camera.Identity, error) {
-		if base == "video4" {
-			return camera.Identity{Device: csPort("1-3"), Index: "0", Name: "Brio 101"}, nil
-		}
-		return camera.Identity{}, errors.New("no device link")
-	}
-	s.readStableNames = func() map[string]stableNames {
-		return map[string]stableNames{"/dev/video0": {byID: "usb-Acme_Camera_SN1-video-index0", byPath: "pci-0000:00:14.0-usb-0:2:1.0"},
-			"/dev/video4": {byPath: "pci-0000:00:14.0-usb-0:3:1.0"}}
-	}
-	for path, want := range map[string]string{
-		"/dev/video0": "by-id:usb-Acme_Camera_SN1-video-index0",
-		"/dev/video4": "sysfs\x00" + csPort("1-3") + "\x000\x00Brio 101",
-		"/dev/video9": "/dev/video9",
+// A camera that comes back has its failures whether udev has named it yet or
+// not, on the port it left or on another.
+func TestCaptureFailures_AreRememberedForACameraThatComesBackBeforeUdevNamesIt(t *testing.T) {
+	const byID = "usb-Logi_H264_2331AP04K2S8-video-index0"
+	onAnotherPort := csH264Cam()
+	onAnotherPort.base, onAnotherPort.id.Device = "video6", csPort("1-2.4")
+	for name, back := range map[string]csCamera{
+		"at its path, on its port":         csH264Cam(),
+		"at another path, on another port": onAnotherPort,
 	} {
-		if got := s.cameraIdentityKey(path); got != want {
-			t.Errorf("key of %s = %q, want %q", path, got, want)
-		}
+		t.Run(name, func(t *testing.T) {
+			h := newCSHarness(t, csH264Cam())
+			hcCanDecode(h.s, "avdec_h264")
+			udev := h.udevNames()
+			udev.name("/dev/video2", byID)
+			backAt := "/dev/" + back.base
+			remembered := func(when string) {
+				t.Helper()
+				dev := &agentpb.VideoDevice{Path: backAt, Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_USB}
+				if got := h.s.shareDecisionFor(context.Background(), dev, appconfig.CameraFormatPixels).Mode.Format; got != appconfig.CameraFormatNative {
+					t.Errorf("%s the camera is served %s: its failure was forgotten", when, got)
+				}
+				if _, refused := h.s.sourceRefusals.recent(h.s.sourceRefusalKey(backAt, "JPEG")); !refused {
+					t.Errorf("%s the camera's source refusal was forgotten", when)
+				}
+			}
+
+			h.s.derivedFailures.remember(h.s.cameraIdentityKey("/dev/video2"), errDerivedFramesReordered.Error(), true)
+			h.s.sourceRefusals.remember(h.s.sourceRefusalKey("/dev/video2", "JPEG"), "no usable frame", false)
+			h.takeOut("video2")
+			udev.forget("/dev/video2")
+			h.putCameraAt(back.base, back)
+			remembered("back, before udev has named it,")
+			udev.name(backAt, byID)
+			remembered("once udev has named it")
+		})
 	}
+}
+
+// ckNode is one camera node in sysfs: where it is, and what it says of itself.
+type ckNode struct {
+	port, index, name string
+	usb               camera.USB
+}
+
+// ckService reads its cameras from nodes, by base, and fails the test if
+// naming a camera reads udev's names.
+func ckService(t *testing.T, nodes map[string]ckNode) *VideoService {
+	s := &VideoService{}
+	identity := func(n ckNode) camera.Identity {
+		return camera.Identity{Device: csPort(n.port), Index: n.index, Name: n.name}
+	}
+	s.cameraIdentity = func(base string) (camera.Identity, error) {
+		n, ok := nodes[base]
+		if !ok {
+			return camera.Identity{}, errors.New("no device link")
+		}
+		return identity(n), nil
+	}
+	s.presentCameras = func() map[string]camera.Identity {
+		out := map[string]camera.Identity{}
+		for base, n := range nodes {
+			out[base] = identity(n)
+		}
+		return out
+	}
+	s.cameraUSB = func(base string) camera.USB { return nodes[base].usb }
+	s.readStableNames = func() map[string]stableNames {
+		t.Error("naming a camera read udev's names, which are not there yet when a camera has just come back")
+		return nil
+	}
+	return s
+}
+
+func TestCameraIdentityKey_ACameraIsKnownAgainByWhatItSaysOfItselfAndWhereItWas(t *testing.T) {
+	brio := func(port, serial string) ckNode {
+		return ckNode{port, "0", "Brio 101", camera.USB{Vendor: "046d", Product: "094c", Serial: serial, Interface: "00"}}
+	}
+	t.Run("a camera with its own serial", func(t *testing.T) {
+		nodes := map[string]ckNode{"video0": brio("1-2.1", "SN1")}
+		s := ckService(t, nodes)
+		first := s.cameraIdentityKey("/dev/video0")
+		if first == "/dev/video0" {
+			t.Fatal("the camera is named by its path")
+		}
+		delete(nodes, "video0")
+		nodes["video2"] = brio("1-2.1", "SN1")
+		if got := s.cameraIdentityKey("/dev/video2"); got != first {
+			t.Errorf("at another path it is %q, want %q", got, first)
+		}
+		// Another one of its model is plugged in where it was, and it comes
+		// back elsewhere.
+		nodes["video2"] = brio("1-2.1", "SN2")
+		other := s.cameraIdentityKey("/dev/video2")
+		if other == first {
+			t.Error("a camera with another serial on its port took its name")
+		}
+		nodes["video4"] = brio("1-2.3", "SN1")
+		if got := s.cameraIdentityKey("/dev/video4"); got != first {
+			t.Errorf("on another port, beside one of its model, it is %q, want %q", got, first)
+		}
+		if got := s.cameraIdentityKey("/dev/video2"); got != other {
+			t.Errorf("the other camera is now %q, want %q", got, other)
+		}
+	})
+	t.Run("two cameras with one serial", func(t *testing.T) {
+		nodes := map[string]ckNode{"video0": brio("1-2.1", "SAME"), "video2": brio("1-2.2", "SAME")}
+		s := ckService(t, nodes)
+		left, right := s.cameraIdentityKey("/dev/video0"), s.cameraIdentityKey("/dev/video2")
+		if left == right {
+			t.Fatal("the two have one name")
+		}
+		// One moves while the other stays: it can only be the one that left.
+		delete(nodes, "video0")
+		nodes["video4"] = brio("1-2.3", "SAME")
+		if got := s.cameraIdentityKey("/dev/video4"); got != left {
+			t.Errorf("the one that moved is %q, want %q", got, left)
+		}
+		if got := s.cameraIdentityKey("/dev/video2"); got != right {
+			t.Errorf("the one that stayed is %q, want %q", got, right)
+		}
+		// Both go and come back on ports neither was at: nothing says which is
+		// which, so neither takes a name.
+		clear(nodes)
+		nodes["video0"], nodes["video2"] = brio("1-2.1", "SAME"), brio("1-2.4", "SAME")
+		for _, path := range []string{"/dev/video0", "/dev/video2"} {
+			if got := s.cameraIdentityKey(path); got == left || got == right {
+				t.Errorf("%s took a name though it may be either camera", path)
+			}
+		}
+		// Back where each was last, each is known again.
+		clear(nodes)
+		nodes["video6"], nodes["video8"] = brio("1-2.3", "SAME"), brio("1-2.2", "SAME")
+		if l, r := s.cameraIdentityKey("/dev/video6"), s.cameraIdentityKey("/dev/video8"); l != left || r != right {
+			t.Errorf("back on their ports they are %q and %q, want %q and %q", l, r, left, right)
+		}
+	})
+	t.Run("two cameras where one was", func(t *testing.T) {
+		nodes := map[string]ckNode{"video0": brio("1-2.1", "SAME")}
+		s := ckService(t, nodes)
+		first := s.cameraIdentityKey("/dev/video0")
+		clear(nodes)
+		nodes["video2"], nodes["video4"] = brio("1-2.2", "SAME"), brio("1-2.3", "SAME")
+		for _, path := range []string{"/dev/video2", "/dev/video4"} {
+			if got := s.cameraIdentityKey(path); got == first {
+				t.Errorf("%s took the name though either of the two may be the camera that left", path)
+			}
+		}
+		// A third on the port the first was at is the first again, and is
+		// followed from there beside the two.
+		nodes["video0"] = brio("1-2.1", "SAME")
+		if got := s.cameraIdentityKey("/dev/video0"); got != first {
+			t.Errorf("back on its port beside the two it is %q, want %q", got, first)
+		}
+		delete(nodes, "video0")
+		nodes["video6"] = brio("1-2.4", "SAME")
+		if got := s.cameraIdentityKey("/dev/video6"); got != first {
+			t.Errorf("moved from there beside the two it is %q, want %q", got, first)
+		}
+	})
+	t.Run("the interfaces of one camera", func(t *testing.T) {
+		depth, colour := brio("1-2.1", "SN1"), brio("1-2.1", "SN1")
+		colour.usb.Interface = "03"
+		nodes := map[string]ckNode{"video0": depth, "video2": colour}
+		s := ckService(t, nodes)
+		first, second := s.cameraIdentityKey("/dev/video0"), s.cameraIdentityKey("/dev/video2")
+		if first == second {
+			t.Fatal("the two interfaces have one name")
+		}
+		depth.port, colour.port = "1-2.3", "1-2.3"
+		clear(nodes)
+		nodes["video4"], nodes["video6"] = colour, depth
+		if c, d := s.cameraIdentityKey("/dev/video4"), s.cameraIdentityKey("/dev/video6"); d != first || c != second {
+			t.Errorf("on another port they are %q and %q, want %q and %q", d, c, first, second)
+		}
+	})
+	t.Run("a camera without a serial", func(t *testing.T) {
+		nodes := map[string]ckNode{"video0": brio("1-2.1", "")}
+		s := ckService(t, nodes)
+		first := s.cameraIdentityKey("/dev/video0")
+		delete(nodes, "video0")
+		nodes["video2"] = brio("1-2.2", "")
+		if got := s.cameraIdentityKey("/dev/video2"); got != first {
+			t.Errorf("the only one of its model, on another port, is %q, want %q", got, first)
+		}
+		nodes["video0"] = ckNode{"1-2.2", "0", "C920", camera.USB{Vendor: "0c45", Product: "6366", Interface: "00"}}
+		delete(nodes, "video2")
+		if got := s.cameraIdentityKey("/dev/video0"); got == first {
+			t.Error("another model on its port took its name")
+		}
+	})
+	t.Run("a camera the listing of present cameras misses", func(t *testing.T) {
+		nodes := map[string]ckNode{"video0": brio("1-2.1", "SN1")}
+		s := ckService(t, nodes)
+		s.presentCameras = func() map[string]camera.Identity { return nil }
+		first := s.cameraIdentityKey("/dev/video0")
+		nodes["video0"] = brio("1-2.2", "SN1")
+		if got := s.cameraIdentityKey("/dev/video0"); got != first {
+			t.Errorf("on another port it is %q, want %q", got, first)
+		}
+	})
+	t.Run("cameras that are not on USB", func(t *testing.T) {
+		nodes := map[string]ckNode{
+			"video0": {port: "csi-a", index: "0", name: "vi-output, imx219 9-0010"},
+			"video1": {port: "csi-b", index: "0", name: "vi-output, imx219 9-0010"},
+		}
+		s := ckService(t, nodes)
+		a, b := s.cameraIdentityKey("/dev/video0"), s.cameraIdentityKey("/dev/video1")
+		if a == b || a == "/dev/video0" {
+			t.Fatalf("the two sensors are %q and %q, want a name each", a, b)
+		}
+		nodes["video0"], nodes["video1"] = nodes["video1"], nodes["video0"]
+		if gotB, gotA := s.cameraIdentityKey("/dev/video0"), s.cameraIdentityKey("/dev/video1"); gotA != a || gotB != b {
+			t.Errorf("at each other's paths they are %q and %q, want %q and %q", gotA, gotB, a, b)
+		}
+	})
+	t.Run("a node without a sysfs identity", func(t *testing.T) {
+		s := ckService(t, map[string]ckNode{})
+		if got := s.cameraIdentityKey("/dev/video9"); got != "/dev/video9" {
+			t.Errorf("it is %q, want its path", got)
+		}
+	})
 }
