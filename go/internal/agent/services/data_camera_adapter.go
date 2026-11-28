@@ -316,7 +316,7 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 	}
 	var achievedW, achievedH, achievedFPS uint32
 	var restarted bool
-	joinedAt := time.Now()
+	ownWait := ownCameraWait{since: time.Now()}
 	hub, subID, frames, primaryKind, ownFramesRefusal, err := joinWithVideoFallback(primaryKind, a.video.refusingOwnFramesKnownAbsent(src.key, req, func(kind frameKind) (hub *deviceHub, id int, ch chan *videoFrame, err error) {
 		hub, id, ch, achievedW, achievedH, achievedFPS, restarted, err = a.subscribeHub(ctx, src.key, req, kind, capture.EncodePreset())
 		return hub, id, ch, err
@@ -340,7 +340,7 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 			return a.video.joinHubKind(ctx, src.key, atDefaults, kind, capture.EncodePreset())
 		})(kind)
 	}
-	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, primaryKind: primaryKind, wantsNativeBeside: nativeBeside, monotonicMapping: a.monotonicMapping, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, joinedAt: joinedAt, lastSnapshotIdx: -1,
+	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, primaryKind: primaryKind, wantsNativeBeside: nativeBeside, monotonicMapping: a.monotonicMapping, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, ownWait: ownWait, lastSnapshotIdx: -1,
 		presetNotApplied: a.video.whyPresetNotApplied(devID, capture)}
 	if ownFramesRefusal != nil {
 		c.ownFramesNoLongerStored(ownFramesRefusal)
@@ -359,38 +359,17 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 		cancel()
 		<-c.done
 		return nil, ctx.Err()
-	case <-time.After(20 * time.Second):
-		waitsForCamera := hub.cameraWait.waiting.Load()
+	case <-time.After(firstCameraFrameWait):
+		gaveUp := time.Now()
 		cancel()
 		<-c.done
-		if waitsForCamera {
-			return nil, errors.New("timed out waiting for the first camera frame: " + cameraStillHeld)
-		}
-		return nil, errors.New("timed out waiting for the first camera frame")
+		return nil, errors.New("timed out waiting for the first camera frame" + c.whyNoFirstFrame(gaveUp, firstCameraFrameWait))
 	}
 }
 
-const (
-	cameraStillHeld      = "the camera was still held by its previous capture"
-	cameraWaitedNote     = "the camera's previous capture took %s to close; recording started after it"
-	cameraStillHeldAtEnd = cameraStillHeld + " when the recording ended, %s after its capture asked for it; that capture never started"
-)
-
-// noteCameraWait says in the episode what the wait of the hub's capture for
-// the camera's previous capture (holdCamera) cost this recording. atEnd says
-// the recording is over, which is when a capture that waits still has kept it
-// from the camera for good; call it then before leaving the hub, which ends a
-// hub with no other subscriber and its wait with it.
-func (c *cameraCapture) noteCameraWait(atEnd bool) {
-	began, ended := c.hub.cameraWait.span()
-	switch {
-	case began.IsZero():
-	case ended.IsZero() && atEnd && c.hub.cameraWait.waiting.Load():
-		c.notes = append(c.notes, fmt.Sprintf(cameraStillHeldAtEnd, time.Since(began).Round(time.Millisecond)))
-	case ended.After(c.joinedAt):
-		c.notes = append(c.notes, fmt.Sprintf(cameraWaitedNote, ended.Sub(began).Round(time.Millisecond)))
-	}
-}
+// firstCameraFrameWait is how long a recording that is not armed waits for its
+// first frame before its episode's start fails.
+const firstCameraFrameWait = 20 * time.Second
 
 // buildStreamRequest translates a campaign capture policy into stream
 // parameters the video pipeline will accept. Caps that cannot be requested at
@@ -577,11 +556,8 @@ type cameraCapture struct {
 	// monotonicMapping is the same over data.SampleMonotonicMapping.
 	monotonicMapping func() (data.MonotonicMappingSample, error)
 	// notes accumulates honesty notes folded into the result's source detail.
-	notes []string
-	// joinedAt is when the episode began to depend on the hub for its frames:
-	// a wait of the hub's capture for the camera that ended before then kept
-	// no part of this recording waiting (noteCameraWait).
-	joinedAt time.Time
+	notes   []string
+	ownWait ownCameraWait
 	// videoStoredAt counts the video frames stored by the preset the agent's
 	// encoder made each at (videoFrame.encodedAt), and lastVideoAt is that of
 	// the last one taken. awaitNewEncoderSegment is set from a video frame made
@@ -664,7 +640,7 @@ func (c *cameraCapture) signalReady(err error) { c.readyOnce.Do(func() { c.ready
 func (c *cameraCapture) run() {
 	defer close(c.done)
 	defer func() {
-		c.noteCameraWait(true)
+		c.noteCameraWaitAtEnd()
 		c.result.SourceID = c.source.ID
 		if len(c.observedDomains) == 1 {
 			for domain := range c.observedDomains {

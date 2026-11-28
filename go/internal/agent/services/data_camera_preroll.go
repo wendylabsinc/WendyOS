@@ -387,6 +387,10 @@ type armedCameraSource struct {
 	// lose the count. activate hands the total to the capture, which reports
 	// it as the episode's armed-period drops.
 	carriedDrops uint64
+	// armedAt is when the source was armed, and ownWait what it has waited
+	// for the camera since.
+	armedAt time.Time
+	ownWait ownCameraWait
 	// alive reports that the subscription is still delivering. The fill goroutine
 	// clears it if the producer stops or a reattach fails, so activate knows to
 	// re-subscribe for the live tail instead of handing capture a dead channel.
@@ -461,6 +465,11 @@ func (a *armedCameraSource) join(ctx context.Context) error {
 	}))
 	if err != nil {
 		return err
+	}
+	if now := time.Now(); a.hub == nil {
+		a.armedAt, a.ownWait.since = now, now
+	} else {
+		a.ownWait.movedFrom(a.hub, now)
 	}
 	a.hub, a.subID, a.frames, a.primaryKind = hub, subID, frames, kind
 	if refusal != nil {
@@ -597,7 +606,24 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	if a.source.Capture != nil && a.source.Capture.Rate > 0 {
 		rateCap = a.source.Capture.Rate
 	}
-	notes := append(a.preRollNotes(preRoll, achievedOffset, shortfall), a.storeNotes...)
+	// A wait for the camera that was over by the trigger is on record here, or
+	// kept nothing of the episode waiting: the episode starts its own count.
+	// It cost the episode what the pre-roll would have held before it ended.
+	ownWait := a.ownWait
+	var waitInPreRoll string
+	windowOpens := triggered.Add(-a.buffer)
+	if from, until, state := a.ownWait.of(a.hub, triggered); state == ownWaitOver {
+		ownWait = ownCameraWait{since: triggered, hadCamera: true}
+		if until.After(windowOpens) {
+			waitInPreRoll = fmt.Sprintf(cameraWaitInPreRoll, roundedWait(from, until), roundedWait(until, triggered))
+		}
+	}
+	armedShort := shortfall && (waitInPreRoll == "" || a.armedAt.After(windowOpens))
+	notes := a.preRollNotes(preRoll, achievedOffset, armedShort)
+	if waitInPreRoll != "" {
+		notes = append(notes, waitInPreRoll)
+	}
+	notes = append(notes, a.storeNotes...)
 
 	captureCtx, cancel := context.WithCancel(context.Background())
 	devID := a.devID
@@ -631,7 +657,7 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 		ownFramesAreVideo: a.ownFramesAreVideo, ownFramesCodec: a.ownFramesCodec, ownFramesRefused: a.ownFramesRefused,
 		rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel,
 		done: make(chan struct{}), ready: make(chan error, 1), mode: "continuous", rateCap: rateCap,
-		notes: notes, joinedAt: triggered, lastSnapshotIdx: -1, preRoll: preRoll, armed: true,
+		notes: notes, ownWait: ownWait, lastSnapshotIdx: -1, preRoll: preRoll, armed: true,
 		dropBaseline: baseline, armedDrops: armedDrops,
 		presetNotApplied: a.video.whyPresetNotApplied(a.devID, a.source.Capture),
 	}
@@ -655,13 +681,13 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 // detail: what pre-roll was achieved against what was requested, and the fact
 // that a request for an explicit resolution cannot be honoured by a pre-roll
 // subscription (which asserts no parameters so it never takes the camera over).
-func (a *armedCameraSource) preRollNotes(preRoll []bufferedCameraFrame, achievedOffset int64, shortfall bool) []string {
+func (a *armedCameraSource) preRollNotes(preRoll []bufferedCameraFrame, achievedOffset int64, armedShort bool) []string {
 	var notes []string
 	if len(preRoll) == 0 {
 		notes = append(notes, fmt.Sprintf("camera pre-roll: requested %s buffer, but no decodable frame was buffered before the trigger; the episode opens at the trigger", a.buffer))
 	} else {
 		note := fmt.Sprintf("camera pre-roll: requested %s buffer, flushed %d frame(s) reaching %s before the trigger", a.buffer, len(preRoll), time.Duration(-achievedOffset))
-		if shortfall {
+		if armedShort {
 			note += "; armed less than the buffer before the trigger, so achieved pre-roll is shorter than requested"
 		}
 		if a.ring.droppedForBytes || (a.ownFrameRing != nil && a.ownFrameRing.droppedForBytes) {

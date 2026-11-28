@@ -695,7 +695,7 @@ func (c *cameraCapture) rejoinSubscriptions() error {
 	if err != nil {
 		return err
 	}
-	c.noteCameraWait(false)
+	c.noteCameraWaitOnLeaving()
 	c.hub, c.subID, c.frames, c.primaryKind = hub, subID, frames, kind
 	if refusal != nil {
 		c.ownFramesNoLongerStored(refusal)

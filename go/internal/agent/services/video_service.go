@@ -684,21 +684,18 @@ type deviceHub struct {
 // cameraWait is one capture's wait for its turn at the camera. The zero value
 // is a capture that has not waited.
 type cameraWait struct {
-	// waiting is set for as long as the capture waits.
-	waiting atomic.Bool
-	mu      sync.Mutex
-	// ended stays zero for a capture that waits still, or whose hub ended
-	// before its turn came.
+	mu sync.Mutex
+	// ended is when the capture had the camera. gaveUp says its hub ended
+	// first, so that it never had it.
 	began, ended time.Time
+	gaveUp       bool
 }
 
 func (w *cameraWait) begin() (began time.Time) {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.began = time.Now()
-	began = w.began
-	w.mu.Unlock()
-	w.waiting.Store(true)
-	return began
+	return w.began
 }
 
 func (w *cameraWait) cameraTaken() (waited time.Duration) {
@@ -708,10 +705,19 @@ func (w *cameraWait) cameraTaken() (waited time.Duration) {
 	return w.ended.Sub(w.began)
 }
 
-func (w *cameraWait) span() (began, ended time.Time) {
+func (w *cameraWait) giveUp() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.began, w.ended
+	w.gaveUp = true
+}
+
+// read is the whole wait in one look, so that no reader sees a wait that is
+// neither going on nor over. waiting says it began and has not ended either
+// way.
+func (w *cameraWait) read() (began, ended time.Time, waiting bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.began, w.ended, !w.began.IsZero() && w.ended.IsZero() && !w.gaveUp
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -2485,22 +2491,29 @@ func (s *VideoService) holdCamera(ctx context.Context, key string, wait *cameraW
 	case hold <- struct{}{}:
 	default:
 		waiting := wait.begin()
-		defer wait.waiting.Store(false)
 		stillHeld := time.NewTicker(cameraReleaseWarnEvery)
 		defer stillHeld.Stop()
 		for taken := false; !taken; {
 			select {
 			case hold <- struct{}{}:
 				taken = true
-				s.logger.Info("previous capture released the camera",
-					zap.String("device", key), zap.Duration("waited", wait.cameraTaken()))
 			case <-ctx.Done():
+				wait.giveUp()
 				return nil, false
 			case <-stillHeld.C:
 				s.logger.Warn("previous capture has not released the camera; the next capture starts when it does",
 					zap.String("device", key), zap.Duration("waited", time.Since(waiting)))
 			}
 		}
+		// The turn and the hub's end can come together, and a hub that has
+		// ended did not get the camera.
+		if ctx.Err() != nil {
+			wait.giveUp()
+			<-hold
+			return nil, false
+		}
+		s.logger.Info("previous capture released the camera",
+			zap.String("device", key), zap.Duration("waited", wait.cameraTaken()))
 	}
 	if ctx.Err() != nil {
 		<-hold
