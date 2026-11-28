@@ -537,6 +537,10 @@ func TestSampleSeqKey_OnlyALocalVideoNodeIsKeyedByItsCamera(t *testing.T) {
 	s.cameraIdentity = func(base string) (camera.Identity, error) {
 		return camera.Identity{Device: csPort("1-3"), Index: "0", Name: "the camera at " + base}, nil
 	}
+	s.presentCameras = func() map[string]camera.Identity {
+		id, _ := s.cameraIdentity("video4")
+		return map[string]camera.Identity{"video4": id}
+	}
 	if got := s.sampleSeqKey("/dev/video4"); got == "/dev/video4" || got != s.cameraIdentityKey("/dev/video4") {
 		t.Errorf("sample counter key of /dev/video4 = %q, want its camera's, %q", got, s.cameraIdentityKey("/dev/video4"))
 	}

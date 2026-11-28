@@ -740,10 +740,11 @@ func ckService(t *testing.T, nodes map[string]ckNode) *VideoService {
 		return out
 	}
 	s.cameraUSB = func(base string) (camera.USB, error) {
-		if err := nodes[base].usbErr; err != nil {
-			return camera.USB{}, err
+		n, ok := nodes[base]
+		if !ok {
+			return camera.USB{}, os.ErrNotExist
 		}
-		return nodes[base].usb, nil
+		return n.usb, n.usbErr
 	}
 	s.readStableNames = func() map[string]stableNames {
 		t.Error("naming a camera read udev's names, which are not there yet when a camera has just come back")
@@ -916,11 +917,29 @@ func TestCameraIdentityKey_ACameraIsKnownAgainByWhatItSaysOfItselfAndWhereItWas(
 	t.Run("a camera the listing of present cameras misses", func(t *testing.T) {
 		nodes := map[string]ckNode{"video0": brio("1-2.1", "SN1")}
 		s := ckService(t, nodes)
-		s.presentCameras = func() map[string]camera.Identity { return nil }
 		first := s.cameraIdentityKey("/dev/video0")
-		nodes["video0"] = brio("1-2.2", "SN1")
+		if first == "/dev/video0" {
+			t.Fatal("the camera is named by its path")
+		}
+		listed := s.presentCameras
+		s.presentCameras = func() map[string]camera.Identity { return nil }
 		if got := s.cameraIdentityKey("/dev/video0"); got != first {
-			t.Errorf("on another port it is %q, want %q", got, first)
+			t.Errorf("on its port, missing from the listing, it is %q, want %q", got, first)
+		}
+		// On a port it was never at, a node the listing does not have is no
+		// camera to follow there or to make: it is named when it is listed.
+		nodes["video0"] = brio("1-2.2", "SN1")
+		if got := s.cameraIdentityKey("/dev/video0"); got != "/dev/video0" {
+			t.Errorf("on another port, missing from the listing, it is %q, want its path", got)
+		}
+		s.presentCameras = listed
+		if got := s.cameraIdentityKey("/dev/video0"); got != first {
+			t.Errorf("listed again on that port it is %q, want %q", got, first)
+		}
+		s.cameras.mu.Lock()
+		defer s.cameras.mu.Unlock()
+		if n := len(s.cameras.seen); n != 1 {
+			t.Errorf("%d cameras are known, want the one", n)
 		}
 	})
 	t.Run("cameras that are not on USB", func(t *testing.T) {
@@ -1046,6 +1065,50 @@ func TestCameraIdentityKey_ACameraThatCannotBeReadIsNoNewCamera(t *testing.T) {
 		nodes["video0"] = brio("1-2.1", "SN1")
 		if got := s.cameraIdentityKey("/dev/video0"); got == "/dev/video0" {
 			t.Error("read, it is still named by its path")
+		}
+	})
+	t.Run("it goes and comes back on another port while it is being named", func(t *testing.T) {
+		nodes := map[string]ckNode{"video0": brio("1-1", "SN1")}
+		s := ckService(t, nodes)
+		first := s.cameraIdentityKey("/dev/video0")
+		// Its identity is read at its path, and it is at another path on
+		// another port by the time the present cameras are listed.
+		read := s.cameraIdentity
+		s.cameraIdentity = func(base string) (camera.Identity, error) {
+			id, err := read(base)
+			if base == "video0" {
+				delete(nodes, "video0")
+				nodes["video2"] = brio("1-2", "SN1")
+			}
+			return id, err
+		}
+		if got := s.cameraIdentityKey("/dev/video0"); got != "/dev/video0" {
+			t.Errorf("the path it has left is named %q, want the path", got)
+		}
+		s.cameraIdentity = read
+		if got := s.cameraIdentityKey("/dev/video2"); got != first {
+			t.Errorf("where it came back it is %q, want %q", got, first)
+		}
+		if n := known(s); n != 1 {
+			t.Errorf("%d cameras are known, want the one", n)
+		}
+	})
+	t.Run("another camera at its path on another port", func(t *testing.T) {
+		nodes := map[string]ckNode{"video0": brio("1-2.1", "SN1")}
+		s := ckService(t, nodes)
+		first := s.cameraIdentityKey("/dev/video0")
+		nodes["video0"] = unread(brio("1-2.2", "SN2"))
+		if got := s.cameraIdentityKey("/dev/video0"); got == first {
+			t.Error("a camera that cannot be read, on a port the first was never at, took its name by the path alone")
+		}
+	})
+	t.Run("another model at its path on its port", func(t *testing.T) {
+		nodes := map[string]ckNode{"video0": brio("1-2.1", "SN1")}
+		s := ckService(t, nodes)
+		first := s.cameraIdentityKey("/dev/video0")
+		nodes["video0"] = unread(ckNode{port: "1-2.1", index: "0", name: "C920", usb: camera.USB{Vendor: "0c45", Product: "6366", Interface: "00"}})
+		if got := s.cameraIdentityKey("/dev/video0"); got == first {
+			t.Error("a camera of another model that cannot be read took the name of the one that was on its port")
 		}
 	})
 }

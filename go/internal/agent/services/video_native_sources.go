@@ -364,15 +364,21 @@ func (s *VideoService) cameraIdentityKey(path string) string {
 	if err != nil {
 		return s.cameras.lastNamedAt(path)
 	}
+	// A node the listing does not have went after id was read, or the listing
+	// fell short. It is not put beside what the listing shows, where it would
+	// be a second node of a camera listed elsewhere, and is named as a node
+	// that cannot be read is.
+	own := cameraNode{id: id, unread: true}
 	present := s.presentIdentities()
-	nodes := make([]cameraNode, 0, len(present)+1)
+	nodes := make([]cameraNode, 0, len(present))
 	for other, otherID := range present {
-		if other != base {
-			nodes = append(nodes, s.cameraNode(other, otherID))
+		node := s.cameraNode(other, otherID)
+		nodes = append(nodes, node)
+		if other == base {
+			own = node
 		}
 	}
-	own := s.cameraNode(base, id)
-	return s.cameras.name(path, own, append(nodes, own))
+	return s.cameras.name(path, own, nodes)
 }
 
 func (s *VideoService) cameraNode(base string, id camera.Identity) cameraNode {
@@ -383,9 +389,10 @@ func (s *VideoService) cameraNode(base string, id camera.Identity) cameraNode {
 	return cameraNode{id: id, usb: usb, unread: err != nil}
 }
 
-// name is the key of the camera at path, which is own, one of the nodes
-// present. A node that cannot be read is no new camera: it is the camera last
-// named at path if that one was at its port, else the only known camera there.
+// name is the key of the camera at path, which is own: one of the nodes
+// present, or unread when the listing did not have it. A node that cannot be
+// read is no new camera: it is the camera last named at path if that one was
+// at its port, else the only known camera there.
 // present was listed before the lock was taken, so two listings can be seen
 // out of order; the next one puts the ports right, and no key changes.
 func (k *knownCameras) name(path string, own cameraNode, present []cameraNode) string {
