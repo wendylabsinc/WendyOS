@@ -4,6 +4,7 @@ package camerashare
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -41,7 +42,85 @@ const (
 	// takes no preset". A row with an h264 mode has this key or
 	// KeyH264DefaultPreset.
 	KeyH264PresetIgnored = "h264_preset_ignored"
+	// KeySizes lists the sizes an app's entitlement can state for the camera's
+	// node, each with the rate the camera is captured at there, smallest
+	// first, e.g. "640x480@30, 1280x720@30, 1920x1080@30". A row of a camera
+	// that is shared has this key or KeySizesUnavailable, and neither from an
+	// agent that does not read an entitlement's size.
+	KeySizes = "share_sizes"
+	// KeySizesUnavailable is why no size can be stated for a shared camera,
+	// whose nodes are then all made at the size of KeyMode.
+	KeySizesUnavailable = "share_sizes_unavailable"
+	// KeySize is the size and rate the camera is captured at for the apps
+	// under KeyWith, e.g. "1920x1080@30". A camera is captured at one size, so
+	// a node made for another app while they share it has that size too.
+	KeySize = "shared_size"
 )
+
+// SizeAtRate is one entry of KeySizes or the value of KeySize.
+type SizeAtRate struct{ Width, Height, FPS uint32 }
+
+// Size reads "1920x1080".
+func (s SizeAtRate) Size() string { return fmt.Sprintf("%dx%d", s.Width, s.Height) }
+
+func (s SizeAtRate) String() string { return fmt.Sprintf("%s@%d", s.Size(), s.FPS) }
+
+// FormatSizes is the value of KeySizes for sizes.
+func FormatSizes(sizes []SizeAtRate) string {
+	entries := make([]string, len(sizes))
+	for i, size := range sizes {
+		entries[i] = size.String()
+	}
+	return strings.Join(entries, ", ")
+}
+
+// ParseSizes reads a KeySizes or KeySize value, leaving out any entry it
+// cannot read.
+func ParseSizes(value string) []SizeAtRate {
+	var sizes []SizeAtRate
+	for _, entry := range strings.Split(value, ",") {
+		size, rate, _ := strings.Cut(strings.TrimSpace(entry), "@")
+		width, height, _ := strings.Cut(size, "x")
+		w, errW := strconv.ParseUint(width, 10, 32)
+		h, errH := strconv.ParseUint(height, 10, 32)
+		fps, errFPS := strconv.ParseUint(rate, 10, 32)
+		if errW == nil && errH == nil && errFPS == nil && w > 0 && h > 0 {
+			sizes = append(sizes, SizeAtRate{uint32(w), uint32(h), uint32(fps)})
+		}
+	}
+	return sizes
+}
+
+// ModeAt is a KeyMode value, such as "1280x720 YUYV, 30 fps", as it reads for
+// a node of the same format made at another size and rate.
+func ModeAt(mode string, at SizeAtRate) string {
+	_, layout, ok := strings.Cut(mode, " ")
+	if !ok {
+		return mode
+	}
+	if rate := strings.LastIndex(layout, ", "); rate >= 0 {
+		layout = layout[:rate]
+	}
+	return fmt.Sprintf("%s %s, %d fps", at.Size(), layout, at.FPS)
+}
+
+// DescribeSizeServedInstead says that a node is made at another size than its
+// app's entitlement states, with the agent's reason.
+func DescribeSizeServedInstead(asked, served, why string) string {
+	return fmt.Sprintf("asked for size %s; serving %s because %s", asked, served, why)
+}
+
+// SizeSharedWith is why an app's node is made at the size other apps share
+// the camera at.
+func SizeSharedWith(apps []string, size string) string {
+	return fmt.Sprintf("the camera is shared with %s at %s, and a camera is captured at one size", strings.Join(apps, ", "), size)
+}
+
+// SizeNotAmong is why a size is not served by a camera whose KeySizes value
+// is sizes.
+func SizeNotAmong(sizes string) string {
+	return "a node of this camera can be made at " + sizes
+}
 
 const softwareEncoderSuffix = " (software)"
 
