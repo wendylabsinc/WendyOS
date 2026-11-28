@@ -2,20 +2,19 @@ name: Docs Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 concurrency:
-  # Unrelated label events must not cancel an active requested review.
-  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review: docs' && github.run_id || 'review' }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}"
   cancel-in-progress: true
 
 jobs:
   docs-review:
     name: Review docs coverage
     if: >-
-      contains(github.event.pull_request.labels.*.name, 'review: docs') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'review: docs') &&
+      !github.event.pull_request.draft &&
+      github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:

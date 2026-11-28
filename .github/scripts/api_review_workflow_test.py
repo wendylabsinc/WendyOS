@@ -100,10 +100,10 @@ class TrustedSourceTests(unittest.TestCase):
                                 for author in authors:
                                     labels = [label] if enabled and label else []
                                     event = {"action": action, "label": {"name": label if matching else "unrelated"},
-                                             "pull_request": {"draft": draft, "head": {"repo": {"full_name": "fork" if fork else "repo"}},
+                                             "pull_request": {"draft": draft, "number": 42, "head": {"repo": {"full_name": "fork" if fork else "repo"}},
                                                               "user": {"login": author}}}
-                                    requested = enabled and (action != "labeled" or matching)
-                                    automatic = author == "dependabot[bot]" and action != "labeled"
+                                    requested = action in ("opened", "synchronize", "reopened", "ready_for_review") and not draft and author != "dependabot[bot]"
+                                    automatic = author == "dependabot[bot]" and action in ("opened", "synchronize", "reopened")
                                     expected = (not fork and (requested or automatic)
                                                 if label else not fork and not draft)
                                     cases.append({"github": {"event_name": "pull_request", "event": event,
@@ -113,19 +113,21 @@ class TrustedSourceTests(unittest.TestCase):
 const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
 const evaluate = new Function("github", "labels", "contains", "return " + input.expression);
 for (const c of input.cases) {
-  const actual = evaluate(c.github, c.labels, (items, value) => items.includes(value));
+  const actual = input.events.includes(c.github.event.action) &&
+    evaluate(c.github, c.labels, (items, value) => items.includes(value));
   if (actual !== c.expected) throw new Error(JSON.stringify({c, actual}));
   if (input.label) {
     const group = input.group.replace(/\$\{\{(.*?)\}\}/g, (_, expr) =>
       new Function("github", "inputs", "return " + expr)(c.github, {}));
-    const unrelated = c.github.event.action === "labeled" && c.github.event.label.name !== input.label;
-    if (!group.endsWith(unrelated ? "-123" : "-review")) throw new Error(group);
+    const botReady = c.github.event.pull_request.user.login === "dependabot[bot]" && c.github.event.action === "ready_for_review";
+    const suffix = input.label === "review: security" ? (botReady ? "-123" : "-review") : "-42";
+    if (!group.endsWith(suffix)) throw new Error(group);
   }
 }
-'''], input=json.dumps({"expression": expression, "cases": cases, "group": group, "label": label}), text=True, capture_output=True)
+'''], input=json.dumps({"expression": expression, "cases": cases, "group": group, "label": label,
+                                   "events": ["opened", "synchronize", "reopened", "ready_for_review"]}), text=True, capture_output=True)
             self.assertEqual(execution.returncode, 0, execution.stderr)
-            self.assertIn("types: [opened, synchronize, reopened, " +
-                          ("labeled]" if label else "ready_for_review]"), text)
+            self.assertIn("types: [opened, synchronize, reopened, ready_for_review]", text)
 
     def test_retained_pr_base_cannot_pin_obsolete_automation(self):
         result = self.run_resolver({"object": {"type": "commit", "sha": CURRENT_MAIN}})

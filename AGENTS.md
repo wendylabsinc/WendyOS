@@ -103,21 +103,14 @@ performing tests or other required checks.
      ecosystem component or changing responsibilities between components.
    - Include this section only when the PR changes the architecture.
 
-## Optional AI reviews
+## AI reviews
 
-AI reviews run only when requested. Apply the corresponding PR labels:
-
-- `review: security` for the security review. Dependabot PRs still run the
-  dependency policy check without a label.
-- `review: api` for API and compatibility review, including a risk recommendation.
-- `review: docs` for documentation coverage suggestions.
-- `review: integration-tests` for integration-test coverage suggestions.
-
-Each label starts its review and enables reruns on subsequent pushes until removed.
-Explicitly requested reviews can run on drafts. API review recommends a risk rating
-in its comment but does not change the author's risk label. Its `api-review` finding
-label is separate from the `review: api` opt-in label. Existing manual API validation
-remains available without publishing results. Builds and tests run as before.
+AI reviews run in parallel when a non-draft PR is opened, updated, reopened or
+marked ready for review. Keep PRs draft while working, then mark them ready
+when done and self-reviewed. Use GitHub's Re-run jobs button or mark the PR
+draft and ready again to rerun.
+Dependabot keeps its secretless dependency policy on PR updates, including drafts.
+API manual validation remains nonpublishing; API review does not change risk labels.
 
 ## Setup
 
