@@ -399,7 +399,7 @@ type derivedOutput struct {
 }
 
 func (l *derivedLayer) picturesOutput(pipe *os.File) derivedOutput {
-	return derivedOutput{name: "pictures", pipe: pipe, maxPayload: maxRawFrameBytes, wanted: l.demand.wantRaw,
+	return derivedOutput{name: "pictures", pipe: pipe, maxPayload: maxPictureBytes, wanted: l.demand.wantRaw,
 		usable: func(payloadBytes int64) bool {
 			return payloadBytes == int64(l.pictures.GetBytesPerLine())*int64(l.pictures.GetHeight())
 		},

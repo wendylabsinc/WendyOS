@@ -80,13 +80,32 @@ func mjpegRawWhy(w, h uint32) string {
 	return fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", w, h)
 }
 
+// maxPictureBytes bounds a picture on its way to pixel subscribers, which are
+// camera nodes: one 1920x1080 YUYV picture. A picture is never a gRPC message,
+// so maxRawFrameBytes does not bound it, and a v4l2loopback node takes any
+// frame up to 8192x8192. What bounds it is memory and copying. Every picture
+// is a buffer of its own, read from a 64 KiB pipe; a subscriber's queue holds
+// up to four and its node two more. At 3840x2160 that is 100 MB a node and
+// 500 MB read a second at 30 fps, which no device has been measured to carry.
+const (
+	maxPictureWidth, maxPictureHeight = 1920, 1080
+	maxPictureBytes                   = maxPictureWidth * maxPictureHeight * yuyvBytesPerPixel
+)
+
+// The hub and the tap hold raw frames and pictures to the picture bound alone.
+const _ = uint(maxPictureBytes - maxRawFrameBytes)
+
+func pictureTooLargeWhy(w, h uint32) string {
+	return fmt.Sprintf("a %dx%d picture exceeds the %d-byte picture limit (%dx%d YUYV)", w, h, maxPictureBytes, maxPictureWidth, maxPictureHeight)
+}
+
 // yuyvPictureFormat describes the YUYV pictures decoded from a camera's
-// compressed frames, or nil when one would exceed the raw frame limit.
+// compressed frames, or nil when one would exceed maxPictureBytes.
 func yuyvPictureFormat(w, h uint32) *agentpb.RawFormat {
-	if uint64(w)*2*uint64(h) > maxRawFrameBytes {
+	if uint64(w)*yuyvBytesPerPixel*uint64(h) > maxPictureBytes {
 		return nil
 	}
-	return &agentpb.RawFormat{Width: w, Height: h, Fourcc: fourccYUYV, BytesPerLine: w * 2}
+	return &agentpb.RawFormat{Width: w, Height: h, Fourcc: fourccYUYV, BytesPerLine: w * yuyvBytesPerPixel}
 }
 
 // tapFormat is the format of the frames the pipeline writes to rawTapFD, or nil

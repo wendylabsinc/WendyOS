@@ -360,7 +360,7 @@ func (s *VideoService) pictureLayerFor(hub derivingHub, path string, frames ownF
 		return nil, fmt.Sprintf("pictures cannot be decoded from its frames on this device: %v", err)
 	}
 	if layer.pictures == nil {
-		return nil, fmt.Sprintf("a %dx%d picture exceeds the %d-byte raw frame limit", frames.width, frames.height, maxRawFrameBytes)
+		return nil, pictureTooLargeWhy(frames.width, frames.height)
 	}
 	return layer, ""
 }

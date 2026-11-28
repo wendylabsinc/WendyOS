@@ -1223,3 +1223,175 @@ func TestDerivedLayerPairsNoPictureOfAnH264StreamItsDecoderReorders(t *testing.T
 		t.Fatalf("a picture node made before = %q\nwant %q", got, want)
 	}
 }
+
+// Real gst-launch-1.0 and real elements at 1920x1080, where one picture is
+// larger than a default gRPC message: each must come through the child's pipe
+// and the hub whole, under the identity of its own frame, from a camera that
+// produces JPEG and from one that produces H.264.
+func TestDerivedLayerDeliversA1920x1080PictureWhole(t *testing.T) {
+	const width, height, pictureBytes, frames = 1920, 1080, 1920 * 2 * 1080, 12
+	gstPath, available, skip := derivedTestGStreamer(t)
+	wholePictures := func(what string, pictures []*videoFrame, atLeast int, gray *decodedGray) {
+		t.Helper()
+		if len(pictures) < atLeast {
+			t.Fatalf("%s: %d frames gave %d pictures, want at least %d", what, frames, len(pictures), atLeast)
+		}
+		for i, picture := range pictures {
+			if picture.codec != agentpb.VideoCodec_VIDEO_CODEC_RAW || len(picture.data) != pictureBytes || picture.rawFmt.GetFourcc() != fourccYUYV ||
+				picture.rawFmt.GetWidth() != width || picture.rawFmt.GetHeight() != height || picture.rawFmt.GetBytesPerLine() != width*2 {
+				t.Fatalf("%s: picture %d: codec=%v bytes=%d format=%v, want a whole %dx%d YUYV picture of %d bytes",
+					what, i, picture.codec, len(picture.data), picture.rawFmt, width, height, pictureBytes)
+			}
+			if luma, shade := yuyvMeanLuma(picture.data), derivedTestShade(picture.sampleID); !gray.shows(luma, shade) {
+				t.Fatalf("%s: picture %d carries sample %d but shows luma %d; that sample's frame shows %s", what, i, picture.sampleID, luma, gray.lumasOf(shade))
+			}
+		}
+	}
+	readPictures := func(hub *deviceHub) (pictures *derivedFramesSeen) {
+		t.Helper()
+		id, ch, err := hub.subscribePixels()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pictures = &derivedFramesSeen{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			pictures.collect(ch)
+		}()
+		t.Cleanup(func() {
+			hub.mu.Lock()
+			if sub := hub.subs[id]; sub != nil && !sub.closed {
+				sub.closed = true
+				close(sub.ch)
+			}
+			hub.mu.Unlock()
+			hub.unsubscribe(id)
+			<-done
+		})
+		return pictures
+	}
+	stamp := func(sampleID uint64) frameTimestamp {
+		return frameTimestamp{wallNs: derivedTestCaptureEpoch + sampleID*derivedTestFramePeriod, nativeNs: int64(sampleID),
+			nativeClock: "CLOCK_MONOTONIC_V4L2", sequence: uint32(sampleID), sequenceValid: true, auAligned: true, native: true}
+	}
+
+	// The JPEG camera's layer encodes too, for a viewer; its access units are
+	// the H.264 camera's frames below.
+	jpegHub, cancelJPEGHub := newTestHub(t)
+	defer cancelJPEGHub()
+	jpegHub.sampleSeq = new(atomic.Uint64)
+	var units derivedFramesSeen
+	layer, err := newDerivedLayer(derivedLayerConfig{
+		logger: zap.NewNop(), device: "/dev/video44", format: videoCodecMJPEG,
+		gstPath: gstPath, available: available, width: width, height: height, framerate: 30,
+		grace: time.Minute, demand: jpegHub,
+		publish: func(source, derived *videoFrame) (bool, error) {
+			keepProducing, err := jpegHub.broadcastDerivedFrom(source, derived)
+			if err == nil && derived.codec == agentpb.VideoCodec_VIDEO_CODEC_H264 {
+				units.add(derived)
+			}
+			return keepProducing, err
+		},
+	})
+	if err != nil {
+		skip("this GStreamer cannot run the derived layer: " + err.Error())
+	}
+	if layer.pictures == nil {
+		t.Fatalf("a %dx%d JPEG camera's layer has no pictures", width, height)
+	}
+	jpegPictures := readPictures(jpegHub)
+	idViewer, viewer, err := jpegHub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jpegHub.unsubscribe(idViewer)
+	go func() {
+		for range viewer {
+		}
+	}()
+	defer jpegHub.feedDerivedLayer(layer)()
+	layer.offerTo(jpegHub)
+	layerCtx, stopLayer := context.WithCancel(context.Background())
+	layerDone := make(chan error, 1)
+	go func() { layerDone <- layer.run(layerCtx) }()
+	defer func() {
+		stopLayer()
+		<-layerDone
+	}()
+	waitUntil(t, "the JPEG camera's child takes frames", layer.feeding.Load)
+	for range frames {
+		sampleID := jpegHub.sampleSeq.Load() + 1
+		shade := uint8(derivedTestShade(sampleID))
+		gray := image.NewYCbCr(image.Rect(0, 0, width, height), image.YCbCrSubsampleRatio420)
+		for i := range gray.Y {
+			gray.Y[i] = shade
+		}
+		for i := range gray.Cb {
+			gray.Cb[i], gray.Cr[i] = 128, 128
+		}
+		var frame bytes.Buffer
+		if err := jpeg.Encode(&frame, gray, nil); err != nil {
+			t.Fatal(err)
+		}
+		wantPictures, wantUnits := jpegPictures.count()+1, units.count()+1
+		jpegHub.produceCaptured(frame.Bytes(), stamp(sampleID), videoCodecMJPEG)
+		deadline := time.Now().Add(20 * time.Second)
+		for jpegPictures.count() < wantPictures || units.count() < wantUnits {
+			if time.Now().After(deadline) {
+				t.Fatalf("JPEG: sample %d came back as %d of %d pictures and %d of %d access units (layer counts %+v)",
+					sampleID, jpegPictures.count(), wantPictures, units.count(), wantUnits, layer.counts())
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	wholePictures("JPEG", jpegPictures.all(), frames, &decodedGray{})
+
+	svc := shareTestService(t, []uint32{v4l2PixFmtH264}, map[uint32][][2]uint32{v4l2PixFmtH264: {{3840, 2160}, {width, height}}}, []uint32{30})
+	svc.logger, svc.encoderIdleGrace = zap.NewNop(), time.Minute
+	svc.gstMemo.gstPath, svc.gstMemo.available = gstPath, available
+	own, declined, _ := svc.ownFramesAtDefaults(usbCam().GetPath())
+	if declined != "" || own.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 || own.width != width || own.height != height {
+		t.Fatalf("the H.264 camera's own frames = %+v (declined %q), want %dx%d H.264", own, declined, width, height)
+	}
+	h264Hub, cancelH264Hub := newTestHub(t)
+	defer cancelH264Hub()
+	h264Hub.sampleSeq = new(atomic.Uint64)
+	pictureLayer, whyNot := svc.pictureLayerFor(h264Hub, usbCam().GetPath(), own)
+	if pictureLayer == nil && strings.Contains(whyNot, "cannot be decoded") {
+		skip("this GStreamer cannot decode pictures from H.264: " + whyNot)
+	}
+	if pictureLayer == nil {
+		t.Fatalf("a %dx%d H.264 camera has no pictures: %s", width, height, whyNot)
+	}
+	h264Pictures := readPictures(h264Hub)
+	pictureLayer.offerTo(h264Hub)
+	captureCtx, stopCapture := context.WithCancel(context.Background())
+	captureEnded := make(chan error, 1)
+	go func() {
+		captureEnded <- svc.captureDeriving(captureCtx, h264Hub, pictureLayer, func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	defer func() {
+		stopCapture()
+		<-captureEnded
+	}()
+	waitUntil(t, "the H.264 camera's child takes frames", pictureLayer.feeding.Load)
+	for _, unit := range units.all() {
+		// Sample IDs repeat the JPEG camera's, so each picture shows the shade
+		// of the sample it carries here too.
+		fed := pictureLayer.counts().fed
+		h264Hub.produceCaptured(unit.data, stamp(h264Hub.sampleSeq.Load()+1), agentpb.VideoCodec_VIDEO_CODEC_H264)
+		waitUntil(t, "the H.264 camera's child is fed the frame", func() bool { return pictureLayer.counts().fed > fed })
+		time.Sleep(50 * time.Millisecond)
+	}
+	// A decoder may still hold its newest pictures.
+	const heldBack = 3
+	waitUntil(t, "the H.264 camera's pictures arrive", func() bool { return h264Pictures.count() >= frames-heldBack })
+	wholePictures("H.264", h264Pictures.all(), frames-heldBack, &decodedGray{})
+	if counts := pictureLayer.counts(); counts.unusable != 0 || counts.unknownTags != 0 {
+		t.Fatalf("the H.264 camera's layer counts %+v, want nothing unusable and no unknown tag", counts)
+	}
+}

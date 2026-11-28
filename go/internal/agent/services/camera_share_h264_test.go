@@ -124,14 +124,14 @@ func TestShareDecision_H264CameraWithoutPicturesServesItsOwnFramesAndSaysWhy(t *
 				return s
 			}, hcNativeMode, hcNoGStreamerParts,
 		},
-		"a picture over the raw frame limit": {
+		"a picture over the picture limit": {
 			func(t *testing.T) *VideoService {
 				s := hcService(t, "avdec_h264")
-				captureSizeFor = func(string, uint32, uint32, uint32) (uint32, uint32) { return 1920, 1080 }
+				captureSizeFor = func(string, uint32, uint32, uint32) (uint32, uint32) { return 3840, 2160 }
 				return s
 			},
-			sharedMode{Width: 1920, Height: 1080, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes},
-			"a 1920x1080 picture exceeds the 4128768-byte raw frame limit",
+			sharedMode{Width: 3840, Height: 2160, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes},
+			"a 3840x2160 picture exceeds the 4147200-byte picture limit (1920x1080 YUYV)",
 		},
 		"decoding failed recently": {
 			func(t *testing.T) *VideoService {
@@ -251,17 +251,17 @@ func TestNativeH264CaptureSize(t *testing.T) {
 }
 
 func TestShareDecision_H264CameraWithNoSizeWithinTheDefaultLimitGetsANodeInEveryFormat(t *testing.T) {
-	const pictureTooLarge = "a 1920x1080 picture exceeds the 4128768-byte raw frame limit"
+	own := sharedMode{Width: 1920, Height: 1080, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes}
+	pictures := sharedMode{Width: 1920, Height: 1080, Fourcc: "YUYV", BytesPerLine: 3840, FPS: 30, Format: appconfig.CameraFormatPixels}
 	for name, tc := range map[string]struct {
-		decoder     []string
-		whyNoPixels string
+		decoder []string
+		pixels  shareDecision
 	}{
-		"with a decoder":    {[]string{"avdec_h264"}, pictureTooLarge},
-		"without a decoder": {nil, hcNoDecoder},
+		"with a decoder":    {[]string{"avdec_h264"}, shareDecision{Shared: true, Mode: pictures}},
+		"without a decoder": {nil, shareDecision{Shared: true, Mode: own, AskedFormat: appconfig.CameraFormatPixels, AskedWhyNot: hcNoDecoder}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := hcLargeOnlyService(t, tc.decoder...)
-			own := sharedMode{Width: 1920, Height: 1080, Fourcc: "H264", FPS: 30, Format: appconfig.CameraFormatNative, MaxFrameBytes: maxFrameBytes}
 			for _, format := range []string{appconfig.CameraFormatNative, appconfig.CameraFormatH264} {
 				asked := own
 				asked.Format = format
@@ -269,9 +269,12 @@ func TestShareDecision_H264CameraWithNoSizeWithinTheDefaultLimitGetsANodeInEvery
 					t.Errorf("%s: decision = %+v, want %+v as asked", format, d, asked)
 				}
 			}
-			want := shareDecision{Shared: true, Mode: own, AskedFormat: appconfig.CameraFormatPixels, AskedWhyNot: tc.whyNoPixels}
-			if d := s.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels); d != want {
-				t.Errorf("pixels: decision = %+v\nwant               %+v", d, want)
+			d := s.shareDecisionFor(context.Background(), usbCam(), appconfig.CameraFormatPixels)
+			if d != tc.pixels {
+				t.Errorf("pixels: decision = %+v\nwant               %+v", d, tc.pixels)
+			}
+			if d.Mode.Format == appconfig.CameraFormatPixels && (d.Mode.pixelFormat() != v4l2PixFmtYUYV || d.Mode.bufferBytes() != 1920*2*1080) {
+				t.Errorf("pixels: the decided mode declares %#x with %d-byte buffers, want YUYV with %d", d.Mode.pixelFormat(), d.Mode.bufferBytes(), 1920*2*1080)
 			}
 		})
 	}

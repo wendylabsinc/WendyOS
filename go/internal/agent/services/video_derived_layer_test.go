@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -308,12 +309,12 @@ func TestDerivedLayer_ShapesTheChildToItsSubscribers(t *testing.T) {
 func TestDerivedLayer_CameraWhosePicturesAreTooLargeEncodesOnly(t *testing.T) {
 	layer, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), format: videoCodecMJPEG, gstPath: "gst-launch-1.0",
 		available: map[string]bool{"gdpdepay": true, "gdppay": true, "jpegdec": true, "h264parse": true, "x264enc": true},
-		width:     1920, height: 1080, framerate: 30})
+		width:     3840, height: 2160, framerate: 30})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if shape := layer.needs(newFakeEncodeDemand(false, true)); shape != (pipelineShape{}) {
-		t.Errorf("shape for a pixel reader of pictures over the raw frame limit = %+v, want no child", shape)
+		t.Errorf("shape for a pixel reader of pictures over the picture limit = %+v, want no child", shape)
 	}
 	shape := layer.needs(newFakeEncodeDemand(true, true))
 	if shape != (pipelineShape{encode: true}) {
@@ -794,12 +795,106 @@ func TestDerivedLayer_OffersPixelsAndRefusesRawAsAnMJPEGCaptureDoes(t *testing.T
 
 	tooLarge, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), format: videoCodecMJPEG, gstPath: "gst-launch-1.0",
 		available: map[string]bool{"gdpdepay": true, "gdppay": true, "jpegdec": true, "h264parse": true, "x264enc": true},
-		width:     1920, height: 1080, demand: h, publish: h.broadcastDerivedFrom})
+		width:     3840, height: 2160, demand: h, publish: h.broadcastDerivedFrom})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tooLarge.pictures != nil || tooLarge.needs(h).pixels {
-		t.Error("a layer whose pictures exceed the raw frame limit still plans a picture branch")
+		t.Error("a layer whose pictures exceed the picture limit still plans a picture branch")
+	}
+}
+
+// A camera at 1920x1080 has pictures for nodes, each larger than a default
+// gRPC message, and a raw subscriber is still told what it was told before.
+func TestDerivedLayer_A1920x1080CameraHasPicturesForNodesAndNoRawFrames(t *testing.T) {
+	const pictureBytes = 1920 * 2 * 1080
+	if pictureBytes <= maxRawFrameBytes {
+		t.Fatalf("a 1920x1080 YUYV picture is %d bytes, within the %d a raw frame may have: this shows nothing", pictureBytes, maxRawFrameBytes)
+	}
+	for name, tc := range map[string]struct {
+		format agentpb.VideoCodec
+		rawWhy string
+	}{
+		"JPEG":  {videoCodecMJPEG, "camera is captured as MJPEG at 1920x1080; raw frames are not offered"},
+		"H.264": {agentpb.VideoCodec_VIDEO_CODEC_H264, "camera streams H.264 natively; raw frames are not offered"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, cancel := newTestHub(t)
+			defer cancel()
+			idRaw, chRaw, _ := h.subscribeKind(rawFrames)
+			idPix, chPix, _ := h.subscribePixels()
+			defer h.unsubscribe(idRaw)
+			defer h.unsubscribe(idPix)
+
+			layer, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), format: tc.format, gstPath: "gst-launch-1.0",
+				available: map[string]bool{"gdpdepay": true, "gdppay": true, "jpegdec": true, "h264parse": true, "x264enc": true, "avdec_h264": true},
+				width:     1920, height: 1080, demand: h, publish: h.broadcastDerivedFrom})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := &agentpb.RawFormat{Width: 1920, Height: 1080, Fourcc: fourccYUYV, BytesPerLine: 3840}
+			if !proto.Equal(layer.pictures, want) || !layer.needs(h).pixels {
+				t.Fatalf("pictures = %v (a picture branch: %v), want %v for the pixel subscriber", layer.pictures, layer.needs(h).pixels, want)
+			}
+			layer.offerTo(h)
+
+			if _, open := <-chRaw; open {
+				t.Fatal("a raw subscriber was left on the camera")
+			}
+			if refusal := h.subscriberErr(idRaw); refusal == nil || !strings.Contains(refusal.Error(), tc.rawWhy) {
+				t.Fatalf("raw refusal = %v, want today's reason %q", refusal, tc.rawWhy)
+			}
+			if _, _, err := h.subscribeKind(rawFrames); err == nil || !strings.Contains(err.Error(), tc.rawWhy) {
+				t.Fatalf("a raw subscriber that joins later: %v, want today's reason %q", err, tc.rawWhy)
+			}
+
+			output := layer.picturesOutput(nil)
+			if !output.usable(pictureBytes) || output.maxPayload < pictureBytes {
+				t.Fatalf("the layer reads pictures of up to %d bytes and calls one of %d usable: %v", output.maxPayload, pictureBytes, output.usable(pictureBytes))
+			}
+			if _, err := h.broadcastDerivedFrom(&videoFrame{sampleID: 7}, output.frame(make([]byte, pictureBytes))); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case picture := <-chPix:
+				if len(picture.data) != pictureBytes || picture.sampleID != 7 || !proto.Equal(picture.rawFmt, want) {
+					t.Fatalf("the pixel subscriber got %d bytes of %v for sample %d, want the whole picture of sample 7", len(picture.data), picture.rawFmt, picture.sampleID)
+				}
+			default:
+				t.Fatalf("the pixel subscriber got no picture: the hub does not hand on one of %d bytes", pictureBytes)
+			}
+		})
+	}
+}
+
+// What a gRPC raw subscriber is sent stays within a default gRPC message
+// whatever a producer publishes: a frame above that goes to pixel subscribers
+// alone, and one above the picture limit to nobody.
+func TestDeviceHub_ARawSubscriberIsNeverSentAFrameAboveADefaultGRPCMessage(t *testing.T) {
+	h, cancel := newTestHub(t)
+	defer cancel()
+	idRaw, chRaw, _ := h.subscribeKind(rawFrames)
+	idPix, chPix, _ := h.subscribePixels()
+	defer h.unsubscribe(idRaw)
+	defer h.unsubscribe(idPix)
+	uncompressed := func(bytes int) *videoFrame {
+		return &videoFrame{data: make([]byte, bytes), codec: agentpb.VideoCodec_VIDEO_CODEC_RAW}
+	}
+
+	h.broadcast(uncompressed(maxRawFrameBytes))
+	if len(chRaw) != 1 || len(chPix) != 1 {
+		t.Fatalf("a frame of %d bytes reached %d raw and %d pixel subscriber(s), want both", maxRawFrameBytes, len(chRaw), len(chPix))
+	}
+	h.broadcast(uncompressed(maxRawFrameBytes + 1))
+	if len(chRaw) != 1 || len(chPix) != 2 {
+		t.Fatalf("a frame of %d bytes: the raw subscriber holds %d frame(s) and the pixel subscriber %d, want it sent to the pixel subscriber alone",
+			maxRawFrameBytes+1, len(chRaw), len(chPix))
+	}
+	h.broadcast(uncompressed(maxPictureBytes))
+	h.broadcast(uncompressed(maxPictureBytes + 1))
+	if len(chRaw) != 1 || len(chPix) != 3 {
+		t.Fatalf("frames of %d and %d bytes: the raw subscriber holds %d frame(s) and the pixel subscriber %d, want the first sent to the pixel subscriber alone and the second to nobody",
+			maxPictureBytes, maxPictureBytes+1, len(chRaw), len(chPix))
 	}
 }
 

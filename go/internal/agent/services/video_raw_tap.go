@@ -63,7 +63,9 @@ const (
 	// grpc-go's default per-message receive limit is 4 MiB, and one raw frame is
 	// one message. A camera whose raw frame is larger is simply not offered raw,
 	// rather than offered a stream the default client rejects on the first frame.
-	// A 1280x720 YUYV frame (1.8 MiB) fits; 1080p (4.0 MiB) does not.
+	// A 1280x720 YUYV frame (1.8 MiB) fits; 1080p (4.0 MiB) does not. It bounds
+	// what a raw subscriber is sent and nothing else: the tap and the hub carry
+	// pictures for pixel subscribers up to maxPictureBytes.
 	maxRawFrameBytes = 4*1024*1024 - 64*1024
 
 	// yuyvBytesPerPixel: YUYV packs two pixels in four bytes.
@@ -518,7 +520,7 @@ type tapLiveness struct{ first, idle time.Duration }
 func (s *VideoService) pumpRawTap(ctx context.Context, r *os.File, format *agentpb.RawFormat, sink rawSink, device string, live *tapLiveness) error {
 	defer r.Close() //nolint:errcheck
 	frameBytes := int(format.GetBytesPerLine()) * int(format.GetHeight())
-	if frameBytes <= 0 || frameBytes > maxRawFrameBytes {
+	if frameBytes <= 0 || frameBytes > maxPictureBytes {
 		s.logger.Warn("raw frame tap has an unusable frame size; not reading it",
 			zap.String("device", device), zap.Int("frame_bytes", frameBytes))
 		return nil
