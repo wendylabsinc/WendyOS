@@ -31,11 +31,11 @@ import sys
 out = Path(sys.argv[1]).resolve()
 source = Path('go/internal/agent/services/video_service.go').resolve()
 original = source.read_text()
-before = '} else if s.sensorFrames != nil && isSensorLinkCameraPath(path) {'
+before = '\tif s.sensorFrames != nil && isSensorLinkCameraPath(path) {'
 if original.count(before) != 1:
     raise SystemExit('SensorLink source mutation no longer identifies exactly one site')
 replacement = out / 'open-loopback.go'
-replacement.write_text(original.replace(before, '} else if false && s.sensorFrames != nil && isSensorLinkCameraPath(path) {'))
+replacement.write_text(original.replace(before, '\tif false && s.sensorFrames != nil && isSensorLinkCameraPath(path) {'))
 (out / 'open-loopback.json').write_text(json.dumps({'Replace': {str(source): str(replacement)}}))
 PY
 if go test -race -overlay "$output/open-loopback.json" ./go/internal/agent/services -run "^${test_name}$" -v -count=1 -timeout 90s > "$output/open-loopback.log" 2>&1; then
