@@ -284,7 +284,7 @@
             "allowlist": {
               "type": "array",
               "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
-              "description": "Cameras this entry's format, stamp and preset apply to, each named by its stable_id (a by-id one preferred), path or name as `wendy device camera list --json` prints them. An entry cannot be empty. Omit to apply them to every camera."
+              "description": "Cameras this entry's format, stamp, preset and size apply to, each named by its stable_id (a by-id one preferred), path or name as `wendy device camera list --json` prints them. An entry cannot be empty. Omit to apply them to every camera."
             },
             "format": {
               "type": "string",
@@ -302,6 +302,11 @@
               "type": "string",
               "enum": ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"],
               "description": "How fast the software H.264 encoder works for the app's \"h264\" camera node, fastest first: a slower preset spends more CPU on each frame for fewer bits. Only with \"format\": \"h264\", and applied only where the device encodes H.264 in software. One encoder serves every consumer of a camera and runs at the fastest preset any of them states, \"ultrafast\" when none states one."
+            },
+            "size": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$",
+              "description": "The size the camera is captured at for the app's camera node, as WxH in pixels, for example \"1920x1080\". Served when the camera lists that size in the format the agent captures it in, up to 1920x1080 for a camera that produces JPEG; otherwise the node is made at the default size and the deploy says why. A camera is captured at one size: while another app shares it at another size, the node is made at that one. Omit for the default size."
             }
           },
           "required": ["type"],
@@ -360,7 +365,7 @@
             "allowlist": {
               "type": "array",
               "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
-              "description": "Cameras this entry's format, stamp and preset apply to, each named by its stable_id (a by-id one preferred), path or name as `wendy device camera list --json` prints them. An entry cannot be empty. Omit to apply them to every camera."
+              "description": "Cameras this entry's format, stamp, preset and size apply to, each named by its stable_id (a by-id one preferred), path or name as `wendy device camera list --json` prints them. An entry cannot be empty. Omit to apply them to every camera."
             },
             "format": {
               "type": "string",
@@ -378,6 +383,11 @@
               "type": "string",
               "enum": ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"],
               "description": "How fast the software H.264 encoder works for the app's \"h264\" camera node, fastest first: a slower preset spends more CPU on each frame for fewer bits. Only with \"format\": \"h264\", and applied only where the device encodes H.264 in software. One encoder serves every consumer of a camera and runs at the fastest preset any of them states, \"ultrafast\" when none states one."
+            },
+            "size": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$",
+              "description": "The size the camera is captured at for the app's camera node, as WxH in pixels, for example \"1920x1080\". Served when the camera lists that size in the format the agent captures it in, up to 1920x1080 for a camera that produces JPEG; otherwise the node is made at the default size and the deploy says why. A camera is captured at one size: while another app shares it at another size, the node is made at that one. Omit for the default size."
             },
             "user": {
               "type": "string",

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -143,12 +144,12 @@ var allowedKeys = map[string][]string{
 	EntitlementBluetooth:     {"type", "mode"},
 	EntitlementAvahi:         {"type"},
 	EntitlementNAN:           {"type"},
-	EntitlementVideo:         {"type", "mode", "allowlist", "format", "stamp", "preset"},
+	EntitlementVideo:         {"type", "mode", "allowlist", "format", "stamp", "preset", "size"},
 	EntitlementGPU:           {"type"},
 	EntitlementNPU:           {"type"},
 	EntitlementPersist:       {"type", "name", "path"},
 	EntitlementAudio:         {"type"},
-	EntitlementCamera:        {"type", "mode", "allowlist", "format", "stamp", "preset", "user", "password"},
+	EntitlementCamera:        {"type", "mode", "allowlist", "format", "stamp", "preset", "size", "user", "password"},
 	EntitlementUSB:           {"type"},
 	EntitlementI2C:           {"type", "device"},
 	EntitlementGPIO:          {"type", "pins"},
@@ -500,6 +501,32 @@ var (
 	CameraStamps  = []string{CameraStampTime, CameraStampFrame}
 )
 
+// CameraSize is the size a camera entry states for its node, in pixels. The
+// zero value states none: the camera's capture then chooses the size.
+type CameraSize struct{ Width, Height uint32 }
+
+// wendy.schema.json repeats the pattern.
+var cameraSizePattern = regexp.MustCompile(`^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$`)
+
+// ParseCameraSize reads a size written as WxH, for example "1920x1080".
+func ParseCameraSize(value string) (CameraSize, bool) {
+	if !cameraSizePattern.MatchString(value) {
+		return CameraSize{}, false
+	}
+	width, height, _ := strings.Cut(value, "x")
+	w, _ := strconv.ParseUint(width, 10, 32)
+	h, _ := strconv.ParseUint(height, 10, 32)
+	return CameraSize{Width: uint32(w), Height: uint32(h)}, true
+}
+
+// String reads "1920x1080", and "" for no size.
+func (s CameraSize) String() string {
+	if s == (CameraSize{}) {
+		return ""
+	}
+	return fmt.Sprintf("%dx%d", s.Width, s.Height)
+}
+
 // CameraFormatsServedFor lists the formats a node may carry for an app that
 // asks for one, the asked format first: the first the camera can be declared in
 // is served. Pictures stand in for a format the camera cannot provide, and the
@@ -590,6 +617,14 @@ type cameraClaim struct {
 	by            string
 	format, stamp string
 	preset        EncodePreset
+	size          CameraSize
+}
+
+func (c cameraClaim) sizeAsked() string {
+	if c.size == (CameraSize{}) {
+		return "no size"
+	}
+	return c.size.String()
 }
 
 func (c cameraClaim) presetAsked() string {
@@ -632,10 +667,20 @@ func listClaims(claims []cameraClaim, describe func(cameraClaim) string) string 
 // default, and a preset it does not know states none.
 //
 // conflicts holds one sentence for each setting on which the entries that
-// apply to the camera differ, the format's first. They quote allowlist entries
-// as written, which is not where the camera is now.
+// apply to the camera differ, the format's first and the size's
+// (CameraNodeSize) last. They quote allowlist entries as written, which is not
+// where the camera is now.
 func CameraNodeSettings(entitlements []Entitlement, camera CameraIdentity) (format, stamp string, preset EncodePreset, conflicts []string) {
-	return settleCameraNode(entitlements, camera.spellings())
+	node := settleCameraNode(entitlements, camera.spellings())
+	return node.format, node.stamp, node.preset, node.conflicts
+}
+
+// CameraNodeSize reports the size the app states for the node it gets for a
+// camera, settled as CameraNodeSettings settles the preset: none when the
+// deciding entries state none or disagree, and none for a value this build
+// cannot read.
+func CameraNodeSize(entitlements []Entitlement, camera CameraIdentity) CameraSize {
+	return settleCameraNode(entitlements, camera.spellings()).size
 }
 
 // CameraNodeSettingsByPathOrName is CameraNodeSettings as an agent from before
@@ -649,16 +694,25 @@ func CameraNodeSettingsByPathOrName(entitlements []Entitlement, cameraPath, came
 	if cameraName != "" {
 		spellings[cameraByName] = []string{cameraName}
 	}
-	return settleCameraNode(entitlements, spellings)
+	node := settleCameraNode(entitlements, spellings)
+	return node.format, node.stamp, node.preset, node.conflicts
 }
 
-func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (format, stamp string, preset EncodePreset, conflicts []string) {
+type settledCameraNode struct {
+	format, stamp string
+	preset        EncodePreset
+	size          CameraSize
+	conflicts     []string
+}
+
+func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (node settledCameraNode) {
 	var claims [cameraRanks][]cameraClaim
 	for _, e := range entitlements {
 		if !isCameraEntitlement(e) || e.Mode == CameraModeDirect {
 			continue
 		}
 		claim := cameraClaim{format: knownOrDefault(e.Format, CameraFormats), stamp: knownOrDefault(e.Stamp, CameraStamps), preset: ParseEncodePreset(e.Preset)}
+		claim.size, _ = ParseCameraSize(e.Size)
 		if len(e.Allowlist) == 0 {
 			claims[cameraByNoAllowlist] = append(claims[cameraByNoAllowlist], claim)
 			continue
@@ -674,14 +728,14 @@ func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (fo
 	}
 	deciding := slices.IndexFunc(claims[:], func(tier []cameraClaim) bool { return len(tier) > 0 })
 	if deciding < 0 {
-		return CameraFormats[0], CameraStamps[0], EncodePresetUnset, nil
+		return settledCameraNode{format: CameraFormats[0], stamp: CameraStamps[0]}
 	}
 	settle := func(setting, fallback string, asked func(cameraClaim) string) string {
 		ask := func(c cameraClaim) string { return c.asker() + " asks for " + asked(c) }
 		served := asked(claims[deciding][0])
 		differs := func(c cameraClaim) bool { return asked(c) != served }
 		if slices.ContainsFunc(claims[deciding], differs) {
-			conflicts = append(conflicts, fmt.Sprintf("%s falls back to %s: the entries deciding for this camera disagree (%s)",
+			node.conflicts = append(node.conflicts, fmt.Sprintf("%s falls back to %s: the entries deciding for this camera disagree (%s)",
 				setting, fallback, listClaims(claims[deciding], ask)))
 			return fallback
 		}
@@ -694,15 +748,16 @@ func settleCameraNode(entitlements []Entitlement, spellings cameraSpellings) (fo
 			}
 		}
 		if len(passedOver) > 0 {
-			conflicts = append(conflicts, fmt.Sprintf("%s is %s (asked by %s); passed over: %s",
+			node.conflicts = append(node.conflicts, fmt.Sprintf("%s is %s (asked by %s); passed over: %s",
 				setting, served, listClaims(claims[deciding], cameraClaim.asker), listClaims(passedOver, ask)))
 		}
 		return served
 	}
-	format = settle("format", CameraFormats[0], func(c cameraClaim) string { return c.format })
-	stamp = settle("stamp", CameraStamps[0], func(c cameraClaim) string { return c.stamp })
-	preset = ParseEncodePreset(settle("preset", cameraClaim{}.presetAsked(), cameraClaim.presetAsked))
-	return format, stamp, preset, conflicts
+	node.format = settle("format", CameraFormats[0], func(c cameraClaim) string { return c.format })
+	node.stamp = settle("stamp", CameraStamps[0], func(c cameraClaim) string { return c.stamp })
+	node.preset = ParseEncodePreset(settle("preset", cameraClaim{}.presetAsked(), cameraClaim.presetAsked))
+	node.size, _ = ParseCameraSize(settle("size", cameraClaim{}.sizeAsked(), cameraClaim.sizeAsked))
+	return node
 }
 
 // CameraAllowlistEntries lists, in manifest order and once each, the allowlist
@@ -732,6 +787,7 @@ type Entitlement struct {
 	Format    string                     `json:"format,omitempty"`    // Camera, Video
 	Stamp     string                     `json:"stamp,omitempty"`     // Camera, Video
 	Preset    string                     `json:"preset,omitempty"`    // Camera, Video
+	Size      string                     `json:"size,omitempty"`      // Camera, Video
 	Name      string                     `json:"name,omitempty"`      // Persist
 	Path      string                     `json:"path,omitempty"`      // Persist
 	Device    string                     `json:"device,omitempty"`    // I2C, Serial
@@ -893,7 +949,7 @@ func validateCameraEntries(entries []locatedEntitlement) error {
 	return validateCameraClaims(entries)
 }
 
-// validateCameraNodeSettingsWithDirect rejects format, stamp or preset on any camera or
+// validateCameraNodeSettingsWithDirect rejects format, stamp, preset or size on any camera or
 // video entry of a container that has a direct entry: one direct entry gives
 // the whole container the real device (CameraShareChoice), so no entry gets a
 // node.
@@ -916,6 +972,8 @@ func validateCameraNodeSettingsWithDirect(entries []locatedEntitlement) error {
 			key = "stamp"
 		case e.Preset != "":
 			key = "preset"
+		case e.Size != "":
+			key = "size"
 		default:
 			continue
 		}
@@ -940,6 +998,11 @@ func validateCameraPresetsHaveAnEncoder(entries []locatedEntitlement) error {
 		}
 	}
 	return nil
+}
+
+func statedCameraSize(e Entitlement) string {
+	size, _ := ParseCameraSize(e.Size)
+	return size.String()
 }
 
 func quotedOrUnset(value string) string {
@@ -985,8 +1048,8 @@ func cameraAllowlistOverlap(earlier, later []string) string {
 // every camera, and an entry with one claims the cameras it lists, compared as
 // written apart from the spellings spellingWithoutDevice reduces. Entries that
 // agree after defaults are accepted, because manifests with several plain
-// camera entries predate format and stamp. An entry that states no preset
-// differs from one that states one.
+// camera entries predate format and stamp. An entry that states no preset or
+// no size differs from one that states one.
 func validateCameraClaims(entries []locatedEntitlement) error {
 	for j, later := range entries {
 		if !isCameraEntitlement(later.Entitlement) {
@@ -1004,6 +1067,7 @@ func validateCameraClaims(entries []locatedEntitlement) error {
 				{"format", knownOrDefault(earlier.Format, CameraFormats), knownOrDefault(later.Format, CameraFormats)},
 				{"stamp", knownOrDefault(earlier.Stamp, CameraStamps), knownOrDefault(later.Stamp, CameraStamps)},
 				{"preset", ParseEncodePreset(earlier.Preset).String(), ParseEncodePreset(later.Preset).String()},
+				{"size", statedCameraSize(earlier.Entitlement), statedCameraSize(later.Entitlement)},
 			} {
 				if setting.earlier != setting.later {
 					differences = append(differences, fmt.Sprintf("%s (%s and %s)", setting.key, quotedOrUnset(setting.earlier), quotedOrUnset(setting.later)))
@@ -1123,6 +1187,9 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			}
 			if err := validateCameraNodeSettingValue(e, "preset", e.Preset, EncodePresets, prefix, i); err != nil {
 				return err
+			}
+			if _, ok := ParseCameraSize(e.Size); e.Size != "" && !ok {
+				return fmt.Errorf("%s[%d]: %s size must be WxH in pixels, for example \"1920x1080\"; got %q", prefix, i, e.Type, e.Size)
 			}
 		case EntitlementGPIO:
 			// Pins are optional; omitting them grants access to all GPIO chips.
