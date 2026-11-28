@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +45,8 @@ func TestOwnCameraWait_IsThePartOfTheHubsWaitTheRecordingSatThrough(t *testing.T
 		"a carried wait behind a hub that found the camera free": {
 			ownCameraWait{since: at(0), carried: at(time.Second), left: at(2 * time.Second)}, none, none,
 			at(time.Second), at(2 * time.Second), ownWaitOver},
+		"a wait that ends after the moment asked about is not over as of it": {
+			ownCameraWait{since: at(0)}, at(time.Second), at(2 * time.Hour), at(time.Second), now, ownWaitUnfinished},
 		"a wait of the floor is reported": {
 			ownCameraWait{since: at(0)}, at(time.Second), at(time.Second + 10*time.Millisecond),
 			at(time.Second), at(time.Second + 10*time.Millisecond), ownWaitOver},
@@ -76,6 +80,54 @@ func TestOwnCameraWait_LeavingAHubCarriesAnUnfinishedWaitAndMarksLaterOnesAsGaps
 	}
 	if _, _, state, gap = own.movedFrom(hubThatWaited(at(9*time.Second), at(10*time.Second)), at(20*time.Second)); state != ownWaitOver || !gap {
 		t.Fatalf("a wait after a hub that had the camera: state %d, gap %v; want it over and a gap", state, gap)
+	}
+}
+
+// Each wait an armed source sat through is worded by what it cost the
+// pre-roll: nothing, everything before it ended, or a gap.
+func TestPreRollWaitNotes_WordAWaitByWhatItCostThePreRoll(t *testing.T) {
+	triggered := time.Unix(1_700_000_000, 0)
+	before := func(d time.Duration) time.Time { return triggered.Add(-d) }
+	windowOpens := before(3 * time.Second)
+	const waitedFor = "this recording waited %s for the camera's previous capture to close the camera"
+	for name, tc := range map[string]struct {
+		wait      ownWaitSpan
+		want      string
+		shortened bool
+	}{
+		"over as the window opened, with no camera before it":  {ownWaitSpan{before(9 * time.Second), before(3 * time.Second), false}, "", false},
+		"over as the window opened, with the camera before it": {ownWaitSpan{before(9 * time.Second), before(3 * time.Second), true}, "", false},
+		"ended inside the window, with no camera before it": {ownWaitSpan{before(9 * time.Second), before(2 * time.Second), false},
+			fmt.Sprintf(waitedFor, "7s") + ", until 2s before the trigger; its pre-roll holds no frame from before then", true},
+		"began and ended inside the window, with no camera before it": {ownWaitSpan{before(time.Second), before(500 * time.Millisecond), false},
+			fmt.Sprintf(waitedFor, "500ms") + ", until 500ms before the trigger; its pre-roll holds no frame from before then", true},
+		"began and ended inside the window, with the camera before it": {ownWaitSpan{before(2 * time.Second), before(500 * time.Millisecond), true},
+			fmt.Sprintf(waitedFor, "1.5s") + ", from 2s to 500ms before the trigger; no frames were recorded in between", false},
+		"began before the window opened and ended inside it, with the camera before it": {ownWaitSpan{before(5 * time.Second), before(time.Second), true},
+			fmt.Sprintf(waitedFor, "4s") + ", from 5s to 1s before the trigger; no frames were recorded in between", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			notes, shortened := preRollWaitNotes([]ownWaitSpan{tc.wait}, windowOpens, triggered)
+			var got string
+			if len(notes) == 1 {
+				got = notes[0]
+			}
+			if len(notes) > 1 || got != tc.want || shortened != tc.shortened {
+				t.Fatalf("notes = %q, shortened %v\nwant    %q, shortened %v", notes, shortened, tc.want, tc.shortened)
+			}
+		})
+	}
+}
+
+// An armed source keeps the waits a later trigger's pre-roll can still reach.
+func TestKeepWaitsWithin_DropsTheWaitsNoPreRollWindowReaches(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	ended := func(ago time.Duration) ownWaitSpan {
+		return ownWaitSpan{from: now.Add(-ago - time.Second), until: now.Add(-ago)}
+	}
+	kept := keepWaitsWithin(3*time.Second, now, []ownWaitSpan{ended(time.Minute), ended(3*time.Second + time.Millisecond), ended(3 * time.Second), ended(time.Second)}, ended(0))
+	if want := []ownWaitSpan{ended(3 * time.Second), ended(time.Second), ended(0)}; !slices.Equal(kept, want) {
+		t.Fatalf("kept %v, want the waits that ended within three seconds and the new one: %v", kept, want)
 	}
 }
 

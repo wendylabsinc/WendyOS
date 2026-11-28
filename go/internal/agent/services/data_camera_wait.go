@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -37,8 +38,8 @@ const (
 const cameraWaitNoteFloor = 10 * time.Millisecond
 
 // of is the part of hub's wait for the camera that the recording sat through,
-// as of now: from when, until when, and whether it is over. A wait under
-// cameraWaitNoteFloor is none.
+// as of now: from when, until when, and whether it is over. One that ended
+// after now was not over then. A wait under cameraWaitNoteFloor is none.
 func (o ownCameraWait) of(hub *deviceHub, now time.Time) (from, until time.Time, state ownWaitState) {
 	began, ended, _ := hub.cameraWait.read()
 	from, until, state = o.carried, now, ownWaitUnfinished
@@ -48,7 +49,7 @@ func (o ownCameraWait) of(hub *deviceHub, now time.Time) (from, until time.Time,
 	case began.IsZero():
 		// The capture that replaced the one left waiting found the camera free.
 		until, state = o.left, ownWaitOver
-	case !ended.IsZero():
+	case !ended.IsZero() && !ended.After(now):
 		until, state = ended, ownWaitOver
 	}
 	if from.IsZero() {
@@ -83,6 +84,7 @@ const (
 	cameraWaitAtStart    = cameraWaitedFor + "; recording started after it"
 	cameraWaitInEpisode  = cameraWaitedFor + " after the capture it read from was replaced; no frames were recorded during that time"
 	cameraWaitInPreRoll  = cameraWaitedFor + ", until %s before the trigger; its pre-roll holds no frame from before then"
+	cameraWaitGapPreRoll = cameraWaitedFor + ", from %s to %s before the trigger; no frames were recorded in between"
 	cameraStillHeld      = "the camera was still held by its previous capture"
 	cameraStillHeldAtEnd = cameraStillHeld + " when the recording ended, %s after this recording began to wait for it; no frames were recorded during that time"
 )
@@ -130,4 +132,41 @@ func (c *cameraCapture) whyNoFirstFrame(gaveUp time.Time, limit time.Duration) s
 		return fmt.Sprintf(": "+cameraWaitedFor, fmt.Sprintf("%s of those %s", roundedWait(from, until), limit))
 	}
 	return ""
+}
+
+// ownWaitSpan is a wait of a recording's own that is over. gap says the
+// recording had the camera before it.
+type ownWaitSpan struct {
+	from, until time.Time
+	gap         bool
+}
+
+// keepWaitsWithin adds a wait to those an armed source keeps, and drops the
+// ones that ended more than a buffer before now: no later trigger's pre-roll
+// window reaches them.
+func keepWaitsWithin(buffer time.Duration, now time.Time, kept []ownWaitSpan, wait ownWaitSpan) []ownWaitSpan {
+	kept = slices.DeleteFunc(kept, func(old ownWaitSpan) bool { return now.Sub(old.until) > buffer })
+	return append(kept, wait)
+}
+
+// preRollWaitNotes words the waits an armed source sat through by what each
+// cost the pre-roll of an episode triggered at triggered. One over before the
+// window opened cost nothing. One before which the source never had the
+// camera left the pre-roll nothing from before it ended, which shortened
+// says. Any other is a gap in the pre-roll, wherever it began: a pre-roll
+// opens on the last key frame at or before the window's opening, so it still
+// holds what the source stored before the wait.
+func preRollWaitNotes(waits []ownWaitSpan, windowOpens, triggered time.Time) (notes []string, shortened bool) {
+	for _, wait := range waits {
+		waited, endedBefore := roundedWait(wait.from, wait.until), roundedWait(wait.until, triggered)
+		switch {
+		case !wait.until.After(windowOpens):
+		case !wait.gap:
+			shortened = true
+			notes = append(notes, fmt.Sprintf(cameraWaitInPreRoll, waited, endedBefore))
+		default:
+			notes = append(notes, fmt.Sprintf(cameraWaitGapPreRoll, waited, roundedWait(wait.from, triggered), endedBefore))
+		}
+	}
+	return notes, shortened
 }

@@ -388,9 +388,11 @@ type armedCameraSource struct {
 	// it as the episode's armed-period drops.
 	carriedDrops uint64
 	// armedAt is when the source was armed, and ownWait what it has waited
-	// for the camera since.
+	// for the camera since. waited are its waits that were over when it left
+	// the hub they were behind, kept while they can reach into a pre-roll.
 	armedAt time.Time
 	ownWait ownCameraWait
+	waited  []ownWaitSpan
 	// alive reports that the subscription is still delivering. The fill goroutine
 	// clears it if the producer stops or a reattach fails, so activate knows to
 	// re-subscribe for the live tail instead of handing capture a dead channel.
@@ -468,8 +470,8 @@ func (a *armedCameraSource) join(ctx context.Context) error {
 	}
 	if now := time.Now(); a.hub == nil {
 		a.armedAt, a.ownWait.since = now, now
-	} else {
-		a.ownWait.movedFrom(a.hub, now)
+	} else if from, until, state, gap := a.ownWait.movedFrom(a.hub, now); state == ownWaitOver {
+		a.waited = keepWaitsWithin(a.buffer, now, a.waited, ownWaitSpan{from, until, gap})
 	}
 	a.hub, a.subID, a.frames, a.primaryKind = hub, subID, frames, kind
 	if refusal != nil {
@@ -608,21 +610,14 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	}
 	// A wait for the camera that was over by the trigger is on record here, or
 	// kept nothing of the episode waiting: the episode starts its own count.
-	// It cost the episode what the pre-roll would have held before it ended.
-	ownWait := a.ownWait
-	var waitInPreRoll string
-	windowOpens := triggered.Add(-a.buffer)
+	ownWait, waits := a.ownWait, a.waited
 	if from, until, state := a.ownWait.of(a.hub, triggered); state == ownWaitOver {
-		ownWait = ownCameraWait{since: triggered, hadCamera: true}
-		if until.After(windowOpens) {
-			waitInPreRoll = fmt.Sprintf(cameraWaitInPreRoll, roundedWait(from, until), roundedWait(until, triggered))
-		}
+		ownWait, waits = ownCameraWait{since: triggered, hadCamera: true}, append(waits, ownWaitSpan{from, until, a.ownWait.hadCamera})
 	}
-	armedShort := shortfall && (waitInPreRoll == "" || a.armedAt.After(windowOpens))
-	notes := a.preRollNotes(preRoll, achievedOffset, armedShort)
-	if waitInPreRoll != "" {
-		notes = append(notes, waitInPreRoll)
-	}
+	windowOpens := triggered.Add(-a.buffer)
+	waitNotes, shortened := preRollWaitNotes(waits, windowOpens, triggered)
+	armedShort := shortfall && (!shortened || a.armedAt.After(windowOpens))
+	notes := append(a.preRollNotes(preRoll, achievedOffset, armedShort), waitNotes...)
 	notes = append(notes, a.storeNotes...)
 
 	captureCtx, cancel := context.WithCancel(context.Background())

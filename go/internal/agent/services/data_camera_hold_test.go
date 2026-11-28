@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -22,6 +23,8 @@ const (
 	waitAtTheStart    = waitedFor + "; recording started after it"
 	waitInTheEpisode  = waitedFor + " after the capture it read from was replaced; no frames were recorded during that time"
 	waitInThePreRoll  = waitedFor + ", until %s before the trigger; its pre-roll holds no frame from before then"
+	waitGapInPreRoll  = waitedFor + ", from %s to %s before the trigger; no frames were recorded in between"
+	preRollFromBefore = "its pre-roll holds no frame from before then"
 	stillHeldAtTheEnd = "the camera was still held by its previous capture when the recording ended, %s after this recording began to wait for it; no frames were recorded during that time"
 	anyWaitNote       = "for the camera's previous capture"
 	anyHeldNote       = "the camera was still held by its previous capture"
@@ -109,7 +112,13 @@ func (s startedRecording) running(t *testing.T) *cameraCapture {
 // ends.
 func takeOver(t *testing.T, svc *VideoService) {
 	t.Helper()
-	req := &agentpb.StreamVideoRequest{Width: 640, Height: 480, Framerate: 15}
+	t.Cleanup(takeOverAt(t, svc, 15))
+}
+
+// takeOverAt is takeOver at a frame rate of its own, held until leave.
+func takeOverAt(t *testing.T, svc *VideoService, framerate uint32) (leave func()) {
+	t.Helper()
+	req := &agentpb.StreamVideoRequest{Width: 640, Height: 480, Framerate: framerate}
 	hub, id, frames, _, _, _, restarted, err := svc.joinHubForCapture(context.Background(), exclusiveCameraPath, req, encodedFrames, noPreset)
 	if err != nil || !restarted {
 		t.Fatalf("takeover: restarted=%v, %v", restarted, err)
@@ -124,10 +133,13 @@ func takeOver(t *testing.T, svc *VideoService) {
 			}
 		}
 	}()
-	t.Cleanup(func() {
-		hub.unsubscribe(id)
-		close(left)
-	})
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			hub.unsubscribe(id)
+			close(left)
+		})
+	}
 }
 
 // recordedDetail stops a recording and returns its one source's count and
@@ -449,4 +461,150 @@ func TestCameraRecording_AStartThatTimesOutSaysWhatItWaitedForTheCamerasPrevious
 			})
 		})
 	}
+}
+
+// armedEpisode arms the camera with a three second buffer, lets the steps of
+// before run on the bubble's clock, opens the episode, and returns what it
+// recorded.
+func armedEpisode(t *testing.T, svc *VideoService, before func()) (count uint64, detail string) {
+	t.Helper()
+	adapter := &cameraDataAdapter{video: svc}
+	sources := []data.Source{exclusiveSource()}
+	adapter.Arm("cam", 3*time.Second, sources)
+	before()
+	capture, err := adapter.Start(context.Background(), recordingSession(t, "cam"), sources)
+	if err != nil || capture == nil {
+		t.Fatalf("the armed campaign's episode did not open: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	return recordedDetail(t, capture)
+}
+
+// An armed source keeps its own wait across the captures it reads while armed:
+// a wait that reached into the pre-roll window is still what shortened the
+// pre-roll after the capture it was behind has been replaced.
+func TestCameraRecording_AnArmedWaitIsStillReportedAfterItsCaptureWasReplacedWhileArmed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc, device, _ := exclusiveCamera(t)
+		leftClosing(t, svc, device)
+		count, detail := armedEpisode(t, svc, func() {
+			time.Sleep(8 * time.Second)
+			device.close()
+			time.Sleep(500 * time.Millisecond)
+			takeOver(t, svc)
+			time.Sleep(1500 * time.Millisecond)
+		})
+		wantDetail(t, count, detail, true, []string{noteOf(waitInThePreRoll, 8*time.Second, 2*time.Second), "camera pre-roll: requested 3s buffer, flushed "},
+			armedTooLate, "in between", startedLate, anyHeldNote)
+	})
+}
+
+// A wait that began inside the pre-roll window is a gap in the pre-roll, which
+// holds frames from before it.
+func TestCameraRecording_AWaitThatBeganInsideThePreRollWindowIsReportedAsAGapInIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc, device, _ := exclusiveCamera(t)
+		count, detail := armedEpisode(t, svc, func() {
+			time.Sleep(8 * time.Second)
+			takeOver(t, svc)
+			time.Sleep(1500 * time.Millisecond)
+			device.keptClosedToOthers(t, 1)
+			device.close()
+			time.Sleep(500 * time.Millisecond)
+		})
+		wantDetail(t, count, detail, true,
+			[]string{noteOf(waitGapInPreRoll, 1500*time.Millisecond, 2*time.Second, 500*time.Millisecond), "reaching 3s before the trigger"},
+			preRollFromBefore, armedTooLate, startedLate, anyHeldNote)
+	})
+}
+
+// A campaign armed inside the pre-roll window was armed too late for the
+// buffer it asked for, and its pre-roll says so whether or not it also waited
+// for the camera.
+func TestCameraRecording_ACampaignArmedInsideThePreRollWindowIsStillSaidToBeArmedTooLate(t *testing.T) {
+	for name, waited := range map[string]bool{"and the camera was free": false, "and it waited for the camera too": true} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				svc, device, _ := exclusiveCamera(t)
+				if waited {
+					leftClosing(t, svc, device)
+				}
+				count, detail := armedEpisode(t, svc, func() {
+					time.Sleep(500 * time.Millisecond)
+					device.close()
+					time.Sleep(500 * time.Millisecond)
+				})
+				if !waited {
+					wantDetail(t, count, detail, true, []string{armedTooLate}, anyWaitNote, anyHeldNote)
+					return
+				}
+				wantDetail(t, count, detail, true, []string{armedTooLate, noteOf(waitInThePreRoll, 500*time.Millisecond, 500*time.Millisecond)},
+					"in between", startedLate, anyHeldNote)
+			})
+		})
+	}
+}
+
+// A wait behind a capture that replaced one the source had frames from is a
+// gap in the pre-roll even when it began before the pre-roll window opened: a
+// pre-roll opens on the last key frame at or before the window's opening, so
+// it still holds frames from before the wait.
+func TestCameraRecording_AWaitAcrossTheOpeningOfThePreRollWindowIsAGapWhenThePreRollHoldsFramesFromBeforeIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc, device, _ := exclusiveCamera(t)
+		count, detail := armedEpisode(t, svc, func() {
+			time.Sleep(5 * time.Second)
+			takeOver(t, svc)
+			time.Sleep(4 * time.Second)
+			device.keptClosedToOthers(t, 1)
+			device.close()
+			time.Sleep(time.Second)
+		})
+		wantDetail(t, count, detail, true,
+			[]string{noteOf(waitGapInPreRoll, 4*time.Second, 5*time.Second, time.Second), "reaching 5s before the trigger"},
+			preRollFromBefore, armedTooLate, startedLate, anyHeldNote)
+	})
+}
+
+// An armed source's own wait begins when it is armed: one armed behind a
+// capture already five seconds into its wait, which has the camera a second
+// later, waited one second.
+func TestCameraRecording_AnArmedSourceThatJoinsACaptureAlreadyWaitingReportsItsOwnWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc, device, _ := exclusiveCamera(t)
+		leftClosing(t, svc, device)
+		reader := joinExclusiveCamera(t, svc, exclusiveCameraPath)
+		time.Sleep(5 * time.Second)
+		if !awaitsCamera(t, reader) {
+			t.Fatal("the reader's capture is not waiting for the camera")
+		}
+		count, detail := armedEpisode(t, svc, func() {
+			time.Sleep(time.Second)
+			device.close()
+			time.Sleep(500 * time.Millisecond)
+		})
+		wantDetail(t, count, detail, true, []string{noteOf(waitInThePreRoll, time.Second, 500*time.Millisecond), armedTooLate},
+			"6s", "in between", startedLate, anyHeldNote)
+	})
+}
+
+// A gap behind a capture the source has since left, because that capture was
+// replaced in turn, is still reported as a gap.
+func TestCameraRecording_AGapBehindACaptureLeftWhileArmedIsStillReportedAsAGap(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc, device, _ := exclusiveCamera(t)
+		count, detail := armedEpisode(t, svc, func() {
+			time.Sleep(8 * time.Second)
+			leave := takeOverAt(t, svc, 15)
+			time.Sleep(time.Second)
+			device.keptClosedToOthers(t, 1)
+			device.close()
+			time.Sleep(200 * time.Millisecond)
+			leave()
+			t.Cleanup(takeOverAt(t, svc, 30))
+			time.Sleep(800 * time.Millisecond)
+		})
+		wantDetail(t, count, detail, true, []string{noteOf(waitGapInPreRoll, time.Second, 2*time.Second, time.Second)},
+			preRollFromBefore, armedTooLate, startedLate, anyHeldNote)
+	})
 }

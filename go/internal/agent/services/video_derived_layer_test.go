@@ -948,6 +948,23 @@ func TestPictureBound_IsTheBytesOfOne1920x1080YUYVPictureAndNoMore(t *testing.T)
 	}
 }
 
+// A picture of exactly a raw frame's limit is one a tap could carry, and is
+// kept under a viewer like any smaller one.
+func TestDerivedLayer_APictureOfExactlyARawFramesLimitIsKeptUnderAViewer(t *testing.T) {
+	layer, err := newDerivedLayer(derivedLayerConfig{logger: zap.NewNop(), format: videoCodecMJPEG, gstPath: "gst-launch-1.0",
+		available: map[string]bool{"gdpdepay": true, "gdppay": true, "jpegdec": true, "h264parse": true, "x264enc": true},
+		width:     2016, height: 1024, framerate: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes := rawFormatBytes(layer.pictures); bytes != 4*1024*1024-64*1024 {
+		t.Fatalf("a 2016x1024 picture is %d bytes, want exactly the raw frame limit", bytes)
+	}
+	if shape := layer.needs(newFakeEncodeDemand(true, false)); !shape.encode || !shape.pixels {
+		t.Errorf("shape for a viewer alone = %+v, want the picture branch kept", shape)
+	}
+}
+
 const derived1080pEncoderOnly = "-q fdsrc fd=0 ! gdpdepay ! jpegdec ! " + derivedEncoder + " fd=3"
 
 // A picture above a default gRPC message is converted only while a pixel
