@@ -660,6 +660,8 @@ type deviceHub struct {
 	// has served the same camera (sampleSeqKey). It outlives the hub so sample
 	// identities stay monotonic across producer restarts within one episode.
 	sampleSeq *atomic.Uint64
+	// receipt is the service's receiptClock; nil stamps by data.CaptureReceipt.
+	receipt func() (before, midpoint, after int64, err error)
 	// Whether this producer tees raw capture frames (video_raw_tap.go). Undecided
 	// until the producer has chosen its capture path; a raw subscriber that joins
 	// before then waits, one that joins after a refusal is turned away up front.
@@ -718,6 +720,14 @@ func (w *cameraWait) read() (began, ended time.Time, waiting bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.began, w.ended, !w.began.IsZero() && w.ended.IsZero() && !w.gaveUp
+}
+
+// receipt is now on the clock the service's frames are stamped by.
+func (s *VideoService) receipt() (before, midpoint, after int64, err error) {
+	if s.receiptClock != nil {
+		return s.receiptClock()
+	}
+	return data.CaptureReceipt()
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -972,7 +982,11 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 	if h.sampleSeq != nil {
 		frame.sampleID = h.sampleSeq.Add(1)
 	}
-	if before, receipt, after, err := data.CaptureReceipt(); err == nil {
+	stamp := data.CaptureReceipt
+	if h.receipt != nil {
+		stamp = h.receipt
+	}
+	if before, receipt, after, err := stamp(); err == nil {
 		frame.receiptBootNanos, frame.receiptUncertaintyNanos = receipt, (after-before+1)/2
 	}
 	keepProducing := h.broadcast(frame)
@@ -1322,6 +1336,12 @@ type VideoService struct {
 	// encoder after the last viewer or recording leaves while raw or pixel
 	// subscribers remain (runShapedPipelines). Zero means defaultEncoderIdleGrace.
 	encoderIdleGrace time.Duration
+
+	// receiptClock, when set, stamps the frames of this service's hubs in
+	// place of data.CaptureReceipt. A test that runs on a clock of its own
+	// sets it: on Linux a receipt is CLOCK_BOOTTIME, which no such clock
+	// moves. nil in production.
+	receiptClock func() (before, midpoint, after int64, err error)
 
 	// tapFrameRead, when set, is called each time a tap pump reads a whole frame
 	// off its pipe, whether it then delivers, discards or drains it. A test hook
@@ -2152,6 +2172,7 @@ func (s *VideoService) getOrCreateHubKind(ctx context.Context, path string, req 
 		height:    req.GetHeight(),
 		framerate: req.GetFramerate(),
 		sampleSeq: s.sampleSeqLocked(seqKey),
+		receipt:   s.receiptClock,
 	}
 	// New hub: the first subscriber is always within the cap, and nothing has
 	// been refused yet.
@@ -2329,6 +2350,7 @@ func (s *VideoService) takeOverDefaultedHub(key string, req *agentpb.StreamVideo
 		height:    req.GetHeight(),
 		framerate: req.GetFramerate(),
 		sampleSeq: s.sampleSeqLocked(seqKey),
+		receipt:   s.receiptClock,
 	}
 	id, ch, _ = h.subscribeAsKind(hubHolderEpisodeCapture, kind, preset)
 	s.hubs[key] = h

@@ -429,6 +429,7 @@ func (s *VideoService) takeOverHubForShare(path string, req *agentpb.StreamVideo
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		sampleSeq: s.sampleSeqLocked(seqKey),
+		receipt:   s.receiptClock,
 	}
 	id, ch, _ := h.subscribeAsKind("", kind, preset)
 	s.hubs[path] = h

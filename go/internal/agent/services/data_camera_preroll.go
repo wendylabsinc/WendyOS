@@ -567,7 +567,14 @@ func (a *armedCameraSource) reattach(ctx context.Context) error {
 // an error only when neither the retained ring nor a fresh live subscription
 // could open.
 func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCapture, bool, error) {
+	// The trigger is the session's, stamped on the receipt clock before
+	// whatever started ahead of this hand-over. The pre-roll is counted back
+	// from it, and so are the source's waits, which time.Now timed: the
+	// trigger is as long before now as the receipt clock says.
 	triggered := time.Now()
+	if _, receipt, _, err := a.video.receipt(); err == nil && session.RequestBootNanos > 0 && receipt > session.RequestBootNanos {
+		triggered = triggered.Add(-time.Duration(receipt - session.RequestBootNanos))
+	}
 	a.cancel()
 	<-a.done
 

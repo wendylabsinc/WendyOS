@@ -68,9 +68,26 @@ func silentWhile(svc *VideoService, silent *atomic.Bool) {
 	}
 }
 
-func recordingSession(t *testing.T, campaign string) data.CaptureSession {
+// recordedCamera is exclusiveCamera with its frames stamped by the bubble's
+// clock, which is the clock these tests hold the camera and arm campaigns by.
+// A frame's receipt is otherwise CLOCK_BOOTTIME on Linux, which the bubble
+// does not move, so that a pre-roll of seconds would span milliseconds.
+func recordedCamera(t *testing.T) (*VideoService, *exclusiveV4L2) {
 	t.Helper()
-	_, origin, _, err := data.CaptureReceipt()
+	svc, device, _ := exclusiveCamera(t)
+	booted := time.Now().Add(-time.Hour)
+	svc.receiptClock = func() (before, midpoint, after int64, err error) {
+		now := int64(time.Since(booted))
+		return now, now, now, nil
+	}
+	return svc, device
+}
+
+// recordingSession is an episode's session, triggered now by the clock the
+// camera's frames are stamped by.
+func recordingSession(t *testing.T, svc *VideoService, campaign string) data.CaptureSession {
+	t.Helper()
+	_, origin, _, err := svc.receiptClock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +107,7 @@ type startedRecording struct {
 // returns once its first frame is stored.
 func startRecording(t *testing.T, svc *VideoService) <-chan startedRecording {
 	t.Helper()
-	session := recordingSession(t, "")
+	session := recordingSession(t, svc, "")
 	started := make(chan startedRecording, 1)
 	go func() {
 		capture, err := (&cameraDataAdapter{video: svc}).startOne(context.Background(), session, exclusiveSource(), exclusiveCameraID)
@@ -178,7 +195,7 @@ func wantDetail(t *testing.T, count uint64, detail string, wantFrames bool, want
 // it starts late, and its episode says by how much.
 func TestCameraRecording_ACaptureThatWaitedForTheCameraSaysHowLongInItsEpisode(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		leftClosing(t, svc, device)
 
 		recording := startRecording(t, svc)
@@ -200,7 +217,7 @@ func TestCameraRecording_ACaptureThatDidNotKeepTheRecordingWaitingSaysNothingOfA
 	for name, heldBefore := range map[string]bool{"the camera was free": false, "the wait ended before the recording joined": true} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				svc, device, _ := exclusiveCamera(t)
+				svc, device := recordedCamera(t)
 				if heldBefore {
 					leftClosing(t, svc, device)
 					reader := joinExclusiveCamera(t, svc, exclusiveCameraPath)
@@ -224,7 +241,7 @@ func TestCameraRecording_ACaptureThatDidNotKeepTheRecordingWaitingSaysNothingOfA
 // the camera a second later, waited one second.
 func TestCameraRecording_ARecordingThatJoinsACaptureAlreadyWaitingReportsItsOwnWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		leftClosing(t, svc, device)
 		reader := joinExclusiveCamera(t, svc, exclusiveCameraPath)
 		time.Sleep(5 * time.Second)
@@ -247,7 +264,7 @@ func TestCameraRecording_ARecordingThatJoinsACaptureAlreadyWaitingReportsItsOwnW
 // on waiting behind the replacement, and its episode reports the whole wait.
 func TestCameraRecording_ARecordingWhoseWaitingCaptureIsReplacedReportsTheWholeWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		leftClosing(t, svc, device)
 
 		recording := startRecording(t, svc)
@@ -268,7 +285,7 @@ func TestCameraRecording_ARecordingWhoseWaitingCaptureIsReplacedReportsTheWholeW
 // from is a gap in its episode, not a late start.
 func TestCameraRecording_AWaitAfterTheCaptureWasReplacedMidEpisodeIsReportedAsAGap(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 
 		capture := (<-startRecording(t, svc)).running(t)
 		time.Sleep(100 * time.Millisecond)
@@ -288,7 +305,7 @@ func TestCameraRecording_AWaitAfterTheCaptureWasReplacedMidEpisodeIsReportedAsAG
 // not wait.
 func TestCameraRecording_AWaitAtTheStartIsStillReportedAfterTheCaptureWasReplaced(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		leftClosing(t, svc, device)
 
 		recording := startRecording(t, svc)
@@ -319,14 +336,14 @@ func TestCameraRecording_AnArmedCaptureSaysWhatTheCamerasPreviousCaptureDidToIts
 	} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				svc, device, _ := exclusiveCamera(t)
+				svc, device := recordedCamera(t)
 				leftClosing(t, svc, device)
 
 				adapter := &cameraDataAdapter{video: svc}
 				sources := []data.Source{exclusiveSource()}
 				adapter.Arm("cam", 3*time.Second, sources)
 				time.Sleep(armed)
-				capture, err := adapter.Start(context.Background(), recordingSession(t, "cam"), sources)
+				capture, err := adapter.Start(context.Background(), recordingSession(t, svc, "cam"), sources)
 				if err != nil || capture == nil {
 					t.Fatalf("the armed campaign's episode did not open while the camera was held: %v", err)
 				}
@@ -350,7 +367,7 @@ func TestCameraRecording_AnArmedCaptureSaysWhatTheCamerasPreviousCaptureDidToIts
 // recording's is.
 func TestCameraRecording_AnArmedCaptureWhoseWaitingCaptureIsReplacedReportsTheWholeWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		leftClosing(t, svc, device)
 
 		adapter := &cameraDataAdapter{video: svc}
@@ -359,7 +376,7 @@ func TestCameraRecording_AnArmedCaptureWhoseWaitingCaptureIsReplacedReportsTheWh
 		time.Sleep(time.Second)
 		takeOver(t, svc)
 		time.Sleep(time.Second)
-		capture, err := adapter.Start(context.Background(), recordingSession(t, "cam"), sources)
+		capture, err := adapter.Start(context.Background(), recordingSession(t, svc, "cam"), sources)
 		if err != nil || capture == nil {
 			t.Fatalf("the armed campaign's episode did not open while the camera was held: %v", err)
 		}
@@ -378,7 +395,7 @@ func TestCameraRecording_AnArmedCaptureWhoseWaitingCaptureIsReplacedReportsTheWh
 // not blame a campaign that was armed in time.
 func TestCameraRecording_AWaitThatEndedInsideThePreRollWindowIsReportedAsLostPreRoll(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		leftClosing(t, svc, device)
 
 		adapter := &cameraDataAdapter{video: svc}
@@ -387,7 +404,7 @@ func TestCameraRecording_AWaitThatEndedInsideThePreRollWindowIsReportedAsLostPre
 		time.Sleep(9500 * time.Millisecond)
 		device.close()
 		time.Sleep(500 * time.Millisecond)
-		capture, err := adapter.Start(context.Background(), recordingSession(t, "cam"), sources)
+		capture, err := adapter.Start(context.Background(), recordingSession(t, svc, "cam"), sources)
 		if err != nil || capture == nil {
 			t.Fatalf("the armed campaign's episode did not open: %v", err)
 		}
@@ -403,7 +420,7 @@ func TestCameraRecording_AWaitThatEndedInsideThePreRollWindowIsReportedAsLostPre
 // episode waiting.
 func TestCameraRecording_AWaitThatEndedBeforeThePreRollWindowIsNotTheEpisodesToReport(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		leftClosing(t, svc, device)
 
 		adapter := &cameraDataAdapter{video: svc}
@@ -412,7 +429,7 @@ func TestCameraRecording_AWaitThatEndedBeforeThePreRollWindowIsNotTheEpisodesToR
 		time.Sleep(time.Second)
 		device.close()
 		time.Sleep(4 * time.Second)
-		capture, err := adapter.Start(context.Background(), recordingSession(t, "cam"), sources)
+		capture, err := adapter.Start(context.Background(), recordingSession(t, svc, "cam"), sources)
 		if err != nil || capture == nil {
 			t.Fatalf("the armed campaign's episode did not open: %v", err)
 		}
@@ -441,7 +458,7 @@ func TestCameraRecording_AStartThatTimesOutSaysWhatItWaitedForTheCamerasPrevious
 	} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				svc, device, _ := exclusiveCamera(t)
+				svc, device := recordedCamera(t)
 				var silent atomic.Bool
 				silentWhile(svc, &silent)
 				if tc.held {
@@ -472,7 +489,7 @@ func armedEpisode(t *testing.T, svc *VideoService, before func()) (count uint64,
 	sources := []data.Source{exclusiveSource()}
 	adapter.Arm("cam", 3*time.Second, sources)
 	before()
-	capture, err := adapter.Start(context.Background(), recordingSession(t, "cam"), sources)
+	capture, err := adapter.Start(context.Background(), recordingSession(t, svc, "cam"), sources)
 	if err != nil || capture == nil {
 		t.Fatalf("the armed campaign's episode did not open: %v", err)
 	}
@@ -485,7 +502,7 @@ func armedEpisode(t *testing.T, svc *VideoService, before func()) (count uint64,
 // pre-roll after the capture it was behind has been replaced.
 func TestCameraRecording_AnArmedWaitIsStillReportedAfterItsCaptureWasReplacedWhileArmed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		leftClosing(t, svc, device)
 		count, detail := armedEpisode(t, svc, func() {
 			time.Sleep(8 * time.Second)
@@ -503,7 +520,7 @@ func TestCameraRecording_AnArmedWaitIsStillReportedAfterItsCaptureWasReplacedWhi
 // holds frames from before it.
 func TestCameraRecording_AWaitThatBeganInsideThePreRollWindowIsReportedAsAGapInIt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		count, detail := armedEpisode(t, svc, func() {
 			time.Sleep(8 * time.Second)
 			takeOver(t, svc)
@@ -525,7 +542,7 @@ func TestCameraRecording_ACampaignArmedInsideThePreRollWindowIsStillSaidToBeArme
 	for name, waited := range map[string]bool{"and the camera was free": false, "and it waited for the camera too": true} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				svc, device, _ := exclusiveCamera(t)
+				svc, device := recordedCamera(t)
 				if waited {
 					leftClosing(t, svc, device)
 				}
@@ -551,7 +568,7 @@ func TestCameraRecording_ACampaignArmedInsideThePreRollWindowIsStillSaidToBeArme
 // it still holds frames from before the wait.
 func TestCameraRecording_AWaitAcrossTheOpeningOfThePreRollWindowIsAGapWhenThePreRollHoldsFramesFromBeforeIt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		count, detail := armedEpisode(t, svc, func() {
 			time.Sleep(5 * time.Second)
 			takeOver(t, svc)
@@ -571,7 +588,7 @@ func TestCameraRecording_AWaitAcrossTheOpeningOfThePreRollWindowIsAGapWhenThePre
 // later, waited one second.
 func TestCameraRecording_AnArmedSourceThatJoinsACaptureAlreadyWaitingReportsItsOwnWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		leftClosing(t, svc, device)
 		reader := joinExclusiveCamera(t, svc, exclusiveCameraPath)
 		time.Sleep(5 * time.Second)
@@ -583,7 +600,8 @@ func TestCameraRecording_AnArmedSourceThatJoinsACaptureAlreadyWaitingReportsItsO
 			device.close()
 			time.Sleep(500 * time.Millisecond)
 		})
-		wantDetail(t, count, detail, true, []string{noteOf(waitInThePreRoll, time.Second, 500*time.Millisecond), armedTooLate},
+		wantDetail(t, count, detail, true,
+			[]string{noteOf(waitInThePreRoll, time.Second, 500*time.Millisecond), "reaching 500ms before the trigger", armedTooLate},
 			"6s", "in between", startedLate, anyHeldNote)
 	})
 }
@@ -592,7 +610,7 @@ func TestCameraRecording_AnArmedSourceThatJoinsACaptureAlreadyWaitingReportsItsO
 // replaced in turn, is still reported as a gap.
 func TestCameraRecording_AGapBehindACaptureLeftWhileArmedIsStillReportedAsAGap(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc, device, _ := exclusiveCamera(t)
+		svc, device := recordedCamera(t)
 		count, detail := armedEpisode(t, svc, func() {
 			time.Sleep(8 * time.Second)
 			leave := takeOverAt(t, svc, 15)
@@ -607,4 +625,56 @@ func TestCameraRecording_AGapBehindACaptureLeftWhileArmedIsStillReportedAsAGap(t
 		wantDetail(t, count, detail, true, []string{noteOf(waitGapInPreRoll, time.Second, 2*time.Second, time.Second)},
 			preRollFromBefore, armedTooLate, startedLate, anyHeldNote)
 	})
+}
+
+// The trigger is the session's. The hand-over of an armed source to its
+// episode runs after it, behind whatever starts first, and a wait is measured
+// against the trigger, as the pre-roll is: one over before the trigger cost
+// pre-roll counted back from the trigger, and one over only after it made the
+// recording start late.
+func TestCameraRecording_AnArmedWaitIsMeasuredAgainstTheSessionsTriggerNotTheHandOver(t *testing.T) {
+	const triggerAt, handOverAfter = 10 * time.Second, 2 * time.Second
+	for name, tc := range map[string]struct {
+		closesAt time.Duration
+		want     []string
+		unwanted []string
+	}{
+		"a wait over before the trigger": {9500 * time.Millisecond,
+			[]string{noteOf(waitInThePreRoll, 9500*time.Millisecond, 500*time.Millisecond), "reaching 500ms before the trigger"},
+			[]string{armedTooLate, startedLate, anyHeldNote}},
+		"a wait over between the trigger and the hand-over": {11 * time.Second,
+			[]string{noteOf(waitAtTheStart, 11*time.Second)},
+			[]string{preRollFromBefore, "in between", anyHeldNote}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				svc, device := recordedCamera(t)
+				leftClosing(t, svc, device)
+				adapter := &cameraDataAdapter{video: svc}
+				sources := []data.Source{exclusiveSource()}
+				adapter.Arm("cam", 3*time.Second, sources)
+
+				armed := time.Now()
+				until := func(at time.Duration) { time.Sleep(at - time.Since(armed)) }
+				if tc.closesAt < triggerAt {
+					until(tc.closesAt)
+					device.close()
+				}
+				until(triggerAt)
+				session := recordingSession(t, svc, "cam")
+				if tc.closesAt >= triggerAt {
+					until(tc.closesAt)
+					device.close()
+				}
+				until(triggerAt + handOverAfter)
+				capture, err := adapter.Start(context.Background(), session, sources)
+				if err != nil || capture == nil {
+					t.Fatalf("the armed campaign's episode did not open: %v", err)
+				}
+				time.Sleep(100 * time.Millisecond)
+				count, detail := recordedDetail(t, capture)
+				wantDetail(t, count, detail, true, tc.want, tc.unwanted...)
+			})
+		})
+	}
 }
