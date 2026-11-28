@@ -126,8 +126,9 @@ cameras. A device without a compatible
 ### What an app gets
 
 The app opens the same path as before, for example `/dev/video0` or its
-`/dev/v4l/by-id` link, and sees one mode: one size up to 1280x720, one frame
-rate, and YUYV when the camera itself produces MJPEG or H.264. A camera that
+`/dev/v4l/by-id` link, and sees one mode: one size, up to 1280x720 unless its
+entitlement states another (see `size` below), one frame rate, and YUYV when
+the camera itself produces MJPEG or H.264. A camera that
 produces H.264 and lists no size up to 1280x720 is shared at the smallest size
 it lists: as YUYV pictures when one picture is at most 4,147,200 bytes, which
 is 1920x1080, and as its own H.264 above that. `wendy run` prints one
@@ -147,8 +148,8 @@ shared by the app (see below).
 
 ### Choose what the node carries
 
-Two optional keys on the camera entitlement set what the node carries, and a
-third sets how its H.264 is encoded:
+Two optional keys on the camera entitlement set what the node carries, a
+third sets how its H.264 is encoded, and a fourth the size it is made at:
 
 - `format`: `"pixels"` (default) for decoded pictures, `"native"` for the
   camera's own frames, for example MJPEG or H.264, or `"h264"` for H.264 with
@@ -162,6 +163,11 @@ third sets how its H.264 is encoded:
   works: `"ultrafast"`, `"superfast"`, `"veryfast"`, `"faster"`, `"fast"` or
   `"medium"`, fastest first. A slower preset spends more CPU on each frame for
   fewer bits. An entry without the key states no preset.
+- `size`: the size the camera is captured at for the node, as `"WxH"`, for
+  example `"1920x1080"`. It is served when the camera lists that size in the
+  format the agent captures it in: JPEG for a webcam, up to 1920x1080, and
+  H.264 for a camera that produces it. An entry without the key gets the
+  default size.
 
 On a camera that produces H.264, `"native"` and `"h264"` are the same thing:
 the camera's own H.264, one whole frame per buffer. `"pixels"` on such a
@@ -173,6 +179,7 @@ status say so; `"native"` and `"pixels"` run no encoder.
 ```json
 { "type": "camera", "format": "pixels", "stamp": "time" }
 { "type": "camera", "format": "h264", "preset": "veryfast" }
+{ "type": "camera", "format": "native", "size": "1920x1080" }
 ```
 
 `preset` applies only where the device encodes the node's H.264 in software.
@@ -197,6 +204,13 @@ H.264 decoder. The deploy notice and the camera's status say
 `asked for <format>; serving <format> because <reason>`. A compressed node's
 largest frame is the image size the node reports; a larger frame is dropped.
 
+A `size` the camera is not captured at leaves the node at the default size. A
+camera is captured at one size, so a node made while another app shares the
+camera has that app's size, and a node keeps the size it was made with. The
+deploy notice, the agent's log and the camera's status say
+`asked for size <size>; serving <size> because <reason>`. Viewers and
+recordings are held to that size as to any shared mode.
+
 A node keeps the format it was made with. When a camera stops providing it
 while the app runs, for example because pictures can no longer be decoded from
 its frames, the node's status is `cannot serve` with the reason, and deploying
@@ -206,7 +220,7 @@ node is read, its status names the decoder: `pictures decoded by <element>`. A
 carry no frame number gets no frames, and its status says why.
 
 An app gets one node per camera. An entry's `allowlist` selects which cameras
-its `format`, `stamp` and `preset` apply to; an entry without one applies to
+its `format`, `stamp`, `preset` and `size` apply to; an entry without one applies to
 every camera. An allowlist entry names a camera by any identifier
 `wendy device camera list --json` prints for it: its `stable_id`
 (`by-id:usb-046d_HD_Pro_Webcam_C920-video-index0`, with or without the `by-id:`
@@ -233,14 +247,14 @@ with the capture time; `wendy run` says so when the app asks for something the
 device's agent does not read.
 
 Two `camera` or `video` entries that claim the same camera must agree on
-`format`, `stamp` and `preset`; an entry that states a preset and one that
-states none do not agree. Validation compares allowlist entries as written, and
+`format`, `stamp`, `preset` and `size`; an entry that states a preset or a size
+and one that states none do not agree. Validation compares allowlist entries as written, and
 also knows `/dev/video0` and `v4l2:/dev/video0` for one camera, and a `by-id:`
 stable id with and without its prefix. Entries that name one camera by
 different identifiers, such as its stable id and its path, are only found on
 the device: there the stable id decides before the path and the path before
 the name, and `wendy run`, the agent's log and the camera's status say which
-entry decided and which was passed over. None of the three keys can be used
+entry decided and which was passed over. None of the four keys can be used
 when any of the app's camera entries has `"mode": "direct"`, and `preset` only
 on an entry with `"format": "h264"`.
 
@@ -257,8 +271,8 @@ Some apps cannot work with the shared mode:
   field on `VIDIOC_QBUF`, so `mmap` fails, and it hands out its buffers in turn.
   Map each buffer as `VIDIOC_QUERYBUF` describes it, and read the one
   `VIDIOC_DQBUF` returns. `HelloVideo` did both, and was changed.
-- Apps that need more than 1280x720, a different frame rate, or camera
-  controls.
+- Apps that need a size the node cannot be made at, a different frame rate, or
+  camera controls.
 
 `Examples/RemoteCam` works unchanged. For an app that breaks, either set
 `"mode": "direct"` on its camera entitlement, or change it to accept the shared
@@ -290,7 +304,7 @@ While a camera is shared:
 The Status column of `wendy device camera list` shows
 `shared: <app> [format <format>, stamp <stamp>] (<state>), ...` for each app
 sharing the camera, with `, preset <preset>` after the stamp for an h264 node
-whose app states one. When the camera cannot fill a node in its format or with
+whose app states one, and `, size <size>` for a node at a stated size. When the camera cannot fill a node in its format or with
 its stamp, the state is `cannot serve` with the reason; the node gets no frames
 until the camera can, which the agent checks once a minute. The same detail is
 in the JSON from `wendy device hardware list --category camera --json` as the
@@ -303,6 +317,10 @@ The row of a camera with an h264 mode also says what becomes of a stated
 preset: `h264_default_preset` holds the preset the encoder runs at when no
 consumer states one, where the device applies presets, and
 `h264_preset_ignored` holds the reason where it does not.
+`share_sizes` lists the sizes a `size` can state, each with its frame rate, for
+example `640x480@30, 1280x720@30, 1920x1080@30`, or `share_sizes_unavailable`
+says why none can be stated, and `shared_size` holds the size the camera runs
+at for the apps that share it.
 A camera that is not shared carries `share_unavailable` with the reason. The
 row of each camera `wendy device camera list` lists also carries `stable_id`,
 the stable id that command's `--json` prints for it and the one an allowlist

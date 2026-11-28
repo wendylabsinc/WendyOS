@@ -16,9 +16,13 @@ device and leaves no node to configure.
 | `format` | `"pixels"` (default): decoded pictures. `"native"`: the camera's own frames. `"h264"`: H.264, one whole frame per buffer. |
 | `stamp` | `"time"` (default): the capture time. `"frame"`: the agent's frame number. |
 | `preset` | Only with `"format": "h264"`: how fast the software H.264 encoder works. `"ultrafast"`, `"superfast"`, `"veryfast"`, `"faster"`, `"fast"` or `"medium"`, fastest first. Omit it to state none. |
+| `size` | The size the node is made at, as `"WxH"`, for example `"1920x1080"`: one the camera lists, up to 1920x1080 for a camera that produces JPEG. Without the key the node has the default size. |
 
 A camera that cannot provide the `format` asked for is served in another one,
-and `wendy run` says which and why. Where the device encodes the `"h264"` of a
+and `wendy run` says which and why. A `size` the camera is not captured at
+leaves the node at the default size. A camera is captured at one size, so a
+node made while another app shares the camera has that app's size. `wendy run`
+says which size is served and why. Where the device encodes the `"h264"` of a
 camera that produces JPEG in software, the encoder runs for as long as the app
 reads its node, and `wendy run` says so; `"native"` and `"pixels"` run no
 encoder.
@@ -42,7 +46,7 @@ and name the encoder.
 
 ## Allowlist
 
-An entry's `allowlist` selects the cameras its `format`, `stamp` and `preset` apply to;
+An entry's `allowlist` selects the cameras its `format`, `stamp`, `preset` and `size` apply to;
 without one they apply to every camera. It restricts nothing: the app still
 gets a node for every shared camera. An entry cannot be empty.
 
@@ -64,8 +68,8 @@ replug to move the settings.
 ## Entries that name the same camera
 
 Two `camera` or `video` entries that claim the same camera must agree on
-`format`, `stamp` and `preset`; an entry that states a preset and one that
-states none do not agree. Validation compares allowlist entries as written, and
+`format`, `stamp`, `preset` and `size`; an entry that states a preset or a size
+and one that states none do not agree. Validation compares allowlist entries as written, and
 also knows `/dev/video0` and `v4l2:/dev/video0` for one camera, and a `by-id:`
 stable id with and without its prefix. Entries that name one camera by
 different identifiers, such as its stable id and its path, are only found on
@@ -76,7 +80,7 @@ entry decided and which was passed over.
 ## What `wendy run` prints
 
 When the device's agent reports that it shares cameras, `wendy run` prints the
-cameras the app shares with each node's format and stamp, then a line for each
+cameras the app shares with each node's size, format and stamp, then a line for each
 node encoded in software, with its preset, a line for each stated preset the
 device does not apply, and a line for each
 allowlist entry that selects no shared camera's node, and for each that names a
